@@ -263,6 +263,7 @@ interface DelegateInput {
 	parentAgent: string
 	prompt: string
 	agent: string
+	model?: string
 }
 
 interface DelegationListItem {
@@ -403,6 +404,20 @@ function isActiveStatus(status: DelegationStatus): boolean {
 
 function normalizeId(value: string): string {
 	return value.trim()
+}
+
+/**
+ * Parse a "providerID/modelID" string into the model object expected by promptAsync.
+ * Returns null if the format is invalid. (Law 1: Early Exit via null return;
+ * Law 2: Parse at boundary; Law 4: Null signals caller to fail fast.)
+ */
+function parseModelString(model: string): { providerID: string; modelID: string } | null {
+	const slashIndex = model.indexOf("/")
+	if (slashIndex === -1) return null
+	const providerID = model.slice(0, slashIndex)
+	const modelID = model.slice(slashIndex + 1)
+	if (!providerID || !modelID) return null
+	return { providerID, modelID }
 }
 
 function parsePersistedStatus(raw: string | undefined): DelegationStatus {
@@ -1031,6 +1046,16 @@ class DelegationManager {
 	 * Delegate a task to an agent
 	 */
 	async delegate(input: DelegateInput): Promise<DelegationRecord> {
+		// Validate model parameter if provided (Law 1: Early Exit; Law 4: Fail Fast)
+		if (input.model !== undefined) {
+			const parsed = parseModelString(input.model)
+			if (parsed === null) {
+				throw new Error(
+					`Invalid model format: "${input.model}". Expected format: "providerID/modelID" (e.g., "openai/gpt-4o").`,
+				)
+			}
+		}
+
 		// Validate agent exists before creating session
 		const agentsResult = await this.client.app.agents({})
 		const agents = (agentsResult.data ?? []) as {
@@ -1102,6 +1127,8 @@ class DelegationManager {
 		// Fire the prompt asynchronously from inside tool execution
 		// Agent param is critical for MCP tools - tells OpenCode which agent's config to use
 		// Anti-recursion: disable nested delegations and state-modifying tools via tools config
+		// Model override: parse providerID/modelID string when provided (Law 2: Parse at boundary)
+		const modelOverride = input.model ? parseModelString(input.model) ?? undefined : undefined
 		this.client.session
 			.promptAsync({
 				throwOnError: true,
@@ -1109,6 +1136,7 @@ class DelegationManager {
 				body: {
 					agent: input.agent,
 					parts: [{ type: "text", text: input.prompt }],
+					model: modelOverride,
 					tools: {
 						task: false,
 						delegate: false,
@@ -1556,6 +1584,7 @@ const managersByBaseDir = new Map<string, DelegationManager>()
 interface DelegateArgs {
 	prompt: string
 	agent: string
+	model?: string
 }
 
 function createDelegate(manager: DelegationManager): ReturnType<typeof tool> {
@@ -1578,6 +1607,12 @@ Use \`delegation_read\` with the ID to retrieve full persisted output (including
 				.describe(
 					'Agent to delegate to. Must be a read-only sub-agent (edit/write/bash denied), such as "researcher" or "explore".',
 				),
+			model: tool.schema
+				.string()
+				.optional()
+				.describe(
+					'Optional. Model to use (format: "provider/model-id", e.g., "openai/gpt-5.5"). If not specified, inherits the parent model or agent\'s configured model.',
+				),
 		},
 		async execute(args: DelegateArgs, toolCtx: ToolContext): Promise<string> {
 			if (!toolCtx?.sessionID) {
@@ -1594,6 +1629,7 @@ Use \`delegation_read\` with the ID to retrieve full persisted output (including
 					parentAgent: toolCtx.agent,
 					prompt: args.prompt,
 					agent: args.agent,
+					model: args.model,
 				})
 
 				// Get total active count for this parent session
@@ -1671,6 +1707,7 @@ const DELEGATION_RULES = `<task-notification>
 
 You have tools for parallel background work:
 - \`delegate(prompt, agent)\` - Launch task, returns ID immediately
+- \`delegate(prompt, agent, model)\` - Launch task with optional model override
 - \`delegation_read(id)\` - Retrieve completed result
 - \`delegation_list()\` - List delegations (use sparingly)
 
