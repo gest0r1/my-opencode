@@ -1,14 +1,9 @@
 {
   "dependencies": {
     "@opencode-ai/plugin": "^1.16.2",
-    "@opencode-ai/sdk": "^1.16.2",
-    "@tarquinen/opencode-dcp": "^3.1.12"
+    "@opencode-ai/sdk": "^1.16.2"
   },
   "devDependencies": {
-    "detect-terminal": "2.0.0",
-    "jsonc-parser": "3.3.1",
-    "node-notifier": "10.0.1",
-    "unique-names-generator": "4.7.1",
     "zod": "4.3.5"
   }
 }

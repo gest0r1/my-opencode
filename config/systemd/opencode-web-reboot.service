@@ -1,0 +1,27 @@
+# opencode-web-reboot.service — single-shot reboot of opencode-web
+# Triggered by opencode-web-reboot.path when ~/.config/opencode-web/reboot-marker.json appears.
+#
+# Why ONE service (not template @.service like v1):
+#   v1 used opencode-web-reboot@.service template + 2 path units (stop.path, start.path).
+#   Both paths fired on the same marker → cascade race → systemctl "Job canceled" errors.
+#   v2 collapses stop+wait+start into ONE invocation of reboot.py, ONE path fires it.
+#
+# Why ConditionPathExists: defense in depth — even if path unit is misconfigured, the
+#   service itself rejects runs with no marker.
+#
+# Why TimeoutStartSec=120: reboot.py uses subprocess timeout=30s on stop + 10s sleep +
+#   timeout=30s on start = 70s + buffer.
+
+[Unit]
+Description=opencode-web-reboot (stop + 10s wait + start, single invocation)
+After=graphical-session.target
+ConditionPathExists=%h/.config/opencode-web/reboot-marker.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/guber/Opencode/scripts/opencode-web-reboot/reboot.py
+TimeoutStartSec=120
+# Restart=No (it's oneshot; the path unit re-fires if the marker persists)
+
+[Install]
+WantedBy=default.target

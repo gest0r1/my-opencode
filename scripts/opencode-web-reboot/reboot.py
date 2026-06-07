@@ -3,6 +3,9 @@
 
 Single-file replacement. Invoked directly (not via systemd path units).
 Stdlib only.
+
+Environment variables:
+  DRY_RUN=1  Log intended systemctl commands instead of executing them (safe testing mode).
 """
 
 import json
@@ -13,8 +16,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+DRY_RUN = os.environ.get("DRY_RUN") == "1"
+
 CONFIG_DIR = Path.home() / ".config" / "opencode-web"
 MARKER_PATH = CONFIG_DIR / "reboot-marker.json"
+NOTIFICATION_MARKER_PATH = CONFIG_DIR / "notification-marker.json"
 LOG_PATH = CONFIG_DIR / "reboot.log"
 SERVICE = "opencode-web.service"
 STOP_TIMEOUT = 30
@@ -49,6 +55,9 @@ def read_marker() -> dict | None:
 
 def systemd_cmd(action: str, timeout: int) -> None:
     """Run systemctl --user <action> SERVICE. Raises on failure."""
+    if DRY_RUN:
+        log("INFO", f"DRY_RUN: would run: systemctl --user {action} {SERVICE} (timeout={timeout}s)")
+        return
     try:
         subprocess.run(
             ["systemctl", "--user", action, SERVICE],
@@ -72,12 +81,16 @@ def systemd_cmd(action: str, timeout: int) -> None:
 def main() -> int:
     pid = os.getpid()
     log("INFO", f"reboot.py starting pid={pid}")
+    if DRY_RUN:
+        log("INFO", "DRY_RUN=1: systemctl calls will be logged, not executed")
 
-    # Read marker (informational only — proceed regardless)
+    # Read marker (to get session_id for notification)
     marker = read_marker()
+    session_id = (marker or {}).get("session_id", "") or ""
+    request_id = (marker or {}).get("request_id", "unknown")
+
     if marker is not None:
-        rid = marker.get("request_id", "unknown")
-        log("INFO", f"marker found: request_id={rid}")
+        log("INFO", f"marker found: request_id={request_id} session_id={'✓' if session_id else '✗'}")
     else:
         log("INFO", "no marker found, proceeding with unconditional reboot")
 
@@ -89,11 +102,35 @@ def main() -> int:
         return 1
     log("INFO", f"{SERVICE} stopped successfully")
 
-    # Step 2: wait
+    # Step 2: consume reboot marker (prevents path re-trigger)
+    if MARKER_PATH.exists():
+        try:
+            MARKER_PATH.unlink()
+            log("INFO", "reboot marker deleted (path unit will NOT re-trigger)")
+        except OSError as exc:
+            log("WARN", f"could not delete reboot marker: {exc}")
+
+    # Step 3: write notification marker (for plugin on next start)
+    if session_id:
+        notif_marker = {
+            "request_id": request_id,
+            "session_id": session_id,
+            "reboot_completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            NOTIFICATION_MARKER_PATH.parent.mkdir(parents=True, exist_ok=True)
+            NOTIFICATION_MARKER_PATH.write_text(json.dumps(notif_marker, indent=2))
+            log("INFO", f"notification marker written for session_id={session_id}")
+        except OSError as exc:
+            log("WARN", f"could not write notification marker: {exc}")
+    else:
+        log("INFO", "no session_id — skipping notification marker")
+
+    # Step 4: wait
     log("INFO", f"waiting {SLEEP_SECONDS}s...")
     time.sleep(SLEEP_SECONDS)
 
-    # Step 3: start
+    # Step 5: start
     log("INFO", f"starting {SERVICE}...")
     try:
         systemd_cmd("start", START_TIMEOUT)
