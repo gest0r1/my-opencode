@@ -3,10 +3,11 @@
   "plugin": [
     "@zenobius/opencode-skillful@1.2.5",
     "@franlol/opencode-md-table-formatter@0.0.6",
-    "octto@0.3.1"
+    "octto@0.3.1",
+    "./plugins/opencode-web-reboot"
   ],
-  "model": "openai/gpt-5.5-fast",
-  "small_model": "openai/gpt-5.4-mini",
+  "model": "opencode-go/qwen3.7-plus",
+  "small_model": "opencode-go/deepseek-v4-flash",
   "mcp": {
     "context7": {
       "type": "remote",
@@ -26,13 +27,9 @@
     "yadisk": {
       "type": "local",
       "command": [
-        "/home/guber/.local/bin/yadisk-mcp"
+        "/home/guber/.local/bin/yadisk-mcp-with-env.sh"
       ],
-      "enabled": true,
-      "env": {
-        "YANDEX_DISK_TOKEN": "${YANDEX_DISK_TOKEN}",
-        "YADISK_MCP_UPLOAD_ALLOWED_DIRS": "/tmp,/home/guber/Opencode/dev"
-      }
+      "enabled": true
     },
     "yonote": {
       "type": "local",
@@ -64,6 +61,11 @@
       "headers": {
         "X-API-Key": "x"
       }
+    },
+    "bitrix24": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8081/mcp",
+      "enabled": true
     }
   },
   "permission": {

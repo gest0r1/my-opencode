@@ -1,0 +1,9 @@
+{
+  "name": "opencode-web-reboot",
+  "version": "1.0.0",
+  "description": "Notify opencode session when opencode-web is rebooted via systemd marker.",
+  "type": "module",
+  "main": "./index.js",
+  "private": true,
+  "dependencies": {}
+}
