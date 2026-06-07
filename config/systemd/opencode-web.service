@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenCode Web Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/guber/bot-project
+ExecStart=/home/guber/.opencode/bin/opencode web --port 4096 --hostname 0.0.0.0
+EnvironmentFile=/home/guber/.config/opencode-web.env
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=10
+StartLimitIntervalSec=60
+
+[Install]
+WantedBy=default.target
