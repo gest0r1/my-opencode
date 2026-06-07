@@ -1,0 +1,24 @@
+# opencode-web-reboot.path — watch for the reboot marker and fire the service
+#
+# Why ONE path (not two like v1):
+#   v1 used opencode-web-reboot-stop.path + opencode-web-reboot-start.path, each
+#   watching the same marker. Both paths fired on the same file appearance →
+#   cascade race → "Job canceled" errors from systemctl when the second path
+#   tried to enqueue an action that was already in flight.
+#   v2 uses ONE path that fires ONE service (which does stop+wait+start itself).
+#
+# PathExists: triggers once when the file appears. The service is oneshot, so
+#   the path will re-fire if the marker still exists after the service exits
+#   (e.g. the service failed and left the marker in place). That's intentional
+#   — the operator should clean up a stuck marker manually if so.
+
+[Unit]
+Description=Watch marker for opencode-web reboot trigger
+After=default.target
+
+[Path]
+PathExists=%h/.config/opencode-web/reboot-marker.json
+Unit=opencode-web-reboot.service
+
+[Install]
+WantedBy=default.target

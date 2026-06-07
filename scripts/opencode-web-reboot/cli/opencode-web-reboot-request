@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# opencode-web-reboot-request — trigger opencode-web reboot via marker file
+# Idempotent: re-running while a marker exists overwrites it (new request_id).
+set -euo pipefail
+
+CONFIG_DIR="$HOME/.config/opencode-web"
+MARKER_PATH="$CONFIG_DIR/reboot-marker.json"
+LOG_PATH="$CONFIG_DIR/reboot.log"
+PLUGIN_LOG="$CONFIG_DIR/plugin.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HELPERS_PY="$(cd "$SCRIPT_DIR/.." && pwd)/reboot_helpers.py"
+
+# --- defaults ---
+SESSION_ID="${OPENCODE_SESSION:-}"
+FORCE_NO_NOTIFY=0
+DRY_RUN=0
+
+# --- arg parsing ---
+usage() {
+    cat <<'EOF'
+opencode-web-reboot-request — schedule a reboot of opencode-web.service
+
+Usage:
+  opencode-web-reboot-request [--session-id ID] [--force-no-notify] [--dry-run] [--help]
+
+Options:
+  --session-id ID    OpenCode session to notify after reboot completes.
+                     If unset, environment variable $OPENCODE_SESSION is used.
+                     If both are unset, the reboot runs WITHOUT a notification.
+  --force-no-notify  Equivalent to --session-id "" (reboot with no notification).
+  --dry-run          Write marker to /tmp instead of ~/.config/opencode-web/.
+                     systemctl is NOT triggered. Safe to test repeatedly.
+  --help, -h         Show this help.
+
+Mechanics:
+  1. Writes a marker JSON to <marker-path> (or /tmp/opencode-web-reboot-test-<rand>.json in --dry-run).
+  2. systemd path unit (opencode-web-reboot.path) detects the file within ~1 second.
+  3. opencode-web-reboot.service runs reboot.py: stop → 10s wait → start.
+  4. On next opencode start, the plugin reads the marker, sends "✅ reboot completed"
+     to the originating session, and deletes the marker.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --session-id)  SESSION_ID="$2"; shift 2 ;;
+        --force-no-notify) FORCE_NO_NOTIFY=1; shift ;;
+        --dry-run)     DRY_RUN=1; shift ;;
+        --help|-h)     usage; exit 0 ;;
+        *) echo "ERROR: unknown arg: $1" >&2; usage; exit 2 ;;
+    esac
+done
+
+[[ $FORCE_NO_NOTIFY -eq 1 ]] && SESSION_ID=""
+
+# --- preflight ---
+mkdir -p "$CONFIG_DIR"
+
+if [[ ! -f "$HELPERS_PY" ]]; then
+    echo "ERROR: reboot_helpers.py not found at $HELPERS_PY" >&2
+    exit 1
+fi
+if ! command -v uuidgen >/dev/null 2>&1; then
+    echo "ERROR: uuidgen not found. Install uuid-runtime." >&2
+    exit 1
+fi
+
+# --- resolve marker path ---
+if [[ $DRY_RUN -eq 1 ]]; then
+    MARKER_PATH="/tmp/opencode-web-reboot-test-$$-$RANDOM.json"
+    echo "[dry-run] marker would be written to: $MARKER_PATH"
+    echo "[dry-run] systemctl path unit will NOT be triggered (real marker location unchanged)"
+fi
+
+# --- warn if no session id (still proceed) ---
+if [[ -z "$SESSION_ID" ]]; then
+    echo "WARN: no session id; reboot will run WITHOUT a completion notification." >&2
+    echo "WARN: To enable notification: set \$OPENCODE_SESSION or pass --session-id ID" >&2
+fi
+
+# --- write marker via Python helper (single source of truth) ---
+OUTPUT="$(python3 "$HELPERS_PY" write \
+    --marker-path "$MARKER_PATH" \
+    --session-id "$SESSION_ID" 2>&1)" || {
+    echo "ERROR: failed to write marker:" >&2
+    echo "$OUTPUT" >&2
+    exit 1
+}
+
+# --- parse output (JSON line) ---
+REQUEST_ID="$(echo "$OUTPUT" | python3 -c 'import sys, json; print(json.loads(sys.stdin.read())["request_id"])')"
+TIMESTAMP="$(echo "$OUTPUT" | python3 -c 'import sys, json; print(json.loads(sys.stdin.read())["requested_at"])')"
+
+if [[ $DRY_RUN -eq 1 ]]; then
+    echo "[dry-run] marker written: $MARKER_PATH"
+    echo "[dry-run] request_id=$REQUEST_ID"
+    echo "[dry-run] session_id='$SESSION_ID'"
+    echo "[dry-run] requested_at=$TIMESTAMP"
+    echo "[dry-run] NO REBOOT WILL OCCUR. Inspect the file, then delete it: rm '$MARKER_PATH'"
+    exit 0
+fi
+
+# --- real run: confirm path unit is active ---
+PATH_STATE="$(systemctl --user is-active opencode-web-reboot.path 2>&1 || echo 'inactive')"
+if [[ "$PATH_STATE" != "active" && "$PATH_STATE" != "active (waiting)" ]]; then
+    echo "WARN: opencode-web-reboot.path is '$PATH_STATE'." >&2
+    echo "WARN: marker was written, but systemd will not fire reboot.py automatically." >&2
+    echo "WARN: Run 'bash install.sh' to enable the path unit." >&2
+fi
+
+echo "Reboot scheduled. request_id=$REQUEST_ID at $TIMESTAMP"
+echo "session_id='${SESSION_ID:-<none>}' marker=$MARKER_PATH"
+echo "Path unit will trigger opencode-web-reboot.service within ~1 second."
