@@ -49,6 +49,37 @@
         "context:external-libraries-workflow"
       ]
     },
+    "open-stage-orchestrator": {
+      "id": "open-stage-orchestrator",
+      "name": "OpenStageOrchestrator",
+      "category": "core",
+      "type": "agent",
+      "version": "1.0.0",
+      "author": "opencode",
+      "tags": ["orchestration", "planning", "review-gates", "primary"],
+      "dependencies": [
+        "subagent:contextscout",
+        "subagent:externalscout",
+        "subagent:story-mapper",
+        "subagent:senior-story-reviewer",
+        "subagent:architecture-analyzer",
+        "subagent:contract-manager",
+        "subagent:prioritization-engine",
+        "subagent:senior-technical-plan-reviewer",
+        "subagent:task-manager",
+        "subagent:batch-executor",
+        "subagent:coder-agent",
+        "subagent:build-agent",
+        "subagent:reviewer",
+        "subagent:tester",
+        "subagent:documentation",
+        "context:standards-code",
+        "context:standards-docs",
+        "context:standards-tests",
+        "context:review-ref",
+        "context:task-delegation-basics"
+      ]
+    },
     "repo-manager": {
       "id": "repo-manager",
       "name": "Repo Manager",
@@ -204,6 +235,26 @@
       "version": "1.0.0",
       "author": "opencode",
       "tags": ["context", "retrieval", "search"],
+      "dependencies": []
+    },
+    "senior-story-reviewer": {
+      "id": "senior-story-reviewer",
+      "name": "SeniorStoryReviewer",
+      "category": "subagents/core",
+      "type": "subagent",
+      "version": "1.0.0",
+      "author": "opencode",
+      "tags": ["review", "requirements", "user-stories", "senior-model"],
+      "dependencies": []
+    },
+    "senior-technical-plan-reviewer": {
+      "id": "senior-technical-plan-reviewer",
+      "name": "SeniorTechnicalPlanReviewer",
+      "category": "subagents/core",
+      "type": "subagent",
+      "version": "1.0.0",
+      "author": "opencode",
+      "tags": ["review", "architecture", "contracts", "senior-model"],
       "dependencies": []
     },
     "coder-agent": {

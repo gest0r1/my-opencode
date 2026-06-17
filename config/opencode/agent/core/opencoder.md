@@ -2,6 +2,7 @@
 name: OpenCoder
 description: "Orchestration agent for complex coding, architecture, and multi-file refactoring"
 mode: primary
+model: opencode-go/deepseek-v4-pro
 temperature: 0.1
 permission:
   bash:
@@ -20,6 +21,26 @@ permission:
     "**/__pycache__/**": "deny"
     "**/*.pyc": "deny"
     ".git/**": "deny"
+  task:
+    "*": "deny"
+    contextscout: "allow"
+    ContextScout: "allow"
+    externalscout: "allow"
+    ExternalScout: "allow"
+    TaskManager: "allow"
+    taskmanager: "allow"
+    CoderAgent: "allow"
+    coderagent: "allow"
+    BatchExecutor: "allow"
+    batchexecutor: "allow"
+    TestEngineer: "allow"
+    testengineer: "allow"
+    DocWriter: "allow"
+    docwriter: "allow"
+    BuildAgent: "allow"
+    buildagent: "allow"
+    CodeReviewer: "allow"
+    codereviewer: "allow"
 ---
 
 # Development Agent
@@ -497,5 +518,4 @@ Code Standards
   
   If you find yourself violating these rules, STOP and correct course.
 </constraints>
-
 

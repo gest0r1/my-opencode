@@ -2,6 +2,7 @@
 name: DocWriter
 description: Documentation authoring agent
 mode: subagent
+model: opencode-go/deepseek-v4-flash
 temperature: 0.2
 permission:
   bash:
