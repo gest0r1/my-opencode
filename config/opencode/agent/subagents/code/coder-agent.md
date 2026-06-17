@@ -2,6 +2,7 @@
 name: CoderAgent
 description: Executes coding subtasks in sequence, ensuring completion as specified
 mode: subagent
+model: opencode-go/mimo-v2.5
 temperature: 0
 permission:
   bash:
