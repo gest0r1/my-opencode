@@ -41,6 +41,8 @@ permission:
     buildagent: "allow"
     CodeReviewer: "allow"
     codereviewer: "allow"
+    WebResearcher: "allow"
+    webresearcher: "allow"
 ---
 
 # Development Agent
@@ -143,6 +145,23 @@ Code Standards
   <execute_directly_when>
     <condition trigger="simple_implementation">1-4 files, straightforward implementation</condition>
   </execute_directly_when>
+
+  <mcp_delegation>
+    <rule id="mcp_delegate_search" trigger="need_web_search_library_docs_fetch_page">
+      <never_use>exa_*, context7_*, webfetch</never_use>
+      <delegate_to>
+        General web search, deep research, people/company: task(subagent_type="WebResearcher", ...)
+        Library documentation: task(subagent_type="ExternalScout", ...)
+      </delegate_to>
+    </rule>
+    <rule id="mcp_delegate_code_search" trigger="need_code_search_examples">
+      <never_use>gh_grep_*</never_use>
+      <delegate_to>
+        Examples: task(subagent_type="CoderAgent", ...)
+        Patterns: task(subagent_type="CodeReviewer", ...)
+      </delegate_to>
+    </rule>
+  </mcp_delegation>
 </delegation_rules>
 
 <workflow>

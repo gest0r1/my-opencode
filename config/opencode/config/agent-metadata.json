@@ -17,6 +17,7 @@
         "subagent:documentation",
         "subagent:contextscout",
         "subagent:externalscout",
+        "subagent:web-researcher",
         "context:standards-code",
         "context:standards-docs",
         "context:standards-tests",
@@ -43,6 +44,7 @@
         "subagent:build-agent",
         "subagent:contextscout",
         "subagent:externalscout",
+        "subagent:web-researcher",
         "context:standards-code",
         "context:task-delegation-basics",
         "context:component-planning",
@@ -60,6 +62,7 @@
       "dependencies": [
         "subagent:contextscout",
         "subagent:externalscout",
+        "subagent:web-researcher",
         "subagent:story-mapper",
         "subagent:senior-story-reviewer",
         "subagent:architecture-analyzer",
@@ -91,6 +94,7 @@
       "dependencies": [
         "subagent:task-manager",
         "subagent:contextscout",
+        "subagent:web-researcher",
         "subagent:documentation",
         "subagent:coder-agent",
         "subagent:tester",
@@ -123,6 +127,7 @@
       "author": "opencode",
       "tags": ["content", "marketing", "writing"],
       "dependencies": [
+        "subagent:web-researcher",
         "context:standards-docs"
       ]
     },
@@ -135,6 +140,7 @@
       "author": "opencode",
       "tags": ["documentation", "technical", "writing"],
       "dependencies": [
+        "subagent:web-researcher",
         "context:standards-docs"
       ]
     },
@@ -146,7 +152,9 @@
       "version": "1.0.0",
       "author": "opencode",
       "tags": ["data", "analysis", "visualization"],
-      "dependencies": []
+      "dependencies": [
+        "subagent:web-researcher"
+      ]
     },
     "eval-runner": {
       "id": "eval-runner",
@@ -215,6 +223,16 @@
       "version": "1.0.0",
       "author": "opencode",
       "tags": ["external", "documentation", "search"],
+      "dependencies": []
+    },
+    "web-researcher": {
+      "id": "web-researcher",
+      "name": "WebResearcher",
+      "category": "subagents/core",
+      "type": "subagent",
+      "version": "1.0.0",
+      "author": "opencode",
+      "tags": ["web-search", "research", "exa", "deep-research"],
       "dependencies": []
     },
     "context-manager": {

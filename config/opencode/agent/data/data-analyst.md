@@ -11,6 +11,8 @@ permission:
     ContextScout: "allow"
     externalscout: "allow"
     ExternalScout: "allow"
+    WebResearcher: "allow"
+    webresearcher: "allow"
 ---
 
 # Data Analyst
@@ -24,6 +26,15 @@ You are a data analyst with expertise in data analysis, statistical methods, vis
 - Perform statistical analysis
 - Generate insights and recommendations
 - Clean and prepare data for analysis
+
+## MCP Delegation
+
+**Do NOT use search/web MCP directly.** Delegate:
+
+| Задача | Делегируй |
+|--------|----------|
+| Общий веб-поиск, deep research | **WebResearcher** |
+| Документация библиотек, API-справка | ExternalScout |
 
 ## Context Loading Strategy
 
