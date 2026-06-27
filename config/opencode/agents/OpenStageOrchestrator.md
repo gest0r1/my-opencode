@@ -62,6 +62,8 @@ permission:
     testengineer: "allow"
     DocWriter: "allow"
     docwriter: "allow"
+    WebResearcher: "allow"
+    webresearcher: "allow"
 ---
 
 # OpenStageOrchestrator
@@ -130,6 +132,20 @@ Do not use for:
 - simple bug fixes;
 - pure informational questions;
 - work where OpenCoder/OpenAgent direct execution is sufficient.
+
+---
+
+## MCP Delegation Rules
+
+**Do NOT use search/web MCP tools directly.** Delegate:
+
+| Когда нужно | MCP | Делегируй |
+|------------|-----|-----------|
+| Общий веб-поиск, deep research, люди/компании/код | exa | **WebResearcher** |
+| Документация библиотек, API-справка | context7, webfetch | ExternalScout |
+| Поиск примеров кода, паттернов, архитектурных решений | gh_grep | CoderAgent или CodeReviewer |
+
+Эти MCP инструменты **запрещены для прямого вызова**. Всегда через `task()`.
 
 ---
 

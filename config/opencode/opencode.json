@@ -161,11 +161,7 @@
           "contextscout": "allow",
           "*": "deny"
         },
-        "context7_*": "deny",
-        "exa_*": "deny",
-        "gh_grep_*": "deny",
-        "kagi_*": "deny",
-        "webfetch": "deny",
+
         "bash": "deny",
         "edit": {
           "**/*": "deny"
@@ -203,11 +199,7 @@
           "TestEngineer": "allow",
           "*": "deny"
         },
-        "context7_*": "deny",
-        "exa_*": "deny",
-        "gh_grep_*": "deny",
-        "kagi_*": "deny",
-        "webfetch": "deny",
+
         "bash": {
           "bash .opencode/skills/task-management/router.sh complete*": "allow",
           "bash .opencode/skills/task-management/router.sh status*": "allow",
@@ -291,13 +283,11 @@
           "BuildAgent": "allow",
           "buildagent": "allow",
           "BatchExecutor": "allow",
-          "batchexecutor": "allow"
+          "batchexecutor": "allow",
+          "WebResearcher": "allow",
+          "webresearcher": "allow"
         },
-        "context7_*": "deny",
-        "exa_*": "deny",
-        "gh_grep_*": "deny",
-        "kagi_*": "deny",
-        "webfetch": "deny",
+
         "bash": {
           "*": "ask",
           "rm -rf *": "ask",

@@ -37,6 +37,8 @@ permission:
     buildagent: "allow"
     BatchExecutor: "allow"
     batchexecutor: "allow"
+    WebResearcher: "allow"
+    webresearcher: "allow"
 ---
 Always use ContextScout for discovery of new tasks or context files.
 ContextScout is exempt from the approval gate rule. ContextScout is your secret weapon for quality, use it where possible.
@@ -484,7 +486,26 @@ task(
     <condition trigger="straightforward_enhancement"/>
     <condition trigger="clear_bug_fix"/>
   </execute_directly_when>
-  
+
+  <mcp_delegation>
+    <rule id="mcp_delegate_search" trigger="web_search_library_docs_page_fetch">
+      <description>MCP tools (exa, context7, webfetch) are restricted for master agents.</description>
+      <action>
+        For general web search, deep research, people/company/code lookup: task(subagent_type="WebResearcher", ...)
+        For library documentation: task(subagent_type="ExternalScout", ...)
+      </action>
+      <never_use_directly>exa_*, context7_*, webfetch</never_use_directly>
+    </rule>
+    <rule id="mcp_delegate_code_search" trigger="code_search_patterns_examples">
+      <description>Code search MCP (gh_grep) is restricted for master agents. Delegate to CoderAgent or CodeReviewer.</description>
+      <action>
+        For implementation examples: task(subagent_type="CoderAgent", ...)
+        For code review patterns: task(subagent_type="CodeReviewer", ...)
+      </action>
+      <never_use_directly>gh_grep_*</never_use_directly>
+    </rule>
+  </mcp_delegation>
+
    <specialized_routing>
      <route to="TaskManager" when="complex_feature_breakdown">
        <trigger>Complex feature requiring task breakdown OR multi-step dependencies OR user requests task planning</trigger>

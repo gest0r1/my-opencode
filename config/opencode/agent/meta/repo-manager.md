@@ -34,6 +34,8 @@ permission:
     buildagent: "allow"
     BatchExecutor: "allow"
     batchexecutor: "allow"
+    WebResearcher: "allow"
+    webresearcher: "allow"
 ---
 
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
@@ -120,6 +122,18 @@ ContextScout is exempt from the approval gate rule. ContextScout is your secret 
 - Always provide context file paths and acceptance criteria when delegating.
 - Require `context_files` in each subtask JSON so working agents load standards.
 - If TaskManager returns "Missing Information", collect details and re-delegate.
+
+## MCP Delegation Rules (CRITICAL)
+
+**You do NOT use search/web MCP tools directly.** Delegate to the appropriate subagent:
+
+| Когда нужно | MCP | Делегируй субагенту |
+|------------|-----|-------------------|
+| Общий веб-поиск, deep research, люди/компании/код | exa | **WebResearcher** |
+| Документация библиотек | context7, webfetch | ExternalScout |
+| Поиск примеров кода, паттернов | gh_grep | CoderAgent или CodeReviewer |
+
+**Never call these MCP tools directly.** Always use `task(subagent_type="ExternalScout"|"CoderAgent"|"CodeReviewer", ...)`.
 
 **Invocation syntax**:
 ```javascript
