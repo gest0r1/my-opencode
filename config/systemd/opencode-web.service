@@ -5,8 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/guber/bot-project
-ExecStart=/home/guber/.opencode/bin/opencode web --port 4096 --hostname 0.0.0.0
+WorkingDirectory=/home/guber
+## ВАЖНО: --pure нужен для стабильного запуска сервиса.
+ExecStart=/home/guber/.opencode/bin/opencode web --port 4096 --hostname 0.0.0.0 --pure
 EnvironmentFile=/home/guber/.config/opencode-web.env
 TimeoutStopSec=10
 Restart=on-failure
