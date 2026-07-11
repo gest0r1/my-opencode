@@ -27,25 +27,18 @@
     "yadisk": {
       "type": "local",
       "command": [
-        "/home/guber/.local/bin/yadisk-mcp-with-env.sh"
-      ],
-      "enabled": true
-    },
-    "yonote": {
-      "type": "local",
-      "command": [
-        "/home/guber/.local/bin/yonote-mcp-with-env.sh"
+        "/home/guber/.local/bin/yadisk-mcp"
       ],
       "enabled": true,
       "env": {
-        "YONOTE_API_KEY": "{env:YONOTE_API_KEY}",
-        "YONOTE_BASE_URL": "https://app.yonote.ru/api"
+        "YANDEX_DISK_TOKEN": "{env:YANDEX_DISK_TOKEN}",
+        "YADISK_MCP_READ_ONLY": "false"
       }
     },
-    "yonote-native": {
+    "yonote": {
       "type": "remote",
       "url": "https://fresh-logic.yonote.ru/api/v2/mcp",
-      "enabled": false,
+      "enabled": true,
       "headers": {
         "Authorization": "Bearer {env:YONOTE_API_KEY}"
       }
@@ -96,6 +89,7 @@
     "gh_grep_*": "deny",
     "kagi_*": "deny",
     "webfetch": "deny",
+    "worktree_*": "deny",
     "exchange_*": "allow"
   },
   "instructions": [
