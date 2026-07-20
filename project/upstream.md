@@ -4,7 +4,7 @@
 
 **Repo:** https://github.com/anomalyco/opencode
 **Git remote:** `upstream`
-**Latest tag:** v1.18.1 (на момент последнего обновления)
+**Latest tag:** v1.18.4 (обновлено 2026-07-20)
 **Version scheme:** v1.x.x (совпадает с npm-пакетами @opencode-ai/*)
 
 ## Legacy (не использовать)
