@@ -97,6 +97,17 @@ permission:
 **Contains**: What this file covers
 ```
 
+## Optional gh_grep Delegation Note
+
+Do not use `gh_grep` directly. If local context is insufficient and the caller needs public GitHub code examples or implementation patterns, recommend delegating to:
+- `CoderAgent` for implementation examples and API usage patterns.
+- `CodeReviewer` for review evidence, anti-patterns, and safe usage checks.
+
+Suggest search patterns only as guidance for those agents:
+- Exact API names: `createClient(`, `defineConfig(`, `useQuery(`
+- Imports: `from "package"`, `require("package")`
+- Paths: `examples/`, `test/`, `tests/`, `spec/`, config files
+
 If a framework/library was mentioned and not found internally, append:
 
 ```markdown

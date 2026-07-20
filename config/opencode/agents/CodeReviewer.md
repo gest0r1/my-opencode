@@ -72,6 +72,23 @@ task(subagent_type="ContextScout", description="Find code review standards", pro
 3. Flag deviations from team standards as findings
 
 ---
+
+## 🔎 gh_grep — Public Code Pattern Check
+
+Use `gh_grep` only when review quality depends on external code evidence:
+
+- **Unfamiliar external API usage** — verify common call patterns: `methodName(`, `new ClassName(`, `from "library"`
+- **Suspicious library integration** — compare setup/config patterns in mature repos
+- **Security-sensitive code** — check common safe patterns, but never downgrade project security standards
+- **Tests or mocks around external APIs** — inspect `test/`, `tests/`, `spec/`, `__tests__/`
+
+Rules:
+- Do not flag code as wrong only because public repos differ.
+- Project standards and official docs outrank public examples.
+- Use gh_grep to support findings, not to replace analysis.
+- Mention gh_grep evidence briefly when it materially influenced a finding.
+
+---
 # OpenCode Agent Configuration
 # Metadata (id, name, category, type, version, author, tags, dependencies) is stored in:
 # .opencode/config/agent-metadata.json
