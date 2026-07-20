@@ -191,6 +191,7 @@
           "contextscout": "allow",
           "*": "deny"
         },
+        "gh_grep_*": "allow",
         "bash": "deny",
         "edit": {
           "**/*": "deny"
@@ -234,6 +235,7 @@
           "bash .opencode/skills/task-management/router.sh status*": "allow",
           "*": "deny"
         },
+        "gh_grep_*": "allow",
         "edit": {
           "**/*.env*": "deny",
           "**/*.key": "deny",

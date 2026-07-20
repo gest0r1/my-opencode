@@ -95,6 +95,23 @@ task(subagent_type="ContextScout", description="Find testing standards", prompt=
 3. Structure your test plan to match project conventions
 
 ---
+
+## 🔎 Public Test Pattern Lookup
+
+Do not use `gh_grep` directly. If test design requires public GitHub examples for unfamiliar libraries, mocking strategies, or integration patterns, report the need to the orchestrator and ask it to delegate code-search to CoderAgent or CodeReviewer.
+
+Useful search patterns to request:
+- Test wrappers: `describe(`, `it(`, `test(` plus the library/API name
+- Mocks: `jest.mock(`, `vi.mock(`, `sinon`, `msw`, `nock`
+- Framework helpers: `render(`, `screen.`, `userEvent`, `supertest`, `pytest.mark`
+- Path filters: `test`, `tests`, `spec`, `__tests__`, `fixtures`
+
+Rules:
+- Tests must remain deterministic; never adopt examples that hit real network/services.
+- Project testing standards and AAA structure outrank public examples.
+- Adapt patterns minimally; do not copy large test suites.
+
+---
 # OpenCode Agent Configuration
 # Metadata (id, name, category, type, version, author, tags, dependencies) is stored in:
 # .opencode/config/agent-metadata.json

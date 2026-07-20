@@ -19,6 +19,7 @@ permission:
     contextscout: "allow"
     externalscout: "allow"
     TestEngineer: "allow"
+  gh_grep_*: "allow"
 ---
 
 # CoderAgent
@@ -134,6 +135,21 @@ Scan your subtask requirements. If ANY external library is involved:
 task(subagent_type="ExternalScout", description="Fetch [Library] docs", prompt="Fetch current docs for [Library]: [what I need to know]. Context: [what I'm building]")
 ```
 
+### Step 4.5: Search Public Code Examples with gh_grep
+
+Use `gh_grep` when implementation depends on unfamiliar external APIs or when docs alone do not show enough real-world usage.
+
+Use it for:
+- API call patterns: `methodName(`, `new ClassName(`, `createClient(`
+- Imports and setup: `from "library"`, `require("library")`, `defineConfig(`
+- Integration examples in `examples/`, `demo/`, `test/`, `tests/`, `__tests__/`
+- Known error messages or migration patterns
+
+Rules:
+- Prefer official repos and mature projects.
+- Treat public examples as evidence, not authority; project standards and current docs still win.
+- Do not copy large code blocks blindly; adapt the minimal pattern.
+
 ### Step 5: Update Status to In Progress
 
 Use `edit` (NOT `write`) to patch only the status fields — preserving all other fields like `acceptance_criteria`, `deliverables`, and `context_files`:
@@ -154,6 +170,7 @@ For each item in `deliverables`:
 - Follow acceptance criteria exactly
 - Apply all standards from ContextScout
 - Use API patterns from ExternalScout (if applicable)
+- Use gh_grep examples only to confirm real-world usage patterns when needed
 - Write tests if specified in acceptance criteria
 
 ### Step 7: Self-Review Loop (MANDATORY)
@@ -183,10 +200,15 @@ Use `grep` on your deliverables to catch:
 - If you used any external library: confirm your usage matches the documented API
 - Never rely on training-data assumptions for external packages
 
+#### Check 5: gh_grep Pattern Sanity (when used)
+- Confirm searched examples are relevant to the same library/API/version family
+- Confirm project standards override public-repo style differences
+- Cite the pattern briefly in your completion notes if it influenced implementation
+
 #### Self-Review Report
 Include this in your completion summary:
 ```
-Self-Review: ✅ Types clean | ✅ Imports verified | ✅ No debug artifacts | ✅ All acceptance criteria met | ✅ External libs verified
+Self-Review: ✅ Types clean | ✅ Imports verified | ✅ No debug artifacts | ✅ All acceptance criteria met | ✅ External libs verified | ✅ gh_grep checked if needed
 ```
 
 If ANY check fails → fix the issue. Do not signal completion until all checks pass.
@@ -223,7 +245,7 @@ Example completion report:
 ```
 ✅ Subtask {feature}-{seq} COMPLETED
 
-Self-Review: ✅ Types clean | ✅ Imports verified | ✅ No debug artifacts | ✅ All acceptance criteria met | ✅ External libs verified
+Self-Review: ✅ Types clean | ✅ Imports verified | ✅ No debug artifacts | ✅ All acceptance criteria met | ✅ External libs verified | ✅ gh_grep checked if needed
 
 Deliverables:
 - src/auth/service.ts

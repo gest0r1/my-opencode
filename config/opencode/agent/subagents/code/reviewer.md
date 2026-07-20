@@ -13,6 +13,7 @@ permission:
     "**/*": "deny"
   task:
     contextscout: "allow"
+  gh_grep_*: "allow"
 ---
 
 # CodeReviewer
@@ -80,6 +81,23 @@ task(subagent_type="ContextScout", description="Find code review standards", pro
 1. **Read** every file it recommends (Critical priority first)
 2. **Apply** those standards as your review criteria
 3. Flag deviations from team standards as findings
+
+---
+
+## 🔎 gh_grep — Public Code Pattern Check
+
+Use `gh_grep` only when review quality depends on external code evidence:
+
+- **Unfamiliar external API usage** — verify common call patterns: `methodName(`, `new ClassName(`, `from "library"`
+- **Suspicious library integration** — compare setup/config patterns in mature repos
+- **Security-sensitive code** — check common safe patterns, but never downgrade project security standards
+- **Tests or mocks around external APIs** — inspect `test/`, `tests/`, `spec/`, `__tests__/`
+
+Rules:
+- Do not flag code as wrong only because public repos differ.
+- Project standards and official docs outrank public examples.
+- Use gh_grep to support findings, not to replace analysis.
+- Mention gh_grep evidence briefly when it materially influenced a finding.
 
 ---
 # OpenCode Agent Configuration
