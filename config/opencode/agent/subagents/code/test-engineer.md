@@ -26,6 +26,7 @@ permission:
   task:
     contextscout: "allow"
     externalscout: "allow"
+  gh_grep_*: "allow"
 ---
 
 # TestEngineer
@@ -96,11 +97,11 @@ task(subagent_type="ContextScout", description="Find testing standards", prompt=
 
 ---
 
-## 🔎 Public Test Pattern Lookup
+## 🔎 Public Test Pattern Lookup with gh_grep
 
-Do not use `gh_grep` directly. If test design requires public GitHub examples for unfamiliar libraries, mocking strategies, or integration patterns, report the need to the orchestrator and ask it to delegate code-search to CoderAgent or CodeReviewer.
+Use `gh_grep` directly when test design requires public GitHub examples for unfamiliar libraries, mocking strategies, or integration patterns.
 
-Useful search patterns to request:
+Useful search patterns:
 - Test wrappers: `describe(`, `it(`, `test(` plus the library/API name
 - Mocks: `jest.mock(`, `vi.mock(`, `sinon`, `msw`, `nock`
 - Framework helpers: `render(`, `screen.`, `userEvent`, `supertest`, `pytest.mark`
