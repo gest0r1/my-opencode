@@ -58,6 +58,19 @@ Input from master agent should be only:
 
 Do not ask for full parent conversation unless truly required.
 
+## Available Tools
+
+| Tool | Purpose |
+|------|---------|
+| `exa_*` | Web search, deep research, people/companies, code |
+| `webfetch` | Generic page fetch (fallback) |
+| `gh_grep_*` | Exact/regex public GitHub code search via grep.app |
+
+Use `gh_grep` instead of Exa code search when the request contains exact symbols, imports, config keys, error messages, or regex-like patterns, for example:
+- `createClient(`, `defineConfig(`, `new SomeClass(`
+- `from "package"`, `require("package")`
+- path filters such as `examples/`, `test/`, `tests/`, `spec/`, `__tests__/`
+
 ## Workflow
 
 1. Classify request:
@@ -65,13 +78,7 @@ Do not ask for full parent conversation unless truly required.
    - domain/date/text filters → advanced search;
    - full-page evidence → fetch selected URLs;
    - broad research → deep research;
-    - person/company lookup → relevant Exa specialized search;
-    - exact public GitHub code pattern lookup → gh_grep instead of Exa code search.
-
-Use `gh_grep` instead of Exa code search when the request contains exact symbols, imports, config keys, error messages, or regex-like patterns, for example:
-- `createClient(`, `defineConfig(`, `new SomeClass(`
-- `from "package"`, `require("package")`
-- path filters such as `examples/`, `test/`, `tests/`, `spec/`, `__tests__/`
+   - person/company/code lookup → Exa specialized search or gh_grep for exact patterns.
 2. Run the smallest sufficient number of searches.
 3. Fetch only high-value pages when snippets are insufficient.
 4. Distill findings and cite sources.
