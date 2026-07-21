@@ -10,6 +10,7 @@ permission:
     "*": "allow"
   glob:
     "*": "allow"
+  gh_grep_*: "allow"
   bash:
     "*": "deny"
   edit:
@@ -97,16 +98,24 @@ permission:
 **Contains**: What this file covers
 ```
 
-## Optional gh_grep Delegation Note
+## Optional gh_grep Usage
 
-Do not use `gh_grep` directly. If local context is insufficient and the caller needs public GitHub code examples or implementation patterns, recommend delegating to:
-- `CoderAgent` for implementation examples and API usage patterns.
-- `CodeReviewer` for review evidence, anti-patterns, and safe usage checks.
+Use `gh_grep` directly when local context is insufficient and the caller needs public GitHub code examples or implementation patterns.
 
-Suggest search patterns only as guidance for those agents:
+Good triggers:
+- User asks for real-world examples, public GitHub patterns, or upstream usage.
+- Local context mentions a library/framework but has no implementation examples.
+- Caller needs search patterns to pass to CoderAgent, TestEngineer, or CodeReviewer.
+
+Search patterns:
 - Exact API names: `createClient(`, `defineConfig(`, `useQuery(`
 - Imports: `from "package"`, `require("package")`
 - Paths: `examples/`, `test/`, `tests/`, `spec/`, config files
+
+Limits:
+- Do not replace project context with public examples.
+- Return gh_grep findings as optional external evidence, ranked below verified local context.
+- Prefer recommending ExternalScout for library docs when docs are the missing piece.
 
 If a framework/library was mentioned and not found internally, append:
 
