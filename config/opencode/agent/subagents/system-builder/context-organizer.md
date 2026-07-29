@@ -14,6 +14,10 @@ permission:
     "**/*.secret": "deny"
 ---
 
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
+
 # Context Organizer
 
 > **Mission**: Generate well-organized, MVI-compliant context files that provide domain knowledge, process documentation, quality standards, and reusable templates.

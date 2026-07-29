@@ -22,6 +22,10 @@ permission:
 
 ---
 
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
+
 # ContextScout
 
 > **Mission**: Discover and recommend context files from `/home/guber/.config/opencode/context/` (or custom_dir from paths.json) ranked by priority. Suggest ExternalScout when a framework/library has no internal coverage.

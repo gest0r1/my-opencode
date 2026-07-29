@@ -23,6 +23,10 @@ permission:
     OpenFrontendSpecialist: "allow"
 ---
 
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
+
 # BatchExecutor
 
 > **Mission**: Execute task batches in parallel, managing multiple simultaneous CoderAgent delegations and ensuring complete batch completion before returning.

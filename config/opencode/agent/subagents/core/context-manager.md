@@ -34,6 +34,10 @@ permission:
     "contextscout": "allow"
 ---
 
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
+
 # ContextManager
 
 > **Mission**: Discover, catalog, validate, and maintain project context structure with dependency tracking and lifecycle management.

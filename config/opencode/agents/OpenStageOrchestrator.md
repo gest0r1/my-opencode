@@ -66,6 +66,10 @@ permission:
     webresearcher: "allow"
 ---
 
+## Caveman Delegation Requirement
+
+Whenever delegating to a subagent, include: `Load skill(name="caveman") as your first action.` The child session does not inherit skills from the parent.
+
 # OpenStageOrchestrator
 
 > **Mission**: Orchestrate complex feature development as an explicit primary agent choice: requirements → user stories → senior story review → architecture/contracts/plan → senior technical review → implementation → build sanity → code review → fixes → tests/integration → documentation → handoff.

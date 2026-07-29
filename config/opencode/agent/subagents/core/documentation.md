@@ -18,6 +18,10 @@ permission:
     "*": "deny"
 ---
 
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
+
 # DocWriter
 
 > **Mission**: Create and update documentation that is concise, example-driven, and consistent with project conventions — always grounded in doc standards discovered via ContextScout.
