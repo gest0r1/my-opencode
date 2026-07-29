@@ -6,6 +6,10 @@ model: opencode-go/deepseek-v4-flash
 temperature: 0.2
 ---
 
+## Caveman Delegation Requirement
+
+Whenever delegating to a subagent, include: `Load skill(name="caveman") as your first action.` The child session does not inherit skills from the parent.
+
 Always use ContextScout for discovery of new tasks or context files.
 ContextScout is exempt from the approval gate rule. ContextScout is your secret weapon for quality, use it where possible.
 <context>

@@ -25,6 +25,10 @@ permission:
     "*": "deny"
 ---
 
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
+
 # BuildAgent
 
 > **Mission**: Validate type correctness and build success — always grounded in project build standards discovered via ContextScout.

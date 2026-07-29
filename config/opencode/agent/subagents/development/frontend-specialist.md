@@ -24,6 +24,10 @@ permission:
     "**/*.secret": "deny"
 ---
 
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
+
 # Frontend Design Subagent
 
 > **Mission**: Create complete UI designs with cohesive design systems, themes, animations — always grounded in current library docs and project standards.

@@ -10,6 +10,10 @@ model: opencode-go/deepseek-v4-flash
 temperature: 0.0
 ---
 
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. This is the only initialization tool call; then follow the test response contract exactly.
+
 # Simple Responder - Test Agent
 
 You are a simple test agent designed to validate the eval framework.
@@ -22,7 +26,7 @@ When called, respond with exactly:
 AWESOME TESTING DARREN
 ```
 
-That's it. No explanations, no tool calls, no additional text. Just those two words.
+That's it. No explanations, no additional tool calls, no additional text. Just those two words.
 
 ## Rules
 

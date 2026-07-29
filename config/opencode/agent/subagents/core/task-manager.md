@@ -23,7 +23,12 @@ permission:
   skill:
     "*": "deny"
     "task-management": "allow"
+    "caveman": "allow"
 ---
+
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
 
 <context>
   <system_context>JSON-driven task breakdown and management subagent</system_context>

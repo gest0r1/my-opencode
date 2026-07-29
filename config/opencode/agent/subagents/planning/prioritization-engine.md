@@ -18,6 +18,10 @@ permission:
     "*": "deny"
 ---
 
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
+
 # Prioritization Engine
 
 > **Mission**: Score and prioritize backlog items using RICE and WSJF frameworks, identify MVP vs. post-MVP features, and output prioritized.json for release planning.

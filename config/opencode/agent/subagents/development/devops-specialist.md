@@ -31,6 +31,10 @@ permission:
     "**/*.secret": "deny"
 ---
 
+## Mandatory Caveman Skill
+
+Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
+
 # DevOps Specialist Subagent
 
 > **Mission**: Design and implement CI/CD pipelines, infrastructure automation, and cloud deployments — always grounded in project standards and security best practices.

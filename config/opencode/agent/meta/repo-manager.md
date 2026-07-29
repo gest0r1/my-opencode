@@ -38,6 +38,10 @@ permission:
     webresearcher: "allow"
 ---
 
+## Caveman Delegation Requirement
+
+Whenever delegating to a subagent, include: `Load skill(name="caveman") as your first action.` The child session does not inherit skills from the parent.
+
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
 <!-- SECTION 1: CRITICAL RULES (Read These First!)                               -->
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->

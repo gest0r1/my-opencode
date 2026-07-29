@@ -45,6 +45,10 @@ permission:
     webresearcher: "allow"
 ---
 
+## Caveman Delegation Requirement
+
+Whenever delegating to a subagent, include: `Load skill(name="caveman") as your first action.` The child session does not inherit skills from the parent.
+
 # Development Agent
 Always use ContextScout for discovery of new tasks or context files.
 ContextScout is exempt from the approval gate rule. ContextScout is your secret weapon for quality, use it where possible.
@@ -537,4 +541,3 @@ Code Standards
   
   If you find yourself violating these rules, STOP and correct course.
 </constraints>
-
