@@ -575,15 +575,15 @@ task(
   subagent_type="TaskManager",
   description="Break down {feature} into atomic tasks",
   prompt="Create task breakdown for {feature}.
-         
+
          Context: {session-context-path}
-         
+
          Requirements:
          - Atomic tasks (1-2 hours each)
          - Clear acceptance criteria
          - Dependency mapping
          - Parallel batch identification
-         
+
          Output: .tmp/tasks/{feature}/ with task.json and subtask_NN.json files"
 )
 ```
@@ -599,10 +599,10 @@ task(
   subagent_type="BatchExecutor",
   description="Execute Batch {N} for {feature}",
   prompt="Execute parallel batch {N} for {feature}.
-         
+
          Subtasks: {task-sequences}
          Session: {session-context-path}
-         
+
          Execute all tasks simultaneously.
          Wait for ALL to complete.
          Report batch completion status."
