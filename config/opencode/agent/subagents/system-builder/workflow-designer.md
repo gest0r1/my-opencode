@@ -1,8 +1,8 @@
 ---
 name: WorkflowDesigner
-description: Designs complete workflow definitions with context dependencies and success criteria
+description: Designs complete workflow definitions with context dependencies and success criteria. Model: opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash
 mode: subagent
-model: opencode-go/deepseek-v4-pro
+model: opencode-go/deepseek-v4-flash
 temperature: 0.1
 permission:
   task:

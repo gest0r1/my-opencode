@@ -4,9 +4,9 @@
 # .opencode/config/agent-metadata.json
 
 name: CommandCreator
-description: "Creates custom slash commands that route to appropriate agents with clear syntax and examples"
+description: "Creates custom slash commands that route to appropriate agents with clear syntax and examples. Model: opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
 mode: subagent
-model: opencode-go/deepseek-v4-pro
+model: opencode-go/deepseek-v4-flash
 temperature: 0.1
 ---
 

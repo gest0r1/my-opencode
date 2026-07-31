@@ -271,8 +271,8 @@
 |--------|--------|-------------------|
 | **openai/gpt-5.5** | CodeReviewer, SeniorStoryReviewer, SeniorTechnicalPlanReviewer | Старшая модель для review-гейтов |
 | **opencode-go/mimo-v2.5** | CoderAgent, BatchExecutor | Основная модель для кодинга |
-| **opencode-go/deepseek-v4-pro** | OpenCoder, OpenStageOrchestrator, plan, OpenDevopsSpecialist, ArchitectureAnalyzer, ContractManager, ADRManager, AgentGenerator, CommandCreator, DomainAnalyzer, WorkflowDesigner, OpenSystemBuilder, OpenDataAnalyst | Модель для orchestration, архитектуры и сложного анализа |
-| **opencode-go/deepseek-v4-flash** | OpenAgent, build, explore, ContextScout, ExternalScout, TaskManager, TestEngineer, BuildAgent, DocWriter, ContextOrganizer, ContextManager, ContextRetriever, StoryMapper, PrioritizationEngine, SimpleResponder, OpenRepoManager, OpenCopywriter, OpenTechnicalWriter, eval-runner | Быстрая модель для большинства задач |
+| **opencode-go/deepseek-v4-pro** | OpenCoder, OpenStageOrchestrator, plan, OpenSystemBuilder, OpenDataAnalyst | Модель для orchestration, архитектуры и сложного анализа |
+| **opencode-go/deepseek-v4-flash** | OpenAgent, build, explore, ContextScout, ExternalScout, TaskManager, TestEngineer, BuildAgent, DocWriter, ContextOrganizer, ContextManager, ContextRetriever, StoryMapper, PrioritizationEngine, SimpleResponder, OpenRepoManager, OpenCopywriter, OpenTechnicalWriter, eval-runner, OpenDevopsSpecialist, ArchitectureAnalyzer, ContractManager, ADRManager, AgentGenerator, CommandCreator, DomainAnalyzer, WorkflowDesigner | Быстрая модель для большинства задач |
 | **opencode-go/qwen3.7-plus** | general | Универсальный исследовательский агент |
 | **google/gemini-2.5-flash** | ImageSpecialist | Работа с изображениями |
 | **opencode-go/minimax-m3** | OpenFrontendSpecialist | Frontend/UI дизайн |
