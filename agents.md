@@ -16,20 +16,20 @@
 | 14 | BuildAgent | subagent | Type check, сборка (tsc/mypy/go/cargo/npm) | **opencode-go/deepseek-v4-flash** | 0.1 | — | bash: only build-commands allow; edit/write: deny all; task: contextscout allow |
 | 15 | DocWriter | subagent | Документация, markdown-файлы | **opencode-go/deepseek-v4-flash** | 0.2 | — | bash: deny; edit: .md allow; task: contextscout allow |
 | 16 | ContextOrganizer | subagent | Управление контекстом: harvest/extract/organize/update/create | **opencode-go/deepseek-v4-flash** | — | — | (определён в command/context.md и system-builder) |
-| 17 | OpenDevopsSpecialist | subagent | CI/CD, инфраструктура, деплой (docker/k8s/terraform) | **opencode-go/deepseek-v4-pro** | 0.1 | — | bash: docker/kubectl/terraform/npm allow; edit: deny .env/.key/.secret; task: contextscout allow |
+| 17 | OpenDevopsSpecialist | subagent | CI/CD, инфраструктура, деплой (docker/k8s/terraform) | **opencode-go/deepseek-v4-flash** | 0.1 | — | bash: docker/kubectl/terraform/npm allow; edit: deny .env/.key/.secret; task: contextscout allow |
 | 18 | OpenFrontendSpecialist | subagent | UI/дизайн, темы, анимации, design-системы | **opencode-go/minimax-m3** | 0.2 | — | write: deny .ts/.js/.py; edit: .html/.css в design_iterations allow; task: contextscout/externalscout allow |
 | 19 | BatchExecutor | subagent | Параллельное выполнение батчей (5+ задач) | **opencode-go/mimo-v2.5** | 0.1 | — | bash: deny (task-cli allow); edit: deny .env/.key/.secret/node_modules/.git; task: contextscout/externalscout/coderagent allow |
 | 20 | ContextManager | subagent | Lifecycle контекста: discover/catalog/validate/propose/maintain | **opencode-go/deepseek-v4-flash** | 0.1 | — | read/grep/glob: allow; bash: find/ls/mkdir/mv .opencode/context allow; edit/write: .opencode/context/** allow; task: contextscout allow |
 | 21 | ContextRetriever | subagent | Поиск и навигация по контексту через navigation.md | **opencode-go/deepseek-v4-flash** | — | — | read/grep/glob: allow; bash/edit/write: deny |
 | 22 | StoryMapper | subagent | User journey mapping, epics, stories, vertical slices | **opencode-go/deepseek-v4-flash** | 0.1 | — | bash: deny; edit: deny .env/.key/.secret/node_modules/.git; task: contextscout/externalscout allow |
-| 23 | ArchitectureAnalyzer | subagent | DDD-driven анализ: bounded contexts, module boundaries, aggregates | **opencode-go/deepseek-v4-pro** | 0.2 | — | bash: deny (mkdir .tmp/architecture allow); edit: deny .env/.key/.secret/node_modules/.git; task: contextscout/externalscout allow |
-| 24 | ContractManager | subagent | API contract management, contract-first design (OpenAPI/Swagger) | **opencode-go/deepseek-v4-pro** | 0.1 | — | bash: deny (mkdir .tmp/contracts allow); edit: deny .env/.key/.secret/node_modules/.git; task: contextscout/externalscout allow |
+| 23 | ArchitectureAnalyzer | subagent | DDD-driven анализ: bounded contexts, module boundaries, aggregates | **opencode-go/deepseek-v4-flash** | 0.2 | — | bash: deny (mkdir .tmp/architecture allow); edit: deny .env/.key/.secret/node_modules/.git; task: contextscout/externalscout allow |
+| 24 | ContractManager | subagent | API contract management, contract-first design (OpenAPI/Swagger) | **opencode-go/deepseek-v4-flash** | 0.1 | — | bash: deny (mkdir .tmp/contracts allow); edit: deny .env/.key/.secret/node_modules/.git; task: contextscout/externalscout allow |
 | 25 | PrioritizationEngine | subagent | RICE/WSJF scoring, MVP identification, release slicing | **opencode-go/deepseek-v4-flash** | 0.1 | — | bash: deny; edit: deny .env/.key/.secret/node_modules/.git; task: contextscout allow |
-| 26 | ADRManager | subagent | Architecture Decision Records: создание/поиск/обновление ADR | **opencode-go/deepseek-v4-pro** | — | — | bash: deny (mkdir docs/adr allow); edit: docs/adr/** allow; task: contextscout allow |
-| 27 | AgentGenerator | subagent | Генерация scaffolding новых агентов | **opencode-go/deepseek-v4-pro** | — | — | bash/edit: deny; task: contextscout allow |
-| 28 | CommandCreator | subagent | Генерация scaffolding команд | **opencode-go/deepseek-v4-pro** | — | — | bash/edit: deny; task: contextscout allow |
-| 29 | DomainAnalyzer | subagent | Анализ домена и bounded contexts | **opencode-go/deepseek-v4-pro** | — | — | bash/edit: deny; task: contextscout allow |
-| 30 | WorkflowDesigner | subagent | Дизайн workflow и orchestration | **opencode-go/deepseek-v4-pro** | — | — | bash/edit: deny; task: contextscout allow |
+| 26 | ADRManager | subagent | Architecture Decision Records: создание/поиск/обновление ADR | **opencode-go/deepseek-v4-flash** | — | — | bash: deny (mkdir docs/adr allow); edit: docs/adr/** allow; task: contextscout allow |
+| 27 | AgentGenerator | subagent | Генерация scaffolding новых агентов | **opencode-go/deepseek-v4-flash** | — | — | bash/edit: deny; task: contextscout allow |
+| 28 | CommandCreator | subagent | Генерация scaffolding команд | **opencode-go/deepseek-v4-flash** | — | — | bash/edit: deny; task: contextscout allow |
+| 29 | DomainAnalyzer | subagent | Анализ домена и bounded contexts | **opencode-go/deepseek-v4-flash** | — | — | bash/edit: deny; task: contextscout allow |
+| 30 | WorkflowDesigner | subagent | Дизайн workflow и orchestration | **opencode-go/deepseek-v4-flash** | — | — | bash/edit: deny; task: contextscout allow |
 | 31 | ImageSpecialist | subagent | Работа с изображениями (editing/generation через Gemini) | **google/gemini-2.5-flash** | — | — | bash: deny; edit: deny; task: contextscout allow; gemini: allow |
 | 32 | SimpleResponder | subagent | Базовый responder для тестирования | **opencode-go/deepseek-v4-flash** | — | — | минимальные permissions |
 | 33 | SeniorStoryReviewer | subagent | Senior review user stories — полнота, edge cases, противоречия | **openai/gpt-5.5** | 0.1 | — | read/grep/glob: allow; bash/edit/write: deny; task: deny |
@@ -47,8 +47,8 @@
 |--------|--------|
 | **openai/gpt-5.5** | CodeReviewer, SeniorStoryReviewer, SeniorTechnicalPlanReviewer |
 | **opencode-go/mimo-v2.5** | CoderAgent, BatchExecutor |
-| **opencode-go/deepseek-v4-pro** | OpenCoder, OpenStageOrchestrator, plan, OpenDevopsSpecialist, ArchitectureAnalyzer, ContractManager, ADRManager, AgentGenerator, CommandCreator, DomainAnalyzer, WorkflowDesigner, OpenSystemBuilder, OpenDataAnalyst |
-| **opencode-go/deepseek-v4-flash** | OpenAgent, build, explore, ContextScout, ExternalScout, TaskManager, TestEngineer, BuildAgent, DocWriter, ContextOrganizer, ContextManager, ContextRetriever, StoryMapper, PrioritizationEngine, SimpleResponder, OpenRepoManager, OpenCopywriter, OpenTechnicalWriter, eval-runner |
+| **opencode-go/deepseek-v4-pro** | OpenCoder, OpenStageOrchestrator, plan, OpenSystemBuilder, OpenDataAnalyst |
+| **opencode-go/deepseek-v4-flash** | OpenAgent, build, explore, ContextScout, ExternalScout, TaskManager, TestEngineer, BuildAgent, DocWriter, ContextOrganizer, ContextManager, ContextRetriever, StoryMapper, PrioritizationEngine, SimpleResponder, OpenRepoManager, OpenCopywriter, OpenTechnicalWriter, eval-runner, OpenDevopsSpecialist, ArchitectureAnalyzer, ContractManager, ADRManager, AgentGenerator, CommandCreator, DomainAnalyzer, WorkflowDesigner |
 | **opencode-go/qwen3.7-plus** | general |
 | **google/gemini-2.5-flash** | ImageSpecialist |
 | **opencode-go/minimax-m3** | OpenFrontendSpecialist |
