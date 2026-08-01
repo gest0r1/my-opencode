@@ -1,6 +1,6 @@
 ---
 name: StageOrchestrator
-description: Управление утверждёнными pipeline через manifest, stage tracking и release gates
+description: "Управление утверждёнными pipeline через manifest, stage tracking и release gates"
 mode: subagent
 temperature: 0.1
 permission:
@@ -36,7 +36,6 @@ permission:
     build-agent: "allow"
     devops-specialist: "allow"
     test-engineer: "allow"
-    reviewer: "allow"
     OpenDevopsSpecialist: "allow"
     OpenFrontendSpecialist: "allow"
     frontend-specialist: "allow"
