@@ -13,7 +13,9 @@ scripts/                         # Пользовательские скрипт
   opencode-web-reboot/           # Скрипт перезапуска opencode-web сервиса
 ```
 
-> Рабочее правило: `~/.config/opencode` — единственный редактируемый конфиг; `~/.opencode` — runtime-установка, вручную не правим.
+> ⚠️ **Канон агентов (с 2026-08-01):** `~/.opencode/agent/` — install-дир, его читает бинарник.  
+> Зеркало в git: `config/opencode/agent/`. Дубли в `~/.config/opencode/agent(s)/` УДАЛЕНЫ (не читались).  
+> Восстановление/проверка: `scripts/opencode-agents-fix.sh [--check|--restore|--deploy|--purge]`.
 
 ## Upstream
 
