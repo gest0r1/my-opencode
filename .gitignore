@@ -20,6 +20,16 @@ package-lock.json
 __pycache__/
 *.pyc
 
+# Temp / session artifacts
+.tmp/
+
+# Build / cache artifacts
+.cache/
+dist/
+build/
+*.tsbuildinfo
+.env.local
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -11,6 +11,7 @@ permission:
     "**/*": "deny"
   write:
     "**/*": "deny"
+    ".tmp/**": "allow"
   task:
     contextscout: "allow"
   gh_grep_*: "allow"

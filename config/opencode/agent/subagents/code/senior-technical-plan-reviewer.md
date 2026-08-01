@@ -2,7 +2,7 @@
 name: SeniorTechnicalPlanReviewer
 description: Senior read-only reviewer for architecture, contracts, dependencies, implementation sequence, risks, and technical plan readiness before task breakdown and coding.
 mode: subagent
-model: openai/gpt-5.5
+model: openai/gpt-5.6-luna
 temperature: 0.1
 permission:
   read:
@@ -17,6 +17,7 @@ permission:
     "**/*": "deny"
   write:
     "**/*": "deny"
+    ".tmp/**": "allow"
   task:
     "*": "deny"
 ---

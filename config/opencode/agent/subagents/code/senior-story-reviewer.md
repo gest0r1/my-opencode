@@ -17,6 +17,7 @@ permission:
     "**/*": "deny"
   write:
     "**/*": "deny"
+    ".tmp/**": "allow"
   task:
     "*": "deny"
 ---

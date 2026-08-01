@@ -6,20 +6,23 @@ model: opencode-go/deepseek-v4-flash
 temperature: 0.1
 permission:
   bash:
-    "tsc": "allow"
-    "mypy": "allow"
-    "go build": "allow"
-    "cargo check": "allow"
-    "cargo build": "allow"
-    "npm run build": "allow"
-    "yarn build": "allow"
-    "pnpm build": "allow"
-    "python -m build": "allow"
     "*": "deny"
+    "tsc*": "allow"
+    "npx tsc*": "allow"
+    "mypy*": "allow"
+    "go build*": "allow"
+    "cargo check*": "allow"
+    "cargo build*": "allow"
+    "corepack pnpm*": "allow"
+    "pnpm*": "allow"
+    "yarn build*": "allow"
+    "npm run build*": "allow"
+    "python -m build*": "allow"
   edit:
     "**/*": "deny"
   write:
     "**/*": "deny"
+    ".tmp/**": "allow"
   task:
     contextscout: "allow"
     "*": "deny"
