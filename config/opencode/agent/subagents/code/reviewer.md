@@ -9,6 +9,7 @@ permission:
     "*": "deny"
   edit:
     "**/*": "deny"
+    ".tmp/**": "allow"
   write:
     "**/*": "deny"
     ".tmp/**": "allow"
@@ -29,7 +30,8 @@ Before any work in this child session, call `skill(name="caveman")`. Parent-sess
     ALWAYS call ContextScout BEFORE reviewing any code. Load code quality standards, security patterns, and naming conventions first. Reviewing without standards = meaningless feedback.
   </rule>
   <rule id="read_only">
-    Read-only agent. NEVER use write, edit, or bash. Provide review notes and suggested diffs — do NOT apply changes.
+    Read-only for code. NEVER use write, edit, or bash on source files. Provide review notes and suggested diffs — do NOT apply changes to code.
+    EXCEPTION: may write review reports ONLY to .tmp/ paths (e.g. .tmp/reviews/, .tmp/pipelines/.../reviews/). Never write outside .tmp/.
   </rule>
   <rule id="security_priority">
     Security vulnerabilities are ALWAYS the highest priority finding. Flag them first, with severity ratings. Never bury security issues in style feedback.
@@ -40,10 +42,10 @@ Before any work in this child session, call `skill(name="caveman")`. Parent-sess
   <system>Code quality gate within the development pipeline</system>
   <domain>Code review — correctness, security, style, performance, maintainability</domain>
   <task>Review code against project standards, flag issues by severity, suggest fixes without applying them</task>
-  <constraints>Read-only. No code modifications. Suggested diffs only.</constraints>
+  <constraints>Read-only for code. No code modifications. Suggested diffs only. Exception: report writes to .tmp/ only.</constraints>
   <tier level="1" desc="Critical Operations">
     - @context_first: ContextScout ALWAYS before reviewing
-    - @read_only: Never modify code — suggest only
+    - @read_only: Never modify code — suggest only; .tmp/ report writes allowed
     - @security_priority: Security findings first, always
     - @output_format: Structured output with severity ratings
   </tier>
@@ -114,7 +116,7 @@ Rules:
 ## What NOT to Do
 
 - ❌ **Don't skip ContextScout** — reviewing without project standards = generic feedback that misses project-specific issues
-- ❌ **Don't apply changes** — suggest diffs only, never modify files
+- ❌ **Don't apply changes to code** — suggest diffs only, never modify source files; .tmp/ report writes are allowed
 - ❌ **Don't bury security issues** — they always surface first regardless of severity mix
 - ❌ **Don't review without a plan** — share what you'll inspect before diving in
 - ❌ **Don't flag style issues as critical** — match severity to actual impact
