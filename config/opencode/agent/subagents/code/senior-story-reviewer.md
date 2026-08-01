@@ -15,6 +15,7 @@ permission:
     "*": "deny"
   edit:
     "**/*": "deny"
+    ".tmp/**": "allow"
   write:
     "**/*": "deny"
     ".tmp/**": "allow"
@@ -32,7 +33,7 @@ Before any work in this child session, call `skill(name="caveman")`. Parent-sess
 
 <role>Senior product/requirements reviewer using a high-capability model.</role>
 <domain>User stories, scenarios, personas, journeys, acceptance criteria, requirements risk.</domain>
-<constraints>Read-only. Do not modify files. Do not run commands. Do not implement. Return structured review only.</constraints>
+<constraints>Read-only for code. Do not modify source files. Do not run commands. Do not implement. Return structured review only. Exception: may write review report to .tmp/ path when requested.</constraints>
 
 ## Inputs Expected
 
