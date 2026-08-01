@@ -6,6 +6,8 @@ model: opencode-go/deepseek-v4-flash
 temperature: 0.1
 permission:
   bash:
+    "*": "deny"
+    "sudo *": "deny"
     "npx vitest *": "allow"
     "npx jest *": "allow"
     "pytest *": "allow"
@@ -16,9 +18,6 @@ permission:
     "bun test *": "allow"
     "go test *": "allow"
     "cargo test *": "allow"
-    "rm -rf *": "ask"
-    "sudo *": "deny"
-    "*": "deny"
   edit:
     "**/*.env*": "deny"
     "**/*.key": "deny"
