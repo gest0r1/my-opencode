@@ -6,26 +6,30 @@ model: opencode-go/deepseek-v4-flash
 temperature: 0.1
 permission:
   bash:
-    "*": "deny"
-    "tsc*": "allow"
-    "npx tsc*": "allow"
-    "mypy*": "allow"
-    "go build*": "allow"
-    "cargo check*": "allow"
-    "cargo build*": "allow"
-    "corepack pnpm*": "allow"
-    "pnpm*": "allow"
-    "yarn build*": "allow"
-    "npm run build*": "allow"
-    "python -m build*": "allow"
+    "*": deny
+    tsc*: allow
+    npx tsc*: allow
+    mypy*: allow
+    go build*: allow
+    cargo check*: allow
+    cargo build*: allow
+    corepack pnpm*: allow
+    pnpm*: allow
+    yarn build*: allow
+    npm run build*: allow
+    python -m build*: allow
+    "cd *": ask
+    "docker compose*": ask
+    "corepack pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*": deny
+    "pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*": deny
   edit:
-    "**/*": "deny"
+    "**/*": deny
   write:
-    "**/*": "deny"
-    ".tmp/**": "allow"
+    "**/*": deny
+    .tmp/**: allow
   task:
-    contextscout: "allow"
-    "*": "deny"
+    "*": deny
+    contextscout: allow
 ---
 
 ## Mandatory Caveman Skill

@@ -1,69 +1,88 @@
 ---
 name: OpenStageOrchestrator
-description: Primary orchestration agent for complex feature delivery with user-story review, senior technical plan review, controlled implementation, build, code review, tests, docs, and handoff.
+description: Primary orchestration agent for complex feature delivery with
+  user-story review, senior technical plan review, controlled implementation,
+  build, code review, tests, docs, and handoff.
 mode: primary
-model: opencode-go/deepseek-v4-pro
+model: opencode-go/deepseek-v4-flash
 temperature: 0.1
 permission:
+  question: deny
   bash:
-    "rm -rf *": "ask"
-    "sudo *": "deny"
-    "chmod *": "ask"
-    "curl *": "ask"
-    "wget *": "ask"
-    "docker *": "ask"
-    "kubectl *": "ask"
-    "bash .opencode/skills/task-management/router.sh*": "allow"
-    "bash .opencode/skill/task-management/router.sh*": "allow"
-    "npx ts-node*task-cli*": "allow"
-    "npx ts-node*stage-cli*": "allow"
-    "*": "ask"
+    "*": deny
+    rm -rf *: ask
+    sudo *: deny
+    chmod *: ask
+    curl *: ask
+    wget *: ask
+    docker *: ask
+    kubectl *: ask
+    bash .opencode/skills/task-management/router.sh*: allow
+    bash .opencode/skill/task-management/router.sh*: allow
+    bash ~/.opencode/skills/task-management/router.sh*: allow
+    npx ts-node*task-cli*: allow
+    npx tsx ~/.opencode/skills/task-management/scripts/stage-cli.ts*: allow
+    npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*: allow
+    corepack pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*: allow
+    pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*: allow
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
-    "node_modules/**": "deny"
-    ".git/**": "deny"
+    "*": deny
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
+    node_modules/**: deny
+    .git/**: deny
   write:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
-    "node_modules/**": "deny"
-    ".git/**": "deny"
+    "*": deny
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
+    node_modules/**: deny
+    .git/**: deny
   task:
-    "*": "deny"
-    contextscout: "allow"
-    ContextScout: "allow"
-    externalscout: "allow"
-    ExternalScout: "allow"
-    StoryMapper: "allow"
-    storymapper: "allow"
-    SeniorStoryReviewer: "allow"
-    seniorstoryreviewer: "allow"
-    ArchitectureAnalyzer: "allow"
-    architectureanalyzer: "allow"
-    ContractManager: "allow"
-    contractmanager: "allow"
-    PrioritizationEngine: "allow"
-    prioritizationengine: "allow"
-    SeniorTechnicalPlanReviewer: "allow"
-    seniortechnicalplanreviewer: "allow"
-    TaskManager: "allow"
-    taskmanager: "allow"
-    BatchExecutor: "allow"
-    batchexecutor: "allow"
-    CoderAgent: "allow"
-    coderagent: "allow"
-    BuildAgent: "allow"
-    buildagent: "allow"
-    CodeReviewer: "allow"
-    codereviewer: "allow"
-    TestEngineer: "allow"
-    testengineer: "allow"
-    DocWriter: "allow"
-    docwriter: "allow"
-    WebResearcher: "allow"
-    webresearcher: "allow"
+    "*": deny
+    contextscout: allow
+    ContextScout: allow
+    externalscout: allow
+    ExternalScout: allow
+    StoryMapper: allow
+    storymapper: allow
+    SeniorStoryReviewer: allow
+    seniorstoryreviewer: allow
+    ArchitectureAnalyzer: allow
+    architectureanalyzer: allow
+    ContractManager: allow
+    contractmanager: allow
+    PrioritizationEngine: allow
+    prioritizationengine: allow
+    SeniorTechnicalPlanReviewer: allow
+    seniortechnicalplanreviewer: allow
+    TaskManager: allow
+    taskmanager: allow
+    BatchExecutor: allow
+    batchexecutor: allow
+    CoderAgent: allow
+    coderagent: allow
+    BuildAgent: allow
+    buildagent: allow
+    CodeReviewer: allow
+    codereviewer: allow
+    TestEngineer: allow
+    testengineer: allow
+    DocWriter: allow
+    docwriter: allow
+    WebResearcher: allow
+    webresearcher: allow
+    task-manager: allow
+    batch-executor: allow
+    coder-agent: allow
+    build-agent: allow
+    devops-specialist: allow
+    devopsspecialist: allow
+    tester: allow
+    reviewer: allow
+    documentation: allow
+    frontend-specialist: allow
 ---
 
 ## Caveman Delegation Requirement

@@ -2,20 +2,20 @@
 name: CodeReviewer
 description: Code review, security, and quality assurance agent
 mode: subagent
-model: openai/gpt-5.5
+model: openai/gpt-5.6-luna
 temperature: 0.1
 permission:
   bash:
-    "*": "deny"
+    "*": deny
   edit:
-    "**/*": "deny"
-    ".tmp/**": "allow"
+    "**/*": deny
+    .tmp/**: allow
   write:
-    "**/*": "deny"
-    ".tmp/**": "allow"
+    "**/*": deny
+    .tmp/**: allow
   task:
-    contextscout: "allow"
-  gh_grep_*: "allow"
+    contextscout: allow
+  gh_grep_*: allow
 ---
 
 ## Mandatory Caveman Skill

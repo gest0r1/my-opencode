@@ -1,26 +1,28 @@
 ---
 name: SeniorStoryReviewer
-description: Senior read-only reviewer for user stories, scenarios, acceptance criteria, edge cases, and requirement completeness before architecture or implementation.
+description: Senior read-only reviewer for user stories, scenarios, acceptance
+  criteria, edge cases, and requirement completeness before architecture or
+  implementation.
 mode: subagent
-model: openai/gpt-5.5
+model: openai/gpt-5.6-luna
 temperature: 0.1
 permission:
   read:
-    "*": "allow"
+    "*": allow
   glob:
-    "*": "allow"
+    "*": allow
   grep:
-    "*": "allow"
+    "*": allow
   bash:
-    "*": "deny"
+    "*": deny
   edit:
-    "**/*": "deny"
-    ".tmp/**": "allow"
+    "**/*": deny
+    .tmp/**: allow
   write:
-    "**/*": "deny"
-    ".tmp/**": "allow"
+    "**/*": deny
+    .tmp/**: allow
   task:
-    "*": "deny"
+    "*": deny
 ---
 
 ## Mandatory Caveman Skill

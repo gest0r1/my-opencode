@@ -2,24 +2,24 @@
 name: CoderAgent
 description: Executes coding subtasks in sequence, ensuring completion as specified
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/deepseek-v4-flash
 temperature: 0
 permission:
   bash:
-    "*": "deny"
-    "bash .opencode/skills/task-management/router.sh complete*": "allow"
-    "bash .opencode/skills/task-management/router.sh status*": "allow"
+    "*": deny
+    bash .opencode/skills/task-management/router.sh complete*: allow
+    bash .opencode/skills/task-management/router.sh status*: allow
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
-    "node_modules/**": "deny"
-    ".git/**": "deny"
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
+    node_modules/**: deny
+    .git/**: deny
   task:
-    contextscout: "allow"
-    externalscout: "allow"
-    TestEngineer: "allow"
-  gh_grep_*: "allow"
+    contextscout: allow
+    externalscout: allow
+    TestEngineer: allow
+  gh_grep_*: allow
 ---
 
 ## Mandatory Caveman Skill
