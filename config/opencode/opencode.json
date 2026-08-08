@@ -174,56 +174,6 @@
     }
   },
   "agent": {
-    "OpenStageOrchestrator": {
-      "permission": {
-        "question": "deny",
-        "task": {
-          "*": "deny",
-          "ContextScout": "allow",
-          "contextscout": "allow",
-          "ExternalScout": "allow",
-          "externalscout": "allow",
-          "TaskManager": "allow",
-          "task-manager": "allow",
-          "taskmanager": "allow",
-          "BatchExecutor": "allow",
-          "batch-executor": "allow",
-          "batchexecutor": "allow",
-          "CoderAgent": "allow",
-          "coder-agent": "allow",
-          "coderagent": "allow",
-          "BuildAgent": "allow",
-          "build-agent": "allow",
-          "buildagent": "allow",
-          "OpenDevopsSpecialist": "allow",
-          "devops-specialist": "allow",
-          "devopsspecialist": "allow",
-          "TestEngineer": "allow",
-          "tester": "allow",
-          "testengineer": "allow",
-          "CodeReviewer": "allow",
-          "reviewer": "allow",
-          "DocWriter": "allow",
-          "documentation": "allow",
-          "docwriter": "allow",
-          "OpenFrontendSpecialist": "allow",
-          "frontend-specialist": "allow"
-        },
-        "bash": {
-          "corepack pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*": "allow",
-          "pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*": "allow",
-          "*": "deny"
-        },
-        "edit": {
-          "**/*": "deny",
-          ".tmp/pipelines/**": "allow"
-        },
-        "write": {
-          "**/*": "deny",
-          ".tmp/pipelines/**": "allow"
-        }
-      }
-    },
     "CodeReviewer": {
       "permission": {
         "doom_loop": "ask",

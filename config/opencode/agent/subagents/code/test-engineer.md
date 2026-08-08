@@ -6,26 +6,26 @@ model: opencode-go/deepseek-v4-flash
 temperature: 0.1
 permission:
   bash:
-    "*": "deny"
-    "sudo *": "deny"
-    "npx vitest *": "allow"
-    "npx jest *": "allow"
-    "pytest *": "allow"
-    "npm test *": "allow"
-    "npm run test *": "allow"
-    "yarn test *": "allow"
-    "pnpm test *": "allow"
-    "bun test *": "allow"
-    "go test *": "allow"
-    "cargo test *": "allow"
+    "*": deny
+    sudo *: deny
+    npx vitest *: allow
+    npx jest *: allow
+    pytest *: allow
+    npm test *: allow
+    npm run test *: allow
+    yarn test *: allow
+    pnpm test *: allow
+    bun test *: allow
+    go test *: allow
+    cargo test *: allow
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
   task:
-    contextscout: "allow"
-    externalscout: "allow"
-  gh_grep_*: "allow"
+    contextscout: allow
+    externalscout: allow
+  gh_grep_*: allow
 ---
 
 ## Mandatory Caveman Skill
