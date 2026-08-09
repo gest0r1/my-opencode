@@ -18,6 +18,8 @@ permission:
     bun test *: allow
     go test *: allow
     cargo test *: allow
+    corepack pnpm exec vitest *: allow
+    pnpm exec vitest *: allow
   edit:
     "**/*.env*": deny
     "**/*.key": deny

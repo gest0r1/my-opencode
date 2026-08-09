@@ -78,7 +78,7 @@ permission:
     coder-agent: allow
     build-agent: allow
     devops-specialist: allow
-    devopsspecialist: allow
+    OpenDevopsSpecialist: allow
     tester: allow
     reviewer: allow
     documentation: allow
@@ -189,8 +189,9 @@ Do not use for:
 | 11 | Code Review | CodeReviewer | Review quality, maintainability, security, and architecture compliance. |
 | 12 | Fix Review Findings | CoderAgent / BatchExecutor | Fix CodeReviewer findings if approved/required, then re-run build sanity if code changed. |
 | 13 | Tests + Integration Validation | TestEngineer | Write/update tests, run targeted/full tests as appropriate, validate acceptance/integration behavior. |
-| 14 | Documentation Update | DocWriter | Update docs/README/API/changelog only when behavior, API, setup, or usage changed. |
-| 15 | Handoff Summary | OpenStageOrchestrator | Summarize deliverables, review/build/test/docs status, unresolved risks, and next steps. |
+| 14 | Release Validation (Docker/Deploy) | OpenDevopsSpecialist | Docker compose build/restart, health checks, deploy smoke, rollback validation. Do NOT duplicate these checks via BuildAgent. |
+| 15 | Documentation Update | DocWriter | Update docs/README/API/changelog only when behavior, API, setup, or usage changed. |
+| 16 | Handoff Summary | OpenStageOrchestrator | Summarize deliverables, review/build/test/docs status, unresolved risks, and next steps. |
 
 ---
 
@@ -330,7 +331,18 @@ Use TestEngineer after code review/fixes. This stage covers:
 
 If tests fail, stop, report, propose fix, and wait for approval before fixing.
 
-### Stage 14 — Documentation Update
+### Stage 14 — Release Validation
+
+Delegate to OpenDevopsSpecialist. This stage covers:
+
+- docker compose build + restart of the stack;
+- health checks (curl) and `docker compose ps` verification;
+- deploy smoke;
+- rollback validation.
+
+Do NOT run Docker/deploy checks via BuildAgent — its zone is typecheck and package/workspace build only.
+
+### Stage 15 — Documentation Update
 
 Use DocWriter only when docs are impacted:
 
@@ -340,7 +352,7 @@ Use DocWriter only when docs are impacted:
 - user-facing workflow changed;
 - architecture/contracts need durable documentation.
 
-### Stage 15 — Handoff Summary
+### Stage 16 — Handoff Summary
 
 Return concise summary:
 
