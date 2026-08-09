@@ -22,7 +22,6 @@ permission:
     batchexecutor: "allow"
     coderagent: "allow"
     buildagent: "allow"
-    devopsspecialist: "allow"
     testengineer: "allow"
     reviewer: "allow"
     documentation: "allow"

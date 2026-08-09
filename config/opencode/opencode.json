@@ -101,7 +101,9 @@
     },
     "google-drive": {
       "type": "local",
-      "command": ["/home/guber/.local/bin/google-drive-mcp-wrapper.sh"],
+      "command": [
+        "/home/guber/.local/bin/google-drive-mcp-wrapper.sh"
+      ],
       "enabled": true,
       "env": {
         "GDRIVE_MCP_CLIENT_ID": "960187277069-jk2mgj02fni0ic7cb4ma80mk7hbljda5.apps.googleusercontent.com",
@@ -123,7 +125,11 @@
     },
     "ya-metrika": {
       "type": "local",
-      "command": ["npx", "-y", "@theyahia/yandex-metrika-mcp"],
+      "command": [
+        "npx",
+        "-y",
+        "@theyahia/yandex-metrika-mcp"
+      ],
       "enabled": true,
       "env": {
         "YANDEX_METRIKA_TOKEN": "{env:YANDEX_METRIKA_TOKEN}"
@@ -334,7 +340,6 @@
           "OpenStageOrchestrator": "allow",
           "OpenDevopsSpecialist": "allow",
           "devops-specialist": "allow",
-          "devopsspecialist": "allow",
           "OpenFrontendSpecialist": "allow",
           "frontend-specialist": "allow"
         },

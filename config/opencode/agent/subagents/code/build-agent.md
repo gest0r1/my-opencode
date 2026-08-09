@@ -19,9 +19,12 @@ permission:
     npm run build*: allow
     python -m build*: allow
     "cd *": ask
-    "docker compose*": ask
     "corepack pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*": deny
     "pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*": deny
+    "pnpm test*": deny
+    "pnpm exec vitest*": deny
+    "corepack pnpm test*": deny
+    "corepack pnpm exec vitest*": deny
   edit:
     "**/*": deny
   write:
