@@ -7,6 +7,7 @@
 ```
 config/                          # Глобальная конфигурация opencode
   opencode/                      # ~/.config/opencode/
+  agents/                        # ~/.agents/skills/ (claude-совместимые скиллы)
   systemd/                       # systemd user-юниты
   opencode-web.env.example       # env-файл (секреты в .env, не в git)
 scripts/                         # Пользовательские скрипты
@@ -16,6 +17,9 @@ scripts/                         # Пользовательские скрипт
 > ⚠️ **Канон агентов (с 2026-08-01):** `~/.opencode/agent/` — install-дир, его читает бинарник.  
 > Зеркало в git: `config/opencode/agent/`. Дубли в `~/.config/opencode/agent(s)/` УДАЛЕНЫ (не читались).  
 > Править агентов ТОЛЬКО в `~/.opencode/agent/`, затем `cp -r ~/.opencode/agent/. config/opencode/agent/` + commit/push.
+
+> ⚠️ **Скиллы `~/.agents/skills/` (с 2026-08-11):** читаются opencode нативно (agent-compatible dir).  
+> Зеркало в git: `config/agents/skills/`. Править в `~/.agents/skills/`, затем `cp -r ~/.agents/skills/. config/agents/skills/` + commit/push.
 
 ## Upstream
 
@@ -32,6 +36,9 @@ scripts/                         # Пользовательские скрипт
 ```bash
 # 1. Конфиги opencode
 cp -r config/opencode/* ~/.config/opencode/
+
+# 1a. Скиллы агентов
+cp -r config/agents/skills/* ~/.agents/skills/
 
 # 2. systemd сервис
 cp config/systemd/opencode-web.service ~/.config/systemd/user/
