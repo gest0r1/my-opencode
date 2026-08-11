@@ -82,7 +82,7 @@ permission:
     tester: allow
     reviewer: allow
     documentation: allow
-    frontend-specialist: allow
+    OpenFrontendSpecialist: allow
 ---
 
 ## Caveman Delegation Requirement
