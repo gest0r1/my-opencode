@@ -340,8 +340,7 @@
           "OpenStageOrchestrator": "allow",
           "OpenDevopsSpecialist": "allow",
           "devops-specialist": "allow",
-          "OpenFrontendSpecialist": "allow",
-          "frontend-specialist": "allow"
+          "OpenFrontendSpecialist": "allow"
         },
         "bash": {
           "*": "ask",

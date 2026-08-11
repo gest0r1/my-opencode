@@ -37,7 +37,6 @@ permission:
     test-engineer: "allow"
     OpenDevopsSpecialist: "allow"
     OpenFrontendSpecialist: "allow"
-    frontend-specialist: "allow"
 ---
 
 # StageOrchestrator
