@@ -1,76 +1,62 @@
 ---
-description: Построить и проверить план pipeline без запуска реализации
+description: Построить design-freeze plan pipeline без запуска реализации
 tags:
   - pipeline
   - planning
-  - read-only
+  - design-freeze
 ---
 
 # Pipeline Planning
 
-Выполни только этап Pipeline Planning для файла `docs/plan.md`.
+Выполни только Pipeline Planning для `docs/plan.md`. Реализацию не запускай.
 
 ## Аргументы
 
-`$ARGUMENTS` может содержать путь к plan-файлу. Если аргументы не переданы,
-используй:
+`$ARGUMENTS` может содержать путь к plan-файлу. По умолчанию:
 
 ```text
 plan: docs/plan.md
 rules: docs/pipeline-rules.md
 ```
 
-## Обязательные правила
+## Обязательный flow
 
-1. Работай в режиме `plan-only`.
-2. Прочитай `docs/plan.md`.
-3. Прочитай `docs/pipeline-rules.md`.
-4. Проверь `edit_policy` правил. При значении, отличном от `human_only`,
-   остановись со статусом `blocked`.
-5. Прочитай `docs/architecture.md` и существующие user stories только в
-   объёме, необходимом для планирования.
-6. Построй dependency graph.
-7. Объедини backlog items в pipeline по правилам из `pipeline-rules.md`.
-8. Определи `exclusive_paths`, `conflict_group`, migration-файлы и
-   deployment locks.
-9. Назначь каждому pipeline gate profile.
-10. Создай pipeline manifest и выполни его validation.
-11. Инициализируй состояние через `stage-cli init`.
+1. Работай в режиме `plan-only` и прочитай plan, rules, architecture context
+   по dual-read и нужные user stories.
+2. Проверь `edit_policy: human_only`; иначе верни `blocked`.
+3. Через ContextScout собери project context. Для risk-trigger (`new library`,
+   внешний API, auth/payment/tenant, security, migration, queue/cache,
+   deploy/runtime) получи official version-specific evidence через ExternalScout
+   и максимум 2–3 зрелых public code patterns через CoderAgent/CodeReviewer.
+4. Выполни StoryMapper/SeniorStoryReviewer, ArchitectureAnalyzer,
+   ContractManager, PrioritizationEngine и SeniorTechnicalPlanReviewer.
+5. Собери все функциональные развилки в один owner decision packet. Не выбирай
+   отсутствующее пользовательское решение сам.
+6. Создай planning artifacts:
+   `decision-register.md`, `technology-evidence.md`, `contract-inventory.md`,
+   `test-strategy.md`, `accepted-risks.md`.
+7. Построй dependency graph; определи pipelines, `exclusive_paths`,
+   `conflict_group`, migrations, fixtures, deployment locks и gate profiles.
+8. TaskManager создаёт задачи только после readiness `ready`; каждая задача
+   содержит binary acceptance criteria, tests и ссылки на decision/contract/research.
+9. Создай manifest с `planning_mode: design-freeze`, `planning_readiness` и
+   per-pipeline `decision_ids`, `research_ids`, `contract_ids`.
+10. Проверь manifest. Если есть `open_decision` или blocker, не инициализируй
+    state и верни `needs_revision`.
+11. Покажи один decision packet и manifest владельцу. После явного approval
+    вызови `stage-cli init`; `/pipeline-run` автоматически не запускай.
 
 ## Запрещено
 
 - изменять исходный код;
-- вызывать CoderAgent;
-- запускать реализацию;
-- запускать тесты реализации;
-- запускать Docker;
-- менять `docs/pipeline-rules.md`;
-- менять backlog без явного указания пользователя.
+- вызывать CoderAgent для реализации;
+- запускать tests реализации или Docker;
+- менять rules или backlog без явного указания владельца.
 
 ## Результат
 
-Создай runtime-артефакты:
+Создай в `.tmp/pipelines/{run-id}/` manifest, dependency graph, conflicts,
+execution plan, пять planning artifacts и state после approval.
 
-```text
-.tmp/pipelines/{run-id}/pipeline-manifest.json
-.tmp/pipelines/{run-id}/dependency-graph.json
-.tmp/pipelines/{run-id}/conflicts.json
-.tmp/pipelines/{run-id}/execution-plan.md
-.tmp/pipelines/{run-id}/state.json
-```
-
-Верни пользователю:
-
-- run id;
-- список созданных pipeline;
-- зависимости между pipeline;
-- выбранные gate profiles;
-- найденные конфликты;
-- блокирующие проблемы;
-- команду для следующего шага:
-
-```text
-/pipeline-run {run-id}
-```
-
-Не запускай `/pipeline-run` автоматически.
+Верни run id, pipelines, зависимости, gate profiles, blockers, unresolved
+risks и команду `/pipeline-run {run-id} --unattended`.

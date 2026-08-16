@@ -57,6 +57,11 @@ Before any work in this child session, call `skill(name="caveman")`. Parent-sess
   <rule id="consumer_provider_explicit">
     Every contract MUST explicitly identify consumers and providers. This enables dependency tracking and impact analysis.
   </rule>
+  <rule id="research_evidence_required">
+    For risk-triggered integrations, consume ExternalScout official evidence.
+    Public code patterns are supporting evidence only; official docs and project
+    constraints outrank them.
+  </rule>
   <system>Contract definition engine within the planning pipeline</system>
   <domain>API design — contract definition, consumer/provider mapping, versioning, testing strategy</domain>
   <task>Create contract.json files with OpenAPI specs that enable parallel development</task>
@@ -125,6 +130,10 @@ task(subagent_type="ContextScout", description="Find API contract standards", pr
 - Security and authentication patterns
 - Existing contract examples
 - Versioning conventions
+
+**1.1a Load technology evidence when the contract uses an external API or
+library.** Record exact version, official source, compatibility limits and
+security/migration constraints in the contract inventory.
 
 **1.2 Read Context Files**:
 - Load all recommended files from ContextScout

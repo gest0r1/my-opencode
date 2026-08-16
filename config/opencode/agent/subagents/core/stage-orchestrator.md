@@ -137,6 +137,8 @@ state.json                   — текущее runtime-состояние
 4. Выполни `stage-cli validate`.
 5. Проверь, что manifest утверждён пользователем.
 6. Проверь зависимости, locks и conflict groups.
+7. Для `planning_mode: design-freeze` проверь decision closure, research,
+   contract и test artifacts. Open decision = `blocked`, без implementation.
 
 Если проверка не пройдена, установи `blocked` и не запускай реализацию.
 
@@ -247,6 +249,10 @@ Approval принадлежит StageOrchestrator.
 - security blocker;
 - архитектурном конфликте.
 
+Архитектурный конфликт или отсутствующее решение в run фиксируй через
+`stage-cli block --reason replan`. Не запускай fix-loop и не выбирай новый
+вариант сам: требуется новый approved plan.
+
 ## Gate cycle
 
 При failed gate:
@@ -256,7 +262,8 @@ Approval принадлежит StageOrchestrator.
 3. rerun failed gate;
 4. rerun dependent gates.
 
-Автоматически допускается максимум два fix-loop.
+Автоматически допускается максимум два `technical_fix` fix-loop. `replan`,
+scope, security, secret и destructive stop никогда не считаются fix-loop.
 
 После превышения лимита установи `failed` и верни отчёт пользователю.
 
