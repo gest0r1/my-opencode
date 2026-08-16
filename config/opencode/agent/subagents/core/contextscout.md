@@ -15,8 +15,10 @@ permission:
     "*": "deny"
   edit:
     "*": "deny"
+    ".tmp/**": "allow"
   write:
     "*": "deny"
+    ".tmp/**": "allow"
   task:
     "*": "deny"
 

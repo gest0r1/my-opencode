@@ -27,6 +27,7 @@ permission:
     "corepack pnpm exec vitest*": deny
   edit:
     "**/*": deny
+    .tmp/**: allow
   write:
     "**/*": deny
     .tmp/**: allow

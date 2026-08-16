@@ -129,9 +129,13 @@ WHY THIS MATTERS:
            - **ContractManager**: Load `.tmp/contracts/{context}/{service}/contract.json` if exists
              - Extract `contracts` array for task.json and relevant subtasks
              - Identify contract dependencies between subtasks
-           - **ADRManager**: Check `docs/adr/` for relevant ADRs
+            - **ADRManager**: Check `docs/adr/` for relevant ADRs
              - Extract `related_adrs` array for task.json and subtasks
-             - Apply architectural constraints from ADRs
+              - Apply architectural constraints from ADRs
+            - **Design-freeze manifest**: load decision register, technology
+              evidence, contract inventory and test strategy when provided.
+              Every subtask must reference applicable decisions, contracts and
+              research evidence.
 
         2. Analyze the feature to identify:
            - Core objective and scope
@@ -175,7 +179,7 @@ WHY THIS MATTERS:
              exit_criteria:
              - {specific completion criteria}
              
-             enhanced_fields (if available from planning agents):
+              enhanced_fields (if available from planning agents):
              - bounded_context: {from ArchitectureAnalyzer}
              - module: {from ArchitectureAnalyzer}
              - vertical_slice: {from StoryMapper}
@@ -183,7 +187,10 @@ WHY THIS MATTERS:
              - related_adrs: {from ADRManager}
              - rice_score: {from PrioritizationEngine}
              - wsjf_score: {from PrioritizationEngine}
-             - release_slice: {from PrioritizationEngine}
+              - release_slice: {from PrioritizationEngine}
+              - decision_ids: {from decision register}
+              - research_ids: {from technology evidence}
+              - contract_ids: {from contract inventory}
              ```
 
         5. Proceed directly to JSON creation in this run when info is sufficient.

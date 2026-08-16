@@ -72,6 +72,8 @@ The orchestrator provides:
 - Business requirements and use cases
 - Existing codebase context (if available)
 - Session context path (optional)
+- Technology evidence: official version-specific docs and, when triggered,
+  at most 2–3 mature public code patterns.
 
 Example prompt from orchestrator:
 ```
@@ -114,6 +116,10 @@ Load recommended files, focusing on:
 - Domain modeling standards
 
 ### Step 3: Domain Analysis
+
+Treat technology evidence as constraints and implementation facts, not as a
+source of domain boundaries. Record each architecture choice, rejected option,
+reason, affected contracts and whether owner approval is required.
 
 **Analyze the feature requirements** to identify:
 
@@ -499,6 +505,7 @@ Analyzed: {timestamp}
 - TaskManager can now use contexts.json to create subtasks aligned with bounded contexts
 - Each module brief provides implementation guidance for CoderAgent
 - Context relationships inform integration tasks and dependencies
+- Decision register contains no unresolved architecture choice before manifest approval
 ```
 
 ---
