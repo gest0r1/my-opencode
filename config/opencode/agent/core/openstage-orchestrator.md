@@ -318,7 +318,8 @@ If findings exist:
 1. classify as blocking/non-blocking;
 2. route fixes to CoderAgent/BatchExecutor;
 3. rerun build sanity after code changes;
-4. rerun CodeReviewer only if fixes are substantial or security/architecture related.
+4. rerun CodeReviewer only if fixes are substantial or security/architecture related;
+5. if the session-reuse pilot is active for this pipeline, apply the enforcement rules from the Session-Reuse Pilot section before reusing any session (identity, delta, metrics, fresh fallbacks).
 
 ### Stage 13 — Tests + Integration Validation
 
@@ -375,7 +376,69 @@ Return concise summary:
 - Combine non-review planning where one stage can coordinate multiple artifacts.
 - Skip DocWriter when documentation is not impacted.
 - Prefer targeted tests first; full tests only when risk requires.
+- During the session-reuse pilot, reuse is limited to CoderAgent, TestEngineer, BuildAgent inside technical_fix loops; planning roles and all reviewers always start fresh.
 - Do not invoke OpenCoder or OpenAgent from this agent.
+
+---
+
+## Session-Reuse Pilot (Enforcement)
+
+Session reuse activates ONLY through the explicit, bounded pilot control on
+the invoking command: `--session-reuse-pilot <pipeline-id>`. The pilot covers
+exactly ONE pipeline per run; without the flag, every delegation starts a
+fresh session. Reject malformed pilot controls: duplicate flag, missing/empty
+value, extra value, or a pipeline ID absent from the approved manifest — the
+pilot is not activated and reuse stays forbidden. This section is the
+enforcement counterpart of the
+pipeline-run pilot control and must stay in sync with it (same flag
+semantics, same role list).
+
+### Eligibility
+
+Reuse is allowed only for `CoderAgent`, `TestEngineer`, `BuildAgent` during
+`technical_fix` loops. Planning roles and ALL reviewer roles always start
+fresh: `StoryMapper`, `SeniorStoryReviewer`, `ArchitectureAnalyzer`,
+`ContractManager`, `PrioritizationEngine`, `SeniorTechnicalPlanReviewer`,
+`TaskManager`, `CodeReviewer`, `OpenDevopsSpecialist`, `DocWriter`.
+Reuse identity is `{run_id, pipeline_id, stage, role}` and must match
+exactly; cross-pipeline reuse is forbidden.
+
+### Deterministic delta (mandatory before any reuse)
+
+Before reusing a session, assemble and pass a deterministic delta packet, and
+require the agent to re-read from evidence, never from conversation memory:
+
+- evidence path (prior review/fix report);
+- changed-file list/diff since the prior session;
+- current manifest/state revision;
+- required re-read paths.
+
+If any part of the delta is missing or stale, start a fresh session instead.
+
+### Sidecar metrics
+
+Each reuse appends one entry to an append-only sidecar JSON under
+`<project-root>/.tmp/pipelines/{run_id}/reuse-metrics/`, resolved against the
+selected pipeline project's root. Record fields: timestamp, identity,
+decision, fallback reason, packet bytes, latency. Never overwrite an existing
+record — each reuse appends a new entry. Record only packet bytes and latency
+proxies. Never claim token measurements OpenCode does not expose.
+
+### Mandatory stop conditions for pilot reuse
+
+Refuse reuse and start a fresh session on:
+
+- session compaction;
+- cancellation or error;
+- handle mismatch;
+- stale evidence/diff;
+- missing delta.
+
+These conditions never stop the pipeline by themselves.
+
+Scope, security, replan, secret, or destructive conditions additionally stop
+the pipeline and ask the user per the Mandatory Stop Conditions section below
+(reuse is refused there too).
 
 ---
 
@@ -389,4 +452,5 @@ Stop and ask the user when:
 - build/typecheck fails;
 - CodeReviewer finds blocking issues requiring implementation changes;
 - tests fail;
-- any destructive cleanup is requested.
+- any destructive cleanup is requested;
+- a session-reuse pilot block condition fires — scope/security/replan/secret/destructive (see Session-Reuse Pilot section); the pipeline stops and reuse is refused. Other pilot fallback conditions (compaction, cancellation/error, handle mismatch, stale evidence/diff, missing delta) only refuse reuse and start a fresh session without stopping the pipeline.
