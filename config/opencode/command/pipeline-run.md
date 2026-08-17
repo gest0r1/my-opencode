@@ -8,87 +8,148 @@ tags:
 
 # Pipeline Run
 
-Выполни утверждённый pipeline manifest. `$ARGUMENTS` содержит `run-id`, может содержать `--unattended` и `--session-reuse-pilot <pipeline-id>`.
+Выполни утверждённый pipeline manifest. `$ARGUMENTS` содержит `run-id` и может
+содержать `--unattended` и `--session-reuse-pilot <pipeline-id>`. Без run-id
+запроси выбор manifest, не выбирай молча.
 
 ## Preflight
 
-1. Найди manifest/state, выполни `stage-cli validate`, проверь rules и `edit_policy: human_only`.
+1. Найди manifest/state, выполни `stage-cli validate`, проверь rules и
+   `edit_policy: human_only`.
 2. Проверь approval manifest, dependencies, paths, conflict groups и locks.
-3. Для `planning_mode: design-freeze` проверь planning readiness и отсутствие open decisions.
-4. Выполни doc-gate.
+3. Для `planning_mode: design-freeze` проверь `planning_readiness`, ссылки на
+   decision/research/contract artifacts и отсутствие open decisions.
+4. Выполни doc-gate по `pipeline-rules.md`.
 
 При любой ошибке верни `blocked`; реализацию не запускай.
 
-## Session reuse pilot
-
-Пилот активируется только явным `--session-reuse-pilot <pipeline-id>` и только для одного pipeline. Без флага reuse запрещён.
-
-Вместо ручного выбора `task_id` используй runtime plugin `pipeline-runtime`.
-
-Для каждой eligible technical-fix делегации перед вызовом `task()` подготовь файл:
-
-```text
-<project-root>/.tmp/pipeline-runtime-context.json
-```
-
-со следующими полями:
-
-```json
-{
-  "run_id": "<run-id>",
-  "pipeline_id": "<pipeline-id>",
-  "stage": "<stage>",
-  "role": "CoderAgent|TestEngineer|BuildAgent",
-  "loop": 1,
-  "technical_fix": true,
-  "state_revision": "<current-state-revision>",
-  "evidence_path": "<relative-or-absolute-evidence-path>",
-  "changed_files": ["..."],
-  "required_reread": ["..."]
-}
-```
-
-Для неeligible делегаций ставь `technical_fix: false` либо не создавай runtime context. Не передавай `task_id` вручную.
-
-Plugin обязан:
-- сопоставлять identity `{run_id,pipeline_id,stage,role}`;
-- возобновлять только healthy session;
-- на compaction/error/cancel/stale/missing delta запускать fresh session;
-- добавлять deterministic delta к prompt;
-- вести session registry;
-- писать append-only reuse metrics.
-
-Метрики хранятся в:
-
-```text
-<project-root>/.tmp/pipelines/{run_id}/reuse-metrics/events.jsonl
-```
-
-Registry:
-
-```text
-<project-root>/.tmp/pipelines/{run_id}/session-registry.json
-```
-
 ## Выполнение
 
-StageOrchestrator остаётся основной сессией. Перед стадией вызывай `stage-cli start`, после успеха — `complete`; evidence обязательно. Выполняй только разрешённые batches.
+StageOrchestrator — это основная сессия; оркестрацию субагентам не передавай.
+Перед стадией вызывай `stage-cli start`, после успеха — `complete`; evidence
+обязателен. Выполняй только разрешённые batches.
 
-Review findings классифицируй как:
-- `technical_fix` — auto-fix, максимум два loop;
-- `replan` — block/stop;
-- scope/security/secret/destructive — block/stop;
-- optional — evidence, не блокирует.
+Классифицируй review findings по `pipeline-rules.md`:
+- `technical_fix` внутри approved scope — auto-fix, максимум два loop;
+- `replan` — `stage-cli block --reason replan`, не продолжай и не выбирай
+  новую архитектуру в run;
+- scope/security/secret/destructive — block и stop;
+- `optional` — evidence, не блокирует.
 
-`--unattended` запрещает дополнительные запросы внутри approved scope.
+`--unattended` запрещает дополнительные запросы внутри approved scope. Верни
+только terminal summary при `completed`, `blocked` или `failed`.
+
+## Пилот session-reuse (ограниченный)
+
+Активация — только явным флагом `--session-reuse-pilot <pipeline-id>`; флаг
+принимает ровно один pipeline-id. Без флага reuse запрещён.
+
+Флаг строго валидируется: дублирующий флаг, отсутствующее/пустое значение,
+лишнее значение или pipeline-id, отсутствующий в approved manifest, —
+отклоняются как ошибка вызова: пилот не активируется, reuse запрещён, верни
+`blocked`.
+
+### Runtime enforcement
+
+При активном пилоте НЕ выбирай и НЕ передавай `task_id` вручную. Решение
+fresh/reuse принимает локальный plugin `pipeline-runtime`.
+
+Перед КАЖДЫМ вызовом CoderAgent, TestEngineer или BuildAgent в выбранном
+pilot-pipeline непосредственно перед `task()` вызови tool
+`pipeline_runtime_prepare`.
+
+- для первого/baseline вызова роли и для вызова вне `technical_fix` передай
+  `technical_fix: false`; такой вызов всегда fresh, но его session будет
+  зарегистрирована для последующего контролируемого reuse;
+- для `technical_fix` передай `technical_fix: true`;
+- `pilot_pipeline_id` обязан совпадать с выбранным флагом pipeline-id;
+- `stage` и `role` должны точно соответствовать следующему `task()`;
+- `state_revision` используй как текущую детерминированную ревизию state
+  (явное revision/hash, а если его нет — стабильное поле `updated_at`);
+- при повторном reuse передай `previous_state_revision` из последней записи
+  session registry для той же identity;
+- передай evidence, changed files или `diff_path`, и `required_reread`.
+
+Пример:
+
+```text
+pipeline_runtime_prepare(
+  pilot_pipeline_id: "api",
+  run_id: "run-123",
+  pipeline_id: "api",
+  stage: "implementation-fix",
+  role: "CoderAgent",
+  loop: 2,
+  technical_fix: true,
+  state_revision: "2026-08-17T16:20:00Z",
+  previous_state_revision: "2026-08-17T16:10:00Z",
+  evidence_path: ".tmp/pipelines/run-123/reviews/api-implementation-fix-1.md",
+  changed_files: ["src/api/auth.ts"],
+  required_reread: ["docs/contracts/auth.md"]
+)
+```
+
+Runtime context одноразовый и ограничен по времени. Plugin сам:
+
+- удаляет любой model-supplied `task_id`;
+- сопоставляет identity `{run_id,pipeline_id,stage,role}`;
+- допускает reuse только healthy session;
+- на compaction/error/cancel/in-progress/stale/missing delta делает fresh fallback;
+- проверяет evidence и required reread paths;
+- добавляет deterministic delta в resumed prompt;
+- ведёт session registry;
+- пишет append-only метрики.
+
+### Область применения
+
+Reuse разрешён только ролям CoderAgent, TestEngineer и BuildAgent и только
+внутри `technical_fix` loop одной стадии. Planning-роли и ВСЕ reviewer-роли
+(CodeReviewer, SeniorTechnicalPlanReviewer и др.) всегда стартуют заново.
+
+Идентичность reuse — `{run_id, pipeline_id, stage, role}`; переиспользование
+сессии между pipeline или role запрещено.
+
+### Stop conditions (fresh session)
+
+Reuse отклоняется и стартует свежая сессия, если:
+
+- произошла compaction сессии;
+- cancellation/error на предыдущей итерации;
+- предыдущий вызов не завершился (`in_progress`);
+- handle/role mismatch;
+- cross-pipeline mismatch;
+- state/evidence/diff устарели;
+- delta-пакет отсутствует или неполон.
+
+Эти условия сами по себе pipeline не останавливают.
+
+Pipeline останавливается (block и stop) только при
+scope/security/replan/secret/destructive — reuse также отклоняется.
+
+### Метрики (append-only)
+
+Registry:
+`<project-root>/.tmp/pipelines/{run_id}/session-registry.json`
+
+Метрики:
+`<project-root>/.tmp/pipelines/{run_id}/reuse-metrics/events.jsonl`
+
+Фиксируются фактически наблюдаемые значения: fresh/reuse, fallback reason,
+latency, orientation time (до первого edit/test/build), prompt/response/packet
+bytes, tool/read/grep/glob/edit/bash calls, unique files read, reread files и
+context reread ratio. Не выдумывай token usage, если OpenCode его не отдаёт.
 
 ## Запрещено
 
-- менять manifest/plan/rules во время run;
+- менять manifest, plan или rules;
 - пропускать обязательную stage;
+- начинать неутверждённый pipeline;
 - запускать dependent pipeline до completed dependency;
-- вручную переиспользовать task_id в обход runtime plugin.
+- переиспользовать сессию субагента без флага `--session-reuse-pilot <pipeline-id>`;
+- передавать `task_id` вручную в обход runtime plugin.
 
 ## Результат
 
-Верни status run/pipeline, stages, evidence, Build/DevOps/test/review results, fix-loops, blockers, unresolved risks и следующий action.
+Верни status run и pipeline, stages, evidence, Build/DevOps/test/review results,
+fix-loops, blockers, unresolved risks, session-reuse решения и метрики (если
+пилот активен) и требуемый next action.
