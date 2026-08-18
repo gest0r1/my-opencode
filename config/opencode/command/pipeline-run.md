@@ -103,20 +103,17 @@ origin/handoff/<handoff-id>
 
 ### Deterministic Git preflight
 
-Не выполняй handoff через свободные `git pull/checkout/push`. Используй только
-`github-handoff-cli.ts`:
+Не выполняй handoff через свободные `git pull/checkout/push` и не расширяй
+`bash` permissions оркестратора. Вызови custom tool:
 
 ```text
-npx tsx ~/.opencode/skills/task-management/scripts/github-handoff-cli.ts prepare <run-id> <handoff-id>
+github_handoff_prepare(
+  run_id: "<run-id>",
+  handoff_id: "<handoff-id>"
+)
 ```
 
-или project-local mirror:
-
-```text
-npx tsx .opencode/skills/task-management/scripts/github-handoff-cli.ts prepare <run-id> <handoff-id>
-```
-
-`prepare` обязан:
+Tool использует deterministic backend `github-handoff-cli.ts` и обязан:
 
 - требовать clean worktree;
 - fetch `origin/handoff/<handoff-id>`;
@@ -129,6 +126,13 @@ npx tsx .opencode/skills/task-management/scripts/github-handoff-cli.ts prepare <
 - записать `.tmp/pipelines/<run-id>/github-handoff.json`;
 - создать `.tmp/pipelines/<run-id>/github-validation-manifest.json` только с
   validation stages из handoff.
+
+После prepare вызови `github_handoff_status(run_id: "<run-id>")` и сверяй
+`current_head == source_sha`, `current_branch == pipeline/<run-id>` и путь к
+validation manifest. Несовпадение — `blocked`.
+
+CLI backend можно вызывать вручную только для диагностики администратора; в
+pipeline runtime используй custom tools.
 
 Если исходная ветка сдвинулась после handoff, worktree грязный, SHA/repository
 не совпали или handoff malformed — `blocked`, ничего не тестируй и не исправляй.
@@ -183,15 +187,13 @@ session-reuse `{run_id,pipeline_id,stage,role}`.
 
 ### Publish validated result
 
-После PASS всех обязательных validation stages изменения должны быть cleanly
-зафиксированы и опубликованы в исходную product branch через deterministic
-helper:
+После PASS всех обязательных validation stages вызови:
 
 ```text
-npx tsx ~/.opencode/skills/task-management/scripts/github-handoff-cli.ts publish <run-id>
+github_handoff_publish(run_id: "<run-id>")
 ```
 
-`publish`:
+Tool:
 
 - разрешает изменённые файлы только внутри `allowed_fix_scope`;
 - отклоняет `.env`, key/pem/secret/credential paths;
@@ -202,8 +204,9 @@ npx tsx ~/.opencode/skills/task-management/scripts/github-handoff-cli.ts publish
 - повторно fetch'ит remote и проверяет exact SHA;
 - записывает `validated_sha` в локальный handoff runtime.
 
-Если fixes не было, publish всё равно верифицирует lineage/remote SHA и
-фиксирует `validated_sha = source_sha`.
+Сразу после publish вызови `github_handoff_status`; `validated_sha` обязан быть
+заполнен, а remote verification из publish должен совпадать с ним. Если fixes
+не было, `validated_sha == source_sha`.
 
 Финальный evidence GitHub mode обязан содержать как минимум:
 
@@ -277,7 +280,7 @@ Reuse разрешён только ролям CoderAgent, TestEngineer и Build
 внутри `technical_fix` loop одной стадии. Planning-роли и ВСЕ reviewer-роли
 (CodeReviewer, SeniorTechnicalPlanReviewer и др.) всегда стартуют заново.
 
-Идентичность reuse — `{run_id, pipeline_id, stage, role}`; переиспользование
+Идентичность reuse — `{run_id, pipeline_id, stage,role}`; переиспользование
 сессии между pipeline или role запрещено.
 
 ### Stop conditions (fresh session)
@@ -314,7 +317,7 @@ context reread ratio. Не выдумывай token usage, если OpenCode е�
 
 - менять approved manifest, plan или rules во время обычного run;
 - в GitHub mode менять handoff ref или source_sha;
-- использовать `git pull`, force-push или ручной push в обход handoff helper;
+- использовать `git pull`, force-push или ручной push в обход handoff tools;
 - пропускать обязательную validation stage;
 - начинать неутверждённый обычный pipeline;
 - запускать dependent pipeline до completed dependency;
