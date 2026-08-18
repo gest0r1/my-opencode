@@ -8,7 +8,7 @@ const helper = fileURLToPath(
 
 function run(args: string[]): string {
   try {
-    return execFileSync('npx', ['tsx', helper, ...args], {
+    return execFileSync('bun', [helper, ...args], {
       cwd: process.cwd(),
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
