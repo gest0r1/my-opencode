@@ -528,4 +528,7 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
   }
 }
 
-export default PipelineRuntimePlugin
+export default {
+  id: "pipeline-runtime",
+  server: PipelineRuntimePlugin,
+}

@@ -6,8 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/home/guber
-## ВАЖНО: --pure нужен для стабильного запуска сервиса.
-ExecStart=/home/guber/.opencode/bin/opencode web --port 4096 --hostname 0.0.0.0 --pure
+## Local plugins, including pipeline-runtime, require normal plugin loading.
+ExecStart=/home/guber/.opencode/bin/opencode web --port 4096 --hostname 0.0.0.0
 EnvironmentFile=/home/guber/.config/opencode-web.env
 TimeoutStopSec=10
 Restart=on-failure
