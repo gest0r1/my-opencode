@@ -9,8 +9,8 @@ tags:
 # Pipeline Run
 
 Выполни утверждённый pipeline manifest. `$ARGUMENTS` содержит `run-id` и может
-содержать `--unattended` и `--session-reuse-pilot <pipeline-id>`. Без run-id
-запроси выбор manifest, не выбирай молча.
+содержать `--unattended` и `--no-session-reuse`. Без run-id запроси выбор
+manifest, не выбирай молча.
 
 ## Preflight
 
@@ -39,30 +39,25 @@ StageOrchestrator — это основная сессия; оркестраци
 `--unattended` запрещает дополнительные запросы внутри approved scope. Верни
 только terminal summary при `completed`, `blocked` или `failed`.
 
-## Пилот session-reuse (ограниченный)
+## Session-reuse (включён по умолчанию)
 
-Активация — только явным флагом `--session-reuse-pilot <pipeline-id>`; флаг
-принимает ровно один pipeline-id. Без флага reuse запрещён.
-
-Флаг строго валидируется: дублирующий флаг, отсутствующее/пустое значение,
-лишнее значение или pipeline-id, отсутствующий в approved manifest, —
-отклоняются как ошибка вызова: пилот не активируется, reuse запрещён, верни
-`blocked`.
+Session-reuse активен по умолчанию для каждого pipeline. Отключение — явный
+флаг `--no-session-reuse`, который запрещает reuse и принудительно делает
+все вызовы fresh.
 
 ### Runtime enforcement
 
-При активном пилоте НЕ выбирай и НЕ передавай `task_id` вручную. Решение
-fresh/reuse принимает локальный plugin `pipeline-runtime`.
+НЕ выбирай и НЕ передавай `task_id` вручную. Решение fresh/reuse принимает
+локальный plugin `pipeline-runtime`.
 
-Перед КАЖДЫМ вызовом CoderAgent, TestEngineer или BuildAgent в выбранном
-pilot-pipeline непосредственно перед `task()` вызови tool
-`pipeline_runtime_prepare`.
+Перед КАЖДЫМ вызовом CoderAgent, TestEngineer или BuildAgent непосредственно
+перед `task()` вызови tool `pipeline_runtime_prepare`.
 
 - для первого/baseline вызова роли и для вызова вне `technical_fix` передай
   `technical_fix: false`; такой вызов всегда fresh, но его session будет
   зарегистрирована для последующего контролируемого reuse;
 - для `technical_fix` передай `technical_fix: true`;
-- `pilot_pipeline_id` обязан совпадать с выбранным флагом pipeline-id;
+- `pilot_pipeline_id` обязан совпадать с pipeline-id из approved manifest;
 - `stage` и `role` должны точно соответствовать следующему `task()`;
 - `state_revision` используй как текущую детерминированную ревизию state
   (явное revision/hash, а если его нет — стабильное поле `updated_at`);
@@ -145,11 +140,9 @@ context reread ratio. Не выдумывай token usage, если OpenCode е�
 - пропускать обязательную stage;
 - начинать неутверждённый pipeline;
 - запускать dependent pipeline до completed dependency;
-- переиспользовать сессию субагента без флага `--session-reuse-pilot <pipeline-id>`;
 - передавать `task_id` вручную в обход runtime plugin.
 
 ## Результат
 
 Верни status run и pipeline, stages, evidence, Build/DevOps/test/review results,
-fix-loops, blockers, unresolved risks, session-reuse решения и метрики (если
-пилот активен) и требуемый next action.
+fix-loops, blockers, unresolved risks, session-reuse решения и метрики.
