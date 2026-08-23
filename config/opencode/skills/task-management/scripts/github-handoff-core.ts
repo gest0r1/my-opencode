@@ -3,11 +3,29 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 
-const STATE_ROOT = '.tmp/pipelines';
 const HANDOFF_FILE = '.opencode/pipeline-handoff.json';
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/;
+
+const ENV_KEY = 'PIPELINE_PROJECT_ROOT';
+
+export function resolveProjectRoot(explicit?: string, env?: string, cwd?: string): string {
+  const start = explicit ?? env ?? (cwd ?? process.cwd());
+  try {
+    const toplevel = execFileSync('git', ['-C', start, 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    return toplevel;
+  } catch {
+    throw new HandoffError(
+      'INVALID_PROJECT_ROOT',
+      `Not a Git repository: ${start}`,
+      { tried: start },
+    );
+  }
+}
 
 type ValidationCommands = {
   build?: string[];
@@ -78,10 +96,10 @@ function failureDetails(error: any): ProcessFailure {
   };
 }
 
-function git(args: string[], options: { trim?: boolean; errorCode?: string } = {}): string {
+function git(args: string[], options: { trim?: boolean; errorCode?: string; cwd: string }): string {
   try {
     const out = execFileSync('git', args, {
-      cwd: process.cwd(),
+      cwd: options.cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -101,11 +119,11 @@ function assertId(value: string, label: string): void {
   if (!ID_RE.test(value)) throw new HandoffError('INVALID_ID', `Invalid ${label}: ${value}`);
 }
 
-function assertBranch(value: string): void {
+function assertBranch(value: string, root: string): void {
   if (!BRANCH_RE.test(value) || value.includes('..') || value.includes('//') || value.endsWith('/') || value.endsWith('.')) {
     throw new HandoffError('INVALID_SOURCE_BRANCH', `Invalid source_branch: ${value}`);
   }
-  git(['check-ref-format', '--branch', value], { errorCode: 'INVALID_SOURCE_BRANCH' });
+  git(['check-ref-format', '--branch', value], { errorCode: 'INVALID_SOURCE_BRANCH', cwd: root });
 }
 
 function assertSha(value: string): void {
@@ -123,7 +141,7 @@ function normalizeRepository(remote: string): string | undefined {
   return undefined;
 }
 
-function assertHandoff(value: unknown, expectedRun: string, expectedId: string): GithubHandoff {
+function assertHandoff(value: unknown, expectedRun: string, expectedId: string, root: string): GithubHandoff {
   if (!value || typeof value !== 'object') throw new HandoffError('HANDOFF_INVALID', 'Handoff must be an object');
   const h = value as Partial<GithubHandoff>;
   if (
@@ -146,7 +164,7 @@ function assertHandoff(value: unknown, expectedRun: string, expectedId: string):
       'Handoff must define schema_version=1, provider=github, matching handoff_id/run_id, source_branch, source_sha, pipeline_id, rules_file, rules_version and validation_stages',
     );
   }
-  assertBranch(h.source_branch);
+  assertBranch(h.source_branch, root);
   assertSha(h.source_sha);
   if (h.allowed_fix_scope && (!Array.isArray(h.allowed_fix_scope) || h.allowed_fix_scope.some((p) => typeof p !== 'string'))) {
     throw new HandoffError('HANDOFF_INVALID', 'allowed_fix_scope must be an array of paths');
@@ -167,16 +185,16 @@ function assertHandoff(value: unknown, expectedRun: string, expectedId: string):
   return h as GithubHandoff;
 }
 
-function stateDir(runId: string): string {
-  return resolve(STATE_ROOT, runId);
+function stateDir(projectRoot: string, runId: string): string {
+  return resolve(projectRoot, '.tmp/pipelines', runId);
 }
 
-function runtimePath(runId: string): string {
-  return join(stateDir(runId), 'github-handoff.json');
+function runtimePath(projectRoot: string, runId: string): string {
+  return join(stateDir(projectRoot, runId), 'github-handoff.json');
 }
 
-function validationManifestPath(runId: string): string {
-  return join(stateDir(runId), 'github-validation-manifest.json');
+function validationManifestPath(projectRoot: string, runId: string): string {
+  return join(stateDir(projectRoot, runId), 'github-validation-manifest.json');
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -193,28 +211,28 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
-async function readRuntime(runId: string): Promise<HandoffRuntime> {
+async function readRuntime(projectRoot: string, runId: string): Promise<HandoffRuntime> {
   try {
-    return JSON.parse(await readFile(runtimePath(runId), 'utf8')) as HandoffRuntime;
+    return JSON.parse(await readFile(runtimePath(projectRoot, runId), 'utf8')) as HandoffRuntime;
   } catch {
     throw new HandoffError('HANDOFF_RUNTIME_NOT_FOUND', `GitHub handoff runtime not found: ${runId}`);
   }
 }
 
-function requireGitRepository(): void {
-  if (git(['rev-parse', '--is-inside-work-tree']) !== 'true') {
+function requireGitRepository(cwd: string): void {
+  if (git(['rev-parse', '--is-inside-work-tree'], { cwd }) !== 'true') {
     throw new HandoffError('NOT_GIT_WORKTREE', 'Current directory is not a Git worktree');
   }
 }
 
-function requireCleanWorktree(): void {
-  const dirty = git(['status', '--porcelain=v1', '--untracked-files=all']);
+function requireCleanWorktree(cwd: string): void {
+  const dirty = git(['status', '--porcelain=v1', '--untracked-files=all'], { cwd });
   if (dirty) throw new HandoffError('DIRTY_WORKTREE', `Worktree must be clean before GitHub handoff:\n${dirty}`);
 }
 
-function verifyRepository(handoff: GithubHandoff): void {
+function verifyRepository(handoff: GithubHandoff, cwd: string): void {
   if (!handoff.repository) return;
-  const origin = git(['remote', 'get-url', 'origin'], { errorCode: 'ORIGIN_NOT_FOUND' });
+  const origin = git(['remote', 'get-url', 'origin'], { errorCode: 'ORIGIN_NOT_FOUND', cwd });
   const actual = normalizeRepository(origin);
   if (!actual) {
     throw new HandoffError('ORIGIN_NOT_GITHUB', `Cannot normalize origin as GitHub repository: ${origin}`);
@@ -227,10 +245,10 @@ function verifyRepository(handoff: GithubHandoff): void {
   }
 }
 
-function isAncestor(ancestor: string, descendant: string): boolean {
+function isAncestor(ancestor: string, descendant: string, cwd: string): boolean {
   try {
     execFileSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
-      cwd: process.cwd(),
+      cwd,
       stdio: 'ignore',
     });
     return true;
@@ -251,8 +269,8 @@ function scopeAllows(file: string, patterns: string[]): boolean {
   });
 }
 
-function changedFiles(): string[] {
-  const output = git(['status', '--porcelain=v1', '--untracked-files=all']);
+function changedFiles(cwd: string): string[] {
+  const output = git(['status', '--porcelain=v1', '--untracked-files=all'], { cwd });
   if (!output) return [];
   return output
     .split('\n')
@@ -277,10 +295,10 @@ function rejectSensitiveFiles(files: string[]): void {
   }
 }
 
-function lsRemoteExact(ref: string): { ref: string; sha: string } {
+function lsRemoteExact(ref: string, cwd: string): { ref: string; sha: string } {
   try {
     const output = execFileSync('git', ['ls-remote', '--exit-code', 'origin', ref], {
-      cwd: process.cwd(),
+      cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
@@ -312,22 +330,23 @@ function lsRemoteExact(ref: string): { ref: string; sha: string } {
   }
 }
 
-function fetchExact(remoteRef: string, localRef: string): string {
+function fetchExact(remoteRef: string, localRef: string, cwd: string): string {
   git(
     ['fetch', '--prune', 'origin', `+${remoteRef}:${localRef}`],
-    { errorCode: 'GIT_FETCH_FAILED' },
+    { errorCode: 'GIT_FETCH_FAILED', cwd },
   );
-  return git(['rev-parse', localRef], { errorCode: 'FETCHED_REF_NOT_FOUND' });
+  return git(['rev-parse', localRef], { errorCode: 'FETCHED_REF_NOT_FOUND', cwd });
 }
 
-export async function probeHandoff(runId: string, handoffId: string): Promise<unknown> {
+export async function probeHandoff(runId: string, handoffId: string, projectRoot?: string): Promise<unknown> {
   assertId(runId, 'run-id');
   assertId(handoffId, 'handoff-id');
-  requireGitRepository();
-  const origin = git(['remote', 'get-url', 'origin'], { errorCode: 'ORIGIN_NOT_FOUND' });
+  const root = resolveProjectRoot(projectRoot, process.env[ENV_KEY]);
+  requireGitRepository(root);
+  const origin = git(['remote', 'get-url', 'origin'], { errorCode: 'ORIGIN_NOT_FOUND', cwd: root });
   const handoffBranch = `handoff/${handoffId}`;
   const remoteRef = `refs/heads/${handoffBranch}`;
-  const visible = lsRemoteExact(remoteRef);
+  const visible = lsRemoteExact(remoteRef, root);
   return {
     status: 'visible',
     run_id: runId,
@@ -340,17 +359,18 @@ export async function probeHandoff(runId: string, handoffId: string): Promise<un
   };
 }
 
-export async function prepareHandoff(runId: string, handoffId: string): Promise<unknown> {
+export async function prepareHandoff(runId: string, handoffId: string, projectRoot?: string): Promise<unknown> {
   assertId(runId, 'run-id');
   assertId(handoffId, 'handoff-id');
-  requireGitRepository();
-  requireCleanWorktree();
+  const root = resolveProjectRoot(projectRoot, process.env[ENV_KEY]);
+  requireGitRepository(root);
+  requireCleanWorktree(root);
 
   const handoffBranch = `handoff/${handoffId}`;
   const handoffRemoteRef = `refs/heads/${handoffBranch}`;
   const handoffRef = `refs/remotes/origin/${handoffBranch}`;
-  const remoteHandoff = lsRemoteExact(handoffRemoteRef);
-  const fetchedHandoffSha = fetchExact(handoffRemoteRef, handoffRef);
+  const remoteHandoff = lsRemoteExact(handoffRemoteRef, root);
+  const fetchedHandoffSha = fetchExact(handoffRemoteRef, handoffRef, root);
   if (fetchedHandoffSha.toLowerCase() !== remoteHandoff.sha.toLowerCase()) {
     throw new HandoffError(
       'HANDOFF_FETCH_SHA_MISMATCH',
@@ -360,7 +380,7 @@ export async function prepareHandoff(runId: string, handoffId: string): Promise<
 
   let raw: string;
   try {
-    raw = git(['show', `${handoffRef}:${HANDOFF_FILE}`], { trim: false, errorCode: 'HANDOFF_FILE_NOT_FOUND' });
+    raw = git(['show', `${handoffRef}:${HANDOFF_FILE}`], { trim: false, errorCode: 'HANDOFF_FILE_NOT_FOUND', cwd: root });
   } catch (error) {
     if (error instanceof HandoffError) {
       throw new HandoffError(
@@ -378,32 +398,32 @@ export async function prepareHandoff(runId: string, handoffId: string): Promise<
   } catch {
     throw new HandoffError('HANDOFF_JSON_INVALID', `Invalid JSON in ${handoffBranch}:${HANDOFF_FILE}`);
   }
-  const handoff = assertHandoff(parsed, runId, handoffId);
-  verifyRepository(handoff);
+  const handoff = assertHandoff(parsed, runId, handoffId, root);
+  verifyRepository(handoff, root);
 
   const sourceRemoteBranchRef = `refs/heads/${handoff.source_branch}`;
   const sourceRemoteRef = `refs/remotes/origin/${handoff.source_branch}`;
-  const remoteSource = lsRemoteExact(sourceRemoteBranchRef);
+  const remoteSource = lsRemoteExact(sourceRemoteBranchRef, root);
   if (remoteSource.sha.toLowerCase() !== handoff.source_sha.toLowerCase()) {
     throw new HandoffError(
       'SOURCE_BRANCH_MOVED',
       `Source branch moved after handoff: expected=${handoff.source_sha}, origin/${handoff.source_branch}=${remoteSource.sha}`,
     );
   }
-  const fetchedSourceSha = fetchExact(sourceRemoteBranchRef, sourceRemoteRef);
+  const fetchedSourceSha = fetchExact(sourceRemoteBranchRef, sourceRemoteRef, root);
   if (fetchedSourceSha.toLowerCase() !== handoff.source_sha.toLowerCase()) {
     throw new HandoffError(
       'SOURCE_FETCH_SHA_MISMATCH',
       `Fetched source SHA mismatch: expected=${handoff.source_sha}, local=${fetchedSourceSha}`,
     );
   }
-  if (!isAncestor(handoff.source_sha, handoffRef)) {
+  if (!isAncestor(handoff.source_sha, handoffRef, root)) {
     throw new HandoffError('HANDOFF_NOT_DESCENDANT', `Handoff ref is not based on source_sha: ${handoff.source_sha}`);
   }
 
   const workingBranch = `pipeline/${runId}`;
-  git(['switch', '-C', workingBranch, handoff.source_sha], { errorCode: 'PIPELINE_CHECKOUT_FAILED' });
-  const head = git(['rev-parse', 'HEAD']);
+  git(['switch', '-C', workingBranch, handoff.source_sha], { errorCode: 'PIPELINE_CHECKOUT_FAILED', cwd: root });
+  const head = git(['rev-parse', 'HEAD'], { cwd: root });
   if (head.toLowerCase() !== handoff.source_sha.toLowerCase()) {
     throw new HandoffError('CHECKOUT_SHA_MISMATCH', `Checkout verification failed: HEAD=${head}, source_sha=${handoff.source_sha}`);
   }
@@ -418,7 +438,7 @@ export async function prepareHandoff(runId: string, handoffId: string): Promise<
     prepared_at: new Date().toISOString(),
     source_sha: handoff.source_sha,
   };
-  await writeJson(runtimePath(runId), runtime);
+  await writeJson(runtimePath(root, runId), runtime);
 
   const validationManifest = {
     schema_version: 1,
@@ -439,7 +459,7 @@ export async function prepareHandoff(runId: string, handoffId: string): Promise<
       },
     ],
   };
-  await writeJson(validationManifestPath(runId), validationManifest);
+  await writeJson(validationManifestPath(root, runId), validationManifest);
 
   return {
     status: 'prepared',
@@ -451,17 +471,18 @@ export async function prepareHandoff(runId: string, handoffId: string): Promise<
     handoff_sha: remoteHandoff.sha,
     working_branch: workingBranch,
     validation_stages: handoff.validation_stages,
-    validation_manifest: validationManifestPath(runId),
-    runtime: runtimePath(runId),
+    validation_manifest: validationManifestPath(root, runId),
+    runtime: runtimePath(root, runId),
   };
 }
 
-export async function publishHandoff(runId: string): Promise<unknown> {
+export async function publishHandoff(runId: string, projectRoot?: string): Promise<unknown> {
   assertId(runId, 'run-id');
-  requireGitRepository();
-  const runtime = await readRuntime(runId);
+  const root = resolveProjectRoot(projectRoot, process.env[ENV_KEY]);
+  requireGitRepository(root);
+  const runtime = await readRuntime(root, runId);
   const { handoff } = runtime;
-  const branch = git(['branch', '--show-current']);
+  const branch = git(['branch', '--show-current'], { cwd: root });
   if (branch !== runtime.working_branch) {
     throw new HandoffError(
       'WRONG_WORKING_BRANCH',
@@ -469,7 +490,7 @@ export async function publishHandoff(runId: string): Promise<unknown> {
     );
   }
 
-  const files = changedFiles();
+  const files = changedFiles(root);
   rejectSensitiveFiles(files);
   if (files.length) {
     const scope = handoff.allowed_fix_scope ?? [];
@@ -478,41 +499,41 @@ export async function publishHandoff(runId: string): Promise<unknown> {
     if (outside.length) {
       throw new HandoffError('FIX_OUTSIDE_SCOPE', `Changed files outside allowed_fix_scope: ${outside.join(', ')}`);
     }
-    git(['add', '--', ...files], { errorCode: 'FIX_STAGE_FAILED' });
-    git(['commit', '-m', `fix: validation ${runId}`], { errorCode: 'FIX_COMMIT_FAILED' });
+    git(['add', '--', ...files], { errorCode: 'FIX_STAGE_FAILED', cwd: root });
+    git(['commit', '-m', `fix: validation ${runId}`], { errorCode: 'FIX_COMMIT_FAILED', cwd: root });
   }
 
-  const head = git(['rev-parse', 'HEAD']);
-  if (!isAncestor(runtime.source_sha, head)) {
+  const head = git(['rev-parse', 'HEAD'], { cwd: root });
+  if (!isAncestor(runtime.source_sha, head, root)) {
     throw new HandoffError('VALIDATED_NOT_DESCENDANT', `Validated HEAD is not descended from source_sha: ${runtime.source_sha}`);
   }
 
   const sourceRemoteBranchRef = `refs/heads/${handoff.source_branch}`;
-  const remoteSource = lsRemoteExact(sourceRemoteBranchRef);
-  const fetchedRemoteSha = fetchExact(sourceRemoteBranchRef, runtime.source_remote_ref);
+  const remoteSource = lsRemoteExact(sourceRemoteBranchRef, root);
+  const fetchedRemoteSha = fetchExact(sourceRemoteBranchRef, runtime.source_remote_ref, root);
   if (fetchedRemoteSha.toLowerCase() !== remoteSource.sha.toLowerCase()) {
     throw new HandoffError(
       'SOURCE_FETCH_SHA_MISMATCH',
       `Fetched source SHA mismatch: remote=${remoteSource.sha}, local=${fetchedRemoteSha}`,
     );
   }
-  if (!isAncestor(remoteSource.sha, head)) {
+  if (!isAncestor(remoteSource.sha, head, root)) {
     throw new HandoffError(
       'SOURCE_DIVERGED',
       `Remote source branch changed independently; refusing non-fast-forward publish: remote=${remoteSource.sha}, local=${head}`,
     );
   }
 
-  git(['push', 'origin', `HEAD:refs/heads/${handoff.source_branch}`], { errorCode: 'PUBLISH_PUSH_FAILED' });
-  const verifiedRemote = lsRemoteExact(sourceRemoteBranchRef).sha;
+  git(['push', 'origin', `HEAD:refs/heads/${handoff.source_branch}`], { errorCode: 'PUBLISH_PUSH_FAILED', cwd: root });
+  const verifiedRemote = lsRemoteExact(sourceRemoteBranchRef, root).sha;
   if (verifiedRemote.toLowerCase() !== head.toLowerCase()) {
     throw new HandoffError('PUBLISH_VERIFY_FAILED', `Push verification failed: local=${head}, remote=${verifiedRemote}`);
   }
-  fetchExact(sourceRemoteBranchRef, runtime.source_remote_ref);
+  fetchExact(sourceRemoteBranchRef, runtime.source_remote_ref, root);
 
   runtime.validated_sha = head;
   runtime.published_at = new Date().toISOString();
-  await writeJson(runtimePath(runId), runtime);
+  await writeJson(runtimePath(root, runId), runtime);
 
   return {
     status: 'published',
@@ -526,18 +547,19 @@ export async function publishHandoff(runId: string): Promise<unknown> {
   };
 }
 
-export async function statusHandoff(runId: string): Promise<unknown> {
+export async function statusHandoff(runId: string, projectRoot?: string): Promise<unknown> {
   assertId(runId, 'run-id');
-  const runtime = await readRuntime(runId);
-  const head = git(['rev-parse', 'HEAD']);
-  const branch = git(['branch', '--show-current']);
+  const root = resolveProjectRoot(projectRoot, process.env[ENV_KEY]);
+  const runtime = await readRuntime(root, runId);
+  const head = git(['rev-parse', 'HEAD'], { cwd: root });
+  const branch = git(['branch', '--show-current'], { cwd: root });
   return {
     ...runtime,
     current_head: head,
     current_branch: branch,
-    worktree_clean: changedFiles().length === 0,
-    state_exists: await exists(join(stateDir(runId), 'state.json')),
-    validation_manifest: validationManifestPath(runId),
+    worktree_clean: changedFiles(root).length === 0,
+    state_exists: await exists(join(stateDir(root, runId), 'state.json')),
+    validation_manifest: validationManifestPath(root, runId),
   };
 }
 
