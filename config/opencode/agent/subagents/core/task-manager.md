@@ -1,29 +1,30 @@
 ---
 name: TaskManager
-description: JSON-driven task breakdown specialist transforming complex features into atomic, verifiable subtasks with dependency tracking and CLI integration
+description: JSON-driven task breakdown specialist transforming complex features
+  into atomic, verifiable subtasks with dependency tracking and CLI integration
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 temperature: 0.1
 permission:
   bash:
-    "*": "deny"
-    "npx ts-node*task-cli*": "allow"
-    "mkdir -p .tmp/tasks*": "allow"
-    "mv .tmp/tasks*": "allow"
+    "*": deny
+    npx ts-node*task-cli*: allow
+    mkdir -p .tmp/tasks*: allow
+    mv .tmp/tasks*: allow
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
-    "node_modules/**": "deny"
-    ".git/**": "deny"
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
+    node_modules/**: deny
+    .git/**: deny
   task:
-    contextscout: "allow"
-    externalscout: "allow"
-    "*": "deny"
+    contextscout: allow
+    externalscout: allow
+    "*": deny
   skill:
-    "*": "deny"
-    "task-management": "allow"
-    "caveman": "allow"
+    "*": deny
+    task-management: allow
+    caveman: allow
 ---
 
 ## Mandatory Caveman Skill

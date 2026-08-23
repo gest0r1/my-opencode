@@ -1,12 +1,10 @@
 ---
-# OpenCode Agent Configuration
-# Metadata (id, name, category, type, version, author, tags, dependencies) is stored in:
-# .opencode/config/agent-metadata.json
-
 name: AgentGenerator
-description: "Generates XML-optimized agent files (orchestrator and subagents) following research-backed patterns. Model: opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
+description: "Generates XML-optimized agent files (orchestrator and subagents)
+  following research-backed patterns. Model: opencode-go/deepseek-v4-pro →
+  opencode-go/deepseek-v4-flash"
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 temperature: 0.1
 ---
 

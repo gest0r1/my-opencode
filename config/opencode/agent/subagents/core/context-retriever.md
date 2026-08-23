@@ -1,16 +1,17 @@
 ---
 name: Context Retriever
-description: Generic context search and retrieval specialist for finding relevant context files, standards, and guides in any repository
+description: Generic context search and retrieval specialist for finding
+  relevant context files, standards, and guides in any repository
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 temperature: 0.1
 permission:
   bash:
-    "*": "deny"
+    "*": deny
   edit:
-    "**/*": "deny"
+    "**/*": deny
   write:
-    "**/*": "deny"
+    "**/*": deny
 ---
 
 ## Mandatory Caveman Skill

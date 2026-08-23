@@ -2,7 +2,7 @@
 name: BuildAgent
 description: Type check and build validation agent
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 temperature: 0.1
 permission:
   bash:
@@ -18,13 +18,13 @@ permission:
     yarn build*: allow
     npm run build*: allow
     python -m build*: allow
-    "cd *": ask
-    "corepack pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*": deny
-    "pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*": deny
-    "pnpm test*": deny
-    "pnpm exec vitest*": deny
-    "corepack pnpm test*": deny
-    "corepack pnpm exec vitest*": deny
+    cd *: ask
+    corepack pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*: deny
+    pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*: deny
+    pnpm test*: deny
+    pnpm exec vitest*: deny
+    corepack pnpm test*: deny
+    corepack pnpm exec vitest*: deny
   edit:
     "**/*": deny
     .tmp/**: allow

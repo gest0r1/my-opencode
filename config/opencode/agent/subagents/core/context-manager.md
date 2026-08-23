@@ -1,37 +1,39 @@
 ---
 name: ContextManager
-description: Context organization and lifecycle management specialist - discovers, catalogs, validates, and maintains project context structure with dependency tracking
+description: Context organization and lifecycle management specialist -
+  discovers, catalogs, validates, and maintains project context structure with
+  dependency tracking
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 temperature: 0.1
 permission:
   read:
-    "*": "allow"
+    "*": allow
   grep:
-    "*": "allow"
+    "*": allow
   glob:
-    "*": "allow"
+    "*": allow
   bash:
-    "find .opencode/context*": "allow"
-    "ls -la .opencode/context*": "allow"
-    "mkdir -p .opencode/context*": "allow"
-    "mv .opencode/context*": "allow"
-    "*": "deny"
+    find .opencode/context*: allow
+    ls -la .opencode/context*: allow
+    mkdir -p .opencode/context*: allow
+    mv .opencode/context*: allow
+    "*": deny
   edit:
-    ".opencode/context/**/*.md": "allow"
-    ".opencode/context/**/*.json": "allow"
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
+    .opencode/context/**/*.md: allow
+    .opencode/context/**/*.json: allow
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
   write:
-    ".opencode/context/**/*.md": "allow"
-    ".opencode/context/**/*.json": "allow"
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
+    .opencode/context/**/*.md: allow
+    .opencode/context/**/*.json: allow
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
   task:
-    "*": "deny"
-    "contextscout": "allow"
+    "*": deny
+    contextscout: allow
 ---
 
 ## Mandatory Caveman Skill

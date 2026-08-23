@@ -1,8 +1,10 @@
 ---
 name: WebResearcher
-description: Internet research specialist. Searches web, fetches pages, deep research, people/company lookup via Exa MCP, and exact public GitHub code patterns via gh_grep. Delegated by master agents.
+description: Internet research specialist. Searches web, fetches pages, deep
+  research, people/company lookup via Exa MCP, and exact public GitHub code
+  patterns via gh_grep. Delegated by master agents.
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 temperature: 0.1
 permission:
   exa_*: allow

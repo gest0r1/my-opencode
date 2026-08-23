@@ -1,40 +1,42 @@
 ---
 name: OpenDevopsSpecialist
-description: "DevOps specialist subagent - CI/CD, infrastructure as code, deployment automation. Model: opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
+description: "DevOps specialist subagent - CI/CD, infrastructure as code,
+  deployment automation. Model: opencode-go/deepseek-v4-pro →
+  opencode-go/deepseek-v4-flash"
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 temperature: 0.1
 permission:
   task:
-    "*": "deny"
-    contextscout: "allow"
+    "*": deny
+    contextscout: allow
   bash:
-    "*": "deny"
-    "docker build *": "allow"
-    "docker compose up *": "allow"
-    "docker compose down *": "allow"
-    "docker compose build *": "allow"
-    "docker compose ps *": "allow"
-    "docker compose logs *": "allow"
-    "docker compose restart *": "allow"
-    "docker compose exec *": "ask"
-    "curl *": "ask"
-    "docker ps *": "allow"
-    "docker logs *": "allow"
-    "kubectl apply *": "allow"
-    "kubectl get *": "allow"
-    "kubectl describe *": "allow"
-    "kubectl logs *": "allow"
-    "terraform init *": "allow"
-    "terraform plan *": "allow"
-    "terraform apply *": "ask"
-    "terraform validate *": "allow"
-    "npm run build *": "allow"
-    "npm run test *": "allow"
+    "*": deny
+    docker build *: allow
+    docker compose up *: allow
+    docker compose down *: allow
+    docker compose build *: allow
+    docker compose ps *: allow
+    docker compose logs *: allow
+    docker compose restart *: allow
+    docker compose exec *: ask
+    curl *: ask
+    docker ps *: allow
+    docker logs *: allow
+    kubectl apply *: allow
+    kubectl get *: allow
+    kubectl describe *: allow
+    kubectl logs *: allow
+    terraform init *: allow
+    terraform plan *: allow
+    terraform apply *: ask
+    terraform validate *: allow
+    npm run build *: allow
+    npm run test *: allow
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
 ---
 
 ## Mandatory Caveman Skill
