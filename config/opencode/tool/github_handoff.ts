@@ -25,9 +25,10 @@ export const probe = tool({
   args: {
     run_id: tool.schema.string(),
     handoff_id: tool.schema.string(),
+    project_root: tool.schema.string().optional(),
   },
   async execute(args) {
-    return run(() => probeHandoff(args.run_id, args.handoff_id));
+    return run(() => probeHandoff(args.run_id, args.handoff_id, args.project_root));
   },
 });
 
@@ -37,9 +38,10 @@ export const prepare = tool({
   args: {
     run_id: tool.schema.string(),
     handoff_id: tool.schema.string(),
+    project_root: tool.schema.string().optional(),
   },
   async execute(args) {
-    return run(() => prepareHandoff(args.run_id, args.handoff_id));
+    return run(() => prepareHandoff(args.run_id, args.handoff_id, args.project_root));
   },
 });
 
@@ -48,9 +50,10 @@ export const publish = tool({
     'Publish a completed GitHub validation run in-process. Commits only allowed-scope fixes, rejects sensitive/out-of-scope paths and non-fast-forward remote changes, pushes the validated SHA to the original source branch, and verifies the remote SHA.',
   args: {
     run_id: tool.schema.string(),
+    project_root: tool.schema.string().optional(),
   },
   async execute(args) {
-    return run(() => publishHandoff(args.run_id));
+    return run(() => publishHandoff(args.run_id, args.project_root));
   },
 });
 
@@ -59,8 +62,9 @@ export const status = tool({
     'Read deterministic GitHub handoff runtime status for a run, including source/validated SHA, current branch/HEAD and validation manifest path.',
   args: {
     run_id: tool.schema.string(),
+    project_root: tool.schema.string().optional(),
   },
   async execute(args) {
-    return run(() => statusHandoff(args.run_id));
+    return run(() => statusHandoff(args.run_id, args.project_root));
   },
 });
