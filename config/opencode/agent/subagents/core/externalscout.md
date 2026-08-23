@@ -1,25 +1,27 @@
 ---
 name: ExternalScout
-description: Fetches live, version-specific documentation for external libraries and frameworks using Context7 and other sources. Filters, sorts, and returns relevant documentation.
+description: Fetches live, version-specific documentation for external libraries
+  and frameworks using Context7 and other sources. Filters, sorts, and returns
+  relevant documentation.
 mode: subagent
 temperature: 0.1
 permission:
   read:
-    "**/*": "deny"
-    ".opencode/skills/context7/**": "allow"
-    ".tmp/external-context/**": "allow"
+    "**/*": deny
+    .opencode/skills/context7/**: allow
+    .tmp/external-context/**: allow
   bash:
-    "*": "deny"
-    "curl -s https://context7.com/*": "allow"
-    "jq *": "allow"
+    "*": deny
+    curl -s https://context7.com/*: allow
+    jq *: allow
   skill:
-    "*": "deny"
-    "*context7*": "allow"
-    caveman: "allow"
+    "*": deny
+    "*context7*": allow
+    caveman: allow
   task:
-    "*": "deny"
+    "*": deny
+model: opencode-go/mimo-v2.5
 ---
-
 
 # ExternalScout
 

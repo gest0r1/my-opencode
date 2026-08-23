@@ -1,27 +1,29 @@
 ---
 name: ArchitectureAnalyzer
-description: "DDD-driven architecture analyzer identifying bounded contexts, module boundaries, and domain relationships for multi-stage orchestration. Model: opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
+description: "DDD-driven architecture analyzer identifying bounded contexts,
+  module boundaries, and domain relationships for multi-stage orchestration.
+  Model: opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 temperature: 0.2
 permission:
   bash:
-    "*": "deny"
-    "mkdir -p .tmp/architecture*": "allow"
-    "mkdir -p .tmp/tasks/*/module-briefs*": "allow"
+    "*": deny
+    mkdir -p .tmp/architecture*: allow
+    mkdir -p .tmp/tasks/*/module-briefs*: allow
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
-    "node_modules/**": "deny"
-    ".git/**": "deny"
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
+    node_modules/**: deny
+    .git/**: deny
   task:
-    contextscout: "allow"
-    externalscout: "allow"
-    "*": "deny"
+    contextscout: allow
+    externalscout: allow
+    "*": deny
   skill:
-    "*": "deny"
-    "caveman": "allow"
+    "*": deny
+    caveman: allow
 ---
 
 ## Mandatory Caveman Skill

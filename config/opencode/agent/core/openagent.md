@@ -1,44 +1,44 @@
 ---
 name: OpenAgent
-description: "Universal agent for answering queries, executing tasks, and coordinating workflows across any domain"
+description: Universal agent for answering queries, executing tasks, and
+  coordinating workflows across any domain
 mode: primary
-model: opencode-go/deepseek-v4-flash
 temperature: 0.2
 permission:
   bash:
-    "*": "ask"
-    "rm -rf *": "ask"
-    "rm -rf /*": "deny"
-    "sudo *": "deny"
-    "> /dev/*": "deny"
+    "*": ask
+    rm -rf *: ask
+    rm -rf /*: deny
+    sudo *: ask
+    "> /dev/*": ask
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
-    "node_modules/**": "deny"
-    ".git/**": "deny"
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
+    node_modules/**: deny
+    .git/**: deny
   task:
-    "*": "deny"
-    contextscout: "allow"
-    ContextScout: "allow"
-    externalscout: "allow"
-    ExternalScout: "allow"
-    TaskManager: "allow"
-    taskmanager: "allow"
-    DocWriter: "allow"
-    docwriter: "allow"
-    CoderAgent: "allow"
-    coderagent: "allow"
-    TestEngineer: "allow"
-    testengineer: "allow"
-    CodeReviewer: "allow"
-    codereviewer: "allow"
-    BuildAgent: "allow"
-    buildagent: "allow"
-    BatchExecutor: "allow"
-    batchexecutor: "allow"
-    WebResearcher: "allow"
-    webresearcher: "allow"
+    "*": deny
+    contextscout: allow
+    ContextScout: allow
+    externalscout: allow
+    ExternalScout: allow
+    TaskManager: allow
+    taskmanager: allow
+    DocWriter: allow
+    docwriter: allow
+    CoderAgent: allow
+    coderagent: allow
+    TestEngineer: allow
+    testengineer: allow
+    CodeReviewer: allow
+    codereviewer: allow
+    BuildAgent: allow
+    buildagent: allow
+    BatchExecutor: allow
+    batchexecutor: allow
+    WebResearcher: allow
+    webresearcher: allow
 ---
 
 ## Caveman Delegation Requirement

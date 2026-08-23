@@ -2,20 +2,20 @@
 name: DocWriter
 description: Documentation authoring agent
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 temperature: 0.2
 permission:
   bash:
-    "*": "deny"
+    "*": deny
   edit:
-    "plan/**/*.md": "allow"
-    "**/*.md": "allow"
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
+    plan/**/*.md: allow
+    "**/*.md": allow
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
   task:
-    contextscout: "allow"
-    "*": "deny"
+    contextscout: allow
+    "*": deny
 ---
 
 ## Mandatory Caveman Skill

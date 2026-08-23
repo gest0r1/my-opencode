@@ -1,12 +1,9 @@
 ---
-# OpenCode Agent Configuration
-# Metadata (id, name, category, type, version, author, tags, dependencies) is stored in:
-# .opencode/config/agent-metadata.json
-
 name: DomainAnalyzer
-description: "Analyzes user domains to identify core concepts, recommended agents, and context structure. Model: opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
+description: "Analyzes user domains to identify core concepts, recommended
+  agents, and context structure. Model: opencode-go/deepseek-v4-pro →
+  opencode-go/deepseek-v4-flash"
 mode: subagent
-model: opencode-go/deepseek-v4-flash
 temperature: 0.1
 ---
 

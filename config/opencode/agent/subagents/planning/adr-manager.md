@@ -1,21 +1,23 @@
 ---
 name: ADRManager
-description: "Architecture Decision Record specialist capturing decisions, context, alternatives, and consequences in lightweight ADR format. Model: opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
+description: "Architecture Decision Record specialist capturing decisions,
+  context, alternatives, and consequences in lightweight ADR format. Model:
+  opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 temperature: 0.2
 permission:
   bash:
-    "*": "deny"
-    "mkdir -p docs/adr*": "allow"
+    "*": deny
+    mkdir -p docs/adr*: allow
   edit:
-    "docs/adr/**/*.md": "allow"
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
+    docs/adr/**/*.md: allow
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
   task:
-    contextscout: "allow"
-    "*": "deny"
+    contextscout: allow
+    "*": deny
 ---
 
 ## Mandatory Caveman Skill

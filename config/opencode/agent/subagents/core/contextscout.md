@@ -1,27 +1,28 @@
 ---
 name: ContextScout
-description: Discovers and recommends context files from /home/guber/.config/opencode/context/ ranked by priority. Suggests ExternalScout when a framework/library is mentioned but not found internally.
+description: Discovers and recommends context files from
+  /home/guber/.config/opencode/context/ ranked by priority. Suggests
+  ExternalScout when a framework/library is mentioned but not found internally.
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 permission:
   read:
-    "*": "allow"
+    "*": allow
   grep:
-    "*": "allow"
+    "*": allow
   glob:
-    "*": "allow"
-  gh_grep_*: "allow"
+    "*": allow
+  gh_grep_*: allow
   bash:
-    "*": "deny"
+    "*": deny
   edit:
-    "*": "deny"
-    ".tmp/**": "allow"
+    "*": deny
+    .tmp/**: allow
   write:
-    "*": "deny"
-    ".tmp/**": "allow"
+    "*": deny
+    .tmp/**: allow
   task:
-    "*": "deny"
-
+    "*": deny
 ---
 
 ## Mandatory Caveman Skill

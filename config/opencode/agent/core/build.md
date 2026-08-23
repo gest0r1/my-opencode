@@ -2,7 +2,7 @@
 name: build
 mode: primary
 description: The default agent. Executes tools based on configured permissions.
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.5
 ---
 
 ## Caveman Delegation Requirement
