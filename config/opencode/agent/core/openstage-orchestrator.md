@@ -381,17 +381,13 @@ Return concise summary:
 
 ---
 
-## Session-Reuse Pilot (Enforcement)
+## Session-Reuse (Enabled by Default)
 
-Session reuse activates ONLY through the explicit, bounded pilot control on
-the invoking command: `--session-reuse-pilot <pipeline-id>`. The pilot covers
-exactly ONE pipeline per run; without the flag, every delegation starts a
-fresh session. Reject malformed pilot controls: duplicate flag, missing/empty
-value, extra value, or a pipeline ID absent from the approved manifest — the
-pilot is not activated and reuse stays forbidden. This section is the
-enforcement counterpart of the
-pipeline-run pilot control and must stay in sync with it (same flag
-semantics, same role list).
+Session reuse is active by default for every pipeline run. The caller can
+disable it with `--no-session-reuse`, which forces all delegations to start
+fresh sessions. The orchestrator checks `$ARGUMENTS` for `--no-session-reuse`;
+if present, skip `pipeline_runtime_prepare` calls entirely and always use fresh
+sessions. This section must stay in sync with pipeline-run.md.
 
 ### Eligibility
 
