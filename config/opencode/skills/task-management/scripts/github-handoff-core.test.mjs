@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -130,8 +130,11 @@ test('prepare blocks when source branch moved after immutable handoff', () => {
   git(work, 'commit', '-m', 'move source');
   git(work, 'push', 'origin', 'gpt');
 
-  const handoffPath = join(work, '.opencode', 'pipeline-handoff.json');
-  assert.equal(readFileSync(handoffPath, 'utf8').length > 0, false, 'handoff file should not exist on gpt worktree');
+  assert.equal(
+    existsSync(join(work, '.opencode', 'pipeline-handoff.json')),
+    false,
+    'handoff file must not exist on the gpt worktree',
+  );
 
   const failure = runCliFailure(work, 'prepare', 'run-1', 'test-handoff');
   assert.equal(failure.status, 'blocked');
