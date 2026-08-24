@@ -77,7 +77,7 @@ function runCliFailureWithProjectRoot(cwd, projectRoot, ...args) {
   }
 }
 
-function fixture(runId = 'run-1') {
+function fixture(runId = 'run-1', allowedFixScope = ['src/**']) {
   const root = mkdtempSync(join(tmpdir(), 'github-handoff-'));
   const remote = join(root, 'remote.git');
   const work = join(root, 'work');
@@ -112,7 +112,7 @@ function fixture(runId = 'run-1') {
         rules_file: 'docs/pipeline-rules.md',
         rules_version: 2,
         validation_stages: ['build', 'tests'],
-        allowed_fix_scope: ['src/**'],
+        allowed_fix_scope: allowedFixScope,
       },
       null,
       2,
@@ -351,6 +351,19 @@ test('publish uses explicit project_root from outside cwd', () => {
   assert.equal(published.status, 'published');
   assert.equal(published.fixes_committed, true);
   assert.equal(git(work, 'rev-parse', 'origin/gpt'), git(work, 'rev-parse', 'HEAD'));
+});
+
+test('publish preserves unstaged apps path from porcelain status', () => {
+  const { work } = fixture('run-1', ['apps/**']);
+  const apps = join(work, 'apps');
+  mkdirSync(apps, { recursive: true });
+
+  runCli(work, 'prepare', 'run-1', 'test-handoff');
+  writeFileSync(join(apps, 'profile.txt'), 'validated\n', 'utf8');
+
+  const published = JSON.parse(runCli(work, 'publish', 'run-1'));
+  assert.equal(published.status, 'published');
+  assert.deepEqual(published.changed_files, ['apps/profile.txt']);
 });
 
 test('tool wrapper has project_root optional param in all tools', () => {
