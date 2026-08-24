@@ -270,11 +270,12 @@ function scopeAllows(file: string, patterns: string[]): boolean {
 }
 
 function changedFiles(cwd: string): string[] {
-  const output = git(['status', '--porcelain=v1', '--untracked-files=all'], { cwd });
+  const output = git(['status', '--porcelain=v1', '--untracked-files=all'], { cwd, trim: false });
   if (!output) return [];
   return output
+    .trimEnd()
     .split('\n')
-    .map((line) => line.slice(3).trim())
+    .map((line) => line.substring(3).trim())
     .map((file) => (file.includes(' -> ') ? file.split(' -> ').pop() ?? file : file))
     .filter(Boolean);
 }
