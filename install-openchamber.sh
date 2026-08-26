@@ -51,8 +51,9 @@ if (( node_major < NODE_MAJOR )); then
   export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 
   if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
-    PROFILE=/dev/null curl -fsSL \
-      "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | bash
+    curl -fsSL \
+      "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | \
+      PROFILE=/dev/null bash
   fi
 
   # shellcheck disable=SC1090
@@ -122,10 +123,22 @@ echo "Устанавливаю зависимости OpenChamber..."
   bun run build:web
 )
 
-# npm global install из уже собранного packages/web создаёт обычную runtime-установку;
-# временный исходный код после завершения будет удалён trap-ом.
+# Устанавливаем не локальную папку, а tarball. Иначе npm может оставить symlink
+# на временный каталог, который будет удалён после завершения installer.
+echo "Упаковываю OpenChamber..."
+PACKAGE_TGZ="$(
+  cd "$SRC/packages/web"
+  npm pack --silent --pack-destination "$TMP_DIR" | tail -n 1
+)"
+PACKAGE_PATH="$TMP_DIR/$PACKAGE_TGZ"
+
+if [[ ! -f "$PACKAGE_PATH" ]]; then
+  echo "Ошибка: npm pack не создал пакет OpenChamber." >&2
+  exit 1
+fi
+
 echo "Устанавливаю собранный OpenChamber глобально..."
-npm install -g "$SRC/packages/web"
+npm install -g "$PACKAGE_PATH"
 
 OPENCHAMBER_BIN="$(command -v openchamber || true)"
 if [[ -z "$OPENCHAMBER_BIN" ]]; then
