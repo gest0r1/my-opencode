@@ -50,7 +50,7 @@ gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/content
 Для установки другой ветки/тега:
 
 ```bash
-OPENCODE_CONFIG_REF=<branch-or-tag> gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install.sh | bash
+gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install.sh | OPENCODE_CONFIG_REF=<branch-or-tag> bash
 ```
 
 ## Разработка
