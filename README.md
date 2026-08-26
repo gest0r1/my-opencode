@@ -40,7 +40,9 @@ gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/content
 ```
 
 Установщик:
-- скачивает `main` во временный каталог через GitHub API;
+- устанавливает или обновляет сам OpenCode официальным установщиком `https://opencode.ai/install` в `~/.opencode/bin/opencode`;
+- проверяет установленную версию OpenCode;
+- скачивает `main` этого репозитория во временный каталог через GitHub API;
 - копирует глобальные конфиги, включая скрытые файлы, в `~/.config/opencode/`;
 - ставит агентов из `config/opencode/agent/` в `~/.opencode/agent/`;
 - ставит скиллы в `~/.agents/skills/`;
