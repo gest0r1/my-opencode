@@ -31,23 +31,69 @@ scripts/                         # Пользовательские скрипт
 > ⚠️ **Важно:** Старый upstream `opencode-ai/opencode` — archived/legacy, не использовать.  
 > Подробнее: `project/upstream.md`
 
-## Восстановление
+## Установка на отдельную машину
+
+Требуется установленный и авторизованный GitHub CLI (`gh auth login`). Рабочий clone репозитория на целевой машине не создаётся.
 
 ```bash
-# 1. Конфиги opencode
-cp -r config/opencode/* ~/.config/opencode/
+gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install.sh | bash
+```
 
-# 1a. Скиллы агентов
-cp -r config/agents/skills/* ~/.agents/skills/
+Установщик:
+- скачивает `main` во временный каталог через GitHub API;
+- копирует глобальные конфиги, включая скрытые файлы, в `~/.config/opencode/`;
+- ставит агентов из `config/opencode/agent/` в `~/.opencode/agent/`;
+- ставит скиллы в `~/.agents/skills/`;
+- создаёт `~/.config/opencode-web.env` из примера только если файла ещё нет;
+- удаляет временные файлы после установки.
 
-# 2. systemd сервис
+Для установки другой ветки/тега:
+
+```bash
+OPENCODE_CONFIG_REF=<branch-or-tag> gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install.sh | bash
+```
+
+## Разработка
+
+Для разработки используется отдельная постоянная рабочая копия:
+
+```bash
+mkdir -p ~/projects
+cd ~/projects
+gh repo clone gest0r1/my-opencode
+cd my-opencode
+```
+
+После изменений — обычные `git add`, `git commit`, `git push`. Установка на другие машины выполняется только через `install.sh`, а не из этой рабочей копии.
+
+## Ручное восстановление
+
+```bash
+mkdir -p ~/.config/opencode ~/.opencode/agent ~/.agents/skills
+
+# Глобальные конфиги, включая скрытые файлы
+cp -a config/opencode/. ~/.config/opencode/
+
+# Агенты должны находиться в ~/.opencode/agent/, а не ~/.config/opencode/agent/
+rm -rf ~/.config/opencode/agent
+cp -a config/opencode/agent/. ~/.opencode/agent/
+
+# Скиллы агентов
+cp -a config/agents/skills/. ~/.agents/skills/
+
+# Секреты — не перезаписывать существующий env
+[ -f ~/.config/opencode-web.env ] || cp config/opencode-web.env.example ~/.config/opencode-web.env
+```
+
+Дополнительные компоненты при необходимости:
+
+```bash
+# systemd сервис
+mkdir -p ~/.config/systemd/user
 cp config/systemd/opencode-web.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 
-# 3. Скрипты
-cp -r scripts ~/Opencode/scripts/
-
-# 4. Секреты
-cp config/opencode-web.env.example ~/.config/opencode-web.env
-# Отредактировать ~/.config/opencode-web.env, вставить реальные ключи
+# Скрипты
+mkdir -p ~/Opencode/scripts
+cp -a scripts/. ~/Opencode/scripts/
 ```
