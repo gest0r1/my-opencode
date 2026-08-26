@@ -20,14 +20,12 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
-# 1. OpenCode + приватная конфигурация my-opencode.
-if ! command -v opencode >/dev/null 2>&1 && [[ ! -x "$HOME/.opencode/bin/opencode" ]]; then
-  echo "OpenCode не найден. Устанавливаю OpenCode и приватную конфигурацию $CONFIG_REPO@$CONFIG_REF..."
-  gh api \
-    -H "Accept: application/vnd.github.raw" \
-    "repos/$CONFIG_REPO/contents/install.sh?ref=$CONFIG_REF" | \
-    OPENCODE_CONFIG_REPO="$CONFIG_REPO" OPENCODE_CONFIG_REF="$CONFIG_REF" bash
-fi
+# 1. Всегда обновляем OpenCode и приватную конфигурацию my-opencode.
+echo "Устанавливаю/обновляю OpenCode и приватную конфигурацию $CONFIG_REPO@$CONFIG_REF..."
+gh api \
+  -H "Accept: application/vnd.github.raw" \
+  "repos/$CONFIG_REPO/contents/install.sh?ref=$CONFIG_REF" | \
+  OPENCODE_CONFIG_REPO="$CONFIG_REPO" OPENCODE_CONFIG_REF="$CONFIG_REF" bash
 
 if [[ -x "$HOME/.opencode/bin/opencode" ]] && ! command -v opencode >/dev/null 2>&1; then
   export PATH="$HOME/.opencode/bin:$PATH"
