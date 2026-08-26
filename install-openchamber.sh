@@ -20,6 +20,38 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
+install_system_package() {
+  local package="$1"
+  local sudo_cmd=()
+
+  if (( EUID != 0 )); then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo_cmd=(sudo)
+    else
+      echo "Ошибка: для установки системного пакета '$package' нужны root-права или sudo." >&2
+      exit 1
+    fi
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "Устанавливаю системный пакет: $package (apt)..."
+    "${sudo_cmd[@]}" apt-get update
+    DEBIAN_FRONTEND=noninteractive "${sudo_cmd[@]}" apt-get install -y "$package"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "Устанавливаю системный пакет: $package (dnf)..."
+    "${sudo_cmd[@]}" dnf install -y "$package"
+  elif command -v yum >/dev/null 2>&1; then
+    echo "Устанавливаю системный пакет: $package (yum)..."
+    "${sudo_cmd[@]}" yum install -y "$package"
+  elif command -v apk >/dev/null 2>&1; then
+    echo "Устанавливаю системный пакет: $package (apk)..."
+    "${sudo_cmd[@]}" apk add --no-cache "$package"
+  else
+    echo "Ошибка: не найден поддерживаемый пакетный менеджер для установки '$package'." >&2
+    exit 1
+  fi
+}
+
 # 1. Всегда обновляем OpenCode и приватную конфигурацию my-opencode.
 echo "Устанавливаю/обновляю OpenCode и приватную конфигурацию $CONFIG_REPO@$CONFIG_REF..."
 gh api \
@@ -82,6 +114,16 @@ echo "Node.js: $(node --version)"
 echo "npm: $(npm --version)"
 
 # 3. Bun нужен для воспроизводимой установки зависимостей и сборки monorepo.
+# Официальный installer Bun требует unzip.
+if ! command -v unzip >/dev/null 2>&1; then
+  install_system_package unzip
+fi
+
+if ! command -v unzip >/dev/null 2>&1; then
+  echo "Ошибка: unzip недоступен после установки." >&2
+  exit 1
+fi
+
 if ! command -v bun >/dev/null 2>&1; then
   echo "Bun не найден. Устанавливаю Bun..."
   curl -fsSL https://bun.sh/install | bash
