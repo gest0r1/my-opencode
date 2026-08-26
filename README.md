@@ -31,7 +31,7 @@ scripts/                         # Пользовательские скрипт
 > ⚠️ **Важно:** Старый upstream `opencode-ai/opencode` — archived/legacy, не использовать.  
 > Подробнее: `project/upstream.md`
 
-## Установка на отдельную машину
+## Установка OpenCode на отдельную машину
 
 Требуется установленный и авторизованный GitHub CLI (`gh auth login`). Рабочий clone репозитория на целевой машине не создаётся.
 
@@ -55,6 +55,45 @@ gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/content
 gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install.sh | OPENCODE_CONFIG_REF=<branch-or-tag> bash
 ```
 
+## Полная установка OpenCode + private config + OpenChamber RU
+
+Для новой Ubuntu-машины используется один bootstrap из приватного `my-opencode`:
+
+```bash
+gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install-openchamber.sh | bash
+```
+
+Он последовательно:
+- устанавливает/обновляет OpenCode и всегда накатывает актуальную конфигурацию из приватного `gest0r1/my-opencode`;
+- проверяет Node.js и при необходимости ставит Node.js 22 через nvm;
+- ставит Bun, если его нет;
+- временно скачивает `gest0r1/openchamber-ru@main`;
+- выполняет `bun install --frozen-lockfile` и `bun run build:web`;
+- пакует именно собранный fork в `.tgz` и устанавливает его глобально через npm;
+- создаёт `/usr/local/bin/openchamber`, если каталог доступен для записи, чтобы CLI был виден сразу после запуска installer через pipe;
+- удаляет временный исходный код после установки.
+
+В результате сервер не содержит dev-clone `openchamber-ru`: установлен runtime-пакет, собранный из текущего GitHub `main`.
+
+Проверка:
+
+```bash
+opencode --version
+openchamber --version
+```
+
+Запуск:
+
+```bash
+openchamber --ui-password '<password>'
+```
+
+Для установки другой ветки/тега fork:
+
+```bash
+gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install-openchamber.sh | OPENCHAMBER_REF=<branch-or-tag> bash
+```
+
 ## Разработка
 
 Для разработки используется отдельная постоянная рабочая копия:
@@ -66,7 +105,9 @@ gh repo clone gest0r1/my-opencode
 cd my-opencode
 ```
 
-После изменений — обычные `git add`, `git commit`, `git push`. Установка на другие машины выполняется только через `install.sh`, а не из этой рабочей копии.
+После изменений — обычные `git add`, `git commit`, `git push`. Установка на другие машины выполняется только через install-скрипты, а не из этой рабочей копии.
+
+OpenChamber разрабатывается отдельно в `gest0r1/openchamber-ru`. Bootstrap не создаёт его рабочую копию на сервере.
 
 ## Ручное восстановление
 
