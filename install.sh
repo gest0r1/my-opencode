@@ -3,8 +3,9 @@ set -Eeuo pipefail
 
 REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 REF="${OPENCODE_CONFIG_REF:-main}"
+OPENCODE_BIN="$HOME/.opencode/bin/opencode"
 
-for cmd in gh tar mktemp; do
+for cmd in gh curl tar mktemp; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "Ошибка: требуется команда '$cmd'." >&2
     exit 1
@@ -16,13 +17,23 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "Устанавливаю/обновляю OpenCode официальным установщиком..."
+curl -fsSL https://opencode.ai/install | bash
+
+if [[ ! -x "$OPENCODE_BIN" ]]; then
+  echo "Ошибка: OpenCode не найден после установки: $OPENCODE_BIN" >&2
+  exit 1
+fi
+
+echo "OpenCode установлен: $($OPENCODE_BIN --version)"
+
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 ARCHIVE="$TMP_DIR/repo.tar.gz"
 SRC="$TMP_DIR/src"
 mkdir -p "$SRC"
 
-echo "Скачиваю $REPO@$REF..."
+echo "Скачиваю конфигурацию $REPO@$REF..."
 gh api "repos/$REPO/tarball/$REF" > "$ARCHIVE"
 tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
 
@@ -47,4 +58,6 @@ else
   echo "$ENV_FILE уже существует — не перезаписываю."
 fi
 
-echo "Готово: конфигурация $REPO@$REF установлена."
+echo "Готово: OpenCode и конфигурация $REPO@$REF установлены."
+echo "Проверка: $OPENCODE_BIN --version"
+echo "Если команда 'opencode' не видна в текущем shell, открой новый shell или выполни: export PATH=\"$HOME/.opencode/bin:$PATH\""
