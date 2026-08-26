@@ -27,6 +27,16 @@ fi
 
 echo "OpenCode установлен: $($OPENCODE_BIN --version)"
 
+# Официальный installer добавляет ~/.opencode/bin в shell rc, но при запуске
+# через `... | bash` дочерний shell не может изменить PATH родительского shell.
+# Для root-сценария делаем opencode доступным сразу через стандартный PATH.
+if ! command -v opencode >/dev/null 2>&1; then
+  if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
+    ln -sf "$OPENCODE_BIN" /usr/local/bin/opencode
+    echo "Создана ссылка: /usr/local/bin/opencode -> $OPENCODE_BIN"
+  fi
+fi
+
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 ARCHIVE="$TMP_DIR/repo.tar.gz"
@@ -59,5 +69,10 @@ else
 fi
 
 echo "Готово: OpenCode и конфигурация $REPO@$REF установлены."
-echo "Проверка: $OPENCODE_BIN --version"
-echo "Если команда 'opencode' не видна в текущем shell, открой новый shell или выполни: export PATH=\"$HOME/.opencode/bin:$PATH\""
+
+if command -v opencode >/dev/null 2>&1; then
+  echo "Проверка: $(command -v opencode) --version -> $(opencode --version)"
+else
+  echo "OpenCode установлен, но текущий shell ещё не видит ~/.opencode/bin." >&2
+  echo "Выполни: export PATH=\"$HOME/.opencode/bin:$PATH\"" >&2
+fi
