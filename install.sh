@@ -82,9 +82,34 @@ if [[ -f "$LEGACY_ENV_FILE" ]]; then
   echo "Удалён legacy runtime-файл: $LEGACY_ENV_FILE"
 fi
 
-# Управляемый launcher гарантирует, что обычный `opencode` всегда получает тот
-# же ~/.config/opencode.env, что и OpenChamber/systemd. Это надёжнее .bashrc и
-# работает также в non-interactive shell.
+# Интерактивные shell должны получать тот же env даже если официальный installer
+# поставил ~/.opencode/bin раньше /usr/local/bin в PATH и CLI обходит launcher.
+ensure_shell_env_loader() {
+  local rc_file="$1"
+  local marker_begin="# >>> my-opencode env >>>"
+  local marker_end="# <<< my-opencode env <<<"
+
+  touch "$rc_file"
+  if ! grep -Fq "$marker_begin" "$rc_file"; then
+    cat >> "$rc_file" <<'EOF'
+
+# >>> my-opencode env >>>
+set -a
+if [ -f "$HOME/.config/opencode.env" ]; then
+  . "$HOME/.config/opencode.env"
+fi
+set +a
+# <<< my-opencode env <<<
+EOF
+    echo "Добавлена загрузка opencode.env: $rc_file"
+  fi
+}
+
+ensure_shell_env_loader "$HOME/.bashrc"
+ensure_shell_env_loader "$HOME/.profile"
+
+# Управляемый launcher гарантирует тот же env и для non-interactive вызовов,
+# если opencode разрешается через /usr/local/bin.
 if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
   LAUNCHER="/usr/local/bin/opencode"
   manage_launcher=0
