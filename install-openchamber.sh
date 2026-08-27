@@ -252,25 +252,109 @@ fi
 echo "Устанавливаю собранный OpenChamber глобально..."
 npm install -g "$PACKAGE_PATH"
 
-OPENCHAMBER_BIN="$(command -v openchamber || true)"
-if [[ -z "$OPENCHAMBER_BIN" ]]; then
-  npm_prefix="$(npm prefix -g)"
-  if [[ -x "$npm_prefix/bin/openchamber" ]]; then
-    OPENCHAMBER_BIN="$npm_prefix/bin/openchamber"
+# Ищем реальный бинарник именно в текущем npm prefix, а не старый launcher
+# /usr/local/bin/openchamber от предыдущей установки.
+npm_prefix="$(npm prefix -g)"
+OPENCHAMBER_NPM_BIN="$npm_prefix/bin/openchamber"
+OPENCHAMBER_REAL=""
+if [[ -e "$OPENCHAMBER_NPM_BIN" || -L "$OPENCHAMBER_NPM_BIN" ]]; then
+  OPENCHAMBER_REAL="$(readlink -f "$OPENCHAMBER_NPM_BIN" 2>/dev/null || true)"
+fi
+
+if [[ -z "$OPENCHAMBER_REAL" || ! -x "$OPENCHAMBER_REAL" ]]; then
+  candidate="$(command -v openchamber || true)"
+  if [[ -n "$candidate" && "$candidate" != "/usr/local/bin/openchamber" ]]; then
+    OPENCHAMBER_REAL="$(readlink -f "$candidate" 2>/dev/null || printf '%s' "$candidate")"
   fi
 fi
 
-if [[ -z "$OPENCHAMBER_BIN" || ! -x "$OPENCHAMBER_BIN" ]]; then
-  echo "Ошибка: openchamber не найден после глобальной установки." >&2
+if [[ -z "$OPENCHAMBER_REAL" || ! -x "$OPENCHAMBER_REAL" ]]; then
+  echo "Ошибка: реальный openchamber не найден после глобальной установки." >&2
   exit 1
 fi
 
+# Managed launcher загружает тот же opencode.env, что используется обычным
+# OpenCode CLI. Для `startup enable` автоматически запрещаем snapshot общего
+# окружения: systemd получает общий env отдельным EnvironmentFile.
+OPENCHAMBER_BIN="$OPENCHAMBER_REAL"
 if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
-  openchamber_real="$(readlink -f "$OPENCHAMBER_BIN" 2>/dev/null || printf '%s' "$OPENCHAMBER_BIN")"
-  if [[ "$openchamber_real" != "/usr/local/bin/openchamber" ]]; then
-    ln -sfn "$openchamber_real" /usr/local/bin/openchamber
-    OPENCHAMBER_BIN="/usr/local/bin/openchamber"
+  OPENCHAMBER_LAUNCHER="/usr/local/bin/openchamber"
+  rm -f "$OPENCHAMBER_LAUNCHER"
+  cat > "$OPENCHAMBER_LAUNCHER" <<EOF
+#!/usr/bin/env bash
+# managed-by: my-opencode-openchamber
+set -a
+if [[ -f "\$HOME/.config/opencode.env" ]]; then
+  # shellcheck disable=SC1090
+  . "\$HOME/.config/opencode.env"
+fi
+set +a
+
+if [[ "\${1:-}" == "startup" && "\${2:-}" == "enable" ]]; then
+  has_no_env_snapshot=0
+  for arg in "\$@"; do
+    if [[ "\$arg" == "--no-env-snapshot" ]]; then
+      has_no_env_snapshot=1
+      break
+    fi
+  done
+  if (( has_no_env_snapshot == 0 )); then
+    exec "$OPENCHAMBER_REAL" "\$@" --no-env-snapshot
   fi
+fi
+
+exec "$OPENCHAMBER_REAL" "\$@"
+EOF
+  chmod 755 "$OPENCHAMBER_LAUNCHER"
+  OPENCHAMBER_BIN="$OPENCHAMBER_LAUNCHER"
+fi
+
+# 6. OpenChamber systemd использует тот же общий env, что и CLI.
+# Сам OpenChamber по-прежнему может хранить в startup.env только собственные
+# параметры (UI password и т.п.), но не копию общего окружения.
+SYSTEMD_DROPIN_DIR="$HOME/.config/systemd/user/openchamber.service.d"
+SYSTEMD_DROPIN="$SYSTEMD_DROPIN_DIR/10-opencode-env.conf"
+mkdir -p "$SYSTEMD_DROPIN_DIR"
+cat > "$SYSTEMD_DROPIN" <<EOF
+[Service]
+EnvironmentFile=-$HOME/.config/opencode.env
+Environment="OPENCODE_BINARY=$HOME/.opencode/bin/opencode"
+EOF
+chmod 600 "$SYSTEMD_DROPIN"
+
+# Если startup.env был создан старой версией со snapshot окружения, удаляем из
+# него переменные, которые теперь принадлежат единому opencode.env, а также
+# старые LLM API key overrides.
+STARTUP_ENV="$HOME/.local/share/openchamber/startup.env"
+SHARED_ENV="$HOME/.config/opencode.env"
+if [[ -f "$STARTUP_ENV" ]]; then
+  CLEAN_STARTUP_ENV="$TMP_DIR/startup.env"
+  if [[ -f "$SHARED_ENV" ]]; then
+    awk -F= '
+      NR==FNR {
+        key=$1
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+        if (key ~ /^[A-Za-z_][A-Za-z0-9_]*$/) shared[key]=1
+        next
+      }
+      {
+        key=$1
+        if (key == "OPENAI_API_KEY" || key == "OPENCODE_API_KEY") next
+        if (!(key in shared)) print
+      }
+    ' "$SHARED_ENV" "$STARTUP_ENV" > "$CLEAN_STARTUP_ENV"
+  else
+    grep -Ev '^(OPENAI_API_KEY|OPENCODE_API_KEY)=' "$STARTUP_ENV" > "$CLEAN_STARTUP_ENV" || true
+  fi
+  mv "$CLEAN_STARTUP_ENV" "$STARTUP_ENV"
+  chmod 600 "$STARTUP_ENV"
+fi
+
+# Если автозагрузка уже включена, применяем drop-in к существующему сервису.
+if command -v systemctl >/dev/null 2>&1 && \
+   [[ -f "$HOME/.config/systemd/user/openchamber.service" ]]; then
+  systemctl --user daemon-reload || true
+  systemctl --user restart openchamber.service || true
 fi
 
 OPENCHAMBER_VERSION="$($OPENCHAMBER_BIN --version 2>/dev/null || true)"
@@ -281,4 +365,6 @@ echo "OpenCode: $(opencode --version)"
 echo "OpenChamber: ${OPENCHAMBER_VERSION:-установлен}"
 echo "Источник OpenChamber: $OPENCHAMBER_REPO@$OPENCHAMBER_REF"
 echo "CLI: $OPENCHAMBER_BIN"
+echo "Общий env: $HOME/.config/opencode.env"
 echo "Запуск: openchamber --ui-password '<password>'"
+echo "Автозагрузка: openchamber startup enable --host '<docker-bridge-ip>' --port 3000 --ui-password '<password>'"
