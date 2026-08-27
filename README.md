@@ -67,31 +67,88 @@ gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/content
 - устанавливает/обновляет OpenCode и всегда накатывает актуальную конфигурацию из приватного `gest0r1/my-opencode`;
 - проверяет Node.js и при необходимости ставит Node.js 22 через nvm;
 - ставит Bun, если его нет;
-- временно скачивает `gest0r1/openchamber-ru@main`;
+- временно скачивает snapshot `gest0r1/openchamber-ru@main`;
 - выполняет `bun install --frozen-lockfile` и `bun run build:web`;
 - пакует именно собранный fork в `.tgz` и устанавливает его глобально через npm;
-- создаёт `/usr/local/bin/openchamber`, если каталог доступен для записи, чтобы CLI был виден сразу после запуска installer через pipe;
+- создаёт `/usr/local/bin/openchamber`, чтобы CLI был доступен из обычного PATH;
 - удаляет временный исходный код после установки.
 
 В результате сервер не содержит dev-clone `openchamber-ru`: установлен runtime-пакет, собранный из текущего GitHub `main`.
 
-Проверка:
+### Проверка
 
 ```bash
 opencode --version
 openchamber --version
 ```
 
-Запуск:
+### Запуск и порт
+
+OpenChamber по умолчанию слушает порт **3000** на localhost.
 
 ```bash
 openchamber --ui-password '<password>'
 ```
 
-Для установки другой ветки/тега fork:
+Явно задать другой порт:
+
+```bash
+openchamber --port 3001 --ui-password '<password>'
+```
+
+Короткая форма:
+
+```bash
+openchamber -p 3001 --ui-password '<password>'
+```
+
+Для доступа не только с localhost используй сетевые параметры OpenChamber осознанно; сам по себе `--port` не меняет интерфейс, на котором слушает сервер.
+
+## Подход к установке и обновлению
+
+Схема намеренно разделяет разработку и runtime-установку:
+
+```text
+разработка в рабочем clone
+        ↓
+git commit / git push
+        ↓
+GitHub: gest0r1/my-opencode + gest0r1/openchamber-ru
+        ↓
+install-openchamber.sh
+        ↓
+временный snapshot → build → runtime install → удаление исходников
+```
+
+### Обновление сервера
+
+После изменений и `git push` в `my-opencode` или `openchamber-ru` на сервере выполняется **та же команда**, что и при первой установке:
+
+```bash
+gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install-openchamber.sh | bash
+```
+
+Она повторно:
+1. обновит OpenCode;
+2. установит актуальный private config из `my-opencode@main`;
+3. скачает текущий `openchamber-ru@main`;
+4. пересоберёт fork;
+5. заменит установленный runtime OpenChamber новой сборкой.
+
+Отдельный `git pull` на сервере не нужен: рабочая копия исходников там не хранится.
+
+> **Важно:** для нашего fork не использовать `openchamber update` как основной механизм обновления. Встроенный updater ориентирован на официальный `@openchamber/web` и upstream OpenChamber. Наш канонический способ обновления — повторный запуск `install-openchamber.sh` из приватного `my-opencode`.
+
+Для установки конкретной ветки или тега fork:
 
 ```bash
 gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install-openchamber.sh | OPENCHAMBER_REF=<branch-or-tag> bash
+```
+
+Для другой версии private config:
+
+```bash
+gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install-openchamber.sh | OPENCODE_CONFIG_REF=<branch-or-tag> bash
 ```
 
 ## Разработка
