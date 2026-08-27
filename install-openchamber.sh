@@ -117,7 +117,6 @@ echo "Node.js: $(node --version)"
 echo "npm: $(npm --version)"
 
 # Если Node используется через nvm, создаём стабильные ссылки для текущей версии.
-# Источник берём только из NVM_BIN, поэтому самоссылка /usr/local/bin -> сама в себя невозможна.
 if [[ -n "${NVM_BIN:-}" && -d /usr/local/bin && -w /usr/local/bin ]]; then
   [[ -x "$NVM_BIN/node" ]] && ln -sfn "$NVM_BIN/node" /usr/local/bin/node
   [[ -e "$NVM_BIN/npm" ]] && ln -sfn "$NVM_BIN/npm" /usr/local/bin/npm
@@ -126,14 +125,8 @@ if [[ -n "${NVM_BIN:-}" && -d /usr/local/bin && -w /usr/local/bin ]]; then
 fi
 
 # 3. Bun нужен для воспроизводимой установки зависимостей и сборки monorepo.
-# Официальный installer Bun требует unzip.
 if ! command -v unzip >/dev/null 2>&1; then
   install_system_package unzip
-fi
-
-if ! command -v unzip >/dev/null 2>&1; then
-  echo "Ошибка: unzip недоступен после установки." >&2
-  exit 1
 fi
 
 export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
@@ -154,7 +147,12 @@ fi
 
 echo "Bun: $(bun --version)"
 
-# 4. Временная загрузка fork OpenChamber. Рабочий clone после установки удаляется.
+# 4. Временная загрузка fork OpenChamber.
+# Основной путь — GitHub tarball через curl HTTP/1.1 с retry. Это устойчивее
+# большого git pack на соединениях, где встречаются GnuTLS recv/early EOF.
+if ! command -v tar >/dev/null 2>&1; then
+  install_system_package tar
+fi
 if ! command -v git >/dev/null 2>&1; then
   install_system_package git
 fi
@@ -162,30 +160,66 @@ fi
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 SRC="$TMP_DIR/src"
+ARCHIVE="$TMP_DIR/openchamber.tar.gz"
+mkdir -p "$SRC"
 
-echo "Скачиваю $OPENCHAMBER_REPO@$OPENCHAMBER_REF..."
-clone_ok=0
-for attempt in 1 2 3; do
-  rm -rf "$SRC"
-  echo "Попытка $attempt/3..."
+GITHUB_TOKEN="$(gh auth token 2>/dev/null || true)"
+ARCHIVE_URL="https://api.github.com/repos/$OPENCHAMBER_REPO/tarball/$OPENCHAMBER_REF"
 
-  # Принудительно HTTP/1.1: на некоторых VDS длинный HTTP/2 transfer через GitHub
-  # завершается ошибкой 'stream ID ... CANCEL'.
-  if GIT_CONFIG_COUNT=1 \
-     GIT_CONFIG_KEY_0=http.version \
-     GIT_CONFIG_VALUE_0=HTTP/1.1 \
-     gh repo clone "$OPENCHAMBER_REPO" "$SRC" -- \
-       --depth=1 --branch "$OPENCHAMBER_REF" --single-branch; then
-    clone_ok=1
-    break
+echo "Скачиваю $OPENCHAMBER_REPO@$OPENCHAMBER_REF snapshot..."
+download_ok=0
+
+curl_args=(
+  --fail --location --http1.1
+  --retry 6 --retry-delay 3 --retry-max-time 300 --retry-all-errors
+  --connect-timeout 20
+  --speed-time 60 --speed-limit 1024
+  -H "Accept: application/vnd.github+json"
+  -H "X-GitHub-Api-Version: 2022-11-28"
+)
+if [[ -n "$GITHUB_TOKEN" ]]; then
+  curl_args+=( -H "Authorization: Bearer $GITHUB_TOKEN" )
+fi
+
+if curl "${curl_args[@]}" "$ARCHIVE_URL" -o "$ARCHIVE"; then
+  if tar -tzf "$ARCHIVE" >/dev/null 2>&1; then
+    tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
+    download_ok=1
+  else
+    echo "Полученный tarball повреждён. Перехожу к fallback." >&2
   fi
+fi
 
-  echo "Скачивание не удалось. Повторяю..." >&2
-  sleep $((attempt * 2))
-done
+# Fallback: минимальный partial clone, также через HTTP/1.1.
+if (( download_ok == 0 )); then
+  echo "Tarball не скачался. Fallback: partial git clone..." >&2
+  rm -rf "$SRC"
 
-if (( clone_ok == 0 )); then
-  echo "Ошибка: не удалось скачать $OPENCHAMBER_REPO@$OPENCHAMBER_REF после 3 попыток." >&2
+  for attempt in 1 2 3; do
+    echo "Fallback попытка $attempt/3..."
+    rm -rf "$SRC"
+
+    if git \
+      -c http.version=HTTP/1.1 \
+      -c http.lowSpeedLimit=1024 \
+      -c http.lowSpeedTime=60 \
+      clone \
+      --depth=1 \
+      --filter=blob:none \
+      --no-tags \
+      --single-branch \
+      --branch "$OPENCHAMBER_REF" \
+      "https://github.com/$OPENCHAMBER_REPO.git" "$SRC"; then
+      download_ok=1
+      break
+    fi
+
+    sleep $((attempt * 3))
+  done
+fi
+
+if (( download_ok == 0 )); then
+  echo "Ошибка: не удалось скачать $OPENCHAMBER_REPO@$OPENCHAMBER_REF ни tarball, ни partial clone." >&2
   exit 1
 fi
 
@@ -203,8 +237,6 @@ echo "Устанавливаю зависимости OpenChamber..."
   bun run build:web
 )
 
-# Устанавливаем не локальную папку, а tarball. Иначе npm может оставить symlink
-# на временный каталог, который будет удалён после завершения installer.
 echo "Упаковываю OpenChamber..."
 PACKAGE_TGZ="$(
   cd "$SRC/packages/web"
@@ -233,7 +265,6 @@ if [[ -z "$OPENCHAMBER_BIN" || ! -x "$OPENCHAMBER_BIN" ]]; then
   exit 1
 fi
 
-# OpenChamber должен быть доступен и в родительском shell после installer через pipe.
 if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
   openchamber_real="$(readlink -f "$OPENCHAMBER_BIN" 2>/dev/null || printf '%s' "$OPENCHAMBER_BIN")"
   if [[ "$openchamber_real" != "/usr/local/bin/openchamber" ]]; then
