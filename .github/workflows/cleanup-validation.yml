@@ -23,17 +23,18 @@ jobs:
       - name: Check active config for retired runtime references
         run: |
           set -e
-          ! grep -R --line-number --exclude-dir=.git -E 'plugins/shell-strategy|~/.opencode/agent|StageOrchestrator' config/opencode/agent config/opencode/opencode.json install.sh config/opencode/command || false
-          if grep -R --line-number --exclude-dir=.git -E 'plugins/shell-strategy|~/.opencode/agent|StageOrchestrator' config/opencode/agent config/opencode/opencode.json install.sh config/opencode/command; then
+          if grep -R --line-number --exclude-dir=.git -E 'plugins/shell-strategy|(^|[^[:alnum:]_])StageOrchestrator([^[:alnum:]_]|$)' config/opencode/agent config/opencode/opencode.json config/opencode/command; then
             echo 'Found retired runtime reference' >&2
             exit 1
           fi
-      - name: Check active config for literal integration secrets
+      - name: Check canonical agent path
+        run: |
+          grep -Fq '$HOME/.config/opencode/agents' install.sh
+          ! grep -R --line-number -F '~/.opencode/agent' config/opencode/agent config/opencode/opencode.json config/opencode/command
+      - name: Check integration secrets are env-backed
         run: |
           python3 - <<'PY'
-          import json,re,sys
-          p='config/opencode/opencode.json'
-          s=open(p,encoding='utf-8').read()
+          s=open('config/opencode/opencode.json',encoding='utf-8').read()
           required=['{env:EXCHANGE_MCP_API_KEY}','{env:ITOP_TOKEN}','{env:GDRIVE_MCP_CLIENT_ID}','{env:GDRIVE_MCP_CLIENT_SECRET}','{env:GDRIVE_MCP_REFRESH_TOKEN}']
           missing=[x for x in required if x not in s]
           if missing:
