@@ -16,6 +16,7 @@ permission:
   task:
     "*": deny
     contextscout: allow
+    ContextScout: allow
 ---
 
 # CodeReviewer
