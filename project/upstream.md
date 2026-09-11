@@ -41,7 +41,11 @@ Upstream OpenCode v1.18.30 загружает agent markdown из `{agent,agents
 
 ## Model fallback
 
-В agent schema OpenCode v1.18.30 поле `model` является одной строкой. Нативного `fallback`/списка моделей в agent frontmatter нет. `task` tool также выбирает model из конфигурации вызываемого agent и не принимает отдельный fallback list. Поэтому автоматическое quota/provider failover должно реализовываться отдельным runtime/router слоем, а не выдуманным полем frontmatter.
+В agent schema OpenCode v1.18.30 поле `model` является одной строкой. Нативного `fallback`/списка моделей в agent frontmatter нет, и `task` tool не принимает fallback list.
+
+**Политика проекта:** автоматический model/provider fallback не реализуем собственным router/runtime-слоем и не патчим OpenCode ради этого. Используем fallback только если он появляется как штатная upstream-функция OpenCode. До этого при недоступности модели ошибка должна быть явной, а смена модели — осознанной операцией пользователя/оркестратора через поддерживаемые upstream-механизмы.
+
+Исключение возможно только при критической необходимости и после отдельного решения с доказательством, что задача не решается штатным upstream API/конфигурацией.
 
 ## Проверка версии
 
