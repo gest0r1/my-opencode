@@ -18,7 +18,9 @@ permission:
   task:
     "*": deny
     contextscout: allow
+    ContextScout: allow
     externalscout: allow
+    ExternalScout: allow
 ---
 
 # ArchitectureAnalyzer

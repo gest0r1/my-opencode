@@ -17,6 +17,7 @@ permission:
     "**/*.secret": deny
   task:
     contextscout: allow
+    ContextScout: allow
     "*": deny
 ---
 

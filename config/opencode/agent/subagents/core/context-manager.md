@@ -34,6 +34,7 @@ permission:
   task:
     "*": deny
     contextscout: allow
+    ContextScout: allow
 ---
 
 ## Mandatory Caveman Skill

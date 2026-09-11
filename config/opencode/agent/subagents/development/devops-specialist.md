@@ -8,6 +8,7 @@ permission:
   task:
     "*": deny
     contextscout: allow
+    ContextScout: allow
   bash:
     "*": deny
     "docker ps *": allow
