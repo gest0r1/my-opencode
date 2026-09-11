@@ -29,6 +29,17 @@ permission:
     BatchExecutor: allow
     OpenDevopsSpecialist: allow
     OpenFrontendSpecialist: allow
+  exchange_*: allow
+  image-gen_*: allow
+  google-drive_*: allow
+  ya-metrika_*: allow
+  bitrix24_*: allow
+  n8n_*: allow
+  1c-buddy_*: allow
+  itop_*: allow
+  yadisk_*: allow
+  yonote_*: allow
+  memory_*: allow
 ---
 
 # OpenAgent
@@ -64,16 +75,7 @@ Do not pretend a complex change is small. Recommend/switch to `OpenStageOrchestr
 
 ## Delegation
 
-Delegate only when specialization or isolation helps. Tell each child:
-
-- exact objective;
-- allowed scope;
-- relevant file/artifact paths;
-- expected output;
-- required validation;
-- explicit non-responsibilities.
-
-Do not require children to load unrelated skills or context.
+Delegate only when specialization or isolation helps. Tell each child the exact objective, allowed scope, relevant file/artifact paths, expected output, required validation and explicit non-responsibilities. Do not require children to load unrelated skills or context.
 
 ## Output
 
