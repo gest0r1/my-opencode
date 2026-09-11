@@ -13,6 +13,8 @@ const ELIGIBLE_ROLES = new Set([
 ])
 
 const CONTEXT_TTL_MS = 5 * 60 * 1000
+const WORK_ITEM_RE = /^[A-Za-z0-9._:-]{1,128}$/
+const WORK_ITEM_MARKER_RE = /<pipeline_work_item\s+id="([A-Za-z0-9._:-]{1,128})"\s*\/?\s*>/
 
 type SessionHealth = "healthy" | "in_progress" | "compacted" | "error" | "cancelled" | "stale"
 
@@ -21,6 +23,7 @@ type RegistryEntry = {
   pipeline_id: string
   stage: string
   role: string
+  work_item_id: string
   task_id: string
   status: SessionHealth
   state_revision?: string
@@ -34,11 +37,12 @@ type RuntimeContext = {
   nonce: string
   prepared_at: string
   expires_at: string
-  pilot_pipeline_id: string
+  parent_session_id: string
   run_id: string
   pipeline_id: string
   stage: string
   role: string
+  work_item_id: string
   loop: number
   technical_fix: boolean
   state_revision: string
@@ -68,7 +72,6 @@ type InvocationMeta = {
   prompt_bytes: number
   packet_bytes?: number
   prior_files_read: string[]
-  expected_task_id?: string
 }
 
 function safeJson(file: string): any | undefined {
@@ -96,8 +99,10 @@ function byteLength(value: unknown) {
   return Buffer.byteLength(typeof value === "string" ? value : JSON.stringify(value ?? null), "utf8")
 }
 
-function runtimeContextPath(root: string) {
-  return path.join(root, ".tmp", "pipeline-runtime-context.json")
+function runtimeContextPath(root: string, parentSessionID: string, workItemID: string) {
+  const parent = sha256(parentSessionID).slice(0, 24)
+  const item = sha256(workItemID).slice(0, 24)
+  return path.join(root, ".tmp", "pipeline-runtime", parent, `${item}.json`)
 }
 
 function registryPath(root: string, runID: string) {
@@ -109,7 +114,8 @@ function metricsFile(root: string, runID: string) {
 }
 
 function loadRegistry(root: string, runID: string): RegistryEntry[] {
-  return safeJson(registryPath(root, runID)) ?? []
+  const entries = safeJson(registryPath(root, runID))
+  return Array.isArray(entries) ? entries : []
 }
 
 function saveRegistry(root: string, runID: string, entries: RegistryEntry[]) {
@@ -118,8 +124,8 @@ function saveRegistry(root: string, runID: string, entries: RegistryEntry[]) {
   fs.writeFileSync(file, JSON.stringify(entries, null, 2) + "\n", "utf8")
 }
 
-function consumeRuntimeContext(root: string): RuntimeContext | undefined {
-  const file = runtimeContextPath(root)
+function consumeRuntimeContext(root: string, parentSessionID: string, workItemID: string): RuntimeContext | undefined {
+  const file = runtimeContextPath(root, parentSessionID, workItemID)
   const ctx = safeJson(file) as RuntimeContext | undefined
   try {
     fs.unlinkSync(file)
@@ -130,7 +136,7 @@ function consumeRuntimeContext(root: string): RuntimeContext | undefined {
 }
 
 function identity(ctx: RuntimeContext, role = ctx.role) {
-  return [ctx.run_id, ctx.pipeline_id, ctx.stage, role].join(":")
+  return [ctx.run_id, ctx.pipeline_id, ctx.stage, role, ctx.work_item_id].join(":")
 }
 
 function resolveInsideRoot(root: string, candidate?: string) {
@@ -143,6 +149,11 @@ function contextIsFresh(ctx: RuntimeContext) {
   return Number.isFinite(expires) && Date.now() <= expires
 }
 
+function extractWorkItemID(prompt: unknown) {
+  if (typeof prompt !== "string") return undefined
+  return WORK_ITEM_MARKER_RE.exec(prompt)?.[1]
+}
+
 function hashDelta(root: string, ctx: RuntimeContext) {
   let diffHash: string | null = null
   if (ctx.diff_path) {
@@ -151,6 +162,7 @@ function hashDelta(root: string, ctx: RuntimeContext) {
   }
   return sha256(
     JSON.stringify({
+      work_item_id: ctx.work_item_id,
       evidence_path: ctx.evidence_path ?? null,
       changed_files: ctx.changed_files,
       diff_path: ctx.diff_path ?? null,
@@ -185,6 +197,7 @@ function validateReuseDelta(root: string, ctx: RuntimeContext, previous: Registr
   }
 
   const payload = {
+    work_item_id: ctx.work_item_id,
     evidence_path: ctx.evidence_path,
     changed_files: ctx.changed_files,
     diff_path: ctx.diff_path ?? null,
@@ -239,6 +252,7 @@ function decisionMetric(ctx: RuntimeContext, role: string, decision: "fresh" | "
     pipeline_id: ctx.pipeline_id,
     stage: ctx.stage,
     role,
+    work_item_id: ctx.work_item_id,
     loop: ctx.loop,
     decision,
     fallback_reason: fallbackReason ?? null,
@@ -248,20 +262,20 @@ function decisionMetric(ctx: RuntimeContext, role: string, decision: "fresh" | "
 export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
   const root = directory
   const statsBySession = new Map<string, SessionStats>()
-  const invocationByIdentity = new Map<string, InvocationMeta>()
+  const invocationByCallID = new Map<string, InvocationMeta>()
   const invalidatedSessions = new Map<string, SessionHealth>()
 
   return {
     tool: {
       pipeline_runtime_prepare: tool({
         description:
-          "Prepare one-shot runtime metadata for the next CoderAgent/TestEngineer/BuildAgent task in the explicitly enabled session-reuse pilot. Call immediately before task().",
+          "Prepare deterministic routing metadata for one pipeline work item. The next matching task() must include <pipeline_work_item id=\"...\"/> in its prompt.",
         args: {
-          pilot_pipeline_id: tool.schema.string(),
           run_id: tool.schema.string(),
           pipeline_id: tool.schema.string(),
           stage: tool.schema.string(),
           role: tool.schema.string(),
+          work_item_id: tool.schema.string(),
           loop: tool.schema.number(),
           technical_fix: tool.schema.boolean(),
           state_revision: tool.schema.string(),
@@ -271,12 +285,18 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
           diff_path: tool.schema.string().optional(),
           required_reread: tool.schema.array(tool.schema.string()).optional(),
         },
-        async execute(args) {
-          if (args.pilot_pipeline_id !== args.pipeline_id) {
-            return "rejected: pilot_pipeline_id does not match pipeline_id; next task will run fresh"
-          }
+        async execute(args, context) {
           if (!ELIGIBLE_ROLES.has(args.role)) {
-            return "rejected: role is not eligible for session reuse; next task will run fresh"
+            return "rejected: role is not eligible for session reuse; next task must run fresh"
+          }
+          if (!WORK_ITEM_RE.test(args.work_item_id)) {
+            return "rejected: work_item_id must match [A-Za-z0-9._:-]{1,128}"
+          }
+
+          const file = runtimeContextPath(root, context.sessionID, args.work_item_id)
+          const existing = safeJson(file) as RuntimeContext | undefined
+          if (existing && contextIsFresh(existing)) {
+            return `rejected: outstanding prepare already exists for work_item_id=${args.work_item_id}`
           }
 
           const now = Date.now()
@@ -284,11 +304,12 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
             nonce: crypto.randomUUID(),
             prepared_at: new Date(now).toISOString(),
             expires_at: new Date(now + CONTEXT_TTL_MS).toISOString(),
-            pilot_pipeline_id: args.pilot_pipeline_id,
+            parent_session_id: context.sessionID,
             run_id: args.run_id,
             pipeline_id: args.pipeline_id,
             stage: args.stage,
             role: args.role,
+            work_item_id: args.work_item_id,
             loop: args.loop,
             technical_fix: args.technical_fix,
             state_revision: args.state_revision,
@@ -299,16 +320,15 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
             required_reread: args.required_reread ?? [],
           }
 
-          const file = runtimeContextPath(root)
           ensureDir(path.dirname(file))
           fs.writeFileSync(file, JSON.stringify(ctx, null, 2) + "\n", "utf8")
-          return `prepared ${ctx.nonce} for ${identity(ctx)}; technical_fix=${ctx.technical_fix}`
+          return `prepared ${ctx.nonce} for ${identity(ctx)}; marker=<pipeline_work_item id=\"${ctx.work_item_id}\"/>`
         },
       }),
     },
 
     "tool.execute.before": async (input: any, output: any) => {
-      const sessionID = String(input.sessionID ?? input.sessionId ?? "")
+      const sessionID = String(input.sessionID ?? "")
 
       if (input.tool !== "task") {
         if (!sessionID || input.tool === "pipeline_runtime_prepare") return
@@ -335,17 +355,19 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
 
       const args = output.args ?? {}
       const role = String(args.subagent_type ?? "")
+      const workItemID = extractWorkItemID(args.prompt)
 
-      // A model-supplied handle is never trusted. Runtime owns task_id completely.
+      // Never trust an LLM-selected session handle. Native task_id is a transport handle;
+      // this router owns the logical work-item -> task_id decision.
       delete args.task_id
 
-      const ctx = consumeRuntimeContext(root)
+      if (!sessionID || !workItemID) return
+      const ctx = consumeRuntimeContext(root, sessionID, workItemID)
       if (!ctx) return
-      const id = identity(ctx, role)
       const promptBytesBeforeDelta = byteLength(args.prompt ?? "")
 
       const rememberFresh = (reason: string, priorFiles: string[] = []) => {
-        invocationByIdentity.set(id, {
+        invocationByCallID.set(String(input.callID), {
           ctx,
           started_at: Date.now(),
           decision: "fresh",
@@ -357,22 +379,21 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
       }
 
       if (!contextIsFresh(ctx)) return rememberFresh("stale_runtime_context")
-      if (ctx.pilot_pipeline_id !== ctx.pipeline_id) return rememberFresh("cross_pipeline_reject")
-      if (role !== ctx.role) return rememberFresh("handle_mismatch")
+      if (ctx.parent_session_id !== sessionID) return rememberFresh("parent_session_mismatch")
+      if (ctx.work_item_id !== workItemID) return rememberFresh("work_item_mismatch")
+      if (role !== ctx.role) return rememberFresh("role_mismatch")
       if (!ELIGIBLE_ROLES.has(role)) return rememberFresh("not_eligible")
 
       const registry = loadRegistry(root, ctx.run_id)
-      const match = registry
-        .filter(
-          (item) =>
-            item.run_id === ctx.run_id &&
-            item.pipeline_id === ctx.pipeline_id &&
-            item.stage === ctx.stage &&
-            item.role === role,
-        )
-        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0]
+      const match = registry.find(
+        (item) =>
+          item.run_id === ctx.run_id &&
+          item.pipeline_id === ctx.pipeline_id &&
+          item.stage === ctx.stage &&
+          item.role === role &&
+          item.work_item_id === ctx.work_item_id,
+      )
 
-      // Baseline/first fix calls are intentionally fresh but are registered after completion.
       if (!ctx.technical_fix) return rememberFresh("baseline")
       if (!match) return rememberFresh("no_prior_session")
       if (match.status !== "healthy") return rememberFresh(match.status, match.files_read ?? [])
@@ -393,17 +414,16 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
         "\n\n<session_reuse_delta>",
         JSON.stringify(delta.payload, null, 2),
         "</session_reuse_delta>",
-        "Re-read the evidence and required paths above. Treat prior conversation memory as supplemental context, never as the source of truth.",
+        "Re-read the evidence and required paths above. Prior conversation memory is supplemental; repository state and evidence remain authoritative.",
       ].join("\n")
 
-      invocationByIdentity.set(id, {
+      invocationByCallID.set(String(input.callID), {
         ctx,
         started_at: Date.now(),
         decision: "reuse",
         prompt_bytes: byteLength(args.prompt),
         packet_bytes: delta.bytes,
         prior_files_read: match.files_read ?? [],
-        expected_task_id: match.task_id,
       })
 
       match.status = "in_progress"
@@ -414,19 +434,17 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
         task_id: match.task_id,
         packet_bytes: delta.bytes,
         delta_hash: delta.hash,
+        call_id: String(input.callID),
       })
     },
 
     "tool.execute.after": async (input: any, output: any) => {
       if (input.tool !== "task") return
-      const role = String(input.args?.subagent_type ?? "")
-      if (!role) return
-
-      const invocation = [...invocationByIdentity.values()]
-        .filter((item) => item.ctx.role === role)
-        .sort((a, b) => b.started_at - a.started_at)[0]
+      const callID = String(input.callID ?? "")
+      const invocation = invocationByCallID.get(callID)
       if (!invocation) return
 
+      const role = String(input.args?.subagent_type ?? invocation.ctx.role)
       const ctx = invocation.ctx
       const id = identity(ctx, role)
       const taskID = String(output?.metadata?.sessionId ?? output?.metadata?.jobId ?? input.args?.task_id ?? "")
@@ -437,7 +455,8 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
           item.run_id === ctx.run_id &&
           item.pipeline_id === ctx.pipeline_id &&
           item.stage === ctx.stage &&
-          item.role === role,
+          item.role === role &&
+          item.work_item_id === ctx.work_item_id,
       )
       const sessionStats = taskID ? statsBySession.get(taskID) : undefined
       const currentFiles = [...(sessionStats?.files_read ?? new Set<string>())]
@@ -451,6 +470,7 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
           pipeline_id: ctx.pipeline_id,
           stage: ctx.stage,
           role,
+          work_item_id: ctx.work_item_id,
           task_id: taskID,
           status: finalHealth,
           state_revision: ctx.state_revision,
@@ -465,7 +485,8 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
               item.run_id === next.run_id &&
               item.pipeline_id === next.pipeline_id &&
               item.stage === next.stage &&
-              item.role === next.role
+              item.role === next.role &&
+              item.work_item_id === next.work_item_id
             ),
         )
         saveRegistry(root, ctx.run_id, [...filtered, next])
@@ -475,6 +496,7 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
         timestamp: now,
         event: "task_complete",
         identity: id,
+        call_id: callID,
         decision: invocation.decision,
         fallback_reason: invocation.fallback_reason ?? null,
         task_id: taskID || null,
@@ -498,19 +520,18 @@ export const PipelineRuntimePlugin: Plugin = async ({ directory }) => {
         context_reread_ratio: currentFiles.length ? rereadFiles.length / currentFiles.length : null,
       })
 
-      invocationByIdentity.delete(id)
+      invocationByCallID.delete(callID)
       if (taskID) statsBySession.delete(taskID)
     },
 
     event: async ({ event }: any) => {
-      if (event.type !== "session.compacted" && event.type !== "session.error") return
+      if (event.type !== "session.compacted" && event.type !== "session.error" && event.type !== "session.deleted") return
       const sessionID = String(event.properties?.sessionID ?? event.properties?.sessionId ?? "")
       if (!sessionID) return
-      const health: SessionHealth = event.type === "session.compacted" ? "compacted" : "error"
+      const health: SessionHealth =
+        event.type === "session.compacted" ? "compacted" : event.type === "session.deleted" ? "cancelled" : "error"
       invalidatedSessions.set(sessionID, health)
 
-      // Update every known run registry conservatively. In-progress reuse must never survive
-      // compaction/error as healthy even if the task after-hook is skipped.
       const pipelinesRoot = path.join(root, ".tmp", "pipelines")
       if (!fs.existsSync(pipelinesRoot)) return
       for (const runID of fs.readdirSync(pipelinesRoot)) {
