@@ -4,6 +4,9 @@ set -Eeuo pipefail
 REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 REF="${OPENCODE_CONFIG_REF:-main}"
 OPENCODE_BIN="$HOME/.opencode/bin/opencode"
+CONFIG_DIR="$HOME/.config/opencode"
+AGENTS_DIR="$CONFIG_DIR/agents"
+LEGACY_AGENTS_DIR="$HOME/.opencode/agent"
 ENV_FILE="$HOME/.config/opencode.env"
 LEGACY_ENV_FILE="$HOME/.config/opencode-web.env"
 
@@ -39,18 +42,30 @@ echo "Скачиваю конфигурацию $REPO@$REF..."
 gh api "repos/$REPO/tarball/$REF" > "$ARCHIVE"
 tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
 
-mkdir -p \
-  "$HOME/.config/opencode" \
-  "$HOME/.opencode/agent" \
-  "$HOME/.agents/skills"
+mkdir -p "$CONFIG_DIR" "$HOME/.agents/skills"
 
-# Глобальная конфигурация OpenCode, включая скрытые файлы.
-# agent/ ставится отдельно в ~/.opencode/agent, поэтому не оставляем его копию
-# в ~/.config/opencode.
-cp -a "$SRC/config/opencode/." "$HOME/.config/opencode/"
-rm -rf "$HOME/.config/opencode/agent"
-cp -a "$SRC/config/opencode/agent/." "$HOME/.opencode/agent/"
+# my-opencode является источником истины для управляемых каталогов глобальной
+# конфигурации. Удаляем старые managed-копии, чтобы удалённые из Git агенты,
+# команды и плагины не продолжали жить в runtime после update.
+for managed in agent agents command context plugins profiles skills tool .ocx; do
+  rm -rf "$CONFIG_DIR/$managed"
+done
+
+# Копируем глобальную конфигурацию. Исходный repo хранит агентов в agent/ для
+# удобства истории, но runtime использует штатный путь OpenCode/OpenChamber
+# ~/.config/opencode/agents/.
+cp -a "$SRC/config/opencode/." "$CONFIG_DIR/"
+rm -rf "$CONFIG_DIR/agent" "$AGENTS_DIR"
+mkdir -p "$AGENTS_DIR"
+cp -a "$SRC/config/opencode/agent/." "$AGENTS_DIR/"
 cp -a "$SRC/config/agents/skills/." "$HOME/.agents/skills/"
+
+# Удаляем прежний managed runtime-path. Современные OpenCode и OpenChamber
+# нативно читают ~/.config/opencode/agents, поэтому дубли больше не нужны.
+if [[ -d "$LEGACY_AGENTS_DIR" ]]; then
+  rm -rf "$LEGACY_AGENTS_DIR"
+  echo "Удалён legacy каталог агентов: $LEGACY_AGENTS_DIR"
+fi
 
 # Единый runtime env для OpenCode CLI и OpenChamber.
 # Старый opencode-web.env мигрируется один раз и затем удаляется, чтобы не было
@@ -87,7 +102,6 @@ fi
 ensure_shell_env_loader() {
   local rc_file="$1"
   local marker_begin="# >>> my-opencode env >>>"
-  local marker_end="# <<< my-opencode env <<<"
 
   touch "$rc_file"
   if ! grep -Fq "$marker_begin" "$rc_file"; then
@@ -154,6 +168,7 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 echo "Готово: OpenCode и конфигурация $REPO@$REF установлены."
+echo "Агенты: $AGENTS_DIR"
 
 if command -v opencode >/dev/null 2>&1; then
   echo "Проверка: $(command -v opencode) --version -> $(opencode --version)"
