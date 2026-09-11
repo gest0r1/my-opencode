@@ -7,6 +7,7 @@ OPENCODE_BIN="$HOME/.opencode/bin/opencode"
 ENV_FILE="$HOME/.config/opencode.env"
 LEGACY_ENV_FILE="$HOME/.config/opencode-web.env"
 CURRENT_CONFIG="$HOME/.config/opencode/opencode.json"
+ROTATION_MARKER="$HOME/.config/opencode.secrets-rotation-required"
 
 for cmd in gh curl tar mktemp python3; do
   command -v "$cmd" >/dev/null 2>&1 || {
@@ -60,11 +61,12 @@ else
   echo "$ENV_FILE уже существует — не перезаписываю."
 fi
 
-# Одноразовая миграция literal MCP credentials из старого opencode.json в
-# runtime-only env. Выполняется ДО замены конфигурации. Уже заданные env-ключи
-# не перезаписываются. Значения не печатаются в stdout/stderr.
+# SECURITY: literal credentials, однажды попавшие в Git/config, считаются
+# скомпрометированными. Их НЕЛЬЗЯ автоматически переносить в новый env:
+# это не ротация, а сохранение старого секрета. Инсталлятор мигрирует только
+# несекретный ITOP_URL и фиксирует имена credential'ов, требующих перевыпуска.
 if [[ -f "$CURRENT_CONFIG" && -f "$ENV_FILE" ]]; then
-  python3 - "$CURRENT_CONFIG" "$ENV_FILE" <<'PY'
+  python3 - "$CURRENT_CONFIG" "$ENV_FILE" "$ROTATION_MARKER" <<'PY'
 import json
 import pathlib
 import shlex
@@ -72,18 +74,12 @@ import sys
 
 config_path = pathlib.Path(sys.argv[1])
 env_path = pathlib.Path(sys.argv[2])
+marker_path = pathlib.Path(sys.argv[3])
 
 try:
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
 except Exception:
-    sys.exit(0)
-
-existing = set()
-for raw in env_path.read_text(encoding="utf-8").splitlines():
-    line = raw.strip()
-    if not line or line.startswith("#") or "=" not in line:
-        continue
-    existing.add(line.split("=", 1)[0].strip())
+    cfg = {}
 
 def get(*parts):
     node = cfg
@@ -93,26 +89,73 @@ def get(*parts):
         node = node[part]
     return node
 
-mapping = {
+# Only non-secret configuration may be carried forward automatically.
+itop_url = get("mcp", "itop", "env", "ITOP_URL")
+existing_lines = env_path.read_text(encoding="utf-8").splitlines()
+existing_keys = {
+    line.split("=", 1)[0].strip()
+    for line in existing_lines
+    if line.strip() and not line.lstrip().startswith("#") and "=" in line
+}
+if (
+    isinstance(itop_url, str)
+    and itop_url
+    and not itop_url.startswith("{env:")
+    and "ITOP_URL" not in existing_keys
+):
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"\nITOP_URL={shlex.quote(itop_url)}\n")
+
+secret_locations = {
     "EXCHANGE_MCP_API_KEY": get("mcp", "exchange", "headers", "X-API-Key"),
-    "ITOP_URL": get("mcp", "itop", "env", "ITOP_URL"),
     "ITOP_TOKEN": get("mcp", "itop", "env", "ITOP_TOKEN"),
     "GDRIVE_MCP_CLIENT_ID": get("mcp", "google-drive", "env", "GDRIVE_MCP_CLIENT_ID"),
     "GDRIVE_MCP_CLIENT_SECRET": get("mcp", "google-drive", "env", "GDRIVE_MCP_CLIENT_SECRET"),
     "GDRIVE_MCP_REFRESH_TOKEN": get("mcp", "google-drive", "env", "GDRIVE_MCP_REFRESH_TOKEN"),
+    "YANDEX_DISK_TOKEN": get("mcp", "yadisk", "env", "YANDEX_DISK_TOKEN"),
+    "YONOTE_API_KEY": get("mcp", "yonote", "headers", "Authorization"),
+    "YANDEX_METRIKA_TOKEN": get("mcp", "ya-metrika", "env", "YANDEX_METRIKA_TOKEN"),
 }
 
-add = []
-for key, value in mapping.items():
-    if key in existing or not isinstance(value, str) or not value or value.startswith("{env:"):
+compromised = []
+for key, value in secret_locations.items():
+    if not isinstance(value, str) or not value:
         continue
-    add.append(f"{key}={shlex.quote(value)}")
+    # Placeholder-based values are already runtime-only and are not evidence
+    # of a secret embedded in the legacy config.
+    if "{env:" in value:
+        continue
+    compromised.append(key)
 
-if add:
-    with env_path.open("a", encoding="utf-8") as handle:
-        handle.write("\n# Migrated from legacy opencode.json; rotate secrets after migration.\n")
-        handle.write("\n".join(add) + "\n")
+# Previous installer revisions could have copied exposed literals into env.
+# Such a marker means those values must not be trusted as "rotated".
+legacy_migration_marker = any(
+    "Migrated from legacy opencode.json" in line for line in existing_lines
+)
+
+if compromised or legacy_migration_marker:
+    names = sorted(set(compromised))
+    marker_path.write_text(
+        "Secrets requiring external revoke/reissue before production use:\n"
+        + "\n".join(names)
+        + ("\nLEGACY_ENV_MIGRATION_PRESENT\n" if legacy_migration_marker else ""),
+        encoding="utf-8",
+    )
+else:
+    marker_path.unlink(missing_ok=True)
 PY
+fi
+
+if [[ -f "$ROTATION_MARKER" ]]; then
+  echo "" >&2
+  echo "ОШИБКА БЕЗОПАСНОСТИ: обнаружены credentials, которые ранее хранились literal-значениями." >&2
+  echo "Старые значения НЕ перенесены. Требуется отозвать/перевыпустить их у соответствующих провайдеров" >&2
+  echo "и записать новые значения в $ENV_FILE." >&2
+  echo "Требуют проверки/ротации:" >&2
+  sed 's/^/  - /' "$ROTATION_MARKER" >&2
+  echo "" >&2
+  echo "После внешней ротации удали $ROTATION_MARKER и повтори установку." >&2
+  exit 2
 fi
 
 # Глобальная конфигурация OpenCode, включая скрытые файлы.
