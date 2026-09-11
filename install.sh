@@ -6,8 +6,9 @@ REF="${OPENCODE_CONFIG_REF:-main}"
 OPENCODE_BIN="$HOME/.opencode/bin/opencode"
 ENV_FILE="$HOME/.config/opencode.env"
 LEGACY_ENV_FILE="$HOME/.config/opencode-web.env"
+CURRENT_CONFIG="$HOME/.config/opencode/opencode.json"
 
-for cmd in gh curl tar mktemp; do
+for cmd in gh curl tar mktemp python3; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "Ошибка: требуется команда '$cmd'." >&2
     exit 1
@@ -44,14 +45,6 @@ mkdir -p \
   "$HOME/.opencode/agent" \
   "$HOME/.agents/skills"
 
-# Глобальная конфигурация OpenCode, включая скрытые файлы.
-# agent/ ставится отдельно в ~/.opencode/agent, поэтому не оставляем его копию
-# в ~/.config/opencode.
-cp -a "$SRC/config/opencode/." "$HOME/.config/opencode/"
-rm -rf "$HOME/.config/opencode/agent"
-cp -a "$SRC/config/opencode/agent/." "$HOME/.opencode/agent/"
-cp -a "$SRC/config/agents/skills/." "$HOME/.agents/skills/"
-
 # Единый runtime env для OpenCode CLI и OpenChamber.
 # Старый opencode-web.env мигрируется один раз и затем удаляется, чтобы не было
 # двух конкурирующих источников настроек.
@@ -66,6 +59,69 @@ if [[ ! -f "$ENV_FILE" ]]; then
 else
   echo "$ENV_FILE уже существует — не перезаписываю."
 fi
+
+# Одноразовая миграция literal MCP credentials из старого opencode.json в
+# runtime-only env. Выполняется ДО замены конфигурации. Уже заданные env-ключи
+# не перезаписываются. Значения не печатаются в stdout/stderr.
+if [[ -f "$CURRENT_CONFIG" && -f "$ENV_FILE" ]]; then
+  python3 - "$CURRENT_CONFIG" "$ENV_FILE" <<'PY'
+import json
+import pathlib
+import shlex
+import sys
+
+config_path = pathlib.Path(sys.argv[1])
+env_path = pathlib.Path(sys.argv[2])
+
+try:
+    cfg = json.loads(config_path.read_text(encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+
+existing = set()
+for raw in env_path.read_text(encoding="utf-8").splitlines():
+    line = raw.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    existing.add(line.split("=", 1)[0].strip())
+
+def get(*parts):
+    node = cfg
+    for part in parts:
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+mapping = {
+    "EXCHANGE_MCP_API_KEY": get("mcp", "exchange", "headers", "X-API-Key"),
+    "ITOP_URL": get("mcp", "itop", "env", "ITOP_URL"),
+    "ITOP_TOKEN": get("mcp", "itop", "env", "ITOP_TOKEN"),
+    "GDRIVE_MCP_CLIENT_ID": get("mcp", "google-drive", "env", "GDRIVE_MCP_CLIENT_ID"),
+    "GDRIVE_MCP_CLIENT_SECRET": get("mcp", "google-drive", "env", "GDRIVE_MCP_CLIENT_SECRET"),
+    "GDRIVE_MCP_REFRESH_TOKEN": get("mcp", "google-drive", "env", "GDRIVE_MCP_REFRESH_TOKEN"),
+}
+
+add = []
+for key, value in mapping.items():
+    if key in existing or not isinstance(value, str) or not value or value.startswith("{env:"):
+        continue
+    add.append(f"{key}={shlex.quote(value)}")
+
+if add:
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write("\n# Migrated from legacy opencode.json; rotate secrets after migration.\n")
+        handle.write("\n".join(add) + "\n")
+PY
+fi
+
+# Глобальная конфигурация OpenCode, включая скрытые файлы.
+# agent/ ставится отдельно в ~/.opencode/agent; этот путь нативно читается
+# OpenCode v1.18.30+ через global $HOME/.opencode config directory.
+cp -a "$SRC/config/opencode/." "$HOME/.config/opencode/"
+rm -rf "$HOME/.config/opencode/agent"
+cp -a "$SRC/config/opencode/agent/." "$HOME/.opencode/agent/"
+cp -a "$SRC/config/agents/skills/." "$HOME/.agents/skills/"
 
 # LLM credentials являются каноничными в `opencode auth login` / auth.json.
 # Удаляем старые env-переопределения, чтобы CLI и OpenChamber использовали
@@ -87,7 +143,6 @@ fi
 ensure_shell_env_loader() {
   local rc_file="$1"
   local marker_begin="# >>> my-opencode env >>>"
-  local marker_end="# <<< my-opencode env <<<"
 
   touch "$rc_file"
   if ! grep -Fq "$marker_begin" "$rc_file"; then
