@@ -8,6 +8,7 @@
   ],
   "model": "opencode-go/qwen3.7-plus",
   "small_model": "opencode-go/mimo-v2.5",
+  "subagent_depth": 3,
   "mcp": {
     "context7": {
       "type": "remote",
@@ -57,7 +58,7 @@
       "url": "http://localhost:8001/sse",
       "enabled": true,
       "headers": {
-        "X-API-Key": "x"
+        "X-API-Key": "{env:EXCHANGE_MCP_API_KEY}"
       }
     },
     "bitrix24": {
@@ -92,8 +93,8 @@
       ],
       "enabled": true,
       "env": {
-        "ITOP_URL": "https://sd.fresh-logic.ru",
-        "ITOP_TOKEN": "x",
+        "ITOP_URL": "{env:ITOP_URL}",
+        "ITOP_TOKEN": "{env:ITOP_TOKEN}",
         "ITOP_VERSION": "1.3",
         "ITOP_VERIFY_SSL": "true",
         "ITOP_TIMEOUT": "30"
@@ -106,9 +107,9 @@
       ],
       "enabled": true,
       "env": {
-        "GDRIVE_MCP_CLIENT_ID": "x",
-        "GDRIVE_MCP_CLIENT_SECRET": "x",
-        "GDRIVE_MCP_REFRESH_TOKEN": "x"
+        "GDRIVE_MCP_CLIENT_ID": "{env:GDRIVE_MCP_CLIENT_ID}",
+        "GDRIVE_MCP_CLIENT_SECRET": "{env:GDRIVE_MCP_CLIENT_SECRET}",
+        "GDRIVE_MCP_REFRESH_TOKEN": "{env:GDRIVE_MCP_REFRESH_TOKEN}"
       }
     },
     "image-gen": {
@@ -144,14 +145,20 @@
     "kagi_*": "deny",
     "webfetch": "deny",
     "worktree_*": "deny",
-    "exchange_*": "allow",
-    "image-gen_*": "allow",
-    "google-drive_*": "allow",
-    "ya-metrika_*": "allow"
+    "exchange_*": "deny",
+    "image-gen_*": "deny",
+    "google-drive_*": "deny",
+    "ya-metrika_*": "deny",
+    "yadisk_*": "deny",
+    "yonote_*": "deny",
+    "memory_*": "deny",
+    "bitrix24_*": "deny",
+    "n8n_*": "deny",
+    "1c-buddy_*": "deny",
+    "itop_*": "deny"
   },
   "instructions": [
-    "./plugins/shell-strategy/shell_strategy.md",
-    "/home/guber/.agents/skills/caveman/SKILL.md"
+    "./plugins/shell-strategy/shell_strategy.md"
   ],
   "compaction": {
     "auto": true,
@@ -172,101 +179,16 @@
     }
   },
   "agent": {
-    "CodeReviewer": {
-      "permission": {
-        "doom_loop": "ask",
-        "external_directory": {
-          "/home/guber/.local/share/opencode/tool-output/*": "allow",
-          "/tmp/opencode/*": "allow",
-          "/home/guber/.agents/skills/caveman/*": "allow",
-          "/home/guber/.agents/skills/find-skills/*": "allow",
-          "/home/guber/.config/opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/corporate-mail/*": "allow",
-          "/home/guber/.opencode/skills/context7/*": "allow",
-          "/home/guber/.opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/telegram-send/*": "allow",
-          "*": "ask"
-        },
-        "question": "deny",
-        "plan_enter": "deny",
-        "plan_exit": "deny",
-        "read": {
-          "*.env": "ask",
-          "*.env.*": "ask",
-          "*.env.example": "allow"
-        },
-        "task": {
-          "contextscout": "allow",
-          "*": "deny"
-        },
-        "gh_grep_*": "allow",
-        "bash": "deny",
-        "edit": {
-          "**/*": "deny"
-        },
-        "write": {
-          "**/*": "deny"
-        }
-      }
-    },
-    "CoderAgent": {
-      "permission": {
-        "doom_loop": "ask",
-        "external_directory": {
-          "/home/guber/.local/share/opencode/tool-output/*": "allow",
-          "/tmp/opencode/*": "allow",
-          "/home/guber/.agents/skills/caveman/*": "allow",
-          "/home/guber/.agents/skills/find-skills/*": "allow",
-          "/home/guber/.config/opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/context7/*": "allow",
-          "/home/guber/.opencode/skills/corporate-mail/*": "allow",
-          "/home/guber/.opencode/skills/telegram-send/*": "allow",
-          "*": "ask"
-        },
-        "question": "deny",
-        "plan_enter": "deny",
-        "plan_exit": "deny",
-        "read": {
-          "*.env": "ask",
-          "*.env.*": "ask",
-          "*.env.example": "allow"
-        },
-        "task": {
-          "contextscout": "allow",
-          "externalscout": "allow",
-          "TestEngineer": "allow",
-          "*": "deny"
-        },
-        "bash": {
-          "bash .opencode/skills/task-management/router.sh complete*": "allow",
-          "bash .opencode/skills/task-management/router.sh status*": "allow",
-          "*": "deny"
-        },
-        "gh_grep_*": "allow",
-        "edit": {
-          "**/*.env*": "deny",
-          "**/*.key": "deny",
-          "**/*.secret": "deny",
-          "node_modules/**": "deny",
-          ".git/**": "deny"
-        }
-      }
-    },
     "build": {
       "permission": {
         "doom_loop": "ask",
         "external_directory": {
+          "*": "ask",
           "/home/guber/.local/share/opencode/tool-output/*": "allow",
           "/tmp/opencode/*": "allow",
           "/home/guber/.agents/skills/find-skills/*": "allow",
-          "/home/guber/.agents/skills/caveman/*": "allow",
           "/home/guber/.config/opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/corporate-mail/*": "allow",
-          "/home/guber/.opencode/skills/context7/*": "allow",
-          "/home/guber/.opencode/skills/telegram-send/*": "allow",
-          "*": "ask"
+          "/home/guber/.opencode/skills/task-management/*": "allow"
         },
         "plan_exit": "deny",
         "read": {
@@ -289,7 +211,6 @@
           "*": "ask",
           "/home/guber/.local/share/opencode/tool-output/*": "allow",
           "/tmp/opencode/*": "allow",
-          "/home/guber/.agents/skills/caveman/*": "allow",
           "/home/guber/.agents/skills/find-skills/*": "allow",
           "/home/guber/.config/opencode/skills/task-management/*": "allow",
           "/home/guber/.opencode/skills/context7/*": "allow",
@@ -344,10 +265,22 @@
         "edit": {
           "**/*.env*": "deny",
           "**/*.key": "deny",
+          "**/*.pem": "deny",
           "**/*.secret": "deny",
           "node_modules/**": "deny",
           ".git/**": "deny"
-        }
+        },
+        "exchange_*": "allow",
+        "image-gen_*": "allow",
+        "google-drive_*": "allow",
+        "ya-metrika_*": "allow",
+        "yadisk_*": "allow",
+        "yonote_*": "allow",
+        "memory_*": "allow",
+        "bitrix24_*": "allow",
+        "n8n_*": "allow",
+        "1c-buddy_*": "allow",
+        "itop_*": "allow"
       }
     }
   }
