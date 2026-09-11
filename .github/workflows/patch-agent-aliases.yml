@@ -1,0 +1,57 @@
+name: patch-agent-aliases
+
+on:
+  push:
+    branches:
+      - harness-safety-2026-09-11
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: harness-safety-2026-09-11
+          fetch-depth: 1
+      - name: Add canonical task aliases
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          changed = []
+          for path in sorted(Path('config/opencode/agent').rglob('*.md')):
+              text = path.read_text(encoding='utf-8')
+              original = text
+              if '    contextscout: allow\n' in text and '    ContextScout: allow\n' not in text:
+                  text = text.replace('    contextscout: allow\n', '    contextscout: allow\n    ContextScout: allow\n')
+              if '    externalscout: allow\n' in text and '    ExternalScout: allow\n' not in text:
+                  text = text.replace('    externalscout: allow\n', '    externalscout: allow\n    ExternalScout: allow\n')
+              if text != original:
+                  path.write_text(text, encoding='utf-8')
+                  changed.append(str(path))
+
+          for path in sorted(Path('config/opencode/agent').rglob('*.md')):
+              text = path.read_text(encoding='utf-8')
+              if '    contextscout: allow\n' in text and '    ContextScout: allow\n' not in text:
+                  raise SystemExit(f'missing canonical ContextScout alias: {path}')
+              if '    externalscout: allow\n' in text and '    ExternalScout: allow\n' not in text:
+                  raise SystemExit(f'missing canonical ExternalScout alias: {path}')
+
+          print('\n'.join(changed) if changed else 'No changes required.')
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add config/opencode/agent
+          if git diff --cached --quiet; then
+            echo 'No patch required.'
+            exit 0
+          fi
+          git commit -m 'fix(agents): allow canonical scout task names'
+          git push origin HEAD:harness-safety-2026-09-11
