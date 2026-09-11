@@ -11,26 +11,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Validate JSON
         run: |
           python3 -m json.tool config/opencode/opencode.json >/dev/null
           python3 -m json.tool config/opencode/package.json >/dev/null
+
       - name: Validate shell syntax
         run: |
           bash -n install.sh
           bash -n install-openchamber.sh
           bash -n config/opencode/skills/task-management/router.sh
-      - name: Check active config for retired runtime references
+
+      - name: Check active agent set and retired references
         run: |
           set -e
-          if grep -R --line-number --exclude-dir=.git -E 'plugins/shell-strategy|(^|[^[:alnum:]_])StageOrchestrator([^[:alnum:]_]|$)' config/opencode/agent config/opencode/opencode.json config/opencode/command; then
+          if grep -R --line-number --exclude-dir=.git -E 'plugins/shell-strategy|(^|[^[:alnum:]_])StageOrchestrator([^[:alnum:]_]|$)|ContextManager|ContextRetriever|ContextOrganizer|AgentGenerator|CommandCreator|SimpleResponder' config/opencode/agent config/opencode/opencode.json config/opencode/command; then
             echo 'Found retired runtime reference' >&2
             exit 1
           fi
+          test -f config/opencode/agent/core/openagent.md
+          test -f config/opencode/agent/core/opencoder.md
+          test -f config/opencode/agent/core/openstage-orchestrator.md
+          test -f config/opencode/agent/subagents/planning/adr-manager.md
+
       - name: Check canonical agent path
         run: |
-          grep -Fq '$HOME/.config/opencode/agents' install.sh
+          grep -Fq 'AGENTS_DIR="$CONFIG_DIR/agents"' install.sh
+          grep -Fq 'cp -a "$SRC/config/opencode/agent/." "$AGENTS_DIR/"' install.sh
           ! grep -R --line-number -F '~/.opencode/agent' config/opencode/agent config/opencode/opencode.json config/opencode/command
+
+      - name: Check pipeline runtime routing remains active
+        run: |
+          test -f config/opencode/plugins/pipeline-runtime.ts
+          grep -Fq 'pipeline_runtime_prepare' config/opencode/agent/core/openstage-orchestrator.md
+          grep -Fq 'pipeline_runtime_prepare' config/opencode/command/pipeline-run.md
+          grep -Fq 'work_item_id' config/opencode/plugins/pipeline-runtime.ts
+
       - name: Check integration secrets are env-backed
         run: |
           python3 - <<'PY'
@@ -40,5 +57,12 @@ jobs:
           if missing:
               raise SystemExit('Missing env secret refs: '+', '.join(missing))
           PY
+
+      - name: Check removed legacy context framework
+        run: |
+          test ! -e config/opencode/context/core/context-system.md
+          test ! -d config/opencode/context/core/context-system
+          test ! -d config/opencode/context/openagents-repo
+
       - name: Run task-management tests
         run: node --test config/opencode/skills/task-management/scripts/github-handoff-core.test.mjs
