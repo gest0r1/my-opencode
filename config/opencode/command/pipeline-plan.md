@@ -1,62 +1,44 @@
 ---
-description: Построить design-freeze plan pipeline без запуска реализации
-tags:
-  - pipeline
-  - planning
-  - design-freeze
+description: Построить design-freeze OpenStage plan без запуска реализации
+tags: [pipeline, planning, design-freeze]
 ---
 
 # Pipeline Planning
 
-Выполни только Pipeline Planning для `docs/plan.md`. Реализацию не запускай.
+Подготовь только план полного `OpenStageOrchestrator` pipeline. Реализацию, build, tests и deploy не запускай.
 
-## Аргументы
-
-`$ARGUMENTS` может содержать путь к plan-файлу. По умолчанию:
+`$ARGUMENTS` может содержать путь к plan-файлу. Defaults:
 
 ```text
 plan: docs/plan.md
 rules: docs/pipeline-rules.md
 ```
 
-## Обязательный flow
+## Flow
 
-1. Работай в режиме `plan-only` и прочитай plan, rules, architecture context
-   по dual-read и нужные user stories.
-2. Проверь `edit_policy: human_only`; иначе верни `blocked`.
-3. Через ContextScout собери project context. Для risk-trigger (`new library`,
-   внешний API, auth/payment/tenant, security, migration, queue/cache,
-   deploy/runtime) получи official version-specific evidence через ExternalScout
-   и максимум 2–3 зрелых public code patterns через CoderAgent/CodeReviewer.
-4. Выполни StoryMapper/SeniorStoryReviewer, ArchitectureAnalyzer,
-   ContractManager, PrioritizationEngine и SeniorTechnicalPlanReviewer.
-5. Собери все функциональные развилки в один owner decision packet. Не выбирай
-   отсутствующее пользовательское решение сам.
-6. Создай planning artifacts:
-   `decision-register.md`, `technology-evidence.md`, `contract-inventory.md`,
-   `test-strategy.md`, `accepted-risks.md`.
-7. Построй dependency graph; определи pipelines, `exclusive_paths`,
-   `conflict_group`, migrations, fixtures, deployment locks и gate profiles.
-8. TaskManager создаёт задачи только после readiness `ready`; каждая задача
-   содержит binary acceptance criteria, tests и ссылки на decision/contract/research.
-9. Создай manifest с `planning_mode: design-freeze`, `planning_readiness` и
-   per-pipeline `decision_ids`, `research_ids`, `contract_ids`.
-10. Проверь manifest. Если есть `open_decision` или blocker, не инициализируй
-    state и верни `needs_revision`.
-11. Покажи один decision packet и manifest владельцу. После явного approval
-    вызови `stage-cli init`; `/pipeline-run` автоматически не запускай.
+1. Прочитай исходный запрос/plan/rules, ближайший `AGENTS.md`, связанные stories и явные ограничения.
+2. Через `ContextScout` добери только недостающий project context.
+3. Для version-sensitive внешних библиотек/API используй `ExternalScout`; для более широкого публичного исследования — `WebResearcher`. Planning не использует CoderAgent для реализации или discovery.
+4. Выполни `StoryMapper` → `SeniorStoryReviewer`.
+5. Если требуется user-story verification, покажи reviewed stories и остановись до approval.
+6. Выполни `ArchitectureAnalyzer` + `ContractManager` + `PrioritizationEngine`.
+7. Выполни `ADRManager`: зафиксируй только устойчивые решения, уже принятые planning stage; допускается `not_required`.
+8. Выполни fresh `SeniorTechnicalPlanReviewer`. Blocking findings возвращают план к шагам 6–7.
+9. Только после статуса `ready` запусти `TaskManager`: stable work-item IDs, dependencies, parallel-safe groups, allowed scope, acceptance, validation/test expectations.
+10. Собери immutable manifest/state inputs: stage order, decision/ADR refs, contracts, dependency graph, validation commands, paths/locks/conflict groups.
+11. Проверь manifest через `stage-cli validate`. Open decision/blocker → `needs_revision`; state не инициализируй.
+12. После явного approval допустимо `stage-cli init`. `/pipeline-run` автоматически не запускай.
 
-## Запрещено
+## Boundaries
 
-- изменять исходный код;
-- вызывать CoderAgent для реализации;
-- запускать tests реализации или Docker;
-- менять rules или backlog без явного указания владельца.
+- не изменять product source;
+- не использовать CoderAgent/BuildAgent/TestEngineer/DevOps;
+- не менять rules/backlog/product requirements без решения владельца;
+- не заменять unresolved decision собственным предположением;
+- не передавать всему pipeline полный conversation/repository context, если есть компактные artifacts.
 
-## Результат
+## Result
 
-Создай в `.tmp/pipelines/{run-id}/` manifest, dependency graph, conflicts,
-execution plan, пять planning artifacts и state после approval.
+В `.tmp/pipelines/<run-id>/` должны быть manifest/state inputs, dependency graph, conflict/parallel groups, task artifacts и ссылки на stories/architecture/contracts/ADR/review evidence.
 
-Верни run id, pipelines, зависимости, gate profiles, blockers, unresolved
-risks и команду `/pipeline-run {run-id} --unattended`.
+Верни: run id, pipelines, critical path, blockers/open decisions, validation profile и команду `/pipeline-run <run-id> --unattended` после approval.
