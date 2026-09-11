@@ -2,34 +2,51 @@
 
 ## Правильный upstream
 
-**Repo:** https://github.com/anomalyco/opencode
-**Git remote:** `upstream`
-**Latest tag:** v1.18.18 (обновлено 2026-08-18)
-**Version scheme:** v1.x.x (совпадает с npm-пакетами @opencode-ai/*)
+**Repo:** https://github.com/anomalyco/opencode  
+**Git remote:** `upstream`  
+**Stable release synced:** v1.18.30 (2026-09-09)  
+**Default development branch upstream:** `dev`  
+**Version scheme:** v1.x.x (совпадает с npm-пакетами `@opencode-ai/*`)
 
 ## Legacy (не использовать)
 
-~~https://github.com/opencode-ai/opencode~~ — archived, переехал в charmbracelet/crush.  
+~~https://github.com/opencode-ai/opencode~~ — archived/legacy.  
 Не является источником binary/config update.
 
-## Ветки
+## Ветки и release policy
 
-- `upstream` remote всегда указывает на anomalyco/opencode
-- У upstream нет ветки `main` — только `master` или feature-ветки
-- Для версионирования используем теги `v1.*`
+- `upstream` должен указывать на `anomalyco/opencode`.
+- Для production/runtime синхронизации ориентируемся на последний stable release/tag `v1.*`, а не на произвольный HEAD `dev`.
+- `dev` используем для анализа будущих изменений и совместимости, но не как автоматический production target.
 
-## Обновление
+## Текущая схема обновления
 
-**При каждом обновлении ОБЯЗАТЕЛЬНО обновлять npm-пакеты:**
-- `@opencode-ai/plugin` — до версии, соответствующей бинарнику
-- `@opencode-ai/sdk` — до версии, соответствующей бинарнику
+`gest0r1/my-opencode` — не source-fork OpenCode: это управляемая конфигурация и обвязка. Поэтому upstream OpenCode **не merge-ится целиком** в этот репозиторий. Синхронизация означает:
 
-Эти пакеты — runtime opencode, от их версии зависит совместимость плагинов и стабильность. Без них бинарник может работать нестабильно или не загружать плагины.
+1. Проверить последний stable release `anomalyco/opencode`.
+2. Обновить бинарник официальным installer (`https://opencode.ai/install`).
+3. Обновить совместимые runtime-пакеты до той же версии:
+   - `@opencode-ai/plugin`
+   - `@opencode-ai/sdk`
+4. Проверить upstream изменения в config/agents/plugins/task/session APIs против наших кастомизаций.
+5. Если upstream уже реализовал аналогичную функцию, использовать upstream-поведение и удалить/не развивать дублирующую кастомизацию.
+6. Сохранить только те изменения `my-opencode`, которые остаются необходимыми поверх upstream.
+7. После обновления проверить загрузку конфигурации, агентов, plugins и OpenChamber integration.
 
-Порядок:
-1. `git fetch upstream --tags`
-2. Проверить latest tag: `git tag -l 'v1*' | sort -V | tail -5`
-3. Сравнить с текущей версией бинарника: `/home/guber/.opencode/bin/opencode --version`
-4. Если версия новее — следовать плану обновления (см. план в OpenStageOrchestrator)
-5. **Всегда обновлять npm-пакеты** — см. `project/startup.md` → раздел "Обновление npm-пакетов"
-6. После обновления — обновить этот файл с актуальной версией
+## Agent directories в v1.18.30
+
+Upstream OpenCode v1.18.30 загружает agent markdown из `{agent,agents}/**/*.md` для всех config directories. В список config directories входят глобальный config dir, проектные `.opencode` и `$HOME/.opencode`. Поэтому текущий install-dir `~/.opencode/agent/` остаётся нативно поддерживаемым OpenCode; отдельный workaround в самом OpenCode не требуется.
+
+Официальная документация при этом рекомендует `~/.config/opencode/agents/` как публичный global path. Наш `~/.opencode/agent/` сохраняется как managed install-dir до отдельной миграции, поскольку он поддерживается loader'ом upstream и используется текущей OpenChamber integration.
+
+## Model fallback
+
+В agent schema OpenCode v1.18.30 поле `model` является одной строкой. Нативного `fallback`/списка моделей в agent frontmatter нет. `task` tool также выбирает model из конфигурации вызываемого agent и не принимает отдельный fallback list. Поэтому автоматическое quota/provider failover должно реализовываться отдельным runtime/router слоем, а не выдуманным полем frontmatter.
+
+## Проверка версии
+
+```bash
+/home/guber/.opencode/bin/opencode --version
+```
+
+После установки версия бинарника и версии `@opencode-ai/plugin` / `@opencode-ai/sdk` должны быть совместимы; для stable deployment держим их на одном release line.
