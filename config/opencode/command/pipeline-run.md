@@ -9,11 +9,13 @@ tags:
 
 # Pipeline Run
 
-Выполни утверждённый pipeline manifest.
+Выполни утверждённый pipeline manifest. StageOrchestrator остаётся основной
+сессией: он управляет стадиями и task routing, но не передаёт оркестрацию
+субагентам.
 
 ## Аргументы
 
-Базовый режим:
+Обычный режим:
 
 ```text
 /pipeline-run <run-id> [--unattended] [--no-session-reuse]
@@ -25,13 +27,12 @@ GitHub validation handoff:
 /pipeline-run <run-id> github <handoff-id> [--unattended] [--no-session-reuse]
 ```
 
-`github` — positional mode, а не флаг. `handoff-id` обязателен и должен быть
-одним токеном. Без `run-id` запроси выбор manifest, не выбирай молча. Если
-указан `github` без `handoff-id`, лишний positional argument или неизвестный
-режим — верни `blocked`.
+`github` — positional mode. `handoff-id` обязателен и должен быть одним токеном.
+Без `run-id` запроси выбор manifest; не выбирай молча. Неизвестный режим,
+лишний positional argument или `github` без `handoff-id` → `blocked`.
 
-Session-reuse включён по умолчанию в обоих режимах; `--no-session-reuse`
-используется только для явного отключения reuse.
+Session reuse включён по умолчанию. `--no-session-reuse` принудительно делает
+каждый task fresh.
 
 ## Preflight — обычный режим
 
@@ -42,36 +43,25 @@ Session-reuse включён по умолчанию в обоих режима�
    decision/research/contract artifacts и отсутствие open decisions.
 4. Выполни doc-gate по `pipeline-rules.md`.
 
-При любой ошибке верни `blocked`; реализацию не запускай.
+Любая ошибка preflight → `blocked`; реализацию не запускай.
 
 ## GitHub validation handoff
 
-Режим активируется только positional-вызовом:
-
-```text
-/pipeline-run <run-id> github <handoff-id>
-```
-
-Он означает: planning, architecture, implementation и code review уже
-выполнены внешним исполнителем; OpenCode НЕ повторяет их, а забирает
-зафиксированный результат из GitHub и продолжает с build/deploy/test и
-`technical_fix`, если validation требует исправлений.
+Этот режим означает, что planning, architecture, implementation и code review
+уже выполнены внешним исполнителем. OpenCode забирает зафиксированный результат
+из GitHub и выполняет только перечисленные validation stages плюс допустимые
+`technical_fix`.
 
 ### Handoff transport
 
-`handoff-id` разрешается через immutable handoff ref в репозитории продукта:
+`handoff-id` разрешается через immutable ref:
 
 ```text
 origin/handoff/<handoff-id>
 ```
 
-Этот ref обязан содержать:
-
-```text
-.opencode/pipeline-handoff.json
-```
-
-Минимальная схема handoff:
+Ref обязан содержать `.opencode/pipeline-handoff.json` минимум со следующими
+полями:
 
 ```json
 {
@@ -97,14 +87,13 @@ origin/handoff/<handoff-id>
 }
 ```
 
-`repository` рекомендуется и при наличии обязан совпадать с GitHub `origin`.
-`allowed_fix_scope` поддерживает exact paths или trailing `/**`; если scope
-пуст, кодовые изменения публиковать запрещено.
+`repository`, если задан, обязан совпадать с GitHub `origin`.
+`allowed_fix_scope` поддерживает exact paths и trailing `/**`; пустой scope
+запрещает публикацию кодовых изменений.
 
 ### Deterministic Git preflight
 
-Не выполняй handoff через свободные `git pull/checkout/push` и не расширяй
-`bash` permissions оркестратора. Вызови custom tool:
+Не используй свободные `git pull/checkout/push`. Вызови:
 
 ```text
 github_handoff_prepare(
@@ -113,102 +102,63 @@ github_handoff_prepare(
 )
 ```
 
-Tool использует deterministic backend `github-handoff-cli.ts` и обязан:
+Tool обязан требовать clean worktree, проверить handoff/source SHA/repository,
+создать локальную `pipeline/<run-id>` строго от `source_sha` и сформировать
+`.tmp/pipelines/<run-id>/github-validation-manifest.json` только с validation
+stages из handoff.
 
-- требовать clean worktree;
-- fetch `origin/handoff/<handoff-id>`;
-- прочитать и валидировать `.opencode/pipeline-handoff.json`;
-- проверить совпадение `run_id`/`handoff_id`/repository;
-- fetch `source_branch`;
-- требовать `origin/<source_branch> == source_sha`;
-- проверить, что handoff ref основан на `source_sha`;
-- создать локальную рабочую ветку `pipeline/<run-id>` строго от `source_sha`;
-- записать `.tmp/pipelines/<run-id>/github-handoff.json`;
-- создать `.tmp/pipelines/<run-id>/github-validation-manifest.json` только с
-  validation stages из handoff.
-
-После prepare вызови `github_handoff_status(run_id: "<run-id>")` и сверяй
-`current_head == source_sha`, `current_branch == pipeline/<run-id>` и путь к
-validation manifest. Несовпадение — `blocked`.
-
-CLI backend можно вызывать вручную только для диагностики администратора; в
-pipeline runtime используй custom tools.
-
-Если исходная ветка сдвинулась после handoff, worktree грязный, SHA/repository
-не совпали или handoff malformed — `blocked`, ничего не тестируй и не исправляй.
-
-### Validation state
-
-После успешного `prepare` используй созданный:
+Затем вызови `github_handoff_status` и проверь:
 
 ```text
-.tmp/pipelines/<run-id>/github-validation-manifest.json
+current_head == source_sha
+current_branch == pipeline/<run-id>
 ```
 
-Если state для `<run-id>` отсутствует — инициализируй его через `stage-cli init`
-с этим manifest и затем проведи штатное approval/start/complete flow согласно
-локальной политике pipeline. Если state уже существует, он должен
-соответствовать тому же `github-handoff.json`, pipeline-id и exact validation
-stage order; иначе верни `blocked`, не переиспользуй чужой state.
+Любое несовпадение, malformed handoff или сдвинувшийся source branch →
+`blocked` без тестирования и исправлений.
 
-В GitHub mode НЕ помечай пропущенными planning/implementation стадии обычного
-manifest: они не входят в validation manifest вообще. Это отдельный runtime
-continuation одного handoff, а не искусственный skip исходного pipeline.
+Если state отсутствует, инициализируй его через `stage-cli init` с validation
+manifest. Если существует, он обязан соответствовать тому же handoff,
+pipeline-id и exact stage order. В GitHub mode planning/implementation stages
+не помечаются skipped — их вообще нет в validation manifest.
 
-### GitHub validation execution
+### Validation execution
 
-Выполняй только `validation_stages` из handoff. Обычно это build, tests и
-release/deploy validation. Не добавляй отсутствующие stages самостоятельно.
-
-Для каждой стадии:
+Для каждой разрешённой стадии:
 
 1. `stage-cli start`;
 2. вызови профильного агента;
-3. используй handoff acceptance и validation commands как обязательный input;
+3. передай acceptance и validation commands;
 4. сохрани evidence;
 5. при PASS — `stage-cli complete`;
-6. при FAIL — классифицируй finding по тем же правилам, что в обычном run.
+6. при FAIL классифицируй finding.
 
 Классификация:
 
-- `technical_fix` внутри `allowed_fix_scope`/approved scope — auto-fix, максимум
-  два loop;
+- `technical_fix` внутри approved/allowed scope — auto-fix, максимум два loop;
 - `replan` — block и stop;
 - scope/security/secret/destructive — block и stop;
 - `optional` — evidence, не блокирует.
 
-Сохраняй стабильное имя стадии внутри fix-loop. Не создавай `build-fix-1`,
-`build-fix-2` и т.п.; меняй `loop`, а не `stage`. Это необходимо для identity
-session-reuse `{run_id,pipeline_id,stage,role}`.
-
-После каждого technical fix повтори непосредственно затронутый gate, затем
-зависимые build/deploy/test gates. Не объявляй validation успешной только по
-текстовому отчёту агента — нужны реальные команды/evidence.
+Имя stage внутри fix-loop остаётся стабильным; меняется `loop`, а не stage.
+После fix повтори затронутый gate и зависимые build/deploy/test gates.
+Текстовый отчёт агента не заменяет реальные команды/evidence.
 
 ### Publish validated result
 
-После PASS всех обязательных validation stages вызови:
+После PASS всех обязательных validation stages:
 
 ```text
 github_handoff_publish(run_id: "<run-id>")
 ```
 
-Tool:
+Tool обязан публиковать только внутри `allowed_fix_scope`, отклонять secret
+paths, запрещать divergent/non-fast-forward publish, проверять validated HEAD
+как потомка `source_sha` и повторно подтверждать remote SHA. После publish
+снова вызови `github_handoff_status` и зафиксируй `validated_sha`. Без fixes
+`validated_sha == source_sha`.
 
-- разрешает изменённые файлы только внутри `allowed_fix_scope`;
-- отклоняет `.env`, key/pem/secret/credential paths;
-- при наличии допустимых fixes создаёт commit `fix: validation <run-id>`;
-- требует, чтобы validated HEAD был потомком `source_sha`;
-- fetch'ит `source_branch` и запрещает non-fast-forward/divergent publish;
-- push'ит `HEAD` в исходную `source_branch`;
-- повторно fetch'ит remote и проверяет exact SHA;
-- записывает `validated_sha` в локальный handoff runtime.
-
-Сразу после publish вызови `github_handoff_status`; `validated_sha` обязан быть
-заполнен, а remote verification из publish должен совпадать с ним. Если fixes
-не было, `validated_sha == source_sha`.
-
-Финальный evidence GitHub mode обязан содержать как минимум:
+Финальный evidence GitHub mode содержит минимум:
 
 ```text
 handoff_id
@@ -220,98 +170,154 @@ build/deploy/test results
 session-reuse decisions
 ```
 
-## Выполнение — общие правила
+## Общие правила выполнения
 
-StageOrchestrator — это основная сессия; оркестрацию субагентам не передавай.
 Перед стадией вызывай `stage-cli start`, после успеха — `complete`; evidence
 обязателен. Выполняй только разрешённые batches/stages.
 
-Классифицируй review findings по `pipeline-rules.md`:
-- `technical_fix` внутри approved scope — auto-fix, максимум два loop;
-- `replan` — `stage-cli block --reason replan`, не продолжай и не выбирай
-  новую архитектуру в run;
-- scope/security/secret/destructive — block и stop;
-- `optional` — evidence, не блокирует.
+Review findings классифицируй по `pipeline-rules.md`. `--unattended` запрещает
+дополнительные вопросы внутри уже approved scope. Ответ пользователю — только
+terminal summary при `completed`, `blocked` или `failed`.
 
-`--unattended` запрещает дополнительные запросы внутри approved scope. Верни
-только terminal summary при `completed`, `blocked` или `failed`.
+## Session reuse
 
-## Session-reuse (включён по умолчанию)
+### Зачем нужен router
 
-Session-reuse активен по умолчанию для каждого pipeline и для GitHub validation
-handoff. Отключение — явный флаг `--no-session-reuse`, который запрещает reuse
-и принудительно делает все вызовы fresh.
+Нативный OpenCode `task_id` — только handle для продолжения конкретной child
+session. Он не определяет, КАКОЙ логический work item должен продолжаться и
+МОЖНО ли его продолжать. Политика принадлежит локальному `pipeline-runtime`.
+
+`task_id` никогда не выбирается моделью. Router удаляет model-supplied
+`task_id` и добавляет его только после точного сопоставления logical identity.
+
+### Logical identity
+
+Identity reuse:
+
+```text
+{run_id, pipeline_id, stage, role, work_item_id}
+```
+
+`work_item_id` обязателен для каждой потенциально reusable task:
+
+- должен быть стабильным для одного логического задания между baseline и
+  последующими technical-fix loop;
+- должен быть уникальным для параллельных заданий одной роли в одной stage;
+- не должен содержать номер loop, timestamp или случайный UUID;
+- предпочтительно используй ID work item из manifest/task plan; если его нет —
+  детерминированный slug конкретной единицы работы.
+
+Пример параллельной реализации:
+
+```text
+implementation / CoderAgent / api-auth
+implementation / CoderAgent / vacancy-filter
+```
+
+Эти две задачи обязаны получить разные `work_item_id` и никогда не должны
+возобновлять session друг друга.
 
 ### Runtime enforcement
 
-НЕ выбирай и НЕ передавай `task_id` вручную. Решение fresh/reuse принимает
-локальный plugin `pipeline-runtime`.
+Перед КАЖДЫМ вызовом CoderAgent, TestEngineer или BuildAgent, если reuse не
+отключён, вызови:
 
-Перед КАЖДЫМ вызовом CoderAgent, TestEngineer или BuildAgent непосредственно
-перед `task()` вызови tool `pipeline_runtime_prepare`, если не указан
-`--no-session-reuse`.
+```text
+pipeline_runtime_prepare(
+  run_id: "<run-id>",
+  pipeline_id: "<pipeline-id>",
+  stage: "<stage>",
+  role: "<role>",
+  work_item_id: "<stable-work-item-id>",
+  loop: <n>,
+  technical_fix: <true|false>,
+  state_revision: "<current-revision>",
+  previous_state_revision: "<previous-revision-if-reuse>",
+  evidence_path: "<path>",
+  changed_files: ["..."],
+  diff_path: "<optional-path>",
+  required_reread: ["..."]
+)
+```
 
-- для первого/baseline вызова роли и для вызова вне `technical_fix` передай
-  `technical_fix: false`; такой вызов всегда fresh, но его session будет
-  зарегистрирована для последующего контролируемого reuse;
-- для `technical_fix` передай `technical_fix: true`;
-- `pilot_pipeline_id` обязан совпадать с pipeline-id из active manifest;
-- `stage` и `role` должны точно соответствовать следующему `task()`;
-- `state_revision` используй как текущую детерминированную ревизию state
-  (явное revision/hash, а если его нет — стабильное поле `updated_at`);
-- при повторном reuse передай `previous_state_revision` из последней записи
-  session registry для той же identity;
-- передай evidence, changed files или `diff_path`, и `required_reread`.
+Сразу следующий соответствующий `task()` ОБЯЗАН содержать в prompt:
 
-Runtime context одноразовый и ограничен по времени. Plugin сам:
+```text
+<pipeline_work_item id="<same-work-item-id>"/>
+```
 
-- удаляет любой model-supplied `task_id`;
-- сопоставляет identity `{run_id,pipeline_id,stage,role}`;
-- допускает reuse только healthy session;
-- на compaction/error/cancel/in-progress/stale/missing delta делает fresh fallback;
-- проверяет evidence и required reread paths;
-- добавляет deterministic delta в resumed prompt;
-- ведёт session registry;
-- пишет append-only метрики.
+Marker — routing key, а не инструкция модели. Он связывает вызов с конкретным
+prepared work item даже при параллельном выполнении и изменённом порядке
+завершения.
 
-### Область применения
+Для первого/baseline вызова передай `technical_fix: false`: task всегда fresh,
+но завершившаяся child session регистрируется. Для допустимого fix-loop передай
+`technical_fix: true` и `previous_state_revision` из registry ТОЙ ЖЕ exact
+identity.
 
-Reuse разрешён только ролям CoderAgent, TestEngineer и BuildAgent и только
-внутри `technical_fix` loop одной стадии. Planning-роли и ВСЕ reviewer-роли
-(CodeReviewer, SeniorTechnicalPlanReviewer и др.) всегда стартуют заново.
+Router:
 
-Идентичность reuse — `{run_id, pipeline_id, stage,role}`; переиспользование
-сессии между pipeline или role запрещено.
+- хранит one-shot prepare отдельно для parent session + `work_item_id`, поэтому
+  параллельные prepare не перезаписывают друг друга;
+- сопоставляет завершение по нативному plugin `callID`, а не по «последней
+  сессии роли»;
+- хранит registry по полной identity с `work_item_id`;
+- разрешает reuse только healthy session той же exact identity;
+- передаёт в OpenCode нативный `task_id` только после всех проверок;
+- добавляет deterministic delta и required reread;
+- пишет append-only metrics.
 
-### Stop conditions (fresh session)
+### Где reuse разрешён
 
-Reuse отклоняется и стартует свежая сессия, если:
+Reuse разрешён только для:
 
-- произошла compaction сессии;
-- cancellation/error на предыдущей итерации;
-- предыдущий вызов не завершился (`in_progress`);
-- handle/role mismatch;
-- cross-pipeline mismatch;
-- state/evidence/diff устарели;
-- delta-пакет отсутствует или неполон.
+```text
+CoderAgent
+TestEngineer
+BuildAgent
+```
 
-Эти условия сами по себе pipeline не останавливают.
+и только внутри `technical_fix` loop того же logical work item.
 
-Pipeline останавливается (block и stop) только при
-scope/security/replan/secret/destructive — reuse также отклоняется.
+Planning-роли и ВСЕ reviewer-роли, включая CodeReviewer и
+SeniorTechnicalPlanReviewer, всегда запускаются fresh, чтобы не переносить
+собственные предыдущие выводы и anchoring.
 
-### Метрики (append-only)
+Reuse между разными role, stage, pipeline, run или `work_item_id` запрещён.
+
+### Fresh fallback
+
+Запускай fresh session вместо reuse при любом из условий:
+
+- нет предыдущей session для exact identity;
+- предыдущая session compacted/error/cancelled/stale/in_progress;
+- role/work-item/parent-session mismatch;
+- state revision не соответствует предыдущей записи;
+- evidence/diff/required reread отсутствуют или устарели;
+- runtime context просрочен;
+- marker отсутствует или не совпадает.
+
+Fresh fallback сам по себе pipeline не останавливает. Pipeline block/stop только
+по обычным scope/security/replan/secret/destructive правилам.
+
+### Метрики
 
 Registry:
-`<project-root>/.tmp/pipelines/{run_id}/session-registry.json`
 
-Метрики:
-`<project-root>/.tmp/pipelines/{run_id}/reuse-metrics/events.jsonl`
+```text
+<project-root>/.tmp/pipelines/{run_id}/session-registry.json
+```
 
-Фиксируются фактически наблюдаемые значения: fresh/reuse, fallback reason,
-latency, orientation time (до первого edit/test/build), prompt/response/packet
-bytes, tool/read/grep/glob/edit/bash calls, unique files read, reread files и
-context reread ratio. Не выдумывай token usage, если OpenCode его не отдаёт.
+Metrics:
+
+```text
+<project-root>/.tmp/pipelines/{run_id}/reuse-metrics/events.jsonl
+```
+
+Фиксируй только наблюдаемые значения: fresh/reuse, fallback reason, `call_id`,
+`work_item_id`, latency, orientation time, prompt/response/packet bytes,
+tool/read/grep/glob/edit/bash calls, unique/reread files. Не выдумывай token
+usage, если OpenCode его не отдаёт.
 
 ## Запрещено
 
@@ -321,14 +327,15 @@ context reread ratio. Не выдумывай token usage, если OpenCode е�
 - пропускать обязательную validation stage;
 - начинать неутверждённый обычный pipeline;
 - запускать dependent pipeline до completed dependency;
-- передавать `task_id` вручную в обход runtime plugin;
+- передавать `task_id` вручную в обход runtime router;
+- использовать один `work_item_id` для разных параллельных задач;
 - публиковать изменения вне `allowed_fix_scope`.
 
 ## Результат
 
-Обычный режим: верни status run и pipeline, stages, evidence,
-Build/DevOps/test/review results, fix-loops, blockers, unresolved risks,
-session-reuse решения и метрики.
+Обычный режим: status run/pipeline, stages, evidence, build/devops/test/review
+results, fix-loops, blockers, unresolved risks, session-reuse decisions и
+metrics.
 
-GitHub mode: дополнительно верни `handoff_id`, `source_branch`, `source_sha`,
-`validated_sha`, fix commits/changed files и результат remote SHA verification.
+GitHub mode дополнительно: `handoff_id`, `source_branch`, `source_sha`,
+`validated_sha`, fix commits/changed files и remote SHA verification.
