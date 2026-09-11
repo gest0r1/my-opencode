@@ -35,6 +35,7 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 ARCHIVE="$TMP_DIR/repo.tar.gz"
 SRC="$TMP_DIR/src"
+LEGACY_CONFIG_SNAPSHOT="$TMP_DIR/opencode.legacy.json"
 mkdir -p "$SRC"
 
 echo "Скачиваю конфигурацию $REPO@$REF..."
@@ -45,6 +46,12 @@ mkdir -p \
   "$HOME/.config/opencode" \
   "$HOME/.opencode/agent" \
   "$HOME/.agents/skills"
+
+# Сохраняем старую конфигурацию только во временный каталог процесса, чтобы
+# обнаружить literal credentials ДО замены безопасной конфигурацией.
+if [[ -f "$CURRENT_CONFIG" ]]; then
+  cp "$CURRENT_CONFIG" "$LEGACY_CONFIG_SNAPSHOT"
+fi
 
 # Единый runtime env для OpenCode CLI и OpenChamber.
 # Старый opencode-web.env мигрируется один раз и затем удаляется, чтобы не было
@@ -65,8 +72,8 @@ fi
 # скомпрометированными. Их НЕЛЬЗЯ автоматически переносить в новый env:
 # это не ротация, а сохранение старого секрета. Инсталлятор мигрирует только
 # несекретный ITOP_URL и фиксирует имена credential'ов, требующих перевыпуска.
-if [[ -f "$CURRENT_CONFIG" && -f "$ENV_FILE" ]]; then
-  python3 - "$CURRENT_CONFIG" "$ENV_FILE" "$ROTATION_MARKER" <<'PY'
+if [[ -f "$LEGACY_CONFIG_SNAPSHOT" && -f "$ENV_FILE" ]]; then
+  python3 - "$LEGACY_CONFIG_SNAPSHOT" "$ENV_FILE" "$ROTATION_MARKER" <<'PY'
 import json
 import pathlib
 import shlex
@@ -89,23 +96,6 @@ def get(*parts):
         node = node[part]
     return node
 
-# Only non-secret configuration may be carried forward automatically.
-itop_url = get("mcp", "itop", "env", "ITOP_URL")
-existing_lines = env_path.read_text(encoding="utf-8").splitlines()
-existing_keys = {
-    line.split("=", 1)[0].strip()
-    for line in existing_lines
-    if line.strip() and not line.lstrip().startswith("#") and "=" in line
-}
-if (
-    isinstance(itop_url, str)
-    and itop_url
-    and not itop_url.startswith("{env:")
-    and "ITOP_URL" not in existing_keys
-):
-    with env_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\nITOP_URL={shlex.quote(itop_url)}\n")
-
 secret_locations = {
     "EXCHANGE_MCP_API_KEY": get("mcp", "exchange", "headers", "X-API-Key"),
     "ITOP_TOKEN": get("mcp", "itop", "env", "ITOP_TOKEN"),
@@ -116,6 +106,24 @@ secret_locations = {
     "YONOTE_API_KEY": get("mcp", "yonote", "headers", "Authorization"),
     "YANDEX_METRIKA_TOKEN": get("mcp", "ya-metrika", "env", "YANDEX_METRIKA_TOKEN"),
 }
+
+existing_lines = env_path.read_text(encoding="utf-8").splitlines()
+existing_keys = {
+    line.split("=", 1)[0].strip()
+    for line in existing_lines
+    if line.strip() and not line.lstrip().startswith("#") and "=" in line
+}
+
+# Only non-secret configuration may be carried forward automatically.
+itop_url = get("mcp", "itop", "env", "ITOP_URL")
+if (
+    isinstance(itop_url, str)
+    and itop_url
+    and not itop_url.startswith("{env:")
+    and "ITOP_URL" not in existing_keys
+):
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"\nITOP_URL={shlex.quote(itop_url)}\n")
 
 compromised = []
 for key, value in secret_locations.items():
@@ -128,17 +136,30 @@ for key, value in secret_locations.items():
     compromised.append(key)
 
 # Previous installer revisions could have copied exposed literals into env.
-# Such a marker means those values must not be trusted as "rotated".
+# Such values are explicitly quarantined: we remove them rather than trusting
+# them as already rotated.
 legacy_migration_marker = any(
     "Migrated from legacy opencode.json" in line for line in existing_lines
 )
+if legacy_migration_marker:
+    sensitive_keys = set(secret_locations)
+    filtered = []
+    for line in existing_lines:
+        stripped = line.strip()
+        if "Migrated from legacy opencode.json" in line:
+            continue
+        key = stripped.split("=", 1)[0].strip() if "=" in stripped else None
+        if key in sensitive_keys:
+            continue
+        filtered.append(line)
+    env_path.write_text("\n".join(filtered).rstrip() + "\n", encoding="utf-8")
 
 if compromised or legacy_migration_marker:
     names = sorted(set(compromised))
     marker_path.write_text(
         "Secrets requiring external revoke/reissue before production use:\n"
         + "\n".join(names)
-        + ("\nLEGACY_ENV_MIGRATION_PRESENT\n" if legacy_migration_marker else ""),
+        + ("\nLEGACY_ENV_MIGRATION_QUARANTINED\n" if legacy_migration_marker else ""),
         encoding="utf-8",
     )
 else:
@@ -146,10 +167,20 @@ else:
 PY
 fi
 
+# Сначала заменяем runtime-конфигурацию на безопасную версию с {env:...} —
+# даже если далее установка остановится из-за обязательной внешней ротации.
+cp -a "$SRC/config/opencode/." "$HOME/.config/opencode/"
+rm -rf "$HOME/.config/opencode/agent"
+cp -a "$SRC/config/opencode/agent/." "$HOME/.opencode/agent/"
+cp -a "$SRC/config/agents/skills/." "$HOME/.agents/skills/"
+
 if [[ -f "$ROTATION_MARKER" ]]; then
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
   echo "" >&2
   echo "ОШИБКА БЕЗОПАСНОСТИ: обнаружены credentials, которые ранее хранились literal-значениями." >&2
-  echo "Старые значения НЕ перенесены. Требуется отозвать/перевыпустить их у соответствующих провайдеров" >&2
+  echo "Старые значения НЕ перенесены; ранее мигрированные значения удалены из runtime env." >&2
+  echo "Рабочая конфигурация уже заменена на безопасную версию с {env:...}." >&2
+  echo "Требуется отозвать/перевыпустить credentials у соответствующих провайдеров" >&2
   echo "и записать новые значения в $ENV_FILE." >&2
   echo "Требуют проверки/ротации:" >&2
   sed 's/^/  - /' "$ROTATION_MARKER" >&2
@@ -157,14 +188,6 @@ if [[ -f "$ROTATION_MARKER" ]]; then
   echo "После внешней ротации удали $ROTATION_MARKER и повтори установку." >&2
   exit 2
 fi
-
-# Глобальная конфигурация OpenCode, включая скрытые файлы.
-# agent/ ставится отдельно в ~/.opencode/agent; этот путь нативно читается
-# OpenCode v1.18.30+ через global $HOME/.opencode config directory.
-cp -a "$SRC/config/opencode/." "$HOME/.config/opencode/"
-rm -rf "$HOME/.config/opencode/agent"
-cp -a "$SRC/config/opencode/agent/." "$HOME/.opencode/agent/"
-cp -a "$SRC/config/agents/skills/." "$HOME/.agents/skills/"
 
 # LLM credentials являются каноничными в `opencode auth login` / auth.json.
 # Удаляем старые env-переопределения, чтобы CLI и OpenChamber использовали
