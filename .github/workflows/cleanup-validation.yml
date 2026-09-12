@@ -23,10 +23,15 @@ jobs:
           bash -n install-openchamber.sh
           bash -n config/opencode/skills/task-management/router.sh
 
+      - name: Compile local TypeScript plugin
+        run: |
+          npx --yes esbuild@0.25.10 config/opencode/plugins/pipeline-runtime.ts \
+            --bundle --platform=node --packages=external --outfile=/tmp/pipeline-runtime.js
+
       - name: Check active agent set and retired references
         run: |
           set -e
-          if grep -R --line-number --exclude-dir=.git -E 'plugins/shell-strategy|(^|[^[:alnum:]_])StageOrchestrator([^[:alnum:]_]|$)|ContextManager|ContextRetriever|ContextOrganizer|AgentGenerator|CommandCreator|SimpleResponder' config/opencode/agent config/opencode/opencode.json config/opencode/command; then
+          if grep -R --line-number --exclude-dir=.git -E 'plugins/shell-strategy|(^|[^[:alnum:]_])StageOrchestrator([^[:alnum:]_]|$)|ContextManager|ContextRetriever|ContextOrganizer|AgentGenerator|CommandCreator|SimpleResponder|Mandatory Caveman|skill\(name="caveman"\)' config/opencode/agent config/opencode/opencode.json config/opencode/command; then
             echo 'Found retired runtime reference' >&2
             exit 1
           fi
@@ -35,18 +40,54 @@ jobs:
           test -f config/opencode/agent/core/openstage-orchestrator.md
           test -f config/opencode/agent/subagents/planning/adr-manager.md
 
+      - name: Check native permission ordering
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          bad=[]
+          for p in Path('config/opencode/agent').rglob('*.md'):
+              lines=p.read_text(encoding='utf-8').splitlines()
+              if not lines or lines[0].strip()!='---':
+                  continue
+              end=next((i for i,x in enumerate(lines[1:],1) if x.strip()=='---'),None)
+              if end is None:
+                  continue
+              fm=lines[:end]
+              for block in ('task:', 'bash:', 'edit:', 'write:'):
+                  starts=[i for i,x in enumerate(fm) if x.strip()==block]
+                  for start in starts:
+                      indent=len(fm[start])-len(fm[start].lstrip())
+                      body=[]
+                      for line in fm[start+1:]:
+                          if not line.strip():
+                              continue
+                          level=len(line)-len(line.lstrip())
+                          if level<=indent:
+                              break
+                          body.append(line.strip())
+                      wildcard=next((i for i,x in enumerate(body) if x.startswith('"*":') or x.startswith("'*':")),None)
+                      allows=[i for i,x in enumerate(body) if x.endswith(': allow') and not x.startswith('"*":')]
+                      if wildcard is not None and allows and any(i < wildcard for i in allows):
+                          bad.append(f'{p}:{block} wildcard deny must precede specific allow rules')
+          if bad:
+              raise SystemExit('\n'.join(bad))
+          PY
+
       - name: Check canonical agent path
         run: |
           grep -Fq 'AGENTS_DIR="$CONFIG_DIR/agents"' install.sh
           grep -Fq 'cp -a "$SRC/config/opencode/agent/." "$AGENTS_DIR/"' install.sh
           ! grep -R --line-number -F '~/.opencode/agent' config/opencode/agent config/opencode/opencode.json config/opencode/command
 
-      - name: Check pipeline runtime routing remains active
+      - name: Check semantic task_id router remains active
         run: |
           test -f config/opencode/plugins/pipeline-runtime.ts
           grep -Fq 'pipeline_runtime_prepare' config/opencode/agent/core/openstage-orchestrator.md
           grep -Fq 'pipeline_runtime_prepare' config/opencode/command/pipeline-run.md
           grep -Fq 'work_item_id' config/opencode/plugins/pipeline-runtime.ts
+          grep -Fq 'if (!workItemID) return' config/opencode/plugins/pipeline-runtime.ts
+          grep -Fq 'delete args.task_id' config/opencode/plugins/pipeline-runtime.ts
+          grep -Fq 'sameIdentity' config/opencode/plugins/pipeline-runtime.ts
 
       - name: Check integration secrets are env-backed
         run: |
@@ -58,11 +99,13 @@ jobs:
               raise SystemExit('Missing env secret refs: '+', '.join(missing))
           PY
 
-      - name: Check removed legacy context framework
+      - name: Check legacy context framework is absent
         run: |
-          test ! -e config/opencode/context/core/context-system.md
-          test ! -d config/opencode/context/core/context-system
-          test ! -d config/opencode/context/openagents-repo
+          test ! -e config/opencode/context
+          test ! -e config/opencode/.ocx
+          test ! -e config/opencode/dcp.jsonc
+          test ! -e config/opencode/ocx.jsonc
+          test ! -d config/opencode/plugins/shell-strategy
 
       - name: Run task-management tests
         run: node --test config/opencode/skills/task-management/scripts/github-handoff-core.test.mjs
