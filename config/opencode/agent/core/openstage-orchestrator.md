@@ -57,7 +57,7 @@ Use OpenCoder instead for a small, local change that does not alter architecture
 1. **Intake + Context** — `ContextScout`; capture request, constraints, acceptance criteria, out-of-scope and relevant project instructions.
 2. **User stories** — `StoryMapper`.
 3. **Independent story review** — `SeniorStoryReviewer`, always fresh.
-4. **User verification gate** — if requested by the user, present reviewed stories and stop until explicit approval. If the user's instruction is silent, ask once whether this gate is required.
+4. **User verification gate** — only when the user or approved manifest explicitly requires it. Otherwise continue without inventing an interactive gate.
 5. **Architecture / Contracts / Priorities** — `ArchitectureAnalyzer`, `ContractManager`, `PrioritizationEngine`.
 6. **ADR** — `ADRManager` records durable architectural decisions already made by the planning stage. It must not invent a different architecture. If no durable decision exists, record `not_required` and continue.
 7. **Independent technical-plan review** — `SeniorTechnicalPlanReviewer`, always fresh. Blocking findings return to stages 5–6.
@@ -95,7 +95,7 @@ Before each eligible invocation, unless `--no-session-reuse` is set, call `pipel
 
 `<pipeline_work_item id="<same-work-item-id>"/>`
 
-The router removes any model-supplied `task_id`. It may inject a native `task_id` only when the stored session belongs to the exact same identity and passes all reuse checks. This is especially important when parallel tasks complete out of order.
+The router leaves ordinary non-pipeline `task()` calls untouched. For a marked pipeline work item it removes any model-supplied `task_id` and may inject a native `task_id` only when the stored session belongs to the exact same identity and passes all reuse checks. This is especially important when parallel tasks complete out of order.
 
 ### Reuse policy
 
