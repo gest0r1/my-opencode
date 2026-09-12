@@ -40,11 +40,9 @@ tags: [pipeline, execution, unattended, github-handoff]
 
 `--unattended` отменяет только лишние вопросы внутри уже утверждённого scope; он не отменяет permissions, security gates и replan stops.
 
-## Session reuse: native task_id + semantic router
+## Session reuse: stock OpenCode task_id + semantic router
 
-OpenCode нативно умеет продолжать child session по `task_id`. Но `task_id` — только transport handle: он не определяет, **какой логический work item** можно продолжать, особенно когда параллельно работают несколько детей одной роли.
-
-Поэтому `pipeline-runtime` остаётся тонким safety/router layer поверх штатного `task_id`.
+OpenCode сам создаёт и возобновляет child session по `task_id`. Локальный `pipeline-runtime` не реализует жизненный цикл session и не заменяет штатный механизм. Он решает только одну отсутствующую в OpenCode задачу: какой логический work item имеет право получить какой native `task_id`, когда в pipeline есть несколько параллельных детей.
 
 ### Logical identity
 
@@ -54,29 +52,17 @@ OpenCode нативно умеет продолжать child session по `task
 {run_id, pipeline_id, stage, role, work_item_id}
 ```
 
-`work_item_id`:
-- стабилен между baseline и technical-fix для одного задания;
-- уникален для параллельных work items;
-- берётся из TaskManager/manifest;
-- не содержит timestamp, random UUID или loop number.
+`work_item_id` стабилен между baseline и technical-fix одного задания, уникален для параллельных work items и берётся из TaskManager/manifest. Не используй timestamp, random UUID или номер fix-loop как identity.
 
 ### Eligible roles
 
-Reuse разрешён только:
+Reuse разрешён только `CoderAgent`, `TestEngineer`, `BuildAgent` и только для `technical_fix` того же exact work item.
 
-```text
-CoderAgent
-TestEngineer
-BuildAgent
-```
-
-и только для `technical_fix` того же exact work item.
-
-Всегда fresh: StoryMapper, SeniorStoryReviewer, ArchitectureAnalyzer, ContractManager, PrioritizationEngine, ADRManager, SeniorTechnicalPlanReviewer, TaskManager, CodeReviewer, OpenDevopsSpecialist, DocWriter.
+Planning/review/ADR/DevOps/docs роли всегда запускаются fresh.
 
 ### Invocation protocol
 
-Перед каждым eligible child invocation, если reuse не отключён:
+Перед eligible child invocation, если reuse не отключён:
 
 ```text
 pipeline_runtime_prepare(
@@ -85,7 +71,6 @@ pipeline_runtime_prepare(
   stage,
   role,
   work_item_id,
-  loop,
   technical_fix,
   state_revision,
   previous_state_revision?,
@@ -96,21 +81,21 @@ pipeline_runtime_prepare(
 )
 ```
 
-Сразу следующий matching `task()` prompt содержит:
+Сразу следующий matching `task()` prompt должен содержать:
 
 ```text
 <pipeline_work_item id="<same-work-item-id>"/>
 ```
 
-Модель не выбирает `task_id`. Router удаляет model-supplied `task_id` и может подставить нативный OpenCode `task_id` только для exact identity после проверок состояния.
+Для pipeline work item модель не выбирает `task_id`: router удаляет такой handle и подставляет его только при exact identity + valid state/evidence. Вызовы `task()` без pipeline marker остаются полностью штатными и могут использовать native `task_id` без вмешательства router.
 
-Baseline (`technical_fix:false`) всегда fresh, но завершившийся child регистрируется. Fix (`technical_fix:true`) может resume только exact registered child.
+Baseline (`technical_fix:false`) всегда fresh и регистрирует созданную OpenCode session. Fix (`technical_fix:true`) может resume только exact registered child.
 
 ### Fresh fallback
 
-Fresh вместо reuse при: отсутствующей session, compaction/error/cancel/stale/in-progress, identity mismatch, revision mismatch, отсутствующем/stale evidence/diff/reread, неверном marker. Fresh fallback сам по себе не блокирует pipeline.
+Fresh вместо reuse при отсутствующей session, compaction/error/cancel/stale/in-progress, identity mismatch, revision mismatch, отсутствующем evidence/diff/reread или просроченном prepare. Fresh fallback сам по себе не блокирует pipeline.
 
-При параллельном исполнении router связывает завершение с native call ID и work_item_id; запрещено выбирать «последнюю session данной роли».
+При параллельном исполнении нельзя выбирать «последнюю session роли»: завершение связывается с exact work-item identity и native call/session ID.
 
 Registry:
 
@@ -118,10 +103,10 @@ Registry:
 .tmp/pipelines/<run-id>/session-registry.json
 ```
 
-Metrics:
+Компактный audit routing decisions:
 
 ```text
-.tmp/pipelines/<run-id>/reuse-metrics/events.jsonl
+.tmp/pipelines/<run-id>/session-routing.jsonl
 ```
 
 ## GitHub validation handoff
@@ -154,18 +139,18 @@ github_handoff_publish(run_id: "<run-id>")
 github_handoff_status(run_id: "<run-id>")
 ```
 
-Фиксируй `source_sha`, `validated_sha`, fix commits (если были), validation evidence и session-reuse decisions.
+Фиксируй `source_sha`, `validated_sha`, fix commits, validation evidence и routing decisions.
 
 ## Prohibited
 
 - менять approved manifest/rules во время run;
 - пропускать обязательный stage;
 - продолжать зависимый batch до завершения dependency;
-- вручную выбирать/reuse `task_id` в обход router;
+- вручную выбирать/reuse `task_id` в обход router для pipeline work item;
 - использовать один work_item_id для разных parallel items;
 - публиковать изменения за пределами allowed scope;
 - force-push или обход GitHub handoff tools.
 
 ## Final result
 
-Верни компактно: pipeline status, stages, evidence, build/review/test/release results, fix-loops, blockers/risks, session-reuse decisions; в GitHub mode также source/validated SHA и fix commits.
+Верни компактно: pipeline status, stages, evidence, build/review/test/release results, fix-loops, blockers/risks, routing decisions; в GitHub mode также source/validated SHA и fix commits.
