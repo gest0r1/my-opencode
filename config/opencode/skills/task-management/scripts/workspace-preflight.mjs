@@ -1,17 +1,30 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
+import { join, relative } from 'node:path';
+
+const RUN_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
 function fail(message, code = 2) {
-  console.error(JSON.stringify({ ok: false, error: message }));
+  console.error(JSON.stringify({ ok: false, reason: message }));
   process.exit(code);
 }
 
 function runGit(args, cwd, { allowFailure = false } = {}) {
   try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    return execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
   } catch (error) {
     if (allowFailure) return '';
     const detail = error?.stderr?.toString?.().trim() || error?.message || String(error);
@@ -21,19 +34,26 @@ function runGit(args, cwd, { allowFailure = false } = {}) {
 
 function parseArgs(argv) {
   const result = { mode: argv[0], runId: undefined, baseSha: undefined };
-  if (!['plan', 'run'].includes(result.mode)) fail('usage: workspace-preflight.mjs <plan|run> [--run-id ID] [--base-sha SHA]');
+  if (!['plan', 'run'].includes(result.mode)) {
+    fail('usage: workspace-preflight.mjs <plan|run> --run-id ID [--base-sha SHA]');
+  }
   for (let i = 1; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--run-id') result.runId = argv[++i];
     else if (arg === '--base-sha') result.baseSha = argv[++i];
     else fail(`unknown argument: ${arg}`);
   }
-  if (result.baseSha && !/^[0-9a-f]{40}$/i.test(result.baseSha)) fail('base SHA must be a 40-hex commit SHA');
+  if (!result.runId || !RUN_ID_RE.test(result.runId)) {
+    fail('run-id must match [A-Za-z0-9._:-]{1,128}');
+  }
+  if (result.baseSha && !/^[0-9a-f]{40}$/i.test(result.baseSha)) {
+    fail('base SHA must be a 40-hex commit SHA');
+  }
   return result;
 }
 
-function worktreeId(path) {
-  return createHash('sha256').update(path).digest('hex').slice(0, 12);
+function worktreeId(value) {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12);
 }
 
 function parseWorktrees(raw) {
@@ -43,9 +63,13 @@ function parseWorktrees(raw) {
     if (line.startsWith('worktree ')) {
       if (current) items.push(current);
       current = { path: line.slice('worktree '.length), branch: null, head: null };
-    } else if (current && line.startsWith('HEAD ')) current.head = line.slice(5);
-    else if (current && line.startsWith('branch ')) current.branch = line.slice(7).replace(/^refs\/heads\//, '');
-    else if (current && line === 'detached') current.branch = '(detached)';
+    } else if (current && line.startsWith('HEAD ')) {
+      current.head = line.slice(5);
+    } else if (current && line.startsWith('branch ')) {
+      current.branch = line.slice(7).replace(/^refs\/heads\//, '');
+    } else if (current && line === 'detached') {
+      current.branch = '(detached)';
+    }
   }
   if (current) items.push(current);
   return items;
@@ -69,6 +93,14 @@ function readPipelineStates(worktreePath) {
   return states;
 }
 
+function persistEvidence(root, runId, evidence) {
+  const dir = join(root, '.tmp', 'pipelines', runId);
+  const file = join(dir, 'workspace-preflight.json');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(file, JSON.stringify(evidence, null, 2) + '\n', 'utf8');
+  return relative(root, file).replaceAll('\\', '/');
+}
+
 const args = parseArgs(process.argv.slice(2));
 const cwd = process.cwd();
 const root = realpathSync(runGit(['rev-parse', '--show-toplevel'], cwd));
@@ -77,11 +109,22 @@ const branch = runGit(['branch', '--show-current'], root, { allowFailure: true }
 const dirtyLines = runGit(['status', '--porcelain'], root, { allowFailure: true });
 const worktrees = parseWorktrees(runGit(['worktree', 'list', '--porcelain'], root));
 
-const activeStatuses = new Set(['approved', 'in_progress', 'blocked', 'failed', 'ready', 'release_ready']);
+const activeStatuses = new Set([
+  'approved',
+  'in_progress',
+  'blocked',
+  'failed',
+  'ready',
+  'release_ready',
+]);
 const activeOtherRuns = [];
 for (const wt of worktrees) {
   let resolved;
-  try { resolved = realpathSync(wt.path); } catch { continue; }
+  try {
+    resolved = realpathSync(wt.path);
+  } catch {
+    continue;
+  }
   for (const state of readPipelineStates(resolved)) {
     if (state.run_id === args.runId) continue;
     if (!activeStatuses.has(state.status) && state.status !== 'invalid_state') continue;
@@ -95,16 +138,20 @@ for (const wt of worktrees) {
 }
 
 const sameWorktreeConflicts = activeOtherRuns.filter((item) => item.same_worktree);
-let workspaceMode;
-if (sameWorktreeConflicts.length > 0) workspaceMode = 'conflict_shared_worktree';
-else if (activeOtherRuns.length > 0) workspaceMode = 'dedicated_worktree';
-else workspaceMode = 'exclusive_shared_worktree';
+const workspaceMode = sameWorktreeConflicts.length
+  ? 'conflict_shared_worktree'
+  : activeOtherRuns.length
+    ? 'dedicated_worktree'
+    : 'exclusive_shared_worktree';
 
 let drift = null;
 if (args.baseSha) {
   let isDescendant = true;
   try {
-    execFileSync('git', ['merge-base', '--is-ancestor', args.baseSha, head], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['merge-base', '--is-ancestor', args.baseSha, head], {
+      cwd: root,
+      stdio: 'ignore',
+    });
   } catch {
     isDescendant = false;
   }
@@ -118,23 +165,49 @@ if (args.baseSha) {
   };
 }
 
-const result = {
-  ok: sameWorktreeConflicts.length === 0,
+let reason = null;
+if (sameWorktreeConflicts.length) reason = 'active_run_in_same_worktree';
+else if (args.mode === 'run' && dirtyLines.length) reason = 'dirty_run_worktree';
+else if (args.mode === 'run' && drift && !drift.is_descendant) reason = 'planning_base_not_ancestor';
+
+const evidence = {
+  ok: reason === null,
+  reason,
+  timestamp: new Date().toISOString(),
   mode: args.mode,
-  run_id: args.runId ?? null,
+  run_id: args.runId,
   branch,
   head_sha: head,
   worktree_id: worktreeId(root),
+  workspace_mode: workspaceMode,
   clean: dirtyLines.length === 0,
   dirty_entries: dirtyLines ? dirtyLines.split(/\r?\n/).filter(Boolean).length : 0,
   worktree_count: worktrees.length,
   active_other_runs: activeOtherRuns,
   same_worktree_conflicts: sameWorktreeConflicts,
-  workspace_mode: workspaceMode,
-  workspace_mode_suggestion: workspaceMode,
-  requires_owner_confirmation: false,
   drift,
 };
 
-console.log(JSON.stringify(result, null, 2));
-process.exitCode = sameWorktreeConflicts.length > 0 ? 3 : 0;
+const evidencePath = persistEvidence(root, args.runId, evidence);
+
+if (reason) {
+  console.error(
+    JSON.stringify({
+      ok: false,
+      reason,
+      evidence: evidencePath,
+      conflicts: reason === 'active_run_in_same_worktree' ? sameWorktreeConflicts : undefined,
+    }),
+  );
+  process.exit(3);
+}
+
+console.log(
+  JSON.stringify({
+    ok: true,
+    head_sha: head,
+    branch,
+    clean: evidence.clean,
+    evidence: evidencePath,
+  }),
+);
