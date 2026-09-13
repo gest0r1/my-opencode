@@ -3,7 +3,7 @@ name: StoryMapper
 description: User journey mapping specialist transforming user needs into epics,
   stories, and vertical slices with bounded context alignment
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   bash:
