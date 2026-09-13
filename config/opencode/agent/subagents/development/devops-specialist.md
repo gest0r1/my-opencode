@@ -2,7 +2,7 @@
 name: OpenDevopsSpecialist
 description: Conditional CI/deployment architecture and runtime failure diagnostics agent
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   task:
