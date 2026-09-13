@@ -1,10 +1,9 @@
 ---
 name: ContractManager
-description: "API contract management specialist enabling parallel development
-  through contract-first design with OpenAPI/Swagger support. Model:
-  opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
+description: API contract management specialist enabling parallel development
+  through contract-first design with OpenAPI/Swagger support.
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/qwen3.7-plus
 temperature: 0.1
 permission:
   bash:
