@@ -37,18 +37,9 @@ node .opencode/skills/task-management/scripts/workspace-preflight.mjs plan --run
 node ~/.config/opencode/skills/task-management/scripts/workspace-preflight.mjs plan --run-id <run-id>
 ```
 
-3. Если `same_worktree_conflicts` не пуст, PLAN заблокирован. Нельзя принимать подтверждение как override. Предложи владельцу одно из двух действий:
-   - открыть/перенести текущую OpenChamber/OpenCode session в отдельный Git worktree;
-   - завершить/явно закрыть остальные незавершённые RUN в этом worktree.
-4. Если конфликтов нет, ОБЯЗАТЕЛЬНО задай владельцу один вопрос и остановись до ответа:
-
-```text
-Подтвердите изоляцию этой planning-сессии:
-1. Dedicated worktree — эта session работает в отдельном worktree и не делит изменяемые файлы с активным RUN.
-2. Exclusive shared worktree — других незавершённых RUN в этом worktree нет/они завершены.
-```
-
-5. После ответа запиши локальный evidence в `.tmp/pipelines/{run-id}/workspace-confirmation.json`: выбранный режим, `head_sha`, branch, `worktree_id`, timestamp, список обнаруженных other runs. Абсолютный путь worktree в manifest не сохраняй.
+3. Если `same_worktree_conflicts` не пуст, PLAN заблокирован. Нельзя продолжать в этом worktree. Нужно открыть/перенести текущую OpenChamber/OpenCode session в отдельный Git worktree либо завершить/явно закрыть остальные незавершённые RUN в этом worktree.
+4. Если конфликтов нет, НЕ задавай владельцу отдельный вопрос про worktree. Прими `workspace_mode` из deterministic preflight и продолжай автоматически.
+5. Сохрани результат preflight как локальный evidence `.tmp/pipelines/{run-id}/workspace-preflight.json`: `workspace_mode`, `head_sha`, branch, `worktree_id`, timestamp, список обнаруженных other runs и conflicts. Абсолютный путь worktree в manifest не сохраняй.
 6. Зафиксируй `planning_base_sha = head_sha` и `planning_base_branch = branch` из preflight. Именно этот SHA является базой design freeze.
 7. Если planning context содержит tracked dirty files, обсуждение допускается, но manifest нельзя утверждать и `stage-cli init` нельзя выполнять, пока контекст не приведён к воспроизводимому Git snapshot. Владелец должен закоммитить/убрать изменения и повторить preflight; новый HEAD становится `planning_base_sha`.
 
@@ -84,7 +75,6 @@ PLAN и другой RUN могут идти одновременно тольк
     "base_branch": "feature-or-main",
     "base_sha": "40-hex-git-sha",
     "workspace_mode": "dedicated_worktree | exclusive_shared_worktree",
-    "owner_confirmed": true,
     "depends_on_runs": [
       {
         "run_id": "run-001",
@@ -104,7 +94,7 @@ PLAN и другой RUN могут идти одновременно тольк
 
 ## Approval
 
-1. Проверь manifest. `open_decision`, отсутствие воспроизводимого `base_sha`, неподтверждённая workspace isolation или planning blocker запрещают approval.
+1. Проверь manifest. `open_decision`, отсутствие воспроизводимого `base_sha`, failed workspace preflight или planning blocker запрещают approval.
 2. Покажи владельцу один consolidated decision packet и manifest.
 3. Только после явного approval вызови `stage-cli init`.
 4. После init остановись и верни команду `/pipeline-run {run-id} --unattended`. Сам `/pipeline-run` не запускай.
@@ -116,6 +106,7 @@ PLAN и другой RUN могут идти одновременно тольк
 - запускать implementation tests, Docker или deployment;
 - читать mutable project context до Workspace Isolation Gate;
 - продолжать в том же worktree при обнаруженном незавершённом RUN;
+- задавать владельцу отдельный worktree-confirmation вопрос при зелёном preflight;
 - менять rules/backlog без явного указания владельца;
 - автоматически стартовать `/pipeline-run`.
 
