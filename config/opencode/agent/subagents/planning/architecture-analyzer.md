@@ -1,10 +1,9 @@
 ---
 name: ArchitectureAnalyzer
-description: "DDD-driven architecture analyzer identifying bounded contexts,
+description: DDD-driven architecture analyzer identifying bounded contexts,
   module boundaries, and domain relationships for multi-stage orchestration.
-  Model: opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/qwen3.7-plus
 temperature: 0.2
 permission:
   bash:
