@@ -95,10 +95,10 @@ for (const wt of worktrees) {
 }
 
 const sameWorktreeConflicts = activeOtherRuns.filter((item) => item.same_worktree);
-let workspaceModeSuggestion;
-if (sameWorktreeConflicts.length > 0) workspaceModeSuggestion = 'conflict_shared_worktree';
-else if (activeOtherRuns.length > 0) workspaceModeSuggestion = 'dedicated_worktree';
-else workspaceModeSuggestion = 'exclusive_shared_worktree';
+let workspaceMode;
+if (sameWorktreeConflicts.length > 0) workspaceMode = 'conflict_shared_worktree';
+else if (activeOtherRuns.length > 0) workspaceMode = 'dedicated_worktree';
+else workspaceMode = 'exclusive_shared_worktree';
 
 let drift = null;
 if (args.baseSha) {
@@ -130,8 +130,9 @@ const result = {
   worktree_count: worktrees.length,
   active_other_runs: activeOtherRuns,
   same_worktree_conflicts: sameWorktreeConflicts,
-  workspace_mode_suggestion: workspaceModeSuggestion,
-  requires_owner_confirmation: true,
+  workspace_mode: workspaceMode,
+  workspace_mode_suggestion: workspaceMode,
+  requires_owner_confirmation: false,
   drift,
 };
 
