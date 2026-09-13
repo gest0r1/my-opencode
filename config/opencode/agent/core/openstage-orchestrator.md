@@ -104,15 +104,12 @@ Before either command reads mutable project context:
 
 1. run `workspace-preflight.mjs` in the corresponding mode;
 2. if another unfinished RUN is detected in the SAME worktree, block immediately;
-3. otherwise ask the owner to confirm exactly one mode:
-   - `dedicated_worktree`: this OpenChamber/OpenCode session has a separate worktree;
-   - `exclusive_shared_worktree`: no other unfinished RUN uses this worktree;
-4. wait for the answer even under `--unattended`;
-5. record local evidence.
+3. otherwise accept the deterministic `workspace_mode` reported by preflight and continue automatically without asking the owner;
+4. persist the preflight result as local workspace evidence.
 
-User confirmation is not an override for a detected same-worktree conflict. The session must move to a separate worktree or the conflicting RUN must finish/close.
+A detected same-worktree conflict is authoritative and cannot be overridden by a user response. The session must move to a separate worktree or the conflicting RUN must finish/close.
 
-This gate is what allows PLAN-2 to proceed while RUN-1 is active: they use separate worktrees and separate `.tmp/pipelines/{run-id}` state.
+This gate is what allows PLAN-2 to proceed while RUN-1 is active: they use separate worktrees and separate `.tmp/pipelines/{run-id}` state. No extra confirmation prompt is required when preflight is green.
 
 ## Planning mode responsibilities
 
@@ -125,7 +122,7 @@ Keep planning agents fresh and read-only where appropriate:
 5. ArchitectureAnalyzer + ContractManager + PrioritizationEngine.
 6. SeniorTechnicalPlanReviewer — independent readiness/security/dependency review.
 7. TaskManager — tasks only after design freeze readiness.
-8. Record exact `planning_base_sha`, workspace mode, dependencies on other runs, affected/exclusive paths and CI contract.
+8. Record exact `planning_base_sha`, workspace mode from deterministic preflight, dependencies on other runs, affected/exclusive paths and CI contract.
 9. Owner approves manifest once; initialize state; stop.
 
 A PLAN may depend on an unfinished RUN. Record `depends_on_runs` plus required contract/artifact IDs. Later RUN preflight validates those assumptions before implementation.
@@ -194,7 +191,7 @@ Classify every blocker:
 - `security_stop`, `scope_stop`, `secret_stop`, `destructive_stop` → block;
 - `optional`: nonblocking evidence.
 
-Default maximum is two automatic technical-fix loops per failing stage. `--unattended` removes intermediate approval for `technical_fix` only; it never removes worktree confirmation or hard stops.
+Default maximum is two automatic technical-fix loops per failing stage. `--unattended` removes intermediate approval for `technical_fix` only; it never removes hard stops.
 
 ## Session reuse
 
