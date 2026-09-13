@@ -1,5 +1,5 @@
 ---
-description: Показать состояние pipeline, Git/CI provenance и workspace evidence без изменения данных
+description: Показать состояние pipeline и Git/CI provenance без изменения данных
 tags:
   - pipeline
   - status
@@ -16,19 +16,11 @@ tags:
 
 1. Прочитай `.tmp/pipelines/{run-id}/state.json` и manifest.
 2. Выполни `stage-cli validate`.
-3. Если есть `workspace-preflight.json`, покажи автоматически определённый workspace mode, worktree id, обнаруженные active runs и conflicts. Не ожидай owner confirmation.
-4. Покажи `planning_context.base_sha`, зависимости от других runs и результат последней drift-проверки, если evidence существует.
-5. Покажи status каждого pipeline/stage, blockers и последние evidence.
-6. Если execution уже дошёл до GitHub validation, покажи отдельно:
-   - `source_sha`;
-   - FAST CI checks;
-   - FULL CI checks;
-   - CodeReviewer/TestEngineer result;
-   - runtime-validation check;
-   - `installed_sha`/artifact digest;
-   - `validated_sha`;
-   - fix-loop count.
-7. Явно отметь SHA mismatch или отсутствие required evidence; не интерпретируй это как PASS.
+3. Если есть `workspace-preflight.json`, покажи только PASS/FAIL и причину FAIL; дополнительные детали — только если они нужны для диагностики.
+4. Покажи `planning_context.base_sha`, зависимости от других runs и drift result, если есть.
+5. Покажи status pipeline/stages, blockers и последние evidence.
+6. Если есть GitHub validation, покажи `source_sha`, FAST/FULL/runtime checks, CodeReviewer/TestEngineer result, installed/validated SHA или artifact digest и fix-loop count.
+7. SHA mismatch или отсутствие required evidence не интерпретируй как PASS.
 
 ## Запрещено
 
