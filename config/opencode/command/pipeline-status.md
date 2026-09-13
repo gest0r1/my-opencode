@@ -16,7 +16,7 @@ tags:
 
 1. Прочитай `.tmp/pipelines/{run-id}/state.json` и manifest.
 2. Выполни `stage-cli validate`.
-3. Если есть `workspace-confirmation.json`, покажи workspace mode и факт owner confirmation.
+3. Если есть `workspace-preflight.json`, покажи автоматически определённый workspace mode, worktree id, обнаруженные active runs и conflicts. Не ожидай owner confirmation.
 4. Покажи `planning_context.base_sha`, зависимости от других runs и результат последней drift-проверки, если evidence существует.
 5. Покажи status каждого pipeline/stage, blockers и последние evidence.
 6. Если execution уже дошёл до GitHub validation, покажи отдельно:
