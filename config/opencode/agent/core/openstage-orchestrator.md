@@ -2,7 +2,7 @@
 name: OpenStageOrchestrator
 description: Primary orchestrator for separated design-freeze planning and CI-first execution
 mode: primary
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   question: allow
