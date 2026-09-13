@@ -2,7 +2,7 @@
 name: TestEngineer
 description: Independent test-quality, acceptance-traceability and missing-test agent
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   bash:
