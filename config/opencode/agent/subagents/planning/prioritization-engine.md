@@ -2,7 +2,7 @@
 name: PrioritizationEngine
 description: Scores and prioritizes backlog items using RICE/WSJF frameworks with MVP/post-MVP release slicing
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   bash:
@@ -504,7 +504,7 @@ WSJF = (6 + 7 + 5) / 9
         "justification": {
           "business_value": "Prevents user churn from lockout",
           "time_criticality": "Users expect this feature",
-          "risk_reduction": "Reduces support load",
+          "risk_reduction": "Reduces support load from locked-out users",
           "job_size": "3 days = tiny effort"
         }
       },
