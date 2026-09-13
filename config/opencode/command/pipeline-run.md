@@ -4,14 +4,14 @@ tags:
   - pipeline
   - execution
   - unattended
-  - github-handoff
+  - ci-first
+  - github-sha
+  - worktree-isolation
 ---
 
 # Pipeline Run
 
-Выполни утверждённый pipeline manifest. StageOrchestrator остаётся основной
-сессией: он управляет стадиями и task routing, но не передаёт оркестрацию
-субагентам.
+`/pipeline-run` выполняет только уже утверждённый design-freeze manifest. Planning остаётся отдельной командой `/pipeline-plan`; RUN не пересматривает продуктовые решения молча.
 
 ## Аргументы
 
@@ -21,321 +21,206 @@ tags:
 /pipeline-run <run-id> [--unattended] [--no-session-reuse]
 ```
 
-GitHub validation handoff:
+GitHub validation handoff (compatibility mode):
 
 ```text
 /pipeline-run <run-id> github <handoff-id> [--unattended] [--no-session-reuse]
 ```
 
-`github` — positional mode. `handoff-id` обязателен и должен быть одним токеном.
-Без `run-id` запроси выбор manifest; не выбирай молча. Неизвестный режим,
-лишний positional argument или `github` без `handoff-id` → `blocked`.
+Без `run-id` попроси выбрать manifest. Неизвестный mode/лишний positional argument → `blocked`.
 
-Session reuse включён по умолчанию. `--no-session-reuse` принудительно делает
-каждый task fresh.
+## Stage 0 — Workspace Isolation Gate
 
-## Preflight — обычный режим
+До implementation и до чтения mutable source выполни:
 
-1. Найди manifest/state, выполни `stage-cli validate`, проверь rules и
-   `edit_policy: human_only`.
-2. Проверь approval manifest, dependencies, paths, conflict groups и locks.
-3. Для `planning_mode: design-freeze` проверь `planning_readiness`, ссылки на
-   decision/research/contract artifacts и отсутствие open decisions.
-4. Выполни doc-gate по `pipeline-rules.md`.
+```bash
+node .opencode/skills/task-management/scripts/workspace-preflight.mjs run --run-id <run-id> --base-sha <planning_base_sha>
+```
 
-Любая ошибка preflight → `blocked`; реализацию не запускай.
+Fallback:
 
-## GitHub validation handoff
+```bash
+node ~/.config/opencode/skills/task-management/scripts/workspace-preflight.mjs run --run-id <run-id> --base-sha <planning_base_sha>
+```
 
-Этот режим означает, что planning, architecture, implementation и code review
-уже выполнены внешним исполнителем. OpenCode забирает зафиксированный результат
-из GitHub и выполняет только перечисленные validation stages плюс допустимые
-`technical_fix`.
+Правила:
 
-### Handoff transport
-
-`handoff-id` разрешается через immutable ref:
+1. Если `same_worktree_conflicts` содержит другой незавершённый RUN — `blocked`. Нельзя подтверждением пользователя разрешить два изменяющих один worktree RUN.
+2. Если конфликтов нет, задай владельцу обязательный вопрос и дождись ответа:
 
 ```text
-origin/handoff/<handoff-id>
+Подтвердите workspace для RUN:
+1. Dedicated worktree — эта session выполняет run в отдельном worktree.
+2. Exclusive shared worktree — других незавершённых RUN в этом worktree нет/они завершены.
 ```
 
-Ref обязан содержать `.opencode/pipeline-handoff.json` минимум со следующими
-полями:
+3. Запиши `.tmp/pipelines/{run-id}/workspace-confirmation.json`.
+4. Worktree относится к DEV execution. Validation runtime не должен запускаться из этого checkout.
 
-```json
-{
-  "schema_version": 1,
-  "provider": "github",
-  "handoff_id": "handoff-001",
-  "run_id": "run-123",
-  "repository": "owner/product",
-  "source_branch": "feature/foo",
-  "source_sha": "40-hex-commit-sha",
-  "pipeline_id": "app",
-  "rules_file": "docs/pipeline-rules.md",
-  "rules_version": 1,
-  "validation_stages": ["build", "tests", "release_validation"],
-  "allowed_fix_scope": ["src/**", "tests/**"],
-  "acceptance": ["..."],
-  "validation": {
-    "build": ["..."],
-    "deploy": ["..."],
-    "test": ["..."],
-    "smoke": ["..."]
-  }
-}
+## Preflight — ordinary mode
+
+1. Найди manifest/state, выполни `stage-cli validate`, проверь approval, rules, dependencies, conflict groups и locks.
+2. Проверь `planning_context.base_sha`, workspace confirmation и CI contract.
+3. Проверяй зависимости `planning_context.depends_on_runs`:
+   - required RUN должен иметь terminal `completed`;
+   - требуемые contract/artifact IDs должны существовать и совпадать с ожиданиями PLAN;
+   - несовпадение контракта/решения → `replan`.
+4. Оцени drift от `planning_base_sha` по evidence `workspace-preflight`:
+   - current HEAD не является descendant base SHA → `replan`;
+   - drift пересекает `exclusive_paths`, contracts, migrations, security boundaries или принятые decisions → targeted revalidation; при изменении решения → `replan`;
+   - непересекающийся drift допускается только с evidence, что acceptance/architecture не изменились.
+5. Dirty worktree до первой implementation stage запрещён.
+
+## Execution model — CI first
+
+### 1. Implementation in DEV worktree
+
+BatchExecutor/CoderAgent меняют только DEV workspace текущего RUN. CoderAgent не меняет validation runtime и не подменяет Git/CI evidence текстовым отчётом.
+
+Разрешены быстрые local prechecks, но они не считаются release evidence.
+
+### 2. Git publication / immutable source SHA
+
+После законченного implementation batch:
+
+1. через одобренный Git mechanism закоммить только разрешённые paths;
+2. push feature branch в GitHub;
+3. получи remote commit SHA и заморозь его как `source_sha`;
+4. проверь, что локальный опубликованный commit и remote SHA совпадают;
+5. все последующие gates относятся к exact `source_sha`, а не к имени ветки.
+
+Если нет воспроизводимого remote SHA, validation не начинается.
+
+### 3. FAST CI — до любого дорогого LLM review
+
+FAST CI должен содержать дешёвые deterministic checks: format/lint/typecheck/build/doc validator/affected tests и project-specific static/security checks.
+
+Проверяй exact SHA без LLM polling:
+
+```bash
+node .opencode/skills/task-management/scripts/github-ci-gate.mjs \
+  --sha <source_sha> \
+  --required <comma-separated-fast-checks> \
+  --wait-seconds 900
 ```
 
-`repository`, если задан, обязан совпадать с GitHub `origin`.
-`allowed_fix_scope` поддерживает exact paths и trailing `/**`; пустой scope
-запрещает публикацию кодовых изменений.
+Fallback — установленный script в `~/.config/opencode/...`.
 
-### Deterministic Git preflight
+- FAST CI FAIL → CodeReviewer/TestEngineer не запускать.
+- Сначала используй CI logs/evidence. BuildAgent вызывается только если причина build/typecheck/CI failure неочевидна или требуется воспроизведение.
+- `technical_fix` выполняется только в DEV worktree. Затем новый commit/push → новый `source_sha` → FAST CI сначала.
+- максимум два automatic technical-fix loop на stage, если project rules не задают меньший предел.
 
-Не используй свободные `git pull/checkout/push`. Вызови:
+### 4. После FAST PASS — semantic review и FULL CI параллельно
+
+Запусти независимо:
+
+- `CodeReviewer` fresh session: semantics/security/architecture/contracts/maintainability;
+- FULL CI: полный deterministic test suite на том же `source_sha`.
+
+FULL CI проверяется `github-ci-gate.mjs` по `ci.full_required_checks`.
+
+Ни один LLM не должен повторно выполнять полный test suite только ради подтверждения зелёного GitHub check.
+
+Если FULL CI падает, reviewer может закончить уже начатый review, но новый expensive review для того же заведомо broken SHA не запускай.
+
+### 5. TestEngineer = test-quality gate, а не test runner
+
+После FAST PASS и при наличии review/full-CI evidence TestEngineer проверяет:
+
+- traceability `acceptance criterion → test`;
+- missing positive/negative/edge cases;
+- trivial/self-fulfilling assertions;
+- неверное/избыточное mocking;
+- regression gaps.
+
+Если тестов достаточно — PASS без повторного полного запуска. Если TestEngineer добавил/изменил тесты, появился новый SHA: commit/push и возврат к FAST CI.
+
+### 6. Remote-pinned runtime validation
+
+Последний технический gate — `ci.runtime_required_checks`. Он должен исполняться в изолированном runtime/self-hosted runner и обязан:
+
+1. очистить/создать validation environment;
+2. получить исходники/пакет ТОЛЬКО из GitHub по exact `source_sha` (не копировать из DEV workspace);
+3. build/install/deploy;
+4. подтвердить `installed_sha == source_sha` или эквивалентный artifact digest;
+5. выполнить integration/e2e/health/smoke и при необходимости rollback validation;
+6. сохранить provenance evidence (`source_sha`, `installed_sha`, workflow run/check, artifact/image digest если есть).
+
+Validation runtime immutable относительно source: исправления внутри него запрещены.
+
+Runtime FAIL → диагностируй evidence. OpenDevopsSpecialist вызывается только для неоднозначной infra/deploy причины или если approved scope действительно меняет infrastructure. Кодовый fix всегда возвращается в DEV → новый SHA → FAST CI → зависимые gates заново → новый clean runtime.
+
+### 7. READY_FOR_APPROVAL
+
+После PASS обязательны:
 
 ```text
-github_handoff_prepare(
-  run_id: "<run-id>",
-  handoff_id: "<handoff-id>"
-)
+source_sha == validated_sha
+fast_ci = PASS
+full_ci = PASS
+semantic_review = PASS
+runtime_validation = PASS
+installed_sha == source_sha (или verified artifact digest)
 ```
 
-Tool обязан требовать clean worktree, проверить handoff/source SHA/repository,
-создать локальную `pipeline/<run-id>` строго от `source_sha` и сформировать
-`.tmp/pipelines/<run-id>/github-validation-manifest.json` только с validation
-stages из handoff.
+Сохрани evidence и остановись со статусом `READY_FOR_APPROVAL`. Не merge в `main` без отдельного явного подтверждения владельца.
 
-Затем вызови `github_handoff_status` и проверь:
+После approval/merge получи exact `main_sha`; перед production сделай короткую повторную deterministic validation именно `main_sha`/промотируемого immutable artifact.
 
-```text
-current_head == source_sha
-current_branch == pipeline/<run-id>
-```
+## Failure classification
 
-Любое несовпадение, malformed handoff или сдвинувшийся source branch →
-`blocked` без тестирования и исправлений.
-
-Если state отсутствует, инициализируй его через `stage-cli init` с validation
-manifest. Если существует, он обязан соответствовать тому же handoff,
-pipeline-id и exact stage order. В GitHub mode planning/implementation stages
-не помечаются skipped — их вообще нет в validation manifest.
-
-### Validation execution
-
-Для каждой разрешённой стадии:
-
-1. `stage-cli start`;
-2. вызови профильного агента;
-3. передай acceptance и validation commands;
-4. сохрани evidence;
-5. при PASS — `stage-cli complete`;
-6. при FAIL классифицируй finding.
-
-Классификация:
-
-- `technical_fix` внутри approved/allowed scope — auto-fix, максимум два loop;
-- `replan` — block и stop;
-- scope/security/secret/destructive — block и stop;
+- `technical_fix` — дефект внутри approved scope: bounded auto-fix в DEV;
+- `replan` — требуется новое решение/контракт или materially changed planning assumption: block;
+- `security_stop`, `scope_stop`, `secret_stop`, `destructive_stop` — block;
 - `optional` — evidence, не блокирует.
 
-Имя stage внутри fix-loop остаётся стабильным; меняется `loop`, а не stage.
-После fix повтори затронутый gate и зависимые build/deploy/test gates.
-Текстовый отчёт агента не заменяет реальные команды/evidence.
+`--unattended` отменяет промежуточные вопросы только внутри approved scope. Он НЕ отменяет Workspace Isolation confirmation и hard stops.
 
-### Publish validated result
+## GitHub validation handoff compatibility mode
 
-После PASS всех обязательных validation stages:
+Существующий `github <handoff-id>` режим сохраняется для внешнего handoff. Источник — immutable `origin/handoff/<handoff-id>` с `.opencode/pipeline-handoff.json` и `source_sha`.
 
-```text
-github_handoff_publish(run_id: "<run-id>")
-```
+Обязательные invariants остаются:
 
-Tool обязан публиковать только внутри `allowed_fix_scope`, отклонять secret
-paths, запрещать divergent/non-fast-forward publish, проверять validated HEAD
-как потомка `source_sha` и повторно подтверждать remote SHA. После publish
-снова вызови `github_handoff_status` и зафиксируй `validated_sha`. Без fixes
-`validated_sha == source_sha`.
+- `github_handoff_prepare` создаёт `pipeline/<run-id>` строго от `source_sha`;
+- `current_head == source_sha` до validation;
+- malformed/shifted handoff → block;
+- validation выполняет только stages из handoff;
+- `replan`/scope/security/secret/destructive → block;
+- publish запрещает secret paths/divergent/non-fast-forward result;
+- финальный evidence содержит `handoff_id`, `source_sha`, `validated_sha`, checks и fixes.
 
-Финальный evidence GitHub mode содержит минимум:
-
-```text
-handoff_id
-source_branch
-source_sha
-validated_sha
-fix commit(s), если были
-build/deploy/test results
-session-reuse decisions
-```
-
-## Общие правила выполнения
-
-Перед стадией вызывай `stage-cli start`, после успеха — `complete`; evidence
-обязателен. Выполняй только разрешённые batches/stages.
-
-Review findings классифицируй по `pipeline-rules.md`. `--unattended` запрещает
-дополнительные вопросы внутри уже approved scope. Ответ пользователю — только
-terminal summary при `completed`, `blocked` или `failed`.
+Новые проекты должны предпочитать ordinary CI-first flow выше: fixes в DEV и clean revalidation remote SHA. Handoff compatibility mode не должен использоваться как основание для запуска runtime из development checkout.
 
 ## Session reuse
 
-### Зачем нужен router
+Нативный `task_id` не выбирается моделью. Router владеет reuse decision.
 
-Нативный OpenCode `task_id` — только handle для продолжения конкретной child
-session. Он не определяет, КАКОЙ логический work item должен продолжаться и
-МОЖНО ли его продолжать. Политика принадлежит локальному `pipeline-runtime`.
-
-`task_id` никогда не выбирается моделью. Router удаляет model-supplied
-`task_id` и добавляет его только после точного сопоставления logical identity.
-
-### Logical identity
-
-Identity reuse:
+Logical identity:
 
 ```text
 {run_id, pipeline_id, stage, role, work_item_id}
 ```
 
-`work_item_id` обязателен для каждой потенциально reusable task:
+`work_item_id` стабилен для одного logical work item между baseline/fix loop и уникален для параллельных задач.
 
-- должен быть стабильным для одного логического задания между baseline и
-  последующими technical-fix loop;
-- должен быть уникальным для параллельных заданий одной роли в одной stage;
-- не должен содержать номер loop, timestamp или случайный UUID;
-- предпочтительно используй ID work item из manifest/task plan; если его нет —
-  детерминированный slug конкретной единицы работы.
+Reuse разрешён только CoderAgent/TestEngineer/BuildAgent внутри `technical_fix` exact same identity. Planning roles, CodeReviewer, SeniorTechnicalPlanReviewer, OpenDevopsSpecialist и DocWriter всегда fresh. Cross-run/pipeline/stage/role/work-item reuse запрещён.
 
-Пример параллельной реализации:
-
-```text
-implementation / CoderAgent / api-auth
-implementation / CoderAgent / vacancy-filter
-```
-
-Эти две задачи обязаны получить разные `work_item_id` и никогда не должны
-возобновлять session друг друга.
-
-### Runtime enforcement
-
-Перед КАЖДЫМ вызовом CoderAgent, TestEngineer или BuildAgent, если reuse не
-отключён, вызови:
-
-```text
-pipeline_runtime_prepare(
-  run_id: "<run-id>",
-  pipeline_id: "<pipeline-id>",
-  stage: "<stage>",
-  role: "<role>",
-  work_item_id: "<stable-work-item-id>",
-  loop: <n>,
-  technical_fix: <true|false>,
-  state_revision: "<current-revision>",
-  previous_state_revision: "<previous-revision-if-reuse>",
-  evidence_path: "<path>",
-  changed_files: ["..."],
-  diff_path: "<optional-path>",
-  required_reread: ["..."]
-)
-```
-
-Сразу следующий соответствующий `task()` ОБЯЗАН содержать в prompt:
-
-```text
-<pipeline_work_item id="<same-work-item-id>"/>
-```
-
-Marker — routing key, а не инструкция модели. Он связывает вызов с конкретным
-prepared work item даже при параллельном выполнении и изменённом порядке
-завершения.
-
-Для первого/baseline вызова передай `technical_fix: false`: task всегда fresh,
-но завершившаяся child session регистрируется. Для допустимого fix-loop передай
-`technical_fix: true` и `previous_state_revision` из registry ТОЙ ЖЕ exact
-identity.
-
-Router:
-
-- хранит one-shot prepare отдельно для parent session + `work_item_id`, поэтому
-  параллельные prepare не перезаписывают друг друга;
-- сопоставляет завершение по нативному plugin `callID`, а не по «последней
-  сессии роли»;
-- хранит registry по полной identity с `work_item_id`;
-- разрешает reuse только healthy session той же exact identity;
-- передаёт в OpenCode нативный `task_id` только после всех проверок;
-- добавляет deterministic delta и required reread;
-- пишет append-only metrics.
-
-### Где reuse разрешён
-
-Reuse разрешён только для:
-
-```text
-CoderAgent
-TestEngineer
-BuildAgent
-```
-
-и только внутри `technical_fix` loop того же logical work item.
-
-Planning-роли и ВСЕ reviewer-роли, включая CodeReviewer и
-SeniorTechnicalPlanReviewer, всегда запускаются fresh, чтобы не переносить
-собственные предыдущие выводы и anchoring.
-
-Reuse между разными role, stage, pipeline, run или `work_item_id` запрещён.
-
-### Fresh fallback
-
-Запускай fresh session вместо reuse при любом из условий:
-
-- нет предыдущей session для exact identity;
-- предыдущая session compacted/error/cancelled/stale/in_progress;
-- role/work-item/parent-session mismatch;
-- state revision не соответствует предыдущей записи;
-- evidence/diff/required reread отсутствуют или устарели;
-- runtime context просрочен;
-- marker отсутствует или не совпадает.
-
-Fresh fallback сам по себе pipeline не останавливает. Pipeline block/stop только
-по обычным scope/security/replan/secret/destructive правилам.
-
-### Метрики
-
-Registry:
-
-```text
-<project-root>/.tmp/pipelines/{run_id}/session-registry.json
-```
-
-Metrics:
-
-```text
-<project-root>/.tmp/pipelines/{run_id}/reuse-metrics/events.jsonl
-```
-
-Фиксируй только наблюдаемые значения: fresh/reuse, fallback reason, `call_id`,
-`work_item_id`, latency, orientation time, prompt/response/packet bytes,
-tool/read/grep/glob/edit/bash calls, unique/reread files. Не выдумывай token
-usage, если OpenCode его не отдаёт.
+Перед допустимым reuse используй `pipeline_runtime_prepare` с deterministic delta/evidence; при stale/missing evidence/session health problem — fresh fallback.
 
 ## Запрещено
 
-- менять approved manifest, plan или rules во время обычного run;
-- в GitHub mode менять handoff ref или source_sha;
-- использовать `git pull`, force-push или ручной push в обход handoff tools;
-- пропускать обязательную validation stage;
-- начинать неутверждённый обычный pipeline;
-- запускать dependent pipeline до completed dependency;
-- передавать `task_id` вручную в обход runtime router;
-- использовать один `work_item_id` для разных параллельных задач;
-- публиковать изменения вне `allowed_fix_scope`.
+- менять approved manifest/plan/rules во время RUN;
+- запускать RUN в shared worktree одновременно с другим unfinished RUN;
+- считать branch name достаточным provenance вместо exact SHA;
+- запускать CodeReviewer на SHA, не прошедшем FAST CI;
+- использовать LLM вместо deterministic GitHub checks;
+- тестировать release из DEV checkout;
+- исправлять код внутри validation runtime;
+- пропускать новый FAST CI после нового commit SHA;
+- merge `main` без явного approval владельца.
 
 ## Результат
 
-Обычный режим: status run/pipeline, stages, evidence, build/devops/test/review
-results, fix-loops, blockers, unresolved risks, session-reuse decisions и
-metrics.
-
-GitHub mode дополнительно: `handoff_id`, `source_branch`, `source_sha`,
-`validated_sha`, fix commits/changed files и remote SHA verification.
+Покажи: workspace mode, planning base SHA/drift result, source/validated/installed SHA, GitHub CI checks, semantic review, test-quality review, runtime provenance, fix loops, blockers и terminal status.

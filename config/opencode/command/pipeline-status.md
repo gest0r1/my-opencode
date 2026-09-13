@@ -1,5 +1,5 @@
 ---
-description: Показать состояние pipeline без изменения данных
+description: Показать состояние pipeline, Git/CI provenance и workspace evidence без изменения данных
 tags:
   - pipeline
   - status
@@ -8,41 +8,28 @@ tags:
 
 # Pipeline Status
 
-Покажи текущее состояние pipeline в режиме read-only.
+Покажи текущее состояние pipeline строго read-only.
 
-## Аргументы
-
-`$ARGUMENTS` должен содержать `run-id`.
-
-Пример:
-
-```text
-/pipeline-status 2026-07-29-telegram-actions
-```
-
-Если run-id не передан, покажи список доступных run-id из `.tmp/pipelines/` и
-попроси пользователя выбрать один. Не изменяй состояние автоматически.
+`$ARGUMENTS` должен содержать `run-id`. Если его нет, покажи доступные run-id из `.tmp/pipelines/` и попроси выбрать.
 
 ## Действия
 
-1. Прочитай `.tmp/pipelines/{run-id}/state.json`.
+1. Прочитай `.tmp/pipelines/{run-id}/state.json` и manifest.
 2. Выполни `stage-cli validate`.
-3. Покажи статус run.
-4. Покажи статус каждого pipeline.
-5. Покажи текущую стадию.
-6. Покажи завершённые, активные, ожидающие и заблокированные stages.
-7. Покажи последние ошибки и evidence.
+3. Если есть `workspace-confirmation.json`, покажи workspace mode и факт owner confirmation.
+4. Покажи `planning_context.base_sha`, зависимости от других runs и результат последней drift-проверки, если evidence существует.
+5. Покажи status каждого pipeline/stage, blockers и последние evidence.
+6. Если execution уже дошёл до GitHub validation, покажи отдельно:
+   - `source_sha`;
+   - FAST CI checks;
+   - FULL CI checks;
+   - CodeReviewer/TestEngineer result;
+   - runtime-validation check;
+   - `installed_sha`/artifact digest;
+   - `validated_sha`;
+   - fix-loop count.
+7. Явно отметь SHA mismatch или отсутствие required evidence; не интерпретируй это как PASS.
 
 ## Запрещено
 
-- запускать agents;
-- менять `state.json`;
-- менять manifest;
-- менять `plan.md`;
-- менять `pipeline-rules.md`;
-- автоматически выполнять `resume`, `start` или `complete`.
-
-## Результат
-
-Используй русский читаемый вывод. При необходимости добавь JSON-вывод для
-машинной обработки, но не изменяй файлы.
+Не запускай agents, tests, CI, resume/start/complete и не меняй state/manifest/plan/rules/files.
