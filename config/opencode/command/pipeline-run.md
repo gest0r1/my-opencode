@@ -45,22 +45,14 @@ node ~/.config/opencode/skills/task-management/scripts/workspace-preflight.mjs r
 
 Правила:
 
-1. Если `same_worktree_conflicts` содержит другой незавершённый RUN — `blocked`. Нельзя подтверждением пользователя разрешить два изменяющих один worktree RUN.
-2. Если конфликтов нет, задай владельцу обязательный вопрос и дождись ответа:
-
-```text
-Подтвердите workspace для RUN:
-1. Dedicated worktree — эта session выполняет run в отдельном worktree.
-2. Exclusive shared worktree — других незавершённых RUN в этом worktree нет/они завершены.
-```
-
-3. Запиши `.tmp/pipelines/{run-id}/workspace-confirmation.json`.
-4. Worktree относится к DEV execution. Validation runtime не должен запускаться из этого checkout.
+1. Если `same_worktree_conflicts` содержит другой незавершённый RUN — `blocked`. Нельзя разрешить два изменяющих один worktree RUN.
+2. Если конфликтов нет, НЕ задавай владельцу отдельный вопрос про worktree. Прими `workspace_mode` из deterministic preflight, сохрани evidence в `.tmp/pipelines/{run-id}/workspace-preflight.json` и продолжай автоматически.
+3. Worktree относится к DEV execution. Validation runtime не должен запускаться из этого checkout.
 
 ## Preflight — ordinary mode
 
 1. Найди manifest/state, выполни `stage-cli validate`, проверь approval, rules, dependencies, conflict groups и locks.
-2. Проверь `planning_context.base_sha`, workspace confirmation и CI contract.
+2. Проверь `planning_context.base_sha`, workspace preflight evidence и CI contract.
 3. Проверяй зависимости `planning_context.depends_on_runs`:
    - required RUN должен иметь terminal `completed`;
    - требуемые contract/artifact IDs должны существовать и совпадать с ожиданиями PLAN;
@@ -175,7 +167,7 @@ installed_sha == source_sha (или verified artifact digest)
 - `security_stop`, `scope_stop`, `secret_stop`, `destructive_stop` — block;
 - `optional` — evidence, не блокирует.
 
-`--unattended` отменяет промежуточные вопросы только внутри approved scope. Он НЕ отменяет Workspace Isolation confirmation и hard stops.
+`--unattended` отменяет промежуточные вопросы только внутри approved scope. Workspace Isolation Gate теперь deterministic и не требует отдельного owner confirmation; hard stops остаются обязательными.
 
 ## GitHub validation handoff compatibility mode
 
@@ -213,6 +205,7 @@ Reuse разрешён только CoderAgent/TestEngineer/BuildAgent внут�
 
 - менять approved manifest/plan/rules во время RUN;
 - запускать RUN в shared worktree одновременно с другим unfinished RUN;
+- задавать владельцу отдельный worktree-confirmation вопрос при зелёном preflight;
 - считать branch name достаточным provenance вместо exact SHA;
 - запускать CodeReviewer на SHA, не прошедшем FAST CI;
 - использовать LLM вместо deterministic GitHub checks;
