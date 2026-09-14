@@ -39,11 +39,16 @@ rules: docs/pipeline-rules.md
    `conflict_group`, migrations, fixtures, deployment locks и gate profiles.
 8. TaskManager создаёт задачи только после readiness `ready`; каждая задача
    содержит binary acceptance criteria, tests и ссылки на decision/contract/research.
-9. Создай manifest с `planning_mode: design-freeze`, `planning_readiness` и
-   per-pipeline `decision_ids`, `research_ids`, `contract_ids`.
-10. Проверь manifest. Если есть `open_decision` или blocker, не инициализируй
-    state и верни `needs_revision`.
-11. Покажи один decision packet и manifest владельцу. После явного approval
+9. Для branch/source checkout добавь в manifest `git_setup`: exact `base_sha`,
+   target `branch`, optional `source_sha`, allowlisted `checkout_paths` и
+   `must_absent`. Это единственный источник полномочий для Git gate.
+10. Создай manifest с `planning_mode: design-freeze`, `planning_readiness` и
+   per-pipeline `decision_ids`, `research_ids`, `contract_ids`. `rules_file`
+   обязан существовать, быть locked (`edit_policy: human_only`) и попасть в
+   manifest с версией; fallback на task.json запрещён.
+11. Проверь manifest. Если есть `open_decision`, отсутствуют rules или blocker,
+    не инициализируй state и верни `needs_revision`.
+12. Покажи один decision packet и manifest владельцу. После явного approval
     вызови `stage-cli init`; `/pipeline-run` автоматически не запускай.
 
 ## Запрещено
