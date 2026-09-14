@@ -1,370 +1,220 @@
 #!/usr/bin/env bash
+# Install the forked OpenChamber web/CLI runtime from a verified GitHub bundle.
+# Source builds are an explicit recovery path only.
 set -Eeuo pipefail
 
 CONFIG_REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 CONFIG_REF="${OPENCODE_CONFIG_REF:-main}"
 OPENCHAMBER_REPO="${OPENCHAMBER_REPO:-gest0r1/openchamber-ru}"
 OPENCHAMBER_REF="${OPENCHAMBER_REF:-main}"
-NVM_VERSION="${NVM_VERSION:-v0.40.6}"
-NODE_MAJOR="${NODE_MAJOR:-22}"
+RELEASE_TAG="${OPENCHAMBER_LINUX_RELEASE_TAG:-linux-web}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode"
+STATE_FILE="$STATE_DIR/openchamber-install.state"
+RUNTIME_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/openchamber"
+VERSIONS_DIR="$RUNTIME_ROOT/versions"
+CURRENT_LINK="$RUNTIME_ROOT/current"
 
-for cmd in gh curl mktemp; do
+build_from_source=0
+force_opencode_update=0
+for argument in "$@"; do
+  case "$argument" in
+    --build-from-source) build_from_source=1 ;;
+    --opencode-update) force_opencode_update=1 ;;
+    --help)
+      cat <<'HELP'
+Usage: install-openchamber.sh [--opencode-update] [--build-from-source]
+
+Default: download an immutable Linux web/CLI bundle built by GitHub Actions.
+--opencode-update: additionally run the official OpenCode binary installer.
+--build-from-source: recovery path; build OpenChamber on this host.
+HELP
+      exit 0 ;;
+    *) echo "Ошибка: неизвестный аргумент: $argument" >&2; exit 2 ;;
+  esac
+done
+
+for cmd in gh curl tar sha256sum mktemp; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "Ошибка: требуется команда '$cmd'." >&2
     exit 1
   }
 done
-
-if ! gh auth status >/dev/null 2>&1; then
+gh auth status >/dev/null 2>&1 || {
   echo "Ошибка: GitHub CLI не авторизован. Выполни: gh auth login" >&2
   exit 1
-fi
+}
 
-install_system_package() {
-  local package="$1"
-  local sudo_cmd=()
+state_value() {
+  local key="$1"
+  [[ -f "$STATE_FILE" ]] || return 0
+  sed -n "s/^$key=//p" "$STATE_FILE" | head -n 1
+}
 
-  if (( EUID != 0 )); then
-    if command -v sudo >/dev/null 2>&1; then
-      sudo_cmd=(sudo)
-    else
-      echo "Ошибка: для установки системного пакета '$package' нужны root-права или sudo." >&2
-      exit 1
-    fi
+ref_sha() {
+  gh api "repos/$1/commits/$2" --jq .sha
+}
+
+ensure_node() {
+  local major=0
+  if command -v node >/dev/null 2>&1; then
+    major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
   fi
+  if (( major >= 22 )); then return; fi
 
-  if command -v apt-get >/dev/null 2>&1; then
-    echo "Устанавливаю системный пакет: $package (apt)..."
-    "${sudo_cmd[@]}" apt-get update
-    DEBIAN_FRONTEND=noninteractive "${sudo_cmd[@]}" apt-get install -y "$package"
-  elif command -v dnf >/dev/null 2>&1; then
-    echo "Устанавливаю системный пакет: $package (dnf)..."
-    "${sudo_cmd[@]}" dnf install -y "$package"
-  elif command -v yum >/dev/null 2>&1; then
-    echo "Устанавливаю системный пакет: $package (yum)..."
-    "${sudo_cmd[@]}" yum install -y "$package"
-  elif command -v apk >/dev/null 2>&1; then
-    echo "Устанавливаю системный пакет: $package (apk)..."
-    "${sudo_cmd[@]}" apk add --no-cache "$package"
-  else
-    echo "Ошибка: не найден поддерживаемый пакетный менеджер для установки '$package'." >&2
-    exit 1
+  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  if [[ ! -s "$nvm_dir/nvm.sh" ]]; then
+    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.6/install.sh | PROFILE=/dev/null bash
+  fi
+  # shellcheck disable=SC1090
+  . "$nvm_dir/nvm.sh"
+  nvm install 22
+  nvm alias default 22
+  nvm use 22
+  if [[ -n "${NVM_BIN:-}" && -d /usr/local/bin && -w /usr/local/bin ]]; then
+    ln -sfn "$NVM_BIN/node" /usr/local/bin/node
   fi
 }
 
-# Удаляем только заведомо повреждённые самоссылки из предыдущей версии installer.
-for bin in node npm npx; do
-  path="/usr/local/bin/$bin"
-  if [[ -L "$path" ]] && [[ "$(readlink "$path" 2>/dev/null || true)" == "$path" ]]; then
-    echo "Удаляю повреждённую самоссылку: $path"
-    rm -f "$path"
+restart_service() {
+  if command -v systemctl >/dev/null 2>&1 && [[ -f "$HOME/.config/systemd/user/openchamber.service" ]]; then
+    systemctl --user daemon-reload
+    systemctl --user restart openchamber.service
+    echo "OpenChamber service restarted."
   fi
-done
-hash -r 2>/dev/null || true
+}
 
-# 1. Всегда обновляем OpenCode и приватную конфигурацию my-opencode.
-echo "Устанавливаю/обновляю OpenCode и приватную конфигурацию $CONFIG_REPO@$CONFIG_REF..."
-gh api \
-  -H "Accept: application/vnd.github.raw" \
-  "repos/$CONFIG_REPO/contents/install.sh?ref=$CONFIG_REF" | \
-  OPENCODE_CONFIG_REPO="$CONFIG_REPO" OPENCODE_CONFIG_REF="$CONFIG_REF" bash
+write_state() {
+  mkdir -p "$STATE_DIR"
+  local temporary
+  temporary="$(mktemp "$STATE_DIR/openchamber-install.state.XXXXXX")"
+  printf 'config_sha=%s\nopenchamber_sha=%s\n' "$CONFIG_SHA" "$OPENCHAMBER_SHA" > "$temporary"
+  mv "$temporary" "$STATE_FILE"
+}
 
-if [[ -x "$HOME/.opencode/bin/opencode" ]] && ! command -v opencode >/dev/null 2>&1; then
-  export PATH="$HOME/.opencode/bin:$PATH"
-fi
-
-if ! command -v opencode >/dev/null 2>&1; then
-  echo "Ошибка: OpenCode не доступен после установки." >&2
-  exit 1
-fi
-
-echo "OpenCode: $(opencode --version)"
-
-# 2. Подхватываем уже установленный nvm до проверки Node.js.
-export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-  # shellcheck disable=SC1090
-  . "$NVM_DIR/nvm.sh"
-fi
-
-node_major=0
-if command -v node >/dev/null 2>&1; then
-  node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-fi
-
-if (( node_major < NODE_MAJOR )); then
-  echo "Node.js ${NODE_MAJOR}+ не найден. Устанавливаю nvm $NVM_VERSION и Node.js $NODE_MAJOR..."
-
-  if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
-    curl -fsSL \
-      "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | \
-      PROFILE=/dev/null bash
+install_config_if_needed() {
+  local config_changed="$1"
+  if [[ "$config_changed" != 1 && ! -x "$HOME/.opencode/bin/opencode" && "$force_opencode_update" != 1 ]]; then
+    config_changed=1
+    force_opencode_update=1
   fi
+  if [[ "$config_changed" != 1 && "$force_opencode_update" != 1 ]]; then return; fi
 
-  # shellcheck disable=SC1090
-  . "$NVM_DIR/nvm.sh"
-  nvm install "$NODE_MAJOR"
-  nvm alias default "$NODE_MAJOR"
-  nvm use "$NODE_MAJOR"
+  local skip=1
+  [[ "$force_opencode_update" == 1 ]] && skip=0
+  echo "Синхронизирую OpenCode/configuration $CONFIG_REPO@$CONFIG_REF..."
+  gh api -H "Accept: application/vnd.github.raw" \
+    "repos/$CONFIG_REPO/contents/install.sh?ref=$CONFIG_REF" | \
+    OPENCODE_CONFIG_REPO="$CONFIG_REPO" \
+    OPENCODE_CONFIG_REF="$CONFIG_REF" \
+    OPENCODE_SKIP_BINARY_INSTALL="$skip" bash
+}
+
+CONFIG_SHA="$(ref_sha "$CONFIG_REPO" "$CONFIG_REF")"
+OPENCHAMBER_SHA="$(ref_sha "$OPENCHAMBER_REPO" "$OPENCHAMBER_REF")"
+PREVIOUS_CONFIG_SHA="$(state_value config_sha)"
+PREVIOUS_OPENCHAMBER_SHA="$(state_value openchamber_sha)"
+config_changed=0
+[[ "$CONFIG_SHA" != "$PREVIOUS_CONFIG_SHA" ]] && config_changed=1
+install_config_if_needed "$config_changed"
+
+if (( build_from_source == 1 )); then
+  echo "Запущен явный fallback: сборка OpenChamber из исходников."
+  gh api -H "Accept: application/vnd.github.raw" \
+    "repos/$CONFIG_REPO/contents/scripts/install-openchamber-from-source.sh?ref=$CONFIG_REF" | \
+    OPENCODE_CONFIG_REPO="$CONFIG_REPO" OPENCODE_CONFIG_REF="$CONFIG_REF" \
+    OPENCHAMBER_REPO="$OPENCHAMBER_REPO" OPENCHAMBER_REF="$OPENCHAMBER_REF" bash
+  mkdir -p "$STATE_DIR"
+  printf 'config_sha=%s\nopenchamber_sha=%s\n' "$CONFIG_SHA" "$OPENCHAMBER_SHA" > "$STATE_FILE"
+  exit 0
 fi
 
-if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-  echo "Ошибка: Node.js/npm недоступны после установки." >&2
-  exit 1
+if [[ "$OPENCHAMBER_SHA" == "$PREVIOUS_OPENCHAMBER_SHA" && -x "$CURRENT_LINK/bin/cli.js" ]]; then
+  write_state
+  if (( config_changed == 1 )); then restart_service; fi
+  echo "OpenChamber bundle already current: $OPENCHAMBER_SHA"
+  exit 0
 fi
 
-echo "Node.js: $(node --version)"
-echo "npm: $(npm --version)"
-
-# Если Node используется через nvm, создаём стабильные ссылки для текущей версии.
-if [[ -n "${NVM_BIN:-}" && -d /usr/local/bin && -w /usr/local/bin ]]; then
-  [[ -x "$NVM_BIN/node" ]] && ln -sfn "$NVM_BIN/node" /usr/local/bin/node
-  [[ -e "$NVM_BIN/npm" ]] && ln -sfn "$NVM_BIN/npm" /usr/local/bin/npm
-  [[ -e "$NVM_BIN/npx" ]] && ln -sfn "$NVM_BIN/npx" /usr/local/bin/npx
-  hash -r 2>/dev/null || true
-fi
-
-# 3. Bun нужен для воспроизводимой установки зависимостей и сборки monorepo.
-if ! command -v unzip >/dev/null 2>&1; then
-  install_system_package unzip
-fi
-
-export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
-if [[ -x "$BUN_INSTALL/bin/bun" ]]; then
-  export PATH="$BUN_INSTALL/bin:$PATH"
-fi
-
-if ! command -v bun >/dev/null 2>&1; then
-  echo "Bun не найден. Устанавливаю Bun..."
+ensure_node
+if [[ ! -x "${BUN_INSTALL:-$HOME/.bun}/bin/bun" ]]; then
   curl -fsSL https://bun.sh/install | bash
-  export PATH="$BUN_INSTALL/bin:$PATH"
 fi
-
-if ! command -v bun >/dev/null 2>&1; then
-  echo "Ошибка: Bun недоступен после установки." >&2
-  exit 1
-fi
-
-echo "Bun: $(bun --version)"
-
-# 4. Временная загрузка fork OpenChamber.
-# Основной путь — GitHub tarball через curl HTTP/1.1 с retry. Это устойчивее
-# большого git pack на соединениях, где встречаются GnuTLS recv/early EOF.
-if ! command -v tar >/dev/null 2>&1; then
-  install_system_package tar
-fi
-if ! command -v git >/dev/null 2>&1; then
-  install_system_package git
-fi
-
+BUN_BIN="${BUN_INSTALL:-$HOME/.bun}/bin/bun"
+[[ -x "$BUN_BIN" ]] || { echo "Ошибка: Bun недоступен после установки." >&2; exit 1; }
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
-SRC="$TMP_DIR/src"
-ARCHIVE="$TMP_DIR/openchamber.tar.gz"
-mkdir -p "$SRC"
+MANIFEST_NAME="openchamber-web-linux-x64-$OPENCHAMBER_SHA.json"
 
-GITHUB_TOKEN="$(gh auth token 2>/dev/null || true)"
-ARCHIVE_URL="https://api.github.com/repos/$OPENCHAMBER_REPO/tarball/$OPENCHAMBER_REF"
+if ! gh release download "$RELEASE_TAG" --repo "$OPENCHAMBER_REPO" \
+  --pattern "$MANIFEST_NAME" --dir "$TMP_DIR"; then
+  echo "Ошибка: release bundle для exact SHA $OPENCHAMBER_SHA ещё не опубликован." >&2
+  echo "Дождись завершения GitHub Actions или используй явный --build-from-source." >&2
+  exit 1
+fi
 
-echo "Скачиваю $OPENCHAMBER_REPO@$OPENCHAMBER_REF snapshot..."
-download_ok=0
-
-curl_args=(
-  --fail --location --http1.1
-  --retry 6 --retry-delay 3 --retry-max-time 300 --retry-all-errors
-  --connect-timeout 20
-  --speed-time 60 --speed-limit 1024
-  -H "Accept: application/vnd.github+json"
-  -H "X-GitHub-Api-Version: 2022-11-28"
+MANIFEST="$TMP_DIR/$MANIFEST_NAME"
+readarray -t bundle_info < <(MANIFEST="$MANIFEST" node - <<'NODE'
+const fs = require('node:fs');
+const value = JSON.parse(fs.readFileSync(process.env.MANIFEST, 'utf8'));
+if (value.schema_version !== 1 || value.platform !== 'linux-x64' ||
+    !/^[0-9a-f]{40}$/i.test(value.source_sha) ||
+    !/^openchamber-web-linux-x64-[0-9a-f]{40}\\.tar\\.gz$/.test(value.asset) ||
+    !/^[0-9a-f]{64}$/i.test(value.sha256)) process.exit(2);
+process.stdout.write(value.source_sha + '\\n' + value.asset + '\\n' + value.sha256 + '\\n');
+NODE
 )
-if [[ -n "$GITHUB_TOKEN" ]]; then
-  curl_args+=( -H "Authorization: Bearer $GITHUB_TOKEN" )
-fi
-
-if curl "${curl_args[@]}" "$ARCHIVE_URL" -o "$ARCHIVE"; then
-  if tar -tzf "$ARCHIVE" >/dev/null 2>&1; then
-    tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
-    download_ok=1
-  else
-    echo "Полученный tarball повреждён. Перехожу к fallback." >&2
-  fi
-fi
-
-# Fallback: минимальный partial clone, также через HTTP/1.1.
-if (( download_ok == 0 )); then
-  echo "Tarball не скачался. Fallback: partial git clone..." >&2
-  rm -rf "$SRC"
-
-  for attempt in 1 2 3; do
-    echo "Fallback попытка $attempt/3..."
-    rm -rf "$SRC"
-
-    if git \
-      -c http.version=HTTP/1.1 \
-      -c http.lowSpeedLimit=1024 \
-      -c http.lowSpeedTime=60 \
-      clone \
-      --depth=1 \
-      --filter=blob:none \
-      --no-tags \
-      --single-branch \
-      --branch "$OPENCHAMBER_REF" \
-      "https://github.com/$OPENCHAMBER_REPO.git" "$SRC"; then
-      download_ok=1
-      break
-    fi
-
-    sleep $((attempt * 3))
-  done
-fi
-
-if (( download_ok == 0 )); then
-  echo "Ошибка: не удалось скачать $OPENCHAMBER_REPO@$OPENCHAMBER_REF ни tarball, ни partial clone." >&2
+[[ "${#bundle_info[@]}" == 3 && "${bundle_info[0]}" == "$OPENCHAMBER_SHA" ]] || {
+  echo "Ошибка: release manifest некорректен или не соответствует requested SHA." >&2
   exit 1
+}
+ASSET="${bundle_info[1]}"
+EXPECTED_SHA256="${bundle_info[2]}"
+gh release download "$RELEASE_TAG" --repo "$OPENCHAMBER_REPO" --pattern "$ASSET" --dir "$TMP_DIR"
+printf '%s  %s\n' "$EXPECTED_SHA256" "$TMP_DIR/$ASSET" | sha256sum -c -
+
+mkdir -p "$VERSIONS_DIR"
+TARGET="$VERSIONS_DIR/$OPENCHAMBER_SHA"
+if [[ ! -d "$TARGET" ]]; then
+  UNPACK="$VERSIONS_DIR/.unpack-$OPENCHAMBER_SHA-$$"
+  mkdir -p "$UNPACK"
+  tar -xzf "$TMP_DIR/$ASSET" -C "$UNPACK"
+  [[ -f "$UNPACK/package/bin/cli.js" ]] || {
+    echo "Ошибка: bundle не содержит OpenChamber CLI." >&2
+    exit 1
+  }
+  mv "$UNPACK/package" "$TARGET"
+  rmdir "$UNPACK"
 fi
+ln -s "$TARGET" "$CURRENT_LINK.next"
+mv -Tf "$CURRENT_LINK.next" "$CURRENT_LINK"
 
-if [[ ! -f "$SRC/package.json" || ! -f "$SRC/packages/web/package.json" ]]; then
-  echo "Ошибка: структура репозитория OpenChamber не распознана." >&2
-  exit 1
-fi
-
-# 5. Сборка именно fork, а не публичного @openchamber/web из npm.
-echo "Устанавливаю зависимости OpenChamber..."
-(
-  cd "$SRC"
-  bun install --frozen-lockfile
-  echo "Собираю Web/CLI OpenChamber..."
-  bun run build:web
-)
-
-echo "Упаковываю OpenChamber..."
-PACKAGE_TGZ="$(
-  cd "$SRC/packages/web"
-  npm pack --silent --pack-destination "$TMP_DIR" | tail -n 1
-)"
-PACKAGE_PATH="$TMP_DIR/$PACKAGE_TGZ"
-
-if [[ ! -f "$PACKAGE_PATH" ]]; then
-  echo "Ошибка: npm pack не создал пакет OpenChamber." >&2
-  exit 1
-fi
-
-echo "Устанавливаю собранный OpenChamber глобально..."
-npm install -g "$PACKAGE_PATH"
-
-# Ищем реальный бинарник именно в текущем npm prefix, а не старый launcher
-# /usr/local/bin/openchamber от предыдущей установки.
-npm_prefix="$(npm prefix -g)"
-OPENCHAMBER_NPM_BIN="$npm_prefix/bin/openchamber"
-OPENCHAMBER_REAL=""
-if [[ -e "$OPENCHAMBER_NPM_BIN" || -L "$OPENCHAMBER_NPM_BIN" ]]; then
-  OPENCHAMBER_REAL="$(readlink -f "$OPENCHAMBER_NPM_BIN" 2>/dev/null || true)"
-fi
-
-if [[ -z "$OPENCHAMBER_REAL" || ! -x "$OPENCHAMBER_REAL" ]]; then
-  candidate="$(command -v openchamber || true)"
-  if [[ -n "$candidate" && "$candidate" != "/usr/local/bin/openchamber" ]]; then
-    OPENCHAMBER_REAL="$(readlink -f "$candidate" 2>/dev/null || printf '%s' "$candidate")"
-  fi
-fi
-
-if [[ -z "$OPENCHAMBER_REAL" || ! -x "$OPENCHAMBER_REAL" ]]; then
-  echo "Ошибка: реальный openchamber не найден после глобальной установки." >&2
-  exit 1
-fi
-
-# Managed launcher загружает тот же opencode.env, что используется обычным
-# OpenCode CLI. Для `startup enable` автоматически запрещаем snapshot общего
-# окружения: systemd получает общий env отдельным EnvironmentFile.
-OPENCHAMBER_BIN="$OPENCHAMBER_REAL"
 if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
-  OPENCHAMBER_LAUNCHER="/usr/local/bin/openchamber"
-  rm -f "$OPENCHAMBER_LAUNCHER"
-  cat > "$OPENCHAMBER_LAUNCHER" <<EOF
+  cat > /usr/local/bin/openchamber <<'LAUNCHER'
 #!/usr/bin/env bash
 # managed-by: my-opencode-openchamber
 set -a
-if [[ -f "\$HOME/.config/opencode.env" ]]; then
-  # shellcheck disable=SC1090
-  . "\$HOME/.config/opencode.env"
-fi
+[[ -f "$HOME/.config/opencode.env" ]] && . "$HOME/.config/opencode.env"
 set +a
-
-if [[ "\${1:-}" == "startup" && "\${2:-}" == "enable" ]]; then
-  has_no_env_snapshot=0
-  for arg in "\$@"; do
-    if [[ "\$arg" == "--no-env-snapshot" ]]; then
-      has_no_env_snapshot=1
-      break
-    fi
-  done
-  if (( has_no_env_snapshot == 0 )); then
-    exec "$OPENCHAMBER_REAL" "\$@" --no-env-snapshot
-  fi
+exec "${BUN_INSTALL:-$HOME/.bun}/bin/bun" "$HOME/.local/share/openchamber/current/bin/cli.js" "$@"
+LAUNCHER
+  chmod 755 /usr/local/bin/openchamber
+else
+  echo "Ошибка: /usr/local/bin недоступен для managed launcher." >&2
+  exit 1
 fi
 
-exec "$OPENCHAMBER_REAL" "\$@"
-EOF
-  chmod 755 "$OPENCHAMBER_LAUNCHER"
-  OPENCHAMBER_BIN="$OPENCHAMBER_LAUNCHER"
-fi
-
-# 6. OpenChamber systemd использует тот же общий env, что и CLI.
-# Сам OpenChamber по-прежнему может хранить в startup.env только собственные
-# параметры (UI password и т.п.), но не копию общего окружения.
-SYSTEMD_DROPIN_DIR="$HOME/.config/systemd/user/openchamber.service.d"
-SYSTEMD_DROPIN="$SYSTEMD_DROPIN_DIR/10-opencode-env.conf"
-mkdir -p "$SYSTEMD_DROPIN_DIR"
-cat > "$SYSTEMD_DROPIN" <<EOF
+mkdir -p "$HOME/.config/systemd/user/openchamber.service.d"
+cat > "$HOME/.config/systemd/user/openchamber.service.d/10-opencode-env.conf" <<EOF
 [Service]
 EnvironmentFile=-$HOME/.config/opencode.env
 Environment="OPENCODE_BINARY=$HOME/.opencode/bin/opencode"
 EOF
-chmod 600 "$SYSTEMD_DROPIN"
+chmod 600 "$HOME/.config/systemd/user/openchamber.service.d/10-opencode-env.conf"
 
-# Если startup.env был создан старой версией со snapshot окружения, удаляем из
-# него переменные, которые теперь принадлежат единому opencode.env, а также
-# старые LLM API key overrides.
-STARTUP_ENV="$HOME/.local/share/openchamber/startup.env"
-SHARED_ENV="$HOME/.config/opencode.env"
-if [[ -f "$STARTUP_ENV" ]]; then
-  CLEAN_STARTUP_ENV="$TMP_DIR/startup.env"
-  if [[ -f "$SHARED_ENV" ]]; then
-    awk -F= '
-      NR==FNR {
-        key=$1
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
-        if (key ~ /^[A-Za-z_][A-Za-z0-9_]*$/) shared[key]=1
-        next
-      }
-      {
-        key=$1
-        if (key == "OPENAI_API_KEY" || key == "OPENCODE_API_KEY") next
-        if (!(key in shared)) print
-      }
-    ' "$SHARED_ENV" "$STARTUP_ENV" > "$CLEAN_STARTUP_ENV"
-  else
-    grep -Ev '^(OPENAI_API_KEY|OPENCODE_API_KEY)=' "$STARTUP_ENV" > "$CLEAN_STARTUP_ENV" || true
-  fi
-  mv "$CLEAN_STARTUP_ENV" "$STARTUP_ENV"
-  chmod 600 "$STARTUP_ENV"
-fi
+write_state
+restart_service
 
-# Если автозагрузка уже включена, применяем drop-in к существующему сервису.
-if command -v systemctl >/dev/null 2>&1 && \
-   [[ -f "$HOME/.config/systemd/user/openchamber.service" ]]; then
-  systemctl --user daemon-reload || true
-  systemctl --user restart openchamber.service || true
-fi
-
-OPENCHAMBER_VERSION="$($OPENCHAMBER_BIN --version 2>/dev/null || true)"
-
-echo ""
 echo "Готово."
-echo "OpenCode: $(opencode --version)"
-echo "OpenChamber: ${OPENCHAMBER_VERSION:-установлен}"
-echo "Источник OpenChamber: $OPENCHAMBER_REPO@$OPENCHAMBER_REF"
-echo "CLI: $OPENCHAMBER_BIN"
-echo "Общий env: $HOME/.config/opencode.env"
-echo "Запуск: openchamber --ui-password '<password>'"
-echo "Автозагрузка: openchamber startup enable --host '<docker-bridge-ip>' --port 3000 --ui-password '<password>'"
+echo "OpenChamber: $OPENCHAMBER_SHA"
+echo "Runtime: $TARGET"
+echo "CLI: /usr/local/bin/openchamber"
