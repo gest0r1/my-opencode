@@ -44,6 +44,7 @@ permission:
     npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts inspect: allow
   edit:
     "*": deny
+    ".tmp/pipelines/**": allow
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
@@ -51,6 +52,7 @@ permission:
     .git/**: deny
   write:
     "*": deny
+    ".tmp/pipelines/**": allow
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
@@ -183,7 +185,13 @@ Do not use for:
 npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts inspect
 ```
 
-For planning or implementation Git mutations use only the explicitly allowlisted Git gate commands. A denied command is not a blocker: continue with the approved file tools or gate contract.
+For pipeline policy resolution use only the deterministic rules gate:
+
+```text
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts rules docs/pipeline-rules.md --json
+```
+
+Do not create project rules automatically and do not implement fallback logic in the model. For planning or implementation Git mutations use only the explicitly allowlisted Git gate commands. A denied arbitrary command is not a blocker: continue with the approved native file tools or gate contract.
 
 ---
 
@@ -348,7 +356,7 @@ If findings exist:
 2. route fixes to CoderAgent/BatchExecutor;
 3. rerun build sanity after code changes;
 4. rerun CodeReviewer only if fixes are substantial or security/architecture related;
-5. if the session-reuse pilot is active for this pipeline, apply the enforcement rules from the Session-Reuse Pilot section before reusing any session (identity, delta, metrics, fresh fallbacks).
+5. if session reuse is active for this pipeline, apply the enforcement rules from `/pipeline-run` before reusing any session (exact identity, delta, metrics, fresh fallbacks).
 
 ### Stage 13 — Tests + Integration Validation
 
@@ -405,7 +413,7 @@ Return concise summary:
 - Combine non-review planning where one stage can coordinate multiple artifacts.
 - Skip DocWriter when documentation is not impacted.
 - Prefer targeted tests first; full tests only when risk requires.
-- During the session-reuse pilot, reuse is limited to CoderAgent, TestEngineer, BuildAgent inside technical_fix loops; planning roles and all reviewers always start fresh.
+- Session reuse is limited to CoderAgent, TestEngineer, BuildAgent inside technical_fix loops; planning roles and all reviewers always start fresh.
 - Do not invoke OpenCoder or OpenAgent from this agent.
 
 ---
@@ -414,56 +422,22 @@ Return concise summary:
 
 Session reuse is active by default for every pipeline run. The caller can
 disable it with `--no-session-reuse`, which forces all delegations to start
-fresh sessions. The orchestrator checks `$ARGUMENTS` for `--no-session-reuse`;
-if present, skip `pipeline_runtime_prepare` calls entirely and always use fresh
-sessions. This section must stay in sync with pipeline-run.md.
-
-### Eligibility
+fresh sessions. The detailed routing/enforcement contract is canonical in
+`/pipeline-run`; do not redefine or weaken it here.
 
 Reuse is allowed only for `CoderAgent`, `TestEngineer`, `BuildAgent` during
 `technical_fix` loops. Planning roles and ALL reviewer roles always start
-fresh: `StoryMapper`, `SeniorStoryReviewer`, `ArchitectureAnalyzer`,
-`ContractManager`, `PrioritizationEngine`, `SeniorTechnicalPlanReviewer`,
-`TaskManager`, `CodeReviewer`, `OpenDevopsSpecialist`, `DocWriter`.
-Reuse identity is `{run_id, pipeline_id, stage, role}` and must match
-exactly; cross-pipeline reuse is forbidden.
+fresh. Reuse identity is the exact logical identity defined by `/pipeline-run`:
 
-### Deterministic delta (mandatory before any reuse)
+```text
+{run_id, pipeline_id, stage, role, work_item_id}
+```
 
-Before reusing a session, assemble and pass a deterministic delta packet, and
-require the agent to re-read from evidence, never from conversation memory:
-
-- evidence path (prior review/fix report);
-- changed-file list/diff since the prior session;
-- current manifest/state revision;
-- required re-read paths.
-
-If any part of the delta is missing or stale, start a fresh session instead.
-
-### Sidecar metrics
-
-Each reuse appends one entry to an append-only sidecar JSON under
-`<project-root>/.tmp/pipelines/{run_id}/reuse-metrics/`, resolved against the
-selected pipeline project's root. Record fields: timestamp, identity,
-decision, fallback reason, packet bytes, latency. Never overwrite an existing
-record — each reuse appends a new entry. Record only packet bytes and latency
-proxies. Never claim token measurements OpenCode does not expose.
-
-### Mandatory stop conditions for pilot reuse
-
-Refuse reuse and start a fresh session on:
-
-- session compaction;
-- cancellation or error;
-- handle mismatch;
-- stale evidence/diff;
-- missing delta.
-
-These conditions never stop the pipeline by themselves.
-
-Scope, security, replan, secret, or destructive conditions additionally stop
-the pipeline and ask the user per the Mandatory Stop Conditions section below
-(reuse is refused there too).
+Cross-run, cross-pipeline, cross-stage, cross-role or cross-work-item reuse is
+forbidden. Before any reuse, call the runtime router exactly as specified by
+`/pipeline-run`. If deterministic reuse validation fails, start a fresh
+session; scope/security/replan/secret/destructive conditions additionally stop
+the pipeline according to the command contract.
 
 ---
 
@@ -478,4 +452,4 @@ Stop and ask the user when:
 - CodeReviewer finds blocking issues requiring implementation changes;
 - tests fail;
 - any destructive cleanup is requested;
-- a session-reuse pilot block condition fires — scope/security/replan/secret/destructive (see Session-Reuse Pilot section); the pipeline stops and reuse is refused. Other pilot fallback conditions (compaction, cancellation/error, handle mismatch, stale evidence/diff, missing delta) only refuse reuse and start a fresh session without stopping the pipeline.
+- a session-reuse block condition fires — scope/security/replan/secret/destructive. Other runtime reuse fallback conditions only refuse reuse and start a fresh session without stopping the pipeline.
