@@ -91,12 +91,24 @@ async function verify(setup: GitSetup, cwd: string): Promise<void> {
 
 async function main(): Promise<void> {
   const [command, manifestPath] = process.argv.slice(2);
+  const cwd = await rootDir();
+
+  if (command === 'inspect' && !manifestPath) {
+    const head = await git(['rev-parse', 'HEAD'], cwd);
+    const branch = await git(['branch', '--show-current'], cwd);
+    const dirty = Boolean(await git(['status', '--porcelain'], cwd));
+    const branches = (await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads'], cwd))
+      .split('\n')
+      .filter(Boolean);
+    console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, head, branch, clean: !dirty, branches }));
+    return;
+  }
+
   if ((command !== 'capability' && command !== 'setup' && command !== 'verify') || !manifestPath) {
-    throw new GateError('usage: git-worktree-cli.ts capability|setup|verify <manifest.json>');
+    throw new GateError('usage: git-worktree-cli.ts inspect | capability|setup|verify <manifest.json>');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
   assertSetup(manifest.git_setup);
-  const cwd = await rootDir();
   if (command === 'capability') await assertCleanAndBase(manifest.git_setup, cwd);
   if (command === 'setup') await setupWorktree(manifest.git_setup, cwd);
   if (command === 'verify') await verify(manifest.git_setup, cwd);
