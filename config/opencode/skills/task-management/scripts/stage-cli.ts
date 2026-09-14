@@ -8,7 +8,6 @@ import type {
   PipelineManifestPipeline,
   PipelineRuntime,
   PipelineState,
-  PipelineStatus,
   RulesSource,
   StageEvidence,
   StageRuntime,
@@ -52,6 +51,11 @@ export interface StageCommandOptions {
   pipelineId?: string;
   message?: string;
   evidencePath?: string;
+}
+
+export interface RunnableStage {
+  pipeline_id: string;
+  stage: string;
 }
 
 function now(): string {
@@ -151,12 +155,10 @@ export async function resolveEffectiveRules(
   );
 }
 
-function safeRepoPath(path: unknown): path is string {
-  if (typeof path !== 'string' || path.length === 0 || path.startsWith('/') || path.includes('\\')) {
-    return false;
-  }
-  const parts = path.split('/');
-  return !parts.includes('..') && !parts.includes('.git') && !path.includes('\0');
+function safeRepoPath(value: unknown): value is string {
+  if (typeof value !== 'string' || !value || value.startsWith('/') || value.includes('\\')) return false;
+  const parts = value.split('/');
+  return !parts.includes('..') && !parts.includes('.git') && !value.includes('\0');
 }
 
 function assertStringArray(value: unknown, field: string): asserts value is string[] {
@@ -173,7 +175,15 @@ function assertOptionalPathArray(value: unknown, field: string): void {
   }
 }
 
-function assertGitSetup(value: PipelineManifest['git_setup']): void {
+function pathMatchesScope(path: string, scope: string): boolean {
+  if (scope.endsWith('/**')) {
+    const prefix = scope.slice(0, -3).replace(/\/$/, '');
+    return path === prefix || path.startsWith(`${prefix}/`);
+  }
+  return path === scope;
+}
+
+function assertGitSetup(value: PipelineManifest['git_setup'], allowedChangePaths?: string[]): void {
   if (!value) return;
   const sha = /^[0-9a-f]{40}$/i;
   const safeBranch = /^(?!main$|master$)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
@@ -192,6 +202,13 @@ function assertGitSetup(value: PipelineManifest['git_setup']): void {
   assertOptionalPathArray(value.must_absent, 'git_setup.must_absent');
   if (value.source_sha && (!value.checkout_paths || value.checkout_paths.length === 0)) {
     throw new StageCliError('git_setup.source_sha requires checkout_paths');
+  }
+  if (value.checkout_paths?.length && allowedChangePaths?.length) {
+    for (const checkoutPath of value.checkout_paths) {
+      if (!allowedChangePaths.some((scope) => pathMatchesScope(checkoutPath, scope))) {
+        throw new StageCliError(`git_setup.checkout_paths[] is outside allowed_change_paths: ${checkoutPath}`);
+      }
+    }
   }
 }
 
@@ -250,9 +267,15 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
     );
   }
 
-  assertGitSetup(manifest.git_setup);
+  assertOptionalPathArray(manifest.allowed_change_paths, 'allowed_change_paths');
+  assertGitSetup(manifest.git_setup, manifest.allowed_change_paths);
   assertGateProfiles(manifest.gate_profiles);
-  if (manifest.open_decisions !== undefined) assertStringArray(manifest.open_decisions, 'open_decisions');
+  if (manifest.open_decisions !== undefined) {
+    assertStringArray(manifest.open_decisions, 'open_decisions');
+    if (manifest.planning_mode === 'design-freeze' && manifest.open_decisions.length > 0) {
+      throw new StageCliError('design-freeze manifest has unresolved open_decisions');
+    }
+  }
 
   const ids = new Set<string>();
   for (const pipeline of manifest.pipelines) {
@@ -273,12 +296,6 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
       throw new StageCliError(`Duplicate stage in pipeline: ${pipeline.id}`);
     }
     if (pipeline.depends_on !== undefined) assertStringArray(pipeline.depends_on, `${pipeline.id}.depends_on`);
-    if (pipeline.conflict_group !== undefined && typeof pipeline.conflict_group !== 'string') {
-      throw new StageCliError(`${pipeline.id}.conflict_group must be a string`);
-    }
-    assertOptionalPathArray(pipeline.exclusive_paths, `${pipeline.id}.exclusive_paths`);
-    assertOptionalPathArray(pipeline.migration_paths, `${pipeline.id}.migration_paths`);
-    assertOptionalPathArray(pipeline.fixture_paths, `${pipeline.id}.fixture_paths`);
     if (pipeline.runtime_locks !== undefined) assertStringArray(pipeline.runtime_locks, `${pipeline.id}.runtime_locks`);
   }
   assertDependencyGraph(manifest.pipelines);
@@ -330,11 +347,6 @@ function createPipelineRuntime(pipeline: PipelineManifestPipeline): PipelineRunt
     stages: stageRuntime,
     stage_order: [...pipeline.stages],
     depends_on: [...(pipeline.depends_on ?? [])],
-    ...(pipeline.conflict_group ? { conflict_group: pipeline.conflict_group } : {}),
-    exclusive_paths: [...(pipeline.exclusive_paths ?? [])],
-    runtime_locks: [...(pipeline.runtime_locks ?? [])],
-    migration_paths: [...(pipeline.migration_paths ?? [])],
-    fixture_paths: [...(pipeline.fixture_paths ?? [])],
   };
 }
 
@@ -352,13 +364,6 @@ function assertStateMatchesManifest(state: PipelineState, manifest: PipelineMani
     if (!runtime) throw new StageCliError(`Missing runtime pipeline: ${spec.id}`);
     if (!sameStrings(runtime.stage_order, spec.stages)) throw new StageCliError(`Stage order changed: ${spec.id}`);
     if (!sameStrings(runtime.depends_on, spec.depends_on)) throw new StageCliError(`Dependencies changed: ${spec.id}`);
-    if ((runtime.conflict_group ?? '') !== (spec.conflict_group ?? '')) {
-      throw new StageCliError(`Conflict group changed: ${spec.id}`);
-    }
-    if (!sameStrings(runtime.exclusive_paths, spec.exclusive_paths)) throw new StageCliError(`exclusive_paths changed: ${spec.id}`);
-    if (!sameStrings(runtime.runtime_locks, spec.runtime_locks)) throw new StageCliError(`runtime_locks changed: ${spec.id}`);
-    if (!sameStrings(runtime.migration_paths, spec.migration_paths)) throw new StageCliError(`migration_paths changed: ${spec.id}`);
-    if (!sameStrings(runtime.fixture_paths, spec.fixture_paths)) throw new StageCliError(`fixture_paths changed: ${spec.id}`);
   }
 }
 
@@ -389,6 +394,7 @@ export async function initFromManifest(
     status: 'planned',
     created_at: timestamp,
     updated_at: timestamp,
+    active_stages: [],
     pipelines: Object.fromEntries(
       manifest.pipelines.map((pipeline) => [pipeline.id, createPipelineRuntime(pipeline)]),
     ),
@@ -450,66 +456,71 @@ function getPipeline(state: PipelineState, pipelineId?: string): PipelineRuntime
   return pipelines[0] as PipelineRuntime;
 }
 
-function patternPrefix(value: string): string | undefined {
-  return value.endsWith('/**') ? value.slice(0, -3).replace(/\/$/, '') : undefined;
+function dependenciesComplete(state: PipelineState, pipeline: PipelineRuntime): boolean {
+  return (pipeline.depends_on ?? []).every((id) => state.pipelines[id]?.status === 'completed');
 }
 
-function pathsConflict(left: string, right: string): boolean {
-  if (left === right) return true;
-  const lp = patternPrefix(left);
-  const rp = patternPrefix(right);
-  if (lp && (right === lp || right.startsWith(`${lp}/`))) return true;
-  if (rp && (left === rp || left.startsWith(`${rp}/`))) return true;
-  return Boolean(lp && rp && (lp.startsWith(`${rp}/`) || rp.startsWith(`${lp}/`)));
+function firstPendingStage(pipeline: PipelineRuntime): string | undefined {
+  if (Object.values(pipeline.stages).some((stage) => stage.status === 'in_progress')) return undefined;
+  for (let index = 0; index < pipeline.stage_order.length; index += 1) {
+    const stage = pipeline.stage_order[index] as string;
+    const runtime = pipeline.stages[stage];
+    if (!runtime) return undefined;
+    if (runtime.status === 'pending') {
+      const prior = pipeline.stage_order.slice(0, index).map((name) => pipeline.stages[name]?.status);
+      return prior.every((status) => status === 'completed' || status === 'skipped') ? stage : undefined;
+    }
+    if (runtime.status === 'blocked' || runtime.status === 'failed') return undefined;
+  }
+  return undefined;
 }
 
-function arraysConflict(left: string[] | undefined, right: string[] | undefined): boolean {
-  return (left ?? []).some((a) => (right ?? []).some((b) => pathsConflict(a, b)));
+export function computeRunnable(state: PipelineState): RunnableStage[] {
+  const runnable: RunnableStage[] = [];
+  for (const pipeline of Object.values(state.pipelines)) {
+    if (pipeline.status !== 'approved' && pipeline.status !== 'in_progress') continue;
+    if (!dependenciesComplete(state, pipeline)) continue;
+    const stage = firstPendingStage(pipeline);
+    if (stage) runnable.push({ pipeline_id: pipeline.id, stage });
+  }
+  return runnable;
 }
 
-function locksConflict(left: string[] | undefined, right: string[] | undefined): boolean {
-  const rightSet = new Set(right ?? []);
-  return (left ?? []).some((item) => rightSet.has(item));
-}
-
-function assertPipelineCanRun(state: PipelineState, pipeline: PipelineRuntime): void {
-  for (const dependency of pipeline.depends_on ?? []) {
-    const dep = state.pipelines[dependency];
-    if (!dep || dep.status !== 'completed') {
-      throw new StageCliError(`Pipeline dependency is not completed: ${pipeline.id} -> ${dependency}`);
+function refreshActiveStages(state: PipelineState): void {
+  const active: string[] = [];
+  for (const pipeline of Object.values(state.pipelines)) {
+    for (const stage of pipeline.stage_order) {
+      if (pipeline.stages[stage]?.status === 'in_progress') active.push(`${pipeline.id}/${stage}`);
     }
   }
-
-  for (const other of Object.values(state.pipelines)) {
-    if (other.id === pipeline.id || other.status !== 'in_progress') continue;
-    if (pipeline.conflict_group && other.conflict_group === pipeline.conflict_group) {
-      throw new StageCliError(`Pipeline conflict_group is active: ${pipeline.conflict_group}`);
-    }
-    if (arraysConflict(pipeline.exclusive_paths, other.exclusive_paths)) {
-      throw new StageCliError(`Pipeline exclusive_paths conflict: ${pipeline.id} <-> ${other.id}`);
-    }
-    if (arraysConflict(pipeline.migration_paths, other.migration_paths)) {
-      throw new StageCliError(`Pipeline migration_paths conflict: ${pipeline.id} <-> ${other.id}`);
-    }
-    if (arraysConflict(pipeline.fixture_paths, other.fixture_paths)) {
-      throw new StageCliError(`Pipeline fixture_paths conflict: ${pipeline.id} <-> ${other.id}`);
-    }
-    if (locksConflict(pipeline.runtime_locks, other.runtime_locks)) {
-      throw new StageCliError(`Pipeline runtime_lock conflict: ${pipeline.id} <-> ${other.id}`);
-    }
-  }
+  state.active_stages = active;
+  state.current_stage = active.length === 1 ? active[0] : undefined;
 }
 
 function recalculateRunStatus(state: PipelineState): void {
-  const statuses = Object.values(state.pipelines).map((pipeline) => pipeline.status);
-  if (statuses.some((status) => status === 'failed')) state.status = 'failed';
-  else if (statuses.some((status) => status === 'blocked')) state.status = 'blocked';
-  else if (statuses.length > 0 && statuses.every((status) => status === 'completed')) state.status = 'completed';
-  else if (statuses.some((status) => status === 'in_progress')) state.status = 'in_progress';
-  else if (statuses.some((status) => status === 'approved')) state.status = 'approved';
-  else if (statuses.some((status) => status === 'release_ready')) state.status = 'release_ready';
-  else if (statuses.some((status) => status === 'ready')) state.status = 'ready';
-  else state.status = 'planned';
+  refreshActiveStages(state);
+  const pipelines = Object.values(state.pipelines);
+  if (pipelines.length > 0 && pipelines.every((pipeline) => pipeline.status === 'completed')) {
+    state.status = 'completed';
+    return;
+  }
+  if (pipelines.some((pipeline) => pipeline.status === 'in_progress')) {
+    state.status = 'in_progress';
+    return;
+  }
+  if (computeRunnable(state).length > 0) {
+    state.status = 'approved';
+    return;
+  }
+  if (pipelines.some((pipeline) => pipeline.status === 'failed')) {
+    state.status = 'failed';
+    return;
+  }
+  if (pipelines.some((pipeline) => pipeline.status === 'blocked')) {
+    state.status = 'blocked';
+    return;
+  }
+  state.status = pipelines.some((pipeline) => pipeline.status === 'approved') ? 'approved' : 'planned';
 }
 
 function addHistory(
@@ -537,6 +548,7 @@ async function updateState(
   try {
     const state = await validateState(stateRoot, runId);
     updater(state);
+    recalculateRunStatus(state);
     state.updated_at = now();
     await writeJsonAtomic(statePath(stateRoot, runId), state);
     return state;
@@ -548,12 +560,19 @@ async function updateState(
 export async function approvePipeline(stateRoot: string, runId: string): Promise<PipelineState> {
   return updateState(stateRoot, runId, (state) => {
     if (state.status !== 'planned') throw new StageCliError(`Cannot approve run while it is ${state.status}`);
-    state.status = 'approved';
     for (const pipeline of Object.values(state.pipelines)) {
       if (pipeline.status !== 'planned') throw new StageCliError(`Pipeline is not planned: ${pipeline.id}`);
       pipeline.status = 'approved';
     }
   });
+}
+
+function assertPipelineDependencies(state: PipelineState, pipeline: PipelineRuntime): void {
+  for (const dependency of pipeline.depends_on ?? []) {
+    if (state.pipelines[dependency]?.status !== 'completed') {
+      throw new StageCliError(`Pipeline dependency is not completed: ${pipeline.id} -> ${dependency}`);
+    }
+  }
 }
 
 export async function startStage(
@@ -567,27 +586,19 @@ export async function startStage(
     const runtime = pipeline.stages[stage];
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     if (runtime.status !== 'pending') throw new StageCliError(`Stage is not pending: ${pipeline.id}/${stage}`);
-    if (state.status !== 'approved' && state.status !== 'in_progress') {
-      throw new StageCliError(`Cannot start stage while run is ${state.status}`);
-    }
     if (pipeline.status !== 'approved' && pipeline.status !== 'in_progress') {
       throw new StageCliError(`Cannot start stage while pipeline is ${pipeline.status}: ${pipeline.id}`);
     }
+    assertPipelineDependencies(state, pipeline);
 
-    const index = pipeline.stage_order.indexOf(stage);
-    const previousStage = index > 0 ? pipeline.stages[pipeline.stage_order[index - 1] as string] : undefined;
-    if (previousStage && previousStage.status !== 'completed' && previousStage.status !== 'skipped') {
-      throw new StageCliError(`Previous stage is not complete: ${pipeline.stage_order[index - 1]}`);
-    }
-    assertPipelineCanRun(state, pipeline);
+    const expected = firstPendingStage(pipeline);
+    if (expected !== stage) throw new StageCliError(`Stage is not next for ${pipeline.id}: expected=${expected ?? 'none'}`);
 
     pipeline.status = 'in_progress';
     runtime.status = 'in_progress';
     runtime.started_at = now();
     pipeline.current_stage = stage;
-    state.current_stage = `${pipeline.id}/${stage}`;
     addHistory(state, pipeline.id, stage, 'in_progress');
-    recalculateRunStatus(state);
   });
 }
 
@@ -629,7 +640,6 @@ export async function completeStage(
     });
     pipeline.status = allCompleted ? 'completed' : 'in_progress';
     if (allCompleted) pipeline.current_stage = undefined;
-    recalculateRunStatus(state);
   });
 }
 
@@ -651,7 +661,7 @@ export async function setStageFailure(
     runtime.evidence = buildEvidence(stage, status, options);
     addHistory(state, pipeline.id, stage, status, options.message);
     pipeline.status = status;
-    recalculateRunStatus(state);
+    pipeline.current_stage = undefined;
   });
 }
 
@@ -670,16 +680,14 @@ export async function resumeStage(
     if (pipeline.status !== 'failed' && pipeline.status !== 'blocked') {
       throw new StageCliError(`Pipeline is not resumable: ${pipeline.id}`);
     }
-    assertPipelineCanRun(state, pipeline);
+    assertPipelineDependencies(state, pipeline);
     runtime.status = 'in_progress';
     runtime.started_at = now();
     runtime.completed_at = undefined;
     runtime.evidence = undefined;
     pipeline.status = 'in_progress';
     pipeline.current_stage = stage;
-    state.current_stage = `${pipeline.id}/${stage}`;
     addHistory(state, pipeline.id, stage, 'in_progress', 'resumed');
-    recalculateRunStatus(state);
   });
 }
 
@@ -706,6 +714,7 @@ function printState(state: PipelineState, asJson: boolean): void {
   }
   console.log(`Pipeline run: ${state.run_id}`);
   console.log(`Status: ${state.status}`);
+  if (state.active_stages?.length) console.log(`Active: ${state.active_stages.join(', ')}`);
   for (const pipeline of Object.values(state.pipelines)) {
     console.log(`\n${pipeline.id}: ${pipeline.status}`);
     for (const stage of pipeline.stage_order) {
@@ -714,6 +723,13 @@ function printState(state: PipelineState, asJson: boolean): void {
       console.log(`  ${marker} ${stage}: ${status}`);
     }
   }
+}
+
+function printRunnable(state: PipelineState, asJson: boolean): void {
+  const runnable = computeRunnable(state);
+  if (asJson) console.log(JSON.stringify({ run_id: state.run_id, status: state.status, runnable }, null, 2));
+  else if (runnable.length === 0) console.log('No runnable stages');
+  else for (const item of runnable) console.log(`${item.pipeline_id}/${item.stage}`);
 }
 
 function printRules(rules: ResolvedRules, asJson: boolean): void {
@@ -741,6 +757,7 @@ function usage(): string {
     '  stage-cli approve <run-id> [--state-root <path>]',
     '  stage-cli status <run-id> [--json] [--state-root <path>]',
     '  stage-cli validate <run-id> [--json] [--state-root <path>]',
+    '  stage-cli next <run-id> [--json] [--state-root <path>]',
     '  stage-cli start <run-id> <stage> [--pipeline <id>]',
     '  stage-cli complete <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
     '  stage-cli fail|block <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
@@ -774,6 +791,10 @@ export async function runCli(args: string[]): Promise<void> {
     const state = await validateState(options.stateRoot, runId);
     if (options.json) console.log(JSON.stringify(state, null, 2));
     else console.log(`Valid: ${runId} status=${state.status}`);
+    return;
+  }
+  if (command === 'next') {
+    printRunnable(await validateState(options.stateRoot, runId), options.json);
     return;
   }
   if (command === 'approve') {
