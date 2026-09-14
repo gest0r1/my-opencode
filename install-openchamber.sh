@@ -83,6 +83,14 @@ restart_service() {
   fi
 }
 
+write_state() {
+  mkdir -p "$STATE_DIR"
+  local temporary
+  temporary="$(mktemp "$STATE_DIR/openchamber-install.state.XXXXXX")"
+  printf 'config_sha=%s\nopenchamber_sha=%s\n' "$CONFIG_SHA" "$OPENCHAMBER_SHA" > "$temporary"
+  mv "$temporary" "$STATE_FILE"
+}
+
 install_config_if_needed() {
   local config_changed="$1"
   if [[ "$config_changed" != 1 && ! -x "$HOME/.opencode/bin/opencode" && "$force_opencode_update" != 1 ]]; then
@@ -121,6 +129,7 @@ if (( build_from_source == 1 )); then
 fi
 
 if [[ "$OPENCHAMBER_SHA" == "$PREVIOUS_OPENCHAMBER_SHA" && -x "$CURRENT_LINK/bin/cli.js" ]]; then
+  write_state
   if (( config_changed == 1 )); then restart_service; fi
   echo "OpenChamber bundle already current: $OPENCHAMBER_SHA"
   exit 0
@@ -197,10 +206,7 @@ Environment="OPENCODE_BINARY=$HOME/.opencode/bin/opencode"
 EOF
 chmod 600 "$HOME/.config/systemd/user/openchamber.service.d/10-opencode-env.conf"
 
-mkdir -p "$STATE_DIR"
-STATE_TMP="$TMP_DIR/state"
-printf 'config_sha=%s\nopenchamber_sha=%s\n' "$CONFIG_SHA" "$OPENCHAMBER_SHA" > "$STATE_TMP"
-mv "$STATE_TMP" "$STATE_FILE"
+write_state
 restart_service
 
 echo "Готово."
