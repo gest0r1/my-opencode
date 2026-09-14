@@ -37,16 +37,21 @@ canonical fallback определяет только deterministic `stage-cli ru
 3. Через ContextScout собери project context. Для risk-trigger (`new library`,
    внешний API, auth/payment/tenant, security, migration, queue/cache,
    deploy/runtime) получи official version-specific evidence через ExternalScout
-   и максимум 2–3 зрелых public code patterns через CoderAgent/CodeReviewer.
+   и максимум 2–3 зрелых public code patterns через read-only CodeReviewer.
+   CoderAgent во время PLAN не вызывай.
 4. Выполни StoryMapper/SeniorStoryReviewer, ArchitectureAnalyzer,
-   ContractManager, PrioritizationEngine и SeniorTechnicalPlanReviewer.
+   ContractManager, PrioritizationEngine и SeniorTechnicalPlanReviewer. Всем
+   planning agents передавай run-scoped artifact root:
+   `.tmp/pipelines/{run-id}/planning/`; не допускай глобальных output paths,
+   которые могут столкнуться с другим run.
 5. Собери все функциональные развилки в один owner decision packet. Не выбирай
    отсутствующее пользовательское решение сам.
-6. Создай planning artifacts:
+6. Создай planning artifacts в `.tmp/pipelines/{run-id}/`:
    `decision-register.md`, `technology-evidence.md`, `contract-inventory.md`,
    `test-strategy.md`, `accepted-risks.md`.
 7. Построй dependency graph; определи pipelines, `exclusive_paths`,
-   `conflict_group`, migrations, fixtures, deployment locks и gate profiles.
+   `conflict_group`, `migration_paths`, `fixture_paths`, `runtime_locks` и gate profiles.
+   Эти поля входят в manifest и затем детерминированно enforce'ятся `stage-cli`.
 8. TaskManager создаёт задачи только после readiness `ready`; каждая задача
    содержит binary acceptance criteria, tests и ссылки на decision/contract/research.
 9. Для branch/source checkout добавь в manifest `git_setup`: exact `base_sha`,
@@ -56,25 +61,43 @@ canonical fallback определяет только deterministic `stage-cli ru
     per-pipeline `decision_ids`, `research_ids`, `contract_ids`. В `rules_file`
     укажи project preference `docs/pipeline-rules.md`, а `rules_version` возьми
     из результата canonical rules gate. `stage-cli init` сам фиксирует фактически
-    выбранные rules source/path/version/SHA. Fallback на task.json запрещён.
-11. Проверь manifest. Если есть `open_decision`, rules gate не PASS или другой
-    blocker, не инициализируй state и верни `needs_revision`/`blocked` по причине.
-12. Покажи один decision packet и manifest владельцу. После явного approval
-    вызови `stage-cli init`; `/pipeline-run` автоматически не запускай.
+    выбранные rules source/path/version/SHA и SHA самого manifest.
+11. Gate profile не должен содержать псевдокоманды. Для command gates
+    (`build`, `tests`, `release_validation`) каждый элемент — одна реально
+    исполнимая команда, совместимая с deterministic `gate-runner-cli`; command
+    chaining/redirection запрещены. Для agent gates (`review`, `docs`) элементы —
+    только зарегистрированные canonical agent IDs. Narrative requirements храни
+    в test-strategy/contract inventory, а не как строки команд.
+12. Проверь manifest. `stage-cli init` обязан отклонить dependency cycles,
+    неизвестные dependencies и небезопасные path scopes. Если есть
+    `open_decision`, rules gate не PASS или другой blocker, state не создавай и
+    верни `needs_revision`/`blocked` по причине.
+13. Покажи один decision packet и manifest владельцу. После явного approval
+    выполни строго последовательность:
+
+```text
+stage-cli init <manifest>
+stage-cli approve <run-id>
+stage-cli validate <run-id> --json
+```
+
+    Только `status=approved` после validate означает готовность к `/pipeline-run`.
+    `/pipeline-run` автоматически не запускай.
 
 ## Direct write scope PLAN
 
 Основной OpenStageOrchestrator во время PLAN может напрямую создавать/менять
-только `.tmp/pipelines/{run-id}/**`. Project source, `docs/pipeline-rules.md`,
-`.tmp/tasks/**`, произвольные docs и Git history напрямую не изменяются.
-Специализированные planning agents работают только в рамках собственных
-разрешений и утверждённого planning flow.
+только `.tmp/pipelines/{run-id}/**`, кроме CLI-owned `state.json`/lock-файлов.
+Project source, `docs/pipeline-rules.md`, `.tmp/tasks/**`, произвольные docs и
+Git history напрямую не изменяются. Специализированные planning agents работают
+только в рамках переданного run-scoped artifact root и собственных разрешений.
 
 ## Запрещено
 
 - создавать, копировать или изменять `docs/pipeline-rules.md`;
+- напрямую создавать/изменять `.tmp/pipelines/{run-id}/state.json` или lock;
 - изменять исходный код;
-- вызывать CoderAgent для реализации;
+- вызывать CoderAgent во время PLAN;
 - запускать tests реализации или Docker;
 - менять backlog без явного указания владельца;
 - обходить deterministic rules/Git/state gates решением LLM.
@@ -82,7 +105,7 @@ canonical fallback определяет только deterministic `stage-cli ru
 ## Результат
 
 Создай в `.tmp/pipelines/{run-id}/` manifest, dependency graph, conflicts,
-execution plan, пять planning artifacts и state после approval.
+execution plan, пять planning artifacts и approved state после owner approval.
 
 Верни run id, pipelines, зависимости, gate profiles, blockers, unresolved
 risks и команду `/pipeline-run {run-id} --unattended`.
