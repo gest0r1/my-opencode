@@ -40,6 +40,8 @@ permission:
     npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts capability *: allow
     npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts setup *: allow
     npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts verify *: allow
+    npx tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts inspect: allow
+    npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts inspect: allow
   edit:
     "*": deny
     "**/*.env*": deny
@@ -170,6 +172,18 @@ Do not use for:
 - simple bug fixes;
 - pure informational questions;
 - work where OpenCoder/OpenAgent direct execution is sufficient.
+
+---
+
+## Command Policy
+
+`bash` is deny-by-default. Never attempt arbitrary shell commands (`ls`, `git`, pipes, redirection, command chains, or shell probes) and do not retry a denied call. Read task, subtask, manifest, and source files through native Read/Glob/Grep tools. For repository state use only:
+
+```text
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts inspect
+```
+
+For planning or implementation Git mutations use only the explicitly allowlisted Git gate commands. A denied command is not a blocker: continue with the approved file tools or gate contract.
 
 ---
 
