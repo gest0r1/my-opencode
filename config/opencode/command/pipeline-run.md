@@ -41,7 +41,20 @@ Session reuse включён по умолчанию. `--no-session-reuse` пр�
 2. Проверь approval manifest, dependencies, paths, conflict groups и locks.
 3. Для `planning_mode: design-freeze` проверь `planning_readiness`, ссылки на
    decision/research/contract artifacts и отсутствие open decisions.
-4. Выполни doc-gate по `pipeline-rules.md`.
+4. Выполни doc-gate по `pipeline-rules.md`. Fallback на `task.json` запрещён.
+5. Если manifest содержит `git_setup`, ДО запуска первой implementation stage вызови:
+
+```text
+npx tsx ~/.opencode/skills/task-management/scripts/git-worktree-cli.ts capability <manifest>
+npx tsx ~/.opencode/skills/task-management/scripts/git-worktree-cli.ts setup <manifest>
+```
+
+Только `PASS` продолжает молча. `BLOCKED` не создаёт CoderAgent-session, не
+пишет reuse metrics и не запускает batch. После setup передай CoderAgent только
+контракт `git_worktree_gate=PASS`; CoderAgent не выполняет Git-команды.
+`git_setup` обязателен для branch/source checkout и содержит approved
+`base_sha`, `branch`, optional `source_sha`, `checkout_paths` и `must_absent`.
+Свободные Git-команды запрещены.
 
 Любая ошибка preflight → `blocked`; реализацию не запускай.
 
