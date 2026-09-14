@@ -25,6 +25,12 @@ permission:
     npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*: allow
     corepack pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*: allow
     pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*: allow
+    npx tsx ~/.opencode/skills/task-management/scripts/git-worktree-cli.ts capability *: allow
+    npx tsx ~/.opencode/skills/task-management/scripts/git-worktree-cli.ts setup *: allow
+    npx tsx ~/.opencode/skills/task-management/scripts/git-worktree-cli.ts verify *: allow
+    npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts capability *: allow
+    npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts setup *: allow
+    npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts verify *: allow
   edit:
     "*": deny
     "**/*.env*": deny
