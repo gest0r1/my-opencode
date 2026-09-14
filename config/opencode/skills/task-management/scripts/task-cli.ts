@@ -304,32 +304,13 @@ function cmdValidate(feature?: string): void {
   const validSubtaskStatuses = new Set(['pending', 'in_progress', 'completed', 'blocked']);
 
   const requiredTaskFields = [
-    'id',
-    'name',
-    'status',
-    'objective',
-    'context_files',
-    'exit_criteria',
-    'subtask_count',
-    'completed_count',
-    'created_at',
-    'completed_at',
+    'id', 'name', 'status', 'objective', 'context_files', 'exit_criteria',
+    'subtask_count', 'completed_count', 'created_at',
   ];
 
   const requiredSubtaskFields = [
-    'id',
-    'seq',
-    'title',
-    'status',
-    'depends_on',
-    'parallel',
-    'context_files',
-    'acceptance_criteria',
-    'deliverables',
-    'agent_id',
-    'started_at',
-    'completed_at',
-    'completion_summary',
+    'id', 'seq', 'title', 'status', 'depends_on', 'parallel', 'context_files',
+    'acceptance_criteria', 'deliverables',
   ];
 
   const hasField = (obj: any, field: string): boolean => Object.prototype.hasOwnProperty.call(obj, field);
@@ -366,6 +347,11 @@ function cmdValidate(feature?: string): void {
       // Task ID should match feature slug
       if (task.id !== f) {
         errors.push(`task.json id ('${task.id}') should match feature slug ('${f}')`);
+      }
+
+      // Completion metadata is required only for a completed task.
+      if (task.status === 'completed' && !hasField(task, 'completed_at')) {
+        errors.push("task.json: completed task is missing required field 'completed_at'");
       }
 
       // Task status should be valid
@@ -415,6 +401,18 @@ function cmdValidate(feature?: string): void {
       // Status should be valid
       if (!validSubtaskStatuses.has(s.status)) {
         errors.push(`${s.seq}: invalid status '${s.status}'`);
+      }
+
+      // Lifecycle metadata is required only once a subtask starts/completes.
+      if (s.status === 'in_progress' || s.status === 'completed') {
+        for (const field of ['agent_id', 'started_at']) {
+          if (!hasField(s, field)) errors.push(`${s.seq}: ${s.status} subtask is missing required field '${field}'`);
+        }
+      }
+      if (s.status === 'completed') {
+        for (const field of ['completed_at', 'completion_summary']) {
+          if (!hasField(s, field)) errors.push(`${s.seq}: completed subtask is missing required field '${field}'`);
+        }
       }
 
       // Type checks
