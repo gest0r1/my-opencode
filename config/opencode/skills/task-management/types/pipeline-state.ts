@@ -18,6 +18,15 @@ export interface PipelineManifestPipeline {
   stages: string[];
   depends_on?: string[];
   profile?: string;
+  conflict_group?: string;
+  exclusive_paths?: string[];
+  runtime_locks?: string[];
+  migration_paths?: string[];
+  fixture_paths?: string[];
+  work_items?: string[];
+  decision_ids?: string[];
+  research_ids?: string[];
+  contract_ids?: string[];
 }
 
 export interface GitSetup {
@@ -35,6 +44,10 @@ export interface PipelineManifest {
   rules_version: number;
   pipelines: PipelineManifestPipeline[];
   git_setup?: GitSetup;
+  gate_profiles?: Record<string, Record<string, string[]>>;
+  planning_mode?: string;
+  planning_readiness?: unknown;
+  open_decisions?: string[];
 }
 
 export interface StageEvidence {
@@ -61,12 +74,20 @@ export interface PipelineRuntime {
   status: PipelineStatus;
   stages: Record<string, StageRuntime>;
   stage_order: string[];
+  depends_on: string[];
+  conflict_group?: string;
+  exclusive_paths: string[];
+  runtime_locks: string[];
+  migration_paths: string[];
+  fixture_paths: string[];
   current_stage?: string;
 }
 
 export interface PipelineState {
   schema_version: number;
   run_id: string;
+  manifest_file?: string;
+  manifest_sha256?: string;
   rules_file: string;
   rules_source?: RulesSource;
   rules_version: number;
