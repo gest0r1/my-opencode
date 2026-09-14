@@ -136,6 +136,11 @@ if [[ "$OPENCHAMBER_SHA" == "$PREVIOUS_OPENCHAMBER_SHA" && -x "$CURRENT_LINK/bin
 fi
 
 ensure_node
+if [[ ! -x "${BUN_INSTALL:-$HOME/.bun}/bin/bun" ]]; then
+  curl -fsSL https://bun.sh/install | bash
+fi
+BUN_BIN="${BUN_INSTALL:-$HOME/.bun}/bin/bun"
+[[ -x "$BUN_BIN" ]] || { echo "Ошибка: Bun недоступен после установки." >&2; exit 1; }
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 MANIFEST_NAME="openchamber-web-linux-x64-$OPENCHAMBER_SHA.json"
@@ -190,7 +195,7 @@ if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
 set -a
 [[ -f "$HOME/.config/opencode.env" ]] && . "$HOME/.config/opencode.env"
 set +a
-exec node "$HOME/.local/share/openchamber/current/bin/cli.js" "$@"
+exec "${BUN_INSTALL:-$HOME/.bun}/bin/bun" "$HOME/.local/share/openchamber/current/bin/cli.js" "$@"
 LAUNCHER
   chmod 755 /usr/local/bin/openchamber
 else
