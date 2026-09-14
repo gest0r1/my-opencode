@@ -88,6 +88,26 @@ function assertRulesLocked(metadata: RulesMetadata): void {
   }
 }
 
+function assertGitSetup(value: PipelineManifest['git_setup']): void {
+  if (!value) return;
+  const sha = /^[0-9a-f]{40}$/i;
+  const safeBranch = /^(?!main$|master$)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+  const safePath = (path: unknown): path is string =>
+    typeof path === 'string' && path.length > 0 && !path.startsWith('/') && !path.includes('\\\\') && !path.split('/').includes('..');
+  if (!sha.test(value.base_sha) || !safeBranch.test(value.branch) || value.branch.includes('..') || value.branch.endsWith('/')) {
+    throw new StageCliError('git_setup must define a safe branch and 40-hex base_sha');
+  }
+  if (value.source_sha !== undefined && !sha.test(value.source_sha)) {
+    throw new StageCliError('git_setup.source_sha must be a 40-hex SHA');
+  }
+  if ((value.checkout_paths ?? []).some((path) => !safePath(path)) || (value.must_absent ?? []).some((path) => !safePath(path))) {
+    throw new StageCliError('git_setup paths must be repository-relative');
+  }
+  if (value.source_sha && (!value.checkout_paths || value.checkout_paths.length === 0)) {
+    throw new StageCliError('git_setup.source_sha requires checkout_paths');
+  }
+}
+
 function assertManifest(value: unknown): asserts value is PipelineManifest {
   if (!value || typeof value !== 'object') {
     throw new StageCliError('Manifest must be an object');
@@ -106,6 +126,8 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
       'Manifest must define schema_version=1, run_id, rules_file, rules_version and pipelines',
     );
   }
+
+  assertGitSetup(manifest.git_setup);
 
   const ids = new Set<string>();
   for (const pipeline of manifest.pipelines) {

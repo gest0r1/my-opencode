@@ -18,12 +18,21 @@ export interface PipelineManifestPipeline {
   profile?: string;
 }
 
+export interface GitSetup {
+  base_sha: string;
+  branch: string;
+  source_sha?: string;
+  checkout_paths?: string[];
+  must_absent?: string[];
+}
+
 export interface PipelineManifest {
   schema_version: number;
   run_id: string;
   rules_file: string;
   rules_version: number;
   pipelines: PipelineManifestPipeline[];
+  git_setup?: GitSetup;
 }
 
 export interface StageEvidence {
