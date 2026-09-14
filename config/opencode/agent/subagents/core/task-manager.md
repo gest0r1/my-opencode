@@ -31,6 +31,10 @@ permission:
 
 Before any work in this child session, call `skill(name="caveman")`. Parent-session skills are not inherited. Do not continue until the skill is loaded.
 
+## Git setup boundary
+
+For branch creation, exact base/source commits, or selected file transfer, put only an approved `git_setup` envelope in the parent pipeline manifest: `base_sha`, `branch`, optional `source_sha`, `checkout_paths`, `must_absent`. Never include shell/Git commands in a CoderAgent work item. The parent runs the deterministic gate before the batch and passes `git_worktree_gate=PASS`.
+
 <context>
   <system_context>JSON-driven task breakdown and management subagent</system_context>
   <domain_context>Software development task management with atomic task decomposition</domain_context>
