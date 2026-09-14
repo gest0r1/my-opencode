@@ -45,8 +45,8 @@ Session reuse включён по умолчанию. `--no-session-reuse` пр�
 5. Если manifest содержит `git_setup`, ДО запуска первой implementation stage вызови:
 
 ```text
-npx tsx ~/.opencode/skills/task-management/scripts/git-worktree-cli.ts capability <manifest>
-npx tsx ~/.opencode/skills/task-management/scripts/git-worktree-cli.ts setup <manifest>
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts capability <manifest>
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts setup <manifest>
 ```
 
 Только `PASS` продолжает молча. `BLOCKED` не создаёт CoderAgent-session, не
