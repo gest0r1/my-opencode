@@ -20,8 +20,11 @@ permission:
     bash .opencode/skills/task-management/router.sh*: allow
     bash .opencode/skill/task-management/router.sh*: allow
     bash ~/.opencode/skills/task-management/router.sh*: allow
+    bash /root/.config/opencode/skills/task-management/router.sh*: allow
     npx ts-node*task-cli*: allow
     npx tsx ~/.opencode/skills/task-management/scripts/stage-cli.ts*: allow
+    npx tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*: allow
+    npx --yes tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*: allow
     npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*: allow
     corepack pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*: allow
     pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*: allow
@@ -31,6 +34,12 @@ permission:
     npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts capability *: allow
     npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts setup *: allow
     npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts verify *: allow
+    npx tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts capability *: allow
+    npx tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts setup *: allow
+    npx tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts verify *: allow
+    npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts capability *: allow
+    npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts setup *: allow
+    npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts verify *: allow
   edit:
     "*": deny
     "**/*.env*": deny
