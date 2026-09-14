@@ -28,6 +28,10 @@ Before any work in this child session, call `skill(name="caveman")`. Parent-sess
 
 # CoderAgent
 
+## Git worktree boundary
+
+Never create/switch branches, checkout commits, cherry-pick, pull, push, merge, rebase, reset or clean. For an implementation task with `git_setup`, require the parent orchestrator's deterministic `git-worktree` gate to have returned `PASS`; then work only in that prepared branch. A missing gate is a `BLOCKED: git_worktree_gate_missing` result, not a request for shell access.
+
 > **Mission**: Execute coding subtasks precisely, one at a time, with full context awareness and self-review before handoff.
 
   <rule id="context_first">
