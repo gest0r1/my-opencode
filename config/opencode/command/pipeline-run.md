@@ -36,12 +36,14 @@ Session reuse включён по умолчанию. `--no-session-reuse` пр�
 
 ## Preflight — обычный режим
 
-1. Найди manifest/state, выполни `stage-cli validate`, проверь rules и
-   `edit_policy: human_only`.
+1. Найди manifest/state и выполни `stage-cli validate`. Этот deterministic gate
+   проверяет frozen effective rules source/path/version/SHA и соответствующий
+   edit policy. Не реализуй rules fallback или lock policy повторно в LLM-flow.
 2. Проверь approval manifest, dependencies, paths, conflict groups и locks.
 3. Для `planning_mode: design-freeze` проверь `planning_readiness`, ссылки на
    decision/research/contract artifacts и отсутствие open decisions.
-4. Выполни doc-gate по `pipeline-rules.md`. Fallback на `task.json` запрещён.
+4. Выполни project-specific gates, явно требуемые effective rules/manifest.
+   Fallback на `task.json` запрещён.
 5. Если manifest содержит `git_setup`, ДО запуска первой implementation stage вызови:
 
 ```text
@@ -188,9 +190,11 @@ session-reuse decisions
 Перед стадией вызывай `stage-cli start`, после успеха — `complete`; evidence
 обязателен. Выполняй только разрешённые batches/stages.
 
-Review findings классифицируй по `pipeline-rules.md`. `--unattended` запрещает
-дополнительные вопросы внутри уже approved scope. Ответ пользователю — только
-terminal summary при `completed`, `blocked` или `failed`.
+Review findings классифицируй по effective rules и approved manifest.
+`--unattended` запрещает дополнительные вопросы внутри уже approved scope, но
+не отменяет approvals, deterministic gates, evidence или safety constraints.
+Ответ пользователю — только terminal summary при `completed`, `blocked` или
+`failed`.
 
 ## Session reuse
 
@@ -334,7 +338,7 @@ usage, если OpenCode его не отдаёт.
 
 ## Запрещено
 
-- менять approved manifest, plan или rules во время обычного run;
+- менять approved manifest, plan или effective rules во время обычного run;
 - в GitHub mode менять handoff ref или source_sha;
 - использовать `git pull`, force-push или ручной push в обход handoff tools;
 - пропускать обязательную validation stage;
