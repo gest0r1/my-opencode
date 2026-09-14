@@ -11,6 +11,8 @@ export type PipelineStatus =
 export type StageStatus =
   'pending' | 'in_progress' | 'completed' | 'blocked' | 'failed' | 'skipped';
 
+export type RulesSource = 'project' | 'opencode_default';
+
 export interface PipelineManifestPipeline {
   id: string;
   stages: string[];
@@ -66,6 +68,7 @@ export interface PipelineState {
   schema_version: number;
   run_id: string;
   rules_file: string;
+  rules_source?: RulesSource;
   rules_version: number;
   rules_sha256: string;
   status: PipelineStatus;
