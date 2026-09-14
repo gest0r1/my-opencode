@@ -21,6 +21,7 @@ rules: docs/pipeline-rules.md
 
 ## Обязательный flow
 
+0. До чтения: не вызывай произвольный Bash, `ls` или `git`. Прочитай входные artifacts через native file tools и вызови только approved read-only gate: `npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts inspect`. Отказ shell permission не является blocker и не должен повторяться.
 1. Работай в режиме `plan-only` и прочитай plan, rules, architecture context
    по dual-read и нужные user stories.
 2. Проверь `edit_policy: human_only`; иначе верни `blocked`.
