@@ -2,12 +2,13 @@ import { createHash } from 'node:crypto';
 import { access, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type {
   PipelineManifest,
   PipelineRuntime,
   PipelineState,
   PipelineStatus,
+  RulesSource,
   StageEvidence,
   StageRuntime,
   StageStatus,
@@ -17,6 +18,12 @@ const DEFAULT_STATE_ROOT = '.tmp/pipelines';
 const STATE_FILE = 'state.json';
 const LOCK_FILE = '.lock';
 const HUMAN_ONLY = 'human_only';
+const DISTRIBUTION_ONLY = 'distribution_only';
+const DEFAULT_RULES_PATH = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'pipeline-rules.default.md',
+);
 
 export class StageCliError extends Error {
   constructor(message: string) {
@@ -28,6 +35,14 @@ export class StageCliError extends Error {
 interface RulesMetadata {
   rules_version: number;
   edit_policy: string;
+}
+
+interface ResolvedRules {
+  source: RulesSource;
+  path: string;
+  metadata: RulesMetadata;
+  content: string;
+  sha256: string;
 }
 
 export interface StageCommandOptions {
@@ -80,12 +95,68 @@ async function readRules(rulesPath: string): Promise<{ metadata: RulesMetadata; 
   return { metadata: parseFrontmatter(content), content };
 }
 
-function assertRulesLocked(metadata: RulesMetadata): void {
-  if (metadata.edit_policy !== HUMAN_ONLY) {
+function assertRulesLocked(metadata: RulesMetadata, source: RulesSource): void {
+  const expected = source === 'project' ? HUMAN_ONLY : DISTRIBUTION_ONLY;
+  if (metadata.edit_policy !== expected) {
     throw new StageCliError(
-      `Rules file must be locked before pipeline execution: edit_policy=${metadata.edit_policy}`,
+      `Rules file has invalid edit_policy for ${source}: expected=${expected}, actual=${metadata.edit_policy}`,
     );
   }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function loadResolvedRules(path: string, source: RulesSource): Promise<ResolvedRules> {
+  const rules = await readRules(path);
+  assertRulesLocked(rules.metadata, source);
+  return {
+    source,
+    path,
+    metadata: rules.metadata,
+    content: rules.content,
+    sha256: sha256(rules.content),
+  };
+}
+
+function resolveRulesPath(rulesFile: string): string {
+  if (rulesFile.startsWith('/')) {
+    return rulesFile;
+  }
+  return resolve(rulesFile);
+}
+
+export async function resolveEffectiveRules(
+  rulesFile = 'docs/pipeline-rules.md',
+  manifestPath?: string,
+): Promise<ResolvedRules> {
+  const projectCandidate = resolveRulesPath(rulesFile);
+  if (await fileExists(projectCandidate)) {
+    const source: RulesSource =
+      resolve(projectCandidate) === resolve(DEFAULT_RULES_PATH) ? 'opencode_default' : 'project';
+    return loadResolvedRules(projectCandidate, source);
+  }
+
+  if (manifestPath && !rulesFile.startsWith('/')) {
+    const manifestCandidate = resolve(dirname(manifestPath), rulesFile);
+    if (manifestCandidate !== projectCandidate && (await fileExists(manifestCandidate))) {
+      return loadResolvedRules(manifestCandidate, 'project');
+    }
+  }
+
+  if (await fileExists(DEFAULT_RULES_PATH)) {
+    return loadResolvedRules(DEFAULT_RULES_PATH, 'opencode_default');
+  }
+
+  throw new StageCliError(
+    `Rules not found: project=${projectCandidate}; default=${DEFAULT_RULES_PATH}`,
+  );
 }
 
 function assertGitSetup(value: PipelineManifest['git_setup']): void {
@@ -93,14 +164,26 @@ function assertGitSetup(value: PipelineManifest['git_setup']): void {
   const sha = /^[0-9a-f]{40}$/i;
   const safeBranch = /^(?!main$|master$)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
   const safePath = (path: unknown): path is string =>
-    typeof path === 'string' && path.length > 0 && !path.startsWith('/') && !path.includes('\\\\') && !path.split('/').includes('..');
-  if (!sha.test(value.base_sha) || !safeBranch.test(value.branch) || value.branch.includes('..') || value.branch.endsWith('/')) {
+    typeof path === 'string' &&
+    path.length > 0 &&
+    !path.startsWith('/') &&
+    !path.includes('\\\\') &&
+    !path.split('/').includes('..');
+  if (
+    !sha.test(value.base_sha) ||
+    !safeBranch.test(value.branch) ||
+    value.branch.includes('..') ||
+    value.branch.endsWith('/')
+  ) {
     throw new StageCliError('git_setup must define a safe branch and 40-hex base_sha');
   }
   if (value.source_sha !== undefined && !sha.test(value.source_sha)) {
     throw new StageCliError('git_setup.source_sha must be a 40-hex SHA');
   }
-  if ((value.checkout_paths ?? []).some((path) => !safePath(path)) || (value.must_absent ?? []).some((path) => !safePath(path))) {
+  if (
+    (value.checkout_paths ?? []).some((path) => !safePath(path)) ||
+    (value.must_absent ?? []).some((path) => !safePath(path))
+  ) {
     throw new StageCliError('git_setup paths must be repository-relative');
   }
   if (value.source_sha && (!value.checkout_paths || value.checkout_paths.length === 0)) {
@@ -194,24 +277,6 @@ async function readState(stateRoot: string, runId: string): Promise<PipelineStat
   }
 }
 
-function resolveRulesPath(rulesFile: string): string {
-  if (rulesFile.startsWith('/')) {
-    return rulesFile;
-  }
-  const projectCandidate = resolve(rulesFile);
-  return projectCandidate;
-}
-
-async function resolveManifestRulesPath(manifestPath: string, rulesFile: string): Promise<string> {
-  const projectCandidate = resolveRulesPath(rulesFile);
-  try {
-    await access(projectCandidate);
-    return projectCandidate;
-  } catch {
-    return resolve(dirname(manifestPath), rulesFile);
-  }
-}
-
 function createPipelineRuntime(id: string, stages: string[]): PipelineRuntime {
   const stageRuntime: Record<string, StageRuntime> = {};
   for (const stage of stages) {
@@ -228,20 +293,19 @@ export async function initFromManifest(
   const manifest = JSON.parse(await readFile(absoluteManifestPath, 'utf8')) as unknown;
   assertManifest(manifest);
 
-  const rulesPath = await resolveManifestRulesPath(absoluteManifestPath, manifest.rules_file);
-  const rules = await readRules(rulesPath);
-  assertRulesLocked(rules.metadata);
+  const rules = await resolveEffectiveRules(manifest.rules_file, absoluteManifestPath);
   if (rules.metadata.rules_version !== manifest.rules_version) {
-    throw new StageCliError('Manifest rules_version does not match rules file');
+    throw new StageCliError('Manifest rules_version does not match effective rules file');
   }
 
   const timestamp = now();
   const state: PipelineState = {
     schema_version: 1,
     run_id: manifest.run_id,
-    rules_file: rulesPath,
+    rules_file: rules.path,
+    rules_source: rules.source,
     rules_version: rules.metadata.rules_version,
-    rules_sha256: sha256(rules.content),
+    rules_sha256: rules.sha256,
     status: 'planned',
     created_at: timestamp,
     updated_at: timestamp,
@@ -266,23 +330,14 @@ export async function initFromManifest(
   return state;
 }
 
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function validateState(stateRoot: string, runId: string): Promise<PipelineState> {
   const state = await readState(stateRoot, runId);
-  const rules = await readRules(state.rules_file);
-  assertRulesLocked(rules.metadata);
+  const source: RulesSource = state.rules_source ?? 'project';
+  const rules = await loadResolvedRules(state.rules_file, source);
   if (rules.metadata.rules_version !== state.rules_version) {
     throw new StageCliError('Rules version changed since pipeline initialization');
   }
-  if (sha256(rules.content) !== state.rules_sha256) {
+  if (rules.sha256 !== state.rules_sha256) {
     throw new StageCliError('Rules file changed since pipeline initialization');
   }
   for (const pipeline of Object.values(state.pipelines)) {
@@ -587,9 +642,28 @@ function printState(state: PipelineState, asJson: boolean): void {
   }
 }
 
+function printRules(rules: ResolvedRules, asJson: boolean): void {
+  const output = {
+    status: 'PASS',
+    rules_source: rules.source,
+    rules_file: rules.path,
+    rules_version: rules.metadata.rules_version,
+    rules_sha256: rules.sha256,
+  };
+  if (asJson) {
+    console.log(JSON.stringify(output, null, 2));
+    return;
+  }
+  console.log(`PASS rules_source=${output.rules_source}`);
+  console.log(`rules_file=${output.rules_file}`);
+  console.log(`rules_version=${output.rules_version}`);
+  console.log(`rules_sha256=${output.rules_sha256}`);
+}
+
 function usage(): string {
   return [
     'Usage:',
+    '  stage-cli rules [rules-file] [--json]',
     '  stage-cli init <manifest> [--state-root <path>]',
     '  stage-cli approve <run-id> [--state-root <path>]',
     '  stage-cli status <run-id> [--json] [--state-root <path>]',
@@ -606,6 +680,12 @@ export async function runCli(args: string[]): Promise<void> {
   const command = positional[0];
   if (!command) {
     throw new StageCliError(usage());
+  }
+
+  if (command === 'rules') {
+    const rulesFile = positional[1] ?? 'docs/pipeline-rules.md';
+    printRules(await resolveEffectiveRules(rulesFile), options.json);
+    return;
   }
 
   if (command === 'init') {

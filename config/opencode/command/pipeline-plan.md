@@ -19,12 +19,21 @@ plan: docs/plan.md
 rules: docs/pipeline-rules.md
 ```
 
+`rules` — предпочтительный project policy. Если project rules отсутствуют,
+canonical fallback определяет только deterministic `stage-cli rules`; агент не
+копирует и не создаёт project rules самостоятельно.
+
 ## Обязательный flow
 
-0. До чтения: не вызывай произвольный Bash, `ls` или `git`. Прочитай входные artifacts через native file tools и вызови только approved read-only gate: `npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts inspect`. Отказ shell permission не является blocker и не должен повторяться.
-1. Работай в режиме `plan-only` и прочитай plan, rules, architecture context
-   по dual-read и нужные user stories.
-2. Проверь `edit_policy: human_only`; иначе верни `blocked`.
+0. До чтения: не вызывай произвольный Bash, `ls` или `git`. Прочитай входные
+   artifacts через native file tools и вызови только approved read-only gates:
+   `git-worktree-cli.ts inspect` и `stage-cli.ts rules docs/pipeline-rules.md --json`.
+   Отказ произвольного shell permission не является blocker и не должен повторяться.
+1. Работай в режиме `plan-only`. Прочитай plan, effective rules по пути,
+   возвращённому `stage-cli rules`, architecture context по dual-read и нужные
+   user stories. Не реализуй алгоритм fallback самостоятельно.
+2. Требуй `PASS` от rules gate. Existing-but-invalid project rules, invalid
+   default rules или невозможность определить effective rules → `blocked`.
 3. Через ContextScout собери project context. Для risk-trigger (`new library`,
    внешний API, auth/payment/tenant, security, migration, queue/cache,
    deploy/runtime) получи official version-specific evidence через ExternalScout
@@ -44,20 +53,31 @@ rules: docs/pipeline-rules.md
    target `branch`, optional `source_sha`, allowlisted `checkout_paths` и
    `must_absent`. Это единственный источник полномочий для Git gate.
 10. Создай manifest с `planning_mode: design-freeze`, `planning_readiness` и
-   per-pipeline `decision_ids`, `research_ids`, `contract_ids`. `rules_file`
-   обязан существовать, быть locked (`edit_policy: human_only`) и попасть в
-   manifest с версией; fallback на task.json запрещён.
-11. Проверь manifest. Если есть `open_decision`, отсутствуют rules или blocker,
-    не инициализируй state и верни `needs_revision`.
+    per-pipeline `decision_ids`, `research_ids`, `contract_ids`. В `rules_file`
+    укажи project preference `docs/pipeline-rules.md`, а `rules_version` возьми
+    из результата canonical rules gate. `stage-cli init` сам фиксирует фактически
+    выбранные rules source/path/version/SHA. Fallback на task.json запрещён.
+11. Проверь manifest. Если есть `open_decision`, rules gate не PASS или другой
+    blocker, не инициализируй state и верни `needs_revision`/`blocked` по причине.
 12. Покажи один decision packet и manifest владельцу. После явного approval
     вызови `stage-cli init`; `/pipeline-run` автоматически не запускай.
 
+## Direct write scope PLAN
+
+Основной OpenStageOrchestrator во время PLAN может напрямую создавать/менять
+только `.tmp/pipelines/{run-id}/**`. Project source, `docs/pipeline-rules.md`,
+`.tmp/tasks/**`, произвольные docs и Git history напрямую не изменяются.
+Специализированные planning agents работают только в рамках собственных
+разрешений и утверждённого planning flow.
+
 ## Запрещено
 
+- создавать, копировать или изменять `docs/pipeline-rules.md`;
 - изменять исходный код;
 - вызывать CoderAgent для реализации;
 - запускать tests реализации или Docker;
-- менять rules или backlog без явного указания владельца.
+- менять backlog без явного указания владельца;
+- обходить deterministic rules/Git/state gates решением LLM.
 
 ## Результат
 
