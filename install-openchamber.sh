@@ -160,7 +160,7 @@ if (value.schema_version !== 1 || value.platform !== 'linux-x64' ||
     !/^[0-9a-f]{40}$/i.test(value.source_sha) ||
     !/^openchamber-web-linux-x64-[0-9a-f]{40}\.tar\.gz$/.test(value.asset) ||
     !/^[0-9a-f]{64}$/i.test(value.sha256)) process.exit(2);
-process.stdout.write(value.source_sha + '\\n' + value.asset + '\\n' + value.sha256 + '\\n');
+process.stdout.write(value.source_sha + '\n' + value.asset + '\n' + value.sha256 + '\n');
 NODE
 )
 [[ "${#bundle_info[@]}" == 3 && "${bundle_info[0]}" == "$OPENCHAMBER_SHA" ]] || {
