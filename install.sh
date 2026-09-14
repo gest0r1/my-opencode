@@ -19,8 +19,12 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Устанавливаю/обновляю OpenCode официальным установщиком..."
-curl -fsSL https://opencode.ai/install | bash
+if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
+  echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
+else
+  echo "Устанавливаю/обновляю OpenCode официальным установщиком..."
+  curl -fsSL https://opencode.ai/install | bash
+fi
 
 if [[ ! -x "$OPENCODE_BIN" ]]; then
   echo "Ошибка: OpenCode не найден после установки: $OPENCODE_BIN" >&2
