@@ -7,82 +7,114 @@ edit_policy: distribution_only
 
 # Default pipeline policy
 
-This file defines universal policy invariants for OpenStage pipelines. It does not define the procedural workflow of `/pipeline-plan`, `/pipeline-run`, or `/pipeline-status`.
+Universal invariants for OpenStage pipelines. Procedure belongs to
+`/pipeline-plan`, `/pipeline-run` and deterministic CLI tools.
 
-## Authority and conflict handling
+## Authority
 
-1. Deterministic CLI safety gates have highest authority.
-2. Command contracts (`/pipeline-plan`, `/pipeline-run`, `/pipeline-status`) define procedure and cannot be overridden by project policy.
-3. Effective pipeline rules define project-independent policy invariants.
-4. The approved manifest defines the frozen scope, stages, dependencies, gates and allowed paths for one run.
-5. Task/subtask instructions may refine work inside the approved scope but cannot weaken higher-level constraints.
-6. LLM judgement cannot override deterministic failures, security restrictions, Git integrity, runtime locks, approvals, or evidence requirements.
+1. Deterministic CLI/tool safety gates.
+2. Command contracts (`/pipeline-plan`, `/pipeline-run`, `/pipeline-status`).
+3. Effective pipeline rules.
+4. Frozen manifest for one run.
+5. Task/work-item instructions inside manifest scope.
+6. LLM judgement.
 
-Any unresolved conflict is fail-closed: mark the run `blocked` and do not continue implementation or release.
+A lower layer cannot weaken a higher layer. Unresolved safety/scope conflict is
+fail-closed.
 
-## Effective rules
+## Effective rules and freeze
 
-- If repository-local `docs/pipeline-rules.md` exists, it is the effective project policy.
-- If it does not exist, this default policy is the effective policy.
-- An existing but malformed or invalid project policy must block; do not silently fall back to the default policy.
-- Agents must never create, copy, rewrite, or bootstrap `docs/pipeline-rules.md` automatically during planning or execution.
-- The effective rules source, version and SHA256 are frozen when pipeline state is initialized. Any later change blocks validation.
+- Repository `docs/pipeline-rules.md`, when present and valid, is project policy.
+- If absent, this distribution policy is used.
+- Invalid existing project rules block; never silently fall back.
+- Agents never create/modify project rules automatically.
+- Effective rules source/version/SHA and approved manifest SHA are frozen at
+  state initialization; later mutation blocks validation.
 
 ## Planning and scope
 
-- Planning may create planning/state artifacts only in explicitly permitted runtime locations.
-- Planning must not modify implementation source code, Git history, secrets, runtime environments, or deployment state.
-- Functional, architectural, security, migration, contract, release or rollback decisions that require owner judgement must be explicit before approval.
-- Open decisions prohibit approval of a design-freeze manifest.
-- Approved scope must not be expanded implicitly during execution. Scope expansion requires re-planning and owner approval.
+- PLAN does not modify implementation source, Git history, runtime or secrets.
+- Decisions requiring owner judgement are explicit before design-freeze approval.
+- Open decisions prohibit initialization of an approved design-freeze run.
+- Approved implementation scope is expressed by the frozen manifest, including
+  minimal `allowed_change_paths` when source changes are expected.
+- Scope expansion requires re-planning and owner approval.
 
-## Pipeline decomposition and parallelism
+## DAG and parallelism
 
-- Dependencies must be explicit in the manifest.
-- Parallel execution is allowed only when dependencies are complete and there is no shared `exclusive_path`, conflict group, migration/fixture collision, or deployment/runtime lock.
-- A declared `parallel` capability is advisory; deterministic conflict constraints win.
-- A dependent pipeline must not start before its declared dependency is complete.
+- PLAN compiles prerequisites and ordinary source/migration/fixture conflicts
+  into an acyclic dependency DAG.
+- A pipeline/stage is runnable only when its declared prerequisites are complete.
+- Independent runnable work may execute in parallel.
+- Do not add runtime conflict detectors for constraints already representable as
+  DAG ordering.
+- Runtime locks are reserved for shared external mutable targets that cannot be
+  serialized purely by the run DAG (for example a shared deployment environment
+  used by separate runs).
 
 ## Git and source integrity
 
-- Source identity must be tied to exact immutable commit SHA values where Git setup or external handoff is used.
-- Protected/default branches must not be mutated directly by pipeline automation unless an explicit deterministic gate authorizes the operation.
-- Branch/source checkout may modify only the allowlisted paths from the approved manifest or handoff contract.
-- Clean-worktree, branch, source SHA, repository and path-scope failures are blocking.
-- Arbitrary Git commands must not be used to bypass Git gate tooling.
+- Source/base/candidate identity uses exact immutable commit SHA values where Git
+  flow applies.
+- Protected/default branches are not directly mutated by working agents.
+- Branch/source setup, changed-file scope and candidate publication use the
+  deterministic Git gate rather than free-form agent Git commands.
+- A changed file outside approved scope, a sensitive path, wrong branch/SHA or
+  failed remote-SHA verification is blocking.
 
 ## Least privilege and secrets
 
-- Agent permissions are deny-by-default outside the scope required for their stage.
-- Secrets, credentials, private keys and protected environment files must not be written into source, prompts, logs, evidence, manifests or runtime artifacts.
-- Security, destructive, secret or out-of-scope findings are blocking unless an explicit higher-authority contract defines a safe deterministic handling path.
+- Static agent permissions are deny-by-default for capabilities not required by
+  the role; working agents receive only their coarse role capability.
+- Fine-grained implementation scope is verified by deterministic Git diff/scope
+  checks instead of duplicating dynamic ACL logic in every agent.
+- Secrets, private keys and protected environment files must not appear in source,
+  prompts, logs, manifests or evidence.
+- Security/secret/destructive/out-of-scope findings are blocking unless the
+  command contract defines a safe deterministic handling route.
 
 ## Gates and evidence
 
-- A stage is successful only after its deterministic gate and required evidence succeed; a natural-language agent report alone is not completion.
-- If a required build, test, review, security, release or runtime gate cannot be executed or its result cannot be verified, the gate fails closed.
-- Evidence must identify the relevant stage and be sufficient to verify the claimed result without relying on model memory.
-- Failed or blocked stages may resume only after the blocking cause is addressed and scope remains valid.
+- Machine build/test/install/runtime validation completes only from deterministic
+  gate-runner results and evidence, not natural-language PASS.
+- Qualitative review gates may be model-driven but blockers must cite an observed
+  defect or approved requirement/contract/security rule.
+- Required gate that cannot execute or be verified fails closed.
+- Evidence identifies run/pipeline/gate, observed result and immutable candidate
+  identity when relevant.
 
-## Build, artifacts and provenance
+## Candidate provenance and runtime validation
 
-- Release artifacts must be traceable to the source revision that produced them.
-- Tags or mutable names alone are insufficient provenance when an immutable digest/image ID/artifact identity is available.
-- Release validation must verify the artifact actually intended for deployment, not merely a similarly named build.
+- For deployable runtime with a reproducible installer, validation should trace:
 
-## Runtime, deployment and rollback
+```text
+approved base/source -> candidate SHA -> installed candidate/artifact -> evidence
+```
 
-- Concurrent mutation of the same deployment/runtime target requires an explicit lock or equivalent deterministic exclusion.
-- Release-ready status requires applicable release/runtime validation from the approved gate profile.
-- A release-affecting pipeline must define rollback or explicitly record why rollback is not applicable.
-- Deployment or release failure must not be converted to PASS by LLM judgement.
+- Runtime validation tests the approved candidate artifact/SHA, not an uncommitted
+  local development tree, when the manifest requires candidate installation.
+- A fix after candidate publication produces a new candidate identity and reruns
+  affected installation/runtime validation.
 
-## Approval and exceptions
+## Runtime and rollback
 
-- Owner approval is required where the command contract or manifest requires it.
-- `--unattended` removes unnecessary interaction only inside already approved scope; it does not waive approvals, gates, evidence or safety constraints.
-- Exceptions/waivers must be explicit, scoped, attributable and recorded as durable evidence. An exception must never silently weaken deterministic safety gates.
+- Concurrent mutation of the same shared external runtime target requires a
+  deterministic runtime lock or equivalent external serialization.
+- Release-affecting work defines rollback or explicitly records `not_applicable`
+  with reason.
+- Deployment/runtime failure cannot be converted to PASS by LLM judgement.
+
+## Approval
+
+- Owner approval is required only where PLAN/manifest requires an owner decision
+  or design-freeze approval.
+- `--unattended` avoids duplicate interaction inside already approved scope; it
+  does not waive deterministic gates, scope, security or owner decisions.
+- Explicit exceptions are scoped and recorded; they cannot bypass deterministic
+  safety controls.
 
 ## Completion
 
-A pipeline is complete only when all required stages in the approved manifest reach their terminal successful state, required evidence is recorded, dependencies and release conditions are satisfied, and no blocking risk or open decision remains.
+A run is complete only when all required DAG nodes/stages reach successful
+terminal state, required evidence exists, candidate/runtime conditions are
+satisfied where applicable, and no blocking decision/risk remains.
