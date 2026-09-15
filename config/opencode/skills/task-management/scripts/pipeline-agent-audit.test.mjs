@@ -84,6 +84,7 @@ test('owner questions are allowed only as a PLAN interaction contract', async ()
   assert.match(plan, /ровно один.*approval.*native `question`/is);
   assert.match(orchestrator, /During\s+`\/pipeline-run --unattended` never call `question`/i);
   assert.match(run, /Внутри approved scope child agents не задают дополнительные approval-вопросы/);
+  assert.match(run, /При `--unattended` никогда не вызывай native `question`/);
   assert.match(run, /Если требуется новое функциональное решение или scope expansion → `replan`/);
 });
 
