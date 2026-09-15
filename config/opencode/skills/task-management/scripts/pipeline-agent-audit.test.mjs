@@ -73,6 +73,20 @@ test('canonical pipeline leaves product priority with the owner', async () => {
   assert.match(plan, /`PrioritizationEngine` не вызывай/);
 });
 
+test('owner questions are allowed only as a PLAN interaction contract', async () => {
+  const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  const orchestratorYaml = frontmatter(orchestrator);
+  const plan = await text('config/opencode/command/pipeline-plan.md');
+  const run = await text('config/opencode/command/pipeline-run.md');
+
+  assert.match(orchestratorYaml, /^\s*question:\s*allow\s*$/m);
+  assert.match(plan, /Native `question` используется только в PLAN/);
+  assert.match(plan, /ровно один.*approval.*native `question`/is);
+  assert.match(orchestrator, /During\s+`\/pipeline-run --unattended` never call `question`/i);
+  assert.match(run, /Внутри approved scope child agents не задают дополнительные approval-вопросы/);
+  assert.match(run, /Если требуется новое функциональное решение или scope expansion → `replan`/);
+});
+
 test('OpenChamber pipeline bootstrap requires an isolated worktree session', async () => {
   const pipeline = await text('config/opencode/command/pipeline.md');
   assert.match(pipeline, /openchamber.*session\.create/is);
@@ -99,6 +113,7 @@ test('pipeline-start verifies without mutation and dispatches Goal execution in 
   assert.match(start, /Одноразовый `git-worktree-cli\.ts adopt` принадлежит только `\/pipeline-run`/);
   assert.match(start, /`goal: true`/);
   assert.match(start, /`prompt`: `\/pipeline-run <run-id> --unattended`/);
+  assert.match(start, /не передавай `directory` или `projectId`/);
   assert.match(start, /не передавай `worktree` и `branch`/);
 });
 
