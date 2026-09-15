@@ -70,7 +70,6 @@
         "subagent:prioritization-engine",
         "subagent:senior-technical-plan-reviewer",
         "subagent:task-manager",
-        "subagent:batch-executor",
         "subagent:coder-agent",
         "subagent:build-agent",
         "subagent:reviewer",
