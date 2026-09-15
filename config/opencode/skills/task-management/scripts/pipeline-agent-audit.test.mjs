@@ -37,6 +37,12 @@ function frontmatter(content) {
   return match[1];
 }
 
+function permissionDenied(yaml, key) {
+  const scalar = new RegExp(`^\\s*${key}:\\s*deny\\s*$`, 'm');
+  const mapping = new RegExp(`${key}:\\s*\\n\\s+["']?\\*["']?:\\s*deny`, 'm');
+  return scalar.test(yaml) || mapping.test(yaml);
+}
+
 test('canonical pipeline agents do not depend on Caveman or unsupported write permissions', async () => {
   for (const file of AGENTS) {
     const content = await text(file);
@@ -61,10 +67,10 @@ test('OpenStage owns orchestration directly and registry does not require BatchE
 
 test('read-only discovery agent cannot write runtime artifacts', async () => {
   const yaml = frontmatter(await text('config/opencode/agent/subagents/core/contextscout.md'));
-  assert.match(yaml, /edit:\s*\n\s+["']?\*["']?:\s*deny/m);
+  assert.ok(permissionDenied(yaml, 'edit'), 'ContextScout edit permission must deny');
   assert.doesNotMatch(yaml, /\.tmp\/\*\*:\s*allow/);
-  assert.match(yaml, /bash:\s*\n\s+["']?\*["']?:\s*deny/m);
-  assert.match(yaml, /task:\s*\n\s+["']?\*["']?:\s*deny/m);
+  assert.ok(permissionDenied(yaml, 'bash'), 'ContextScout bash permission must deny');
+  assert.ok(permissionDenied(yaml, 'task'), 'ContextScout task permission must deny');
 });
 
 test('execution agents cannot re-orchestrate the pipeline', async () => {
