@@ -16,7 +16,6 @@ const AGENTS = [
   'config/opencode/agent/subagents/planning/story-mapper.md',
   'config/opencode/agent/subagents/planning/architecture-analyzer.md',
   'config/opencode/agent/subagents/planning/contract-manager.md',
-  'config/opencode/agent/subagents/planning/prioritization-engine.md',
   'config/opencode/agent/subagents/code/senior-story-reviewer.md',
   'config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md',
   'config/opencode/agent/subagents/code/coder-agent.md',
@@ -63,6 +62,50 @@ test('OpenStage owns orchestration directly and registry does not require BatchE
   const metadata = JSON.parse(await text('config/opencode/config/agent-metadata.json'));
   const dependencies = metadata.agents['open-stage-orchestrator'].dependencies ?? [];
   assert.ok(!dependencies.includes('subagent:batch-executor'), 'OpenStage registry must not declare BatchExecutor');
+});
+
+test('canonical pipeline leaves product priority with the owner', async () => {
+  const orchestratorYaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
+  const plan = await text('config/opencode/command/pipeline-plan.md');
+
+  assert.doesNotMatch(orchestratorYaml, /^\s*(?:prioritization-engine|PrioritizationEngine):\s*allow\s*$/m);
+  assert.match(plan, /Product\/backlog priority не является частью PLAN/);
+  assert.match(plan, /`PrioritizationEngine` не вызывай/);
+});
+
+test('OpenChamber pipeline bootstrap requires an isolated worktree session', async () => {
+  const pipeline = await text('config/opencode/command/pipeline.md');
+  assert.match(pipeline, /openchamber.*session\.create/is);
+  assert.match(pipeline, /isolated worktree session/i);
+  assert.match(pipeline, /`worktree`/);
+  assert.match(pipeline, /`branch`/);
+  assert.match(pipeline, /`prompt`: `\/pipeline-plan \$ARGUMENTS`/);
+  assert.match(pipeline, /не включай Goal Mode/i);
+  assert.doesNotMatch(pipeline, /git-worktree-cli\.ts setup/);
+});
+
+test('canonical plan freezes linked worktree identity and hands off to pipeline-start', async () => {
+  const plan = await text('config/opencode/command/pipeline-plan.md');
+  assert.match(plan, /"workspace_mode": "linked_worktree"/);
+  assert.match(plan, /linked_worktree: true/);
+  assert.match(plan, /\/pipeline-start \{run-id\}/);
+  assert.match(plan, /pipeline-init-cli\.ts <manifest>/);
+});
+
+test('pipeline-start verifies without mutation and dispatches Goal execution in the same worktree', async () => {
+  const start = await text('config/opencode/command/pipeline-start.md');
+  assert.match(start, /git-worktree-cli\.ts capability/);
+  assert.doesNotMatch(start, /git-worktree-cli\.ts adopt/);
+  assert.match(start, /`goal: true`/);
+  assert.match(start, /`prompt`: `\/pipeline-run <run-id> --unattended`/);
+  assert.match(start, /не передавай `worktree` и `branch`/);
+});
+
+test('pipeline-run adopts linked worktree and never falls back to setup', async () => {
+  const run = await text('config/opencode/command/pipeline-run.md');
+  assert.match(run, /git_setup\.workspace_mode == linked_worktree/);
+  assert.match(run, /git-worktree-cli\.ts adopt <manifest>/);
+  assert.match(run, /Никогда не делай fallback к `setup`/);
 });
 
 test('read-only discovery agent cannot write runtime artifacts', async () => {
