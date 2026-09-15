@@ -46,11 +46,13 @@ test('canonical pipeline agents do not depend on Caveman or unsupported write pe
   }
 });
 
-test('OpenStage owns orchestration directly and canonical run does not use BatchExecutor', async () => {
+test('OpenStage owns orchestration directly and registry does not require BatchExecutor', async () => {
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  const orchestratorYaml = frontmatter(orchestrator);
   const run = await text('config/opencode/command/pipeline-run.md');
-  assert.doesNotMatch(orchestrator, /BatchExecutor|batch-executor/i);
-  assert.doesNotMatch(run, /BatchExecutor|batch-executor/i);
+  assert.doesNotMatch(orchestratorYaml, /BatchExecutor|batch-executor/i);
+  assert.match(orchestrator, /Do not invoke `BatchExecutor`/);
+  assert.match(run, /Не делегируй orchestration в\s+BatchExecutor/i);
 
   const metadata = JSON.parse(await text('config/opencode/config/agent-metadata.json'));
   const dependencies = metadata.agents['open-stage-orchestrator'].dependencies ?? [];
