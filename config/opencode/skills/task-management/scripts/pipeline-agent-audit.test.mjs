@@ -95,7 +95,8 @@ test('canonical plan freezes linked worktree identity and hands off to pipeline-
 test('pipeline-start verifies without mutation and dispatches Goal execution in the same worktree', async () => {
   const start = await text('config/opencode/command/pipeline-start.md');
   assert.match(start, /git-worktree-cli\.ts capability/);
-  assert.doesNotMatch(start, /git-worktree-cli\.ts adopt/);
+  assert.doesNotMatch(start, /```text\s*\ngit-worktree-cli\.ts adopt/);
+  assert.match(start, /Одноразовый `git-worktree-cli\.ts adopt` принадлежит только `\/pipeline-run`/);
   assert.match(start, /`goal: true`/);
   assert.match(start, /`prompt`: `\/pipeline-run <run-id> --unattended`/);
   assert.match(start, /не передавай `worktree` и `branch`/);
