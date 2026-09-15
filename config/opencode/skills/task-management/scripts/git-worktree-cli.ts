@@ -121,6 +121,21 @@ async function linkedWorktreeInfo(cwd: string): Promise<{ linked_worktree: boole
   return { linked_worktree: gitDir !== commonDir, git_dir: gitDir, common_dir: commonDir };
 }
 
+async function assertLinkedWorkspaceIdentity(
+  setup: GitSetup,
+  cwd: string,
+): Promise<{ linked_worktree: true; git_dir: string; common_dir: string; current_branch: string }> {
+  const info = await linkedWorktreeInfo(cwd);
+  if (!info.linked_worktree) {
+    throw new GateError('current checkout is not a linked git worktree');
+  }
+  const branch = await git(['branch', '--show-current'], cwd);
+  if (branch !== setup.branch) {
+    throw new GateError(`current linked worktree branch does not match approved branch (${branch || 'detached'})`);
+  }
+  return { linked_worktree: true, git_dir: info.git_dir, common_dir: info.common_dir, current_branch: branch };
+}
+
 async function assertCleanAndBase(setup: GitSetup, cwd: string): Promise<void> {
   if (await git(['status', '--porcelain'], cwd)) throw new GateError('worktree is not clean');
   const head = await git(['rev-parse', 'HEAD'], cwd);
@@ -210,9 +225,12 @@ async function verifyScope(manifest: Manifest, cwd: string): Promise<string[]> {
 }
 
 async function capability(setup: GitSetup, cwd: string): Promise<Record<string, unknown>> {
+  const workspace = setup.workspace_mode === 'linked_worktree'
+    ? await assertLinkedWorkspaceIdentity(setup, cwd)
+    : await linkedWorktreeInfo(cwd);
   await assertCleanAndBase(setup, cwd);
   await assertAbsent(setup, cwd);
-  return { source_local: await sourceAvailable(setup, cwd), ...(await linkedWorktreeInfo(cwd)) };
+  return { source_local: await sourceAvailable(setup, cwd), ...workspace };
 }
 
 async function setupWorktree(manifest: Manifest, cwd: string): Promise<void> {
@@ -244,15 +262,7 @@ async function adoptWorktree(manifest: Manifest, cwd: string): Promise<Record<st
     throw new GateError('adopt requires git_setup.workspace_mode=linked_worktree');
   }
 
-  const worktree = await linkedWorktreeInfo(cwd);
-  if (!worktree.linked_worktree) {
-    throw new GateError('current checkout is not a linked git worktree');
-  }
-  const branch = await git(['branch', '--show-current'], cwd);
-  if (branch !== setup.branch) {
-    throw new GateError(`current linked worktree branch does not match approved branch (${branch || 'detached'})`);
-  }
-
+  const worktree = await assertLinkedWorkspaceIdentity(setup, cwd);
   await assertCleanAndBase(setup, cwd);
   await assertAbsent(setup, cwd);
   await ensureSource(setup, cwd);
