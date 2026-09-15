@@ -119,6 +119,47 @@ test('setup refuses checkout paths outside allowed change scope before branch mu
   assert.equal(exec(fixture.repo, 'git', ['rev-parse', 'HEAD']), fixture.baseSha);
 });
 
+test('linked-worktree capability is non-mutating and validates worktree branch identity', async () => {
+  const fixture = await makeRepository();
+  const linked = path.join(fixture.root, 'pipeline-capability');
+  exec(fixture.repo, 'git', ['worktree', 'add', '-b', 'pipeline/capability-run', linked, fixture.baseSha]);
+
+  const manifest = {
+    schema_version: 1,
+    run_id: 'capability-run',
+    allowed_change_paths: ['src/**'],
+    git_setup: {
+      base_sha: fixture.baseSha,
+      branch: 'pipeline/capability-run',
+      workspace_mode: 'linked_worktree',
+    },
+  };
+  const manifestPath = path.join(fixture.root, 'capability-manifest.json');
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+  let result = runGate(linked, ['capability', manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  const capability = JSON.parse(result.stdout);
+  assert.equal(capability.linked_worktree, true);
+  assert.equal(capability.current_branch, 'pipeline/capability-run');
+  assert.equal(exec(linked, 'git', ['status', '--porcelain']), '');
+  assert.equal(exec(linked, 'git', ['rev-parse', 'HEAD']), fixture.baseSha);
+
+  result = runGate(fixture.repo, ['capability', manifestPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not a linked git worktree/);
+
+  const wrongBranchManifest = {
+    ...manifest,
+    git_setup: { ...manifest.git_setup, branch: 'pipeline/not-this-branch' },
+  };
+  const wrongBranchPath = path.join(fixture.root, 'wrong-branch-manifest.json');
+  await writeFile(wrongBranchPath, `${JSON.stringify(wrongBranchManifest, null, 2)}\n`, 'utf8');
+  result = runGate(linked, ['capability', wrongBranchPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /does not match approved branch/);
+});
+
 test('adopt accepts an existing linked worktree and refuses the primary checkout', async () => {
   const fixture = await makeRepository();
   const linked = path.join(fixture.root, 'pipeline-worktree');
@@ -141,7 +182,7 @@ test('adopt accepts an existing linked worktree and refuses the primary checkout
   assert.equal(result.status, 0, result.stderr);
   const adopted = JSON.parse(result.stdout);
   assert.equal(adopted.linked_worktree, true);
-  assert.equal(adopted.branch, 'pipeline/adopt-run');
+  assert.equal(adopted.current_branch, 'pipeline/adopt-run');
 
   result = runGate(fixture.repo, ['adopt', manifestPath]);
   assert.notEqual(result.status, 0);
