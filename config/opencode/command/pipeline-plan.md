@@ -39,6 +39,20 @@ frozen manifest. После этого routine actions внутри утверж
 Product/backlog priority не является частью PLAN: задача уже выбрана владельцем
 самим фактом `/pipeline` запуска.
 
+## Owner interaction
+
+Native `question` используется только в PLAN и только для двух случаев:
+
+1. один batched owner decision packet, если остаются решения, которые нельзя
+   вывести из rules/context;
+2. один финальный вопрос на approval готового manifest/design freeze.
+
+Не задавай промежуточные progress-вопросы и не дроби decision packet на серию
+prompt'ов. OpenChamber `notifyOnQuestion` должен иметь возможность уведомить
+владельца именно о реально требующем решения месте. После approval RUN становится
+неинтерактивным: owner decision или scope expansion в `/pipeline-run --unattended`
+приводит к `blocked`/`replan`, а не к новому `question`.
+
 ## Project discovery
 
 - Для просмотра каталога используй native `Read` на directory path.
@@ -83,7 +97,9 @@ stage-cli.ts rules docs/pipeline-rules.md --json
    Они не пишут source и не используют глобальные `.tmp/planning/**` или
    `.tmp/contracts/**` как canonical pipeline output.
 5. Собери функциональные/архитектурные решения, которые нельзя вывести
-   детерминированно, в один owner decision packet. Не принимай owner decision сам.
+   детерминированно, в один owner decision packet. Если пакет непустой, задай его
+   одним native `question` вызовом и дождись ответа до продолжения. Не принимай
+   owner decision сам. Если packet пуст, не вызывай `question` на этом шаге.
 6. Построй DAG:
    - реальные prerequisite → `depends_on`;
    - overlapping source paths → выбери порядок и добавь dependency edge;
@@ -148,8 +164,9 @@ implementation -> fast gates -> git scope verify -> publish candidate
 14. До owner approval проверь: no open decisions, DAG acyclic, references valid,
     change scope minimal, gate commands реально исполнимы, workspace identity
     соответствует canonical linked worktree. Не создавай state при blocker.
-15. Покажи владельцу один decision packet + manifest. Это единственный explicit
-    approval canonical flow. После явного approval выполни:
+15. Покажи владельцу один финальный decision/manifest packet и запроси **ровно
+    один** explicit approval через native `question`. Это единственный explicit
+    approval canonical flow. Только после явного положительного ответа выполни:
 
 ```text
 pipeline-init-cli.ts <manifest>
@@ -191,6 +208,7 @@ planning/**
 - вызывать `PrioritizationEngine` в canonical pipeline;
 - создавать/switch branch в canonical flow вместо OpenChamber physical worktree;
 - добавлять лишний approval внутри уже утверждаемого manifest;
+- использовать `question` внутри unattended RUN;
 - обходить rules/Git/state gates решением LLM.
 
 ## Результат
