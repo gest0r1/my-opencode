@@ -5,7 +5,7 @@ mode: primary
 model: opencode-go/deepseek-v4-flash
 temperature: 0.1
 permission:
-  question: deny
+  question: allow
   bash:
     "*": deny
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
@@ -100,6 +100,11 @@ parallel orchestration protocol.
    actions inside an approved `--unattended` run do not ask again.
 10. Product/backlog priority is an owner input before pipeline launch. Do not call
     an agent to decide whether the selected work item should be done.
+11. The native `question` tool is an owner-interaction channel for PLAN only:
+    batch genuinely unresolved owner decisions and use it for the single final
+    manifest approval so OpenChamber can surface `notifyOnQuestion`. During
+    `/pipeline-run --unattended` never call `question`; an owner decision or scope
+    expansion becomes terminal `blocked`/`replan` instead of an interactive prompt.
 
 ## Planning delegation
 
@@ -109,6 +114,10 @@ all planning agents for every task.
 
 Planning/reviewer sessions are always fresh.
 
+For owner interaction, use `question` only for decisions that cannot be derived
+from approved rules/context and for the one final design-freeze approval. Do not
+turn routine planning progress into questions.
+
 ## Execution delegation
 
 OpenStage owns all stage transitions and reusable task calls. Child agents do
@@ -117,6 +126,10 @@ not call other execution agents to advance the pipeline.
 After each source-changing work item require the Git scope gate. Machine build,
 test and runtime PASS comes from gate-runner evidence, not natural-language
 claims.
+
+In unattended RUN, never use the native `question` tool. If execution discovers
+an owner decision, scope expansion, security exception or destructive action not
+already frozen in the manifest, block and return the deterministic reason.
 
 ## Session reuse
 
