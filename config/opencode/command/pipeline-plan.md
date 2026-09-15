@@ -12,7 +12,7 @@ tags:
 
 ## Аргументы
 
-`$ARGUMENTS` может содержать путь к plan-файлу. По умолчанию:
+`$ARGUMENTS` содержит описание задачи и может дополнительно ссылаться на plan-файл. По умолчанию:
 
 ```text
 plan: docs/plan.md
@@ -36,6 +36,9 @@ PLAN является компилятором исполнения: он зар
 frozen manifest. После этого routine actions внутри утверждённого scope не требуют
 повторных подтверждений.
 
+Product/backlog priority не является частью PLAN: задача уже выбрана владельцем
+самим фактом `/pipeline` запуска.
+
 ## Project discovery
 
 - Для просмотра каталога используй native `Read` на directory path.
@@ -55,6 +58,11 @@ stage-cli.ts rules docs/pipeline-rules.md --json
 
    Используй native Read/Glob/Grep и только approved deterministic CLI. Не
    вызывай произвольный shell/git. Rules gate обязан вернуть PASS.
+
+   При canonical запуске через `/pipeline` результат `inspect` обязан показать
+   `linked_worktree: true`, clean checkout, непустую task branch и exact current
+   HEAD. Если canonical PLAN оказался в primary checkout, остановись `blocked`:
+   не создавай branch через shell и не заменяй physical worktree обычным checkout.
 2. Один раз собери project context через ContextScout и сформируй compact
    context packet. Downstream agents получают exact relevant paths; повторный
    ContextScout вызывается только при обнаруженном gap.
@@ -65,7 +73,7 @@ stage-cli.ts rules docs/pipeline-rules.md --json
    - `ExternalScout`: new/changed external library/API, auth/payment/security/migration/runtime technology;
    - `SeniorTechnicalPlanReviewer`: medium/high risk, multi-pipeline, security/migration/runtime или существенная architecture change.
    Для low-risk локального изменения пропускай неприменимые роли. Product priority
-   не вычисляй: задача уже выбрана владельцем до запуска pipeline.
+   не вычисляй и `PrioritizationEngine` не вызывай.
 4. Всем planning agents передавай artifact root:
 
 ```text
@@ -93,13 +101,15 @@ stage-cli.ts rules docs/pipeline-rules.md --json
    Tasks содержат binary acceptance criteria, deliverables, dependencies,
    suggested canonical agent ID и ссылки на relevant decision/research/contract.
    Task JSON — рабочий execution aid; authority остаётся frozen manifest.
-10. Для branch/source setup добавь:
+10. Для canonical OpenChamber branch/source setup добавь данные **текущего уже
+    созданного worktree**, полученные из deterministic `inspect`:
 
 ```json
 {
   "git_setup": {
-    "base_sha": "40-hex",
-    "branch": "feature/or-pipeline-branch",
+    "workspace_mode": "linked_worktree",
+    "base_sha": "40-hex-current-worktree-head-before-source-checkout",
+    "branch": "current-openchamber-worktree-branch",
     "source_sha": "optional-40-hex",
     "checkout_paths": [],
     "must_absent": []
@@ -107,6 +117,10 @@ stage-cli.ts rules docs/pipeline-rules.md --json
 }
 ```
 
+    PLAN не придумывает другую branch после создания worktree. `branch` и
+    `base_sha` freeze фактическую workspace identity. Advanced прямой
+    `/pipeline-plan` вне `/pipeline` допускает legacy mode только если пользователь
+    явно выбрал старый workflow; canonical flow всегда `linked_worktree`.
 11. `gate_profiles` содержит только machine-executable commands для
     deterministic `gate-runner-cli`. Один array item = один процесс без pipes,
     redirects, command substitution или command chaining. Qualitative review/docs
@@ -132,7 +146,8 @@ implementation -> fast gates -> git scope verify -> publish candidate
    - `git_setup` при Git branch/source flow;
    - `open_decisions`.
 14. До owner approval проверь: no open decisions, DAG acyclic, references valid,
-    change scope minimal, gate commands реально исполнимы. Не создавай state при blocker.
+    change scope minimal, gate commands реально исполнимы, workspace identity
+    соответствует canonical linked worktree. Не создавай state при blocker.
 15. Покажи владельцу один decision packet + manifest. Это единственный explicit
     approval canonical flow. После явного approval выполни:
 
@@ -144,9 +159,9 @@ stage-cli next <run-id> --json
 ```
 
     `pipeline-init-cli` атомарно запрещает второй active run в том же worktree;
-    для параллельной разработки используй отдельный git worktree. После approval
-    не запрашивай подтверждение для routine actions внутри frozen scope.
-    Только approved state с ожидаемым runnable queue готов к `/pipeline-run`.
+    для параллельной разработки используй отдельный OpenChamber git worktree.
+    После approval не запрашивай подтверждение для routine actions внутри frozen
+    scope. Только approved state с ожидаемым runnable queue готов к execution.
     `/pipeline-run` автоматически не запускай.
 
 ## Planning artifacts
@@ -172,15 +187,22 @@ planning/**
 - изменять implementation source в PLAN;
 - вызывать CoderAgent для реализации;
 - создавать runtime conflict detector там, где конфликт можно превратить в DAG edge;
-- вычислять product/backlog priority внутри pipeline: work item выбирает владелец;
+- вычислять product/backlog priority внутри pipeline;
+- вызывать `PrioritizationEngine` в canonical pipeline;
+- создавать/switch branch в canonical flow вместо OpenChamber physical worktree;
 - добавлять лишний approval внутри уже утверждаемого manifest;
 - обходить rules/Git/state gates решением LLM.
 
 ## Результат
 
 Верни run id, выбранные planning roles и причины, DAG/runnable roots,
-`allowed_change_paths`, runtime locks, gate profiles, blockers/risks и команду:
+`allowed_change_paths`, runtime locks, gate profiles, blockers/risks и следующий
+пользовательский action:
 
 ```text
-/pipeline-run {run-id} --unattended
+/pipeline-start {run-id}
 ```
+
+`/pipeline-run {run-id} --unattended` оставь как advanced/debug direct execution,
+но canonical OpenChamber flow запускается через `/pipeline-start`, чтобы RUN получил
+отдельную Goal-session в том же worktree.
