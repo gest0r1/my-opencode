@@ -9,7 +9,9 @@ on:
       - 'config/opencode/skills/task-management/**'
       - '.github/workflows/pipeline-contracts.yml'
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'audit/**'
     paths:
       - 'config/opencode/agent/**'
       - 'config/opencode/command/pipeline-*.md'
