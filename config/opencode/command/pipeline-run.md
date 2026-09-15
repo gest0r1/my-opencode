@@ -192,6 +192,11 @@ GitHub candidate installation.
 ## `--unattended`
 
 Внутри approved scope child agents не задают дополнительные approval-вопросы.
+При `--unattended` никогда не вызывай native `question`. Любая новая необходимость
+owner decision, scope expansion, security exception или destructive action вне
+frozen manifest должна завершить текущий execution как `blocked`/`replan`, а не
+открывать интерактивный prompt.
+
 `--unattended` не разрешает:
 
 - scope expansion;
