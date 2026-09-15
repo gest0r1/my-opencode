@@ -7,9 +7,12 @@ const execFileAsync = promisify(execFile);
 const SHA = /^[0-9a-f]{40}$/i;
 const BRANCH = /^(?!main$|master$)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
+type WorkspaceMode = 'linked_worktree' | 'legacy_current_checkout';
+
 type GitSetup = {
   base_sha: string;
   branch: string;
+  workspace_mode?: WorkspaceMode;
   source_sha?: string;
   checkout_paths?: string[];
   must_absent?: string[];
@@ -47,6 +50,13 @@ function assertSetup(value: unknown): asserts value is GitSetup {
     setup.branch.endsWith('/')
   ) {
     throw new GateError('git_setup.branch is unsafe or protected');
+  }
+  if (
+    setup.workspace_mode !== undefined &&
+    setup.workspace_mode !== 'linked_worktree' &&
+    setup.workspace_mode !== 'legacy_current_checkout'
+  ) {
+    throw new GateError('git_setup.workspace_mode must be linked_worktree or legacy_current_checkout');
   }
   if (setup.source_sha !== undefined && !SHA.test(setup.source_sha)) {
     throw new GateError('git_setup.source_sha must be a 40-hex SHA');
@@ -105,6 +115,12 @@ async function rootDir(): Promise<string> {
   return git(['rev-parse', '--show-toplevel']);
 }
 
+async function linkedWorktreeInfo(cwd: string): Promise<{ linked_worktree: boolean; git_dir: string; common_dir: string }> {
+  const gitDir = resolve(await git(['rev-parse', '--path-format=absolute', '--git-dir'], cwd));
+  const commonDir = resolve(await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd));
+  return { linked_worktree: gitDir !== commonDir, git_dir: gitDir, common_dir: commonDir };
+}
+
 async function assertCleanAndBase(setup: GitSetup, cwd: string): Promise<void> {
   if (await git(['status', '--porcelain'], cwd)) throw new GateError('worktree is not clean');
   const head = await git(['rev-parse', 'HEAD'], cwd);
@@ -130,6 +146,16 @@ async function assertCheckoutPathsExist(setup: GitSetup, cwd: string): Promise<v
   for (const path of setup.checkout_paths ?? []) {
     const exists = await gitSucceeds(['cat-file', '-e', `${setup.source_sha}:${path}`], cwd);
     if (!exists) throw new GateError(`checkout path not found in source_sha: ${path}`);
+  }
+}
+
+function assertCheckoutPathsWithinScope(manifest: Manifest): void {
+  const setup = manifest.git_setup;
+  if (!setup?.checkout_paths?.length || !manifest.allowed_change_paths?.length) return;
+  for (const path of setup.checkout_paths) {
+    if (!manifest.allowed_change_paths.some((scope) => pathMatches(path, scope))) {
+      throw new GateError(`checkout path is outside allowed_change_paths: ${path}`);
+    }
   }
 }
 
@@ -183,16 +209,19 @@ async function verifyScope(manifest: Manifest, cwd: string): Promise<string[]> {
   return changed;
 }
 
-async function capability(setup: GitSetup, cwd: string): Promise<{ source_local: boolean }> {
+async function capability(setup: GitSetup, cwd: string): Promise<Record<string, unknown>> {
   await assertCleanAndBase(setup, cwd);
   await assertAbsent(setup, cwd);
-  return { source_local: await sourceAvailable(setup, cwd) };
+  return { source_local: await sourceAvailable(setup, cwd), ...(await linkedWorktreeInfo(cwd)) };
 }
 
 async function setupWorktree(manifest: Manifest, cwd: string): Promise<void> {
   assertSetup(manifest.git_setup);
   assertAllowedChangePaths(manifest.allowed_change_paths);
   const setup = manifest.git_setup;
+  if (setup.workspace_mode === 'linked_worktree') {
+    throw new GateError('linked_worktree manifests must use adopt; setup may not switch/create the branch');
+  }
   await assertCleanAndBase(setup, cwd);
   await assertAbsent(setup, cwd);
   const existing = await gitSucceeds(['show-ref', '--verify', '--quiet', `refs/heads/${setup.branch}`], cwd);
@@ -200,17 +229,38 @@ async function setupWorktree(manifest: Manifest, cwd: string): Promise<void> {
 
   await ensureSource(setup, cwd);
   await assertCheckoutPathsExist(setup, cwd);
-  if (setup.checkout_paths?.length && manifest.allowed_change_paths?.length) {
-    for (const path of setup.checkout_paths) {
-      if (!manifest.allowed_change_paths.some((scope) => pathMatches(path, scope))) {
-        throw new GateError(`checkout path is outside allowed_change_paths: ${path}`);
-      }
-    }
-  }
+  assertCheckoutPathsWithinScope(manifest);
 
   await git(['switch', '-c', setup.branch, setup.base_sha], cwd);
   if (setup.source_sha) await git(['checkout', setup.source_sha, '--', ...(setup.checkout_paths ?? [])], cwd);
   await verifyScope(manifest, cwd);
+}
+
+async function adoptWorktree(manifest: Manifest, cwd: string): Promise<Record<string, unknown>> {
+  assertSetup(manifest.git_setup);
+  assertAllowedChangePaths(manifest.allowed_change_paths);
+  const setup = manifest.git_setup;
+  if (setup.workspace_mode !== 'linked_worktree') {
+    throw new GateError('adopt requires git_setup.workspace_mode=linked_worktree');
+  }
+
+  const worktree = await linkedWorktreeInfo(cwd);
+  if (!worktree.linked_worktree) {
+    throw new GateError('current checkout is not a linked git worktree');
+  }
+  const branch = await git(['branch', '--show-current'], cwd);
+  if (branch !== setup.branch) {
+    throw new GateError(`current linked worktree branch does not match approved branch (${branch || 'detached'})`);
+  }
+
+  await assertCleanAndBase(setup, cwd);
+  await assertAbsent(setup, cwd);
+  await ensureSource(setup, cwd);
+  await assertCheckoutPathsExist(setup, cwd);
+  assertCheckoutPathsWithinScope(manifest);
+  if (setup.source_sha) await git(['checkout', setup.source_sha, '--', ...(setup.checkout_paths ?? [])], cwd);
+  const changed = await verifyScope(manifest, cwd);
+  return { ...worktree, changed_files: changed };
 }
 
 async function publishCandidate(manifest: Manifest, manifestPath: string, cwd: string): Promise<Record<string, unknown>> {
@@ -255,12 +305,21 @@ async function main(): Promise<void> {
     const branches = (await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads'], cwd))
       .split('\n')
       .filter(Boolean);
-    console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, head, branch, clean: !dirty, branches }));
+    console.log(JSON.stringify({
+      status: 'PASS',
+      gate: 'git_worktree',
+      command,
+      head,
+      branch,
+      clean: !dirty,
+      branches,
+      ...(await linkedWorktreeInfo(cwd)),
+    }));
     return;
   }
 
-  if (!manifestPath || !['capability', 'setup', 'verify', 'publish'].includes(command ?? '')) {
-    throw new GateError('usage: git-worktree-cli.ts inspect | capability|setup|verify|publish <manifest.json>');
+  if (!manifestPath || !['capability', 'setup', 'adopt', 'verify', 'publish'].includes(command ?? '')) {
+    throw new GateError('usage: git-worktree-cli.ts inspect | capability|setup|adopt|verify|publish <manifest.json>');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
   assertSetup(manifest.git_setup);
@@ -269,6 +328,7 @@ async function main(): Promise<void> {
   let details: Record<string, unknown> = {};
   if (command === 'capability') details = await capability(manifest.git_setup, cwd);
   if (command === 'setup') await setupWorktree(manifest, cwd);
+  if (command === 'adopt') details = await adoptWorktree(manifest, cwd);
   if (command === 'verify') details = { changed_files: await verifyScope(manifest, cwd) };
   if (command === 'publish') details = await publishCandidate(manifest, manifestPath, cwd);
   console.log(
