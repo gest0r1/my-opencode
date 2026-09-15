@@ -1,0 +1,51 @@
+name: Pipeline contracts
+
+on:
+  pull_request:
+    paths:
+      - 'config/opencode/agent/**'
+      - 'config/opencode/command/pipeline-*.md'
+      - 'config/opencode/config/agent-metadata.json'
+      - 'config/opencode/skills/task-management/**'
+      - '.github/workflows/pipeline-contracts.yml'
+  push:
+    branches:
+      - main
+      - 'audit/**'
+    paths:
+      - 'config/opencode/agent/**'
+      - 'config/opencode/command/pipeline-*.md'
+      - 'config/opencode/config/agent-metadata.json'
+      - 'config/opencode/skills/task-management/**'
+      - '.github/workflows/pipeline-contracts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Git identity for repository fixtures
+        run: |
+          git config --global user.name 'Pipeline Contract CI'
+          git config --global user.email 'pipeline-contract-ci@example.invalid'
+
+      - name: Run pipeline contract tests
+        env:
+          NODE_NO_WARNINGS: '1'
+        run: |
+          node --test \
+            config/opencode/skills/task-management/scripts/stage-cli-rules.test.mjs \
+            config/opencode/skills/task-management/scripts/stage-cli-dag.test.mjs \
+            config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs \
+            config/opencode/skills/task-management/scripts/git-worktree-cli.test.mjs \
+            config/opencode/skills/task-management/scripts/github-handoff-core.test.mjs \
+            config/opencode/skills/task-management/scripts/pipeline-agent-audit.test.mjs

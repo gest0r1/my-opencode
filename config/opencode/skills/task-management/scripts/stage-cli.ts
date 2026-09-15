@@ -5,9 +5,9 @@ import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type {
   PipelineManifest,
+  PipelineManifestPipeline,
   PipelineRuntime,
   PipelineState,
-  PipelineStatus,
   RulesSource,
   StageEvidence,
   StageRuntime,
@@ -53,6 +53,11 @@ export interface StageCommandOptions {
   evidencePath?: string;
 }
 
+export interface RunnableStage {
+  pipeline_id: string;
+  stage: string;
+}
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -63,16 +68,12 @@ function sha256(content: string): string {
 
 function parseFrontmatter(content: string): RulesMetadata {
   const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
-  if (!match?.[1]) {
-    throw new StageCliError('Rules file has no YAML frontmatter');
-  }
+  if (!match?.[1]) throw new StageCliError('Rules file has no YAML frontmatter');
 
   const values = new Map<string, string>();
   for (const line of match[1].split('\n')) {
     const separator = line.indexOf(':');
-    if (separator < 0) {
-      continue;
-    }
+    if (separator < 0) continue;
     const key = line.slice(0, separator).trim();
     const value = line
       .slice(separator + 1)
@@ -86,7 +87,6 @@ function parseFrontmatter(content: string): RulesMetadata {
   if (!Number.isInteger(rulesVersion) || !editPolicy) {
     throw new StageCliError('Rules file must define rules_version and edit_policy');
   }
-
   return { rules_version: rulesVersion, edit_policy: editPolicy };
 }
 
@@ -126,10 +126,7 @@ async function loadResolvedRules(path: string, source: RulesSource): Promise<Res
 }
 
 function resolveRulesPath(rulesFile: string): string {
-  if (rulesFile.startsWith('/')) {
-    return rulesFile;
-  }
-  return resolve(rulesFile);
+  return rulesFile.startsWith('/') ? rulesFile : resolve(rulesFile);
 }
 
 export async function resolveEffectiveRules(
@@ -153,22 +150,43 @@ export async function resolveEffectiveRules(
   if (await fileExists(DEFAULT_RULES_PATH)) {
     return loadResolvedRules(DEFAULT_RULES_PATH, 'opencode_default');
   }
-
   throw new StageCliError(
     `Rules not found: project=${projectCandidate}; default=${DEFAULT_RULES_PATH}`,
   );
 }
 
-function assertGitSetup(value: PipelineManifest['git_setup']): void {
+function safeRepoPath(value: unknown): value is string {
+  if (typeof value !== 'string' || !value || value.startsWith('/') || value.includes('\\')) return false;
+  const parts = value.split('/');
+  return !parts.includes('..') && !parts.includes('.git') && !value.includes('\0');
+}
+
+function assertStringArray(value: unknown, field: string): asserts value is string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.length === 0)) {
+    throw new StageCliError(`${field} must be an array of non-empty strings`);
+  }
+}
+
+function assertOptionalPathArray(value: unknown, field: string): void {
+  if (value === undefined) return;
+  assertStringArray(value, field);
+  if (value.some((item) => !safeRepoPath(item))) {
+    throw new StageCliError(`${field} must contain safe repository-relative paths`);
+  }
+}
+
+function pathMatchesScope(path: string, scope: string): boolean {
+  if (scope.endsWith('/**')) {
+    const prefix = scope.slice(0, -3).replace(/\/$/, '');
+    return path === prefix || path.startsWith(`${prefix}/`);
+  }
+  return path === scope;
+}
+
+function assertGitSetup(value: PipelineManifest['git_setup'], allowedChangePaths?: string[]): void {
   if (!value) return;
   const sha = /^[0-9a-f]{40}$/i;
   const safeBranch = /^(?!main$|master$)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
-  const safePath = (path: unknown): path is string =>
-    typeof path === 'string' &&
-    path.length > 0 &&
-    !path.startsWith('/') &&
-    !path.includes('\\\\') &&
-    !path.split('/').includes('..');
   if (
     !sha.test(value.base_sha) ||
     !safeBranch.test(value.branch) ||
@@ -180,26 +198,65 @@ function assertGitSetup(value: PipelineManifest['git_setup']): void {
   if (value.source_sha !== undefined && !sha.test(value.source_sha)) {
     throw new StageCliError('git_setup.source_sha must be a 40-hex SHA');
   }
-  if (
-    (value.checkout_paths ?? []).some((path) => !safePath(path)) ||
-    (value.must_absent ?? []).some((path) => !safePath(path))
-  ) {
-    throw new StageCliError('git_setup paths must be repository-relative');
-  }
+  assertOptionalPathArray(value.checkout_paths, 'git_setup.checkout_paths');
+  assertOptionalPathArray(value.must_absent, 'git_setup.must_absent');
   if (value.source_sha && (!value.checkout_paths || value.checkout_paths.length === 0)) {
     throw new StageCliError('git_setup.source_sha requires checkout_paths');
+  }
+  if (value.checkout_paths?.length && allowedChangePaths?.length) {
+    for (const checkoutPath of value.checkout_paths) {
+      if (!allowedChangePaths.some((scope) => pathMatchesScope(checkoutPath, scope))) {
+        throw new StageCliError(`git_setup.checkout_paths[] is outside allowed_change_paths: ${checkoutPath}`);
+      }
+    }
+  }
+}
+
+function assertDependencyGraph(pipelines: PipelineManifestPipeline[]): void {
+  const ids = new Set(pipelines.map((pipeline) => pipeline.id));
+  for (const pipeline of pipelines) {
+    for (const dependency of pipeline.depends_on ?? []) {
+      if (!ids.has(dependency)) throw new StageCliError(`Unknown dependency: ${pipeline.id} -> ${dependency}`);
+      if (dependency === pipeline.id) throw new StageCliError(`Pipeline cannot depend on itself: ${pipeline.id}`);
+    }
+  }
+
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const byId = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline]));
+  const visit = (id: string): void => {
+    if (visited.has(id)) return;
+    if (visiting.has(id)) throw new StageCliError(`Pipeline dependency cycle detected at: ${id}`);
+    visiting.add(id);
+    for (const dependency of byId.get(id)?.depends_on ?? []) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const id of ids) visit(id);
+}
+
+function assertGateProfiles(value: unknown): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new StageCliError('gate_profiles must be an object');
+  }
+  for (const [profile, stages] of Object.entries(value as Record<string, unknown>)) {
+    if (!stages || typeof stages !== 'object' || Array.isArray(stages)) {
+      throw new StageCliError(`gate_profiles.${profile} must be an object`);
+    }
+    for (const [stage, commands] of Object.entries(stages as Record<string, unknown>)) {
+      assertStringArray(commands, `gate_profiles.${profile}.${stage}`);
+    }
   }
 }
 
 function assertManifest(value: unknown): asserts value is PipelineManifest {
-  if (!value || typeof value !== 'object') {
-    throw new StageCliError('Manifest must be an object');
-  }
-
+  if (!value || typeof value !== 'object') throw new StageCliError('Manifest must be an object');
   const manifest = value as Partial<PipelineManifest>;
   if (
     manifest.schema_version !== 1 ||
     typeof manifest.run_id !== 'string' ||
+    manifest.run_id.length === 0 ||
     typeof manifest.rules_file !== 'string' ||
     typeof manifest.rules_version !== 'number' ||
     !Array.isArray(manifest.pipelines) ||
@@ -210,7 +267,15 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
     );
   }
 
-  assertGitSetup(manifest.git_setup);
+  assertOptionalPathArray(manifest.allowed_change_paths, 'allowed_change_paths');
+  assertGitSetup(manifest.git_setup, manifest.allowed_change_paths);
+  assertGateProfiles(manifest.gate_profiles);
+  if (manifest.open_decisions !== undefined) {
+    assertStringArray(manifest.open_decisions, 'open_decisions');
+    if (manifest.planning_mode === 'design-freeze' && manifest.open_decisions.length > 0) {
+      throw new StageCliError('design-freeze manifest has unresolved open_decisions');
+    }
+  }
 
   const ids = new Set<string>();
   for (const pipeline of manifest.pipelines) {
@@ -218,30 +283,30 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
       !pipeline ||
       typeof pipeline !== 'object' ||
       typeof pipeline.id !== 'string' ||
+      pipeline.id.length === 0 ||
       !Array.isArray(pipeline.stages) ||
       pipeline.stages.length === 0 ||
       pipeline.stages.some((stage) => typeof stage !== 'string' || stage.length === 0)
     ) {
       throw new StageCliError('Every pipeline must define id and non-empty stages');
     }
-    if (ids.has(pipeline.id)) {
-      throw new StageCliError(`Duplicate pipeline id: ${pipeline.id}`);
-    }
+    if (ids.has(pipeline.id)) throw new StageCliError(`Duplicate pipeline id: ${pipeline.id}`);
     ids.add(pipeline.id);
     if (new Set(pipeline.stages).size !== pipeline.stages.length) {
       throw new StageCliError(`Duplicate stage in pipeline: ${pipeline.id}`);
     }
+    if (pipeline.depends_on !== undefined) assertStringArray(pipeline.depends_on, `${pipeline.id}.depends_on`);
+    if (pipeline.runtime_locks !== undefined) assertStringArray(pipeline.runtime_locks, `${pipeline.id}.runtime_locks`);
   }
+  assertDependencyGraph(manifest.pipelines);
 }
 
 function stateDir(stateRoot: string, runId: string): string {
   return join(resolve(stateRoot), runId);
 }
-
 function statePath(stateRoot: string, runId: string): string {
   return join(stateDir(stateRoot, runId), STATE_FILE);
 }
-
 function lockPath(stateRoot: string, runId: string): string {
   return join(stateDir(stateRoot, runId), LOCK_FILE);
 }
@@ -262,27 +327,44 @@ async function acquireLock(stateRoot: string, runId: string): Promise<() => Prom
   } catch {
     throw new StageCliError(`Pipeline is locked: ${runId}`);
   }
-
-  return async () => {
-    await rm(lockPath(stateRoot, runId), { force: true });
-  };
+  return async () => rm(lockPath(stateRoot, runId), { force: true });
 }
 
 async function readState(stateRoot: string, runId: string): Promise<PipelineState> {
   try {
-    const raw = await readFile(statePath(stateRoot, runId), 'utf8');
-    return JSON.parse(raw) as PipelineState;
+    return JSON.parse(await readFile(statePath(stateRoot, runId), 'utf8')) as PipelineState;
   } catch {
     throw new StageCliError(`State not found or invalid: ${runId}`);
   }
 }
 
-function createPipelineRuntime(id: string, stages: string[]): PipelineRuntime {
+function createPipelineRuntime(pipeline: PipelineManifestPipeline): PipelineRuntime {
   const stageRuntime: Record<string, StageRuntime> = {};
-  for (const stage of stages) {
-    stageRuntime[stage] = { status: 'pending' };
+  for (const stage of pipeline.stages) stageRuntime[stage] = { status: 'pending' };
+  return {
+    id: pipeline.id,
+    status: 'planned',
+    stages: stageRuntime,
+    stage_order: [...pipeline.stages],
+    depends_on: [...(pipeline.depends_on ?? [])],
+  };
+}
+
+function sameStrings(a: string[] | undefined, b: string[] | undefined): boolean {
+  return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
+function assertStateMatchesManifest(state: PipelineState, manifest: PipelineManifest): void {
+  if (state.run_id !== manifest.run_id) throw new StageCliError('State run_id does not match frozen manifest');
+  const manifestIds = manifest.pipelines.map((pipeline) => pipeline.id);
+  const stateIds = Object.keys(state.pipelines);
+  if (!sameStrings(stateIds, manifestIds)) throw new StageCliError('State pipelines do not match frozen manifest');
+  for (const spec of manifest.pipelines) {
+    const runtime = state.pipelines[spec.id];
+    if (!runtime) throw new StageCliError(`Missing runtime pipeline: ${spec.id}`);
+    if (!sameStrings(runtime.stage_order, spec.stages)) throw new StageCliError(`Stage order changed: ${spec.id}`);
+    if (!sameStrings(runtime.depends_on, spec.depends_on)) throw new StageCliError(`Dependencies changed: ${spec.id}`);
   }
-  return { id, status: 'planned', stages: stageRuntime, stage_order: stages };
 }
 
 export async function initFromManifest(
@@ -290,7 +372,8 @@ export async function initFromManifest(
   stateRoot = DEFAULT_STATE_ROOT,
 ): Promise<PipelineState> {
   const absoluteManifestPath = resolve(manifestPath);
-  const manifest = JSON.parse(await readFile(absoluteManifestPath, 'utf8')) as unknown;
+  const manifestContent = await readFile(absoluteManifestPath, 'utf8');
+  const manifest = JSON.parse(manifestContent) as unknown;
   assertManifest(manifest);
 
   const rules = await resolveEffectiveRules(manifest.rules_file, absoluteManifestPath);
@@ -302,6 +385,8 @@ export async function initFromManifest(
   const state: PipelineState = {
     schema_version: 1,
     run_id: manifest.run_id,
+    manifest_file: absoluteManifestPath,
+    manifest_sha256: sha256(manifestContent),
     rules_file: rules.path,
     rules_source: rules.source,
     rules_version: rules.metadata.rules_version,
@@ -309,11 +394,9 @@ export async function initFromManifest(
     status: 'planned',
     created_at: timestamp,
     updated_at: timestamp,
+    active_stages: [],
     pipelines: Object.fromEntries(
-      manifest.pipelines.map((pipeline) => [
-        pipeline.id,
-        createPipelineRuntime(pipeline.id, pipeline.stages),
-      ]),
+      manifest.pipelines.map((pipeline) => [pipeline.id, createPipelineRuntime(pipeline)]),
     ),
     history: [],
   };
@@ -340,14 +423,23 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
   if (rules.sha256 !== state.rules_sha256) {
     throw new StageCliError('Rules file changed since pipeline initialization');
   }
-  for (const pipeline of Object.values(state.pipelines)) {
-    if (pipeline.stage_order.length === 0) {
-      throw new StageCliError(`Pipeline has no stages: ${pipeline.id}`);
+
+  if (state.manifest_file && state.manifest_sha256) {
+    const manifestContent = await readFile(state.manifest_file, 'utf8').catch(() => {
+      throw new StageCliError('Frozen manifest is missing');
+    });
+    if (sha256(manifestContent) !== state.manifest_sha256) {
+      throw new StageCliError('Manifest changed since pipeline initialization');
     }
+    const manifest = JSON.parse(manifestContent) as unknown;
+    assertManifest(manifest);
+    assertStateMatchesManifest(state, manifest);
+  }
+
+  for (const pipeline of Object.values(state.pipelines)) {
+    if (pipeline.stage_order.length === 0) throw new StageCliError(`Pipeline has no stages: ${pipeline.id}`);
     for (const stage of pipeline.stage_order) {
-      if (!pipeline.stages[stage]) {
-        throw new StageCliError(`Missing runtime state for stage: ${pipeline.id}/${stage}`);
-      }
+      if (!pipeline.stages[stage]) throw new StageCliError(`Missing runtime state for stage: ${pipeline.id}/${stage}`);
     }
   }
   return state;
@@ -357,60 +449,78 @@ function getPipeline(state: PipelineState, pipelineId?: string): PipelineRuntime
   const pipelines = Object.values(state.pipelines);
   if (pipelineId) {
     const pipeline = state.pipelines[pipelineId];
-    if (!pipeline) {
-      throw new StageCliError(`Pipeline not found: ${pipelineId}`);
-    }
+    if (!pipeline) throw new StageCliError(`Pipeline not found: ${pipelineId}`);
     return pipeline;
   }
-  if (pipelines.length !== 1) {
-    throw new StageCliError('pipeline_id is required when run has multiple pipelines');
-  }
+  if (pipelines.length !== 1) throw new StageCliError('pipeline_id is required when run has multiple pipelines');
   return pipelines[0] as PipelineRuntime;
 }
 
-function assertStatusTransition(current: PipelineStatus, target: PipelineStatus): void {
-  const allowed: Record<PipelineStatus, PipelineStatus[]> = {
-    planned: ['approved'],
-    approved: ['in_progress'],
-    in_progress: ['ready', 'blocked', 'failed'],
-    blocked: ['in_progress'],
-    failed: ['in_progress'],
-    ready: ['release_ready'],
-    release_ready: ['completed'],
-    completed: [],
-  };
-  if (!allowed[current].includes(target)) {
-    throw new StageCliError(`Invalid pipeline transition: ${current} -> ${target}`);
+function dependenciesComplete(state: PipelineState, pipeline: PipelineRuntime): boolean {
+  return (pipeline.depends_on ?? []).every((id) => state.pipelines[id]?.status === 'completed');
+}
+
+function firstPendingStage(pipeline: PipelineRuntime): string | undefined {
+  if (Object.values(pipeline.stages).some((stage) => stage.status === 'in_progress')) return undefined;
+  for (let index = 0; index < pipeline.stage_order.length; index += 1) {
+    const stage = pipeline.stage_order[index] as string;
+    const runtime = pipeline.stages[stage];
+    if (!runtime) return undefined;
+    if (runtime.status === 'pending') {
+      const prior = pipeline.stage_order.slice(0, index).map((name) => pipeline.stages[name]?.status);
+      return prior.every((status) => status === 'completed' || status === 'skipped') ? stage : undefined;
+    }
+    if (runtime.status === 'blocked' || runtime.status === 'failed') return undefined;
   }
+  return undefined;
+}
+
+export function computeRunnable(state: PipelineState): RunnableStage[] {
+  const runnable: RunnableStage[] = [];
+  for (const pipeline of Object.values(state.pipelines)) {
+    if (pipeline.status !== 'approved' && pipeline.status !== 'in_progress') continue;
+    if (!dependenciesComplete(state, pipeline)) continue;
+    const stage = firstPendingStage(pipeline);
+    if (stage) runnable.push({ pipeline_id: pipeline.id, stage });
+  }
+  return runnable;
+}
+
+function refreshActiveStages(state: PipelineState): void {
+  const active: string[] = [];
+  for (const pipeline of Object.values(state.pipelines)) {
+    for (const stage of pipeline.stage_order) {
+      if (pipeline.stages[stage]?.status === 'in_progress') active.push(`${pipeline.id}/${stage}`);
+    }
+  }
+  state.active_stages = active;
+  state.current_stage = active.length === 1 ? active[0] : undefined;
 }
 
 function recalculateRunStatus(state: PipelineState): void {
-  const statuses = Object.values(state.pipelines).map((pipeline) => pipeline.status);
-  if (statuses.some((status) => status === 'failed')) {
-    state.status = 'failed';
-  } else if (statuses.some((status) => status === 'blocked')) {
-    state.status = 'blocked';
-  } else if (statuses.every((status) => status === 'completed')) {
+  refreshActiveStages(state);
+  const pipelines = Object.values(state.pipelines);
+  if (pipelines.length > 0 && pipelines.every((pipeline) => pipeline.status === 'completed')) {
     state.status = 'completed';
-  } else if (
-    statuses.length > 0 &&
-    statuses.every((status) => status === 'release_ready' || status === 'completed')
-  ) {
-    state.status = 'release_ready';
-  } else if (
-    statuses.length > 0 &&
-    statuses.every(
-      (status) => status === 'ready' || status === 'release_ready' || status === 'completed',
-    )
-  ) {
-    state.status = 'ready';
-  } else if (statuses.some((status) => status === 'in_progress')) {
-    state.status = 'in_progress';
-  } else if (statuses.some((status) => status === 'approved')) {
-    state.status = 'approved';
-  } else {
-    state.status = 'planned';
+    return;
   }
+  if (pipelines.some((pipeline) => pipeline.status === 'in_progress')) {
+    state.status = 'in_progress';
+    return;
+  }
+  if (computeRunnable(state).length > 0) {
+    state.status = 'approved';
+    return;
+  }
+  if (pipelines.some((pipeline) => pipeline.status === 'failed')) {
+    state.status = 'failed';
+    return;
+  }
+  if (pipelines.some((pipeline) => pipeline.status === 'blocked')) {
+    state.status = 'blocked';
+    return;
+  }
+  state.status = pipelines.some((pipeline) => pipeline.status === 'approved') ? 'approved' : 'planned';
 }
 
 function addHistory(
@@ -438,6 +548,7 @@ async function updateState(
   try {
     const state = await validateState(stateRoot, runId);
     updater(state);
+    recalculateRunStatus(state);
     state.updated_at = now();
     await writeJsonAtomic(statePath(stateRoot, runId), state);
     return state;
@@ -448,14 +559,20 @@ async function updateState(
 
 export async function approvePipeline(stateRoot: string, runId: string): Promise<PipelineState> {
   return updateState(stateRoot, runId, (state) => {
-    if (state.status !== 'planned') {
-      throw new StageCliError(`Cannot approve run while it is ${state.status}`);
-    }
-    state.status = 'approved';
+    if (state.status !== 'planned') throw new StageCliError(`Cannot approve run while it is ${state.status}`);
     for (const pipeline of Object.values(state.pipelines)) {
+      if (pipeline.status !== 'planned') throw new StageCliError(`Pipeline is not planned: ${pipeline.id}`);
       pipeline.status = 'approved';
     }
   });
+}
+
+function assertPipelineDependencies(state: PipelineState, pipeline: PipelineRuntime): void {
+  for (const dependency of pipeline.depends_on ?? []) {
+    if (state.pipelines[dependency]?.status !== 'completed') {
+      throw new StageCliError(`Pipeline dependency is not completed: ${pipeline.id} -> ${dependency}`);
+    }
+  }
 }
 
 export async function startStage(
@@ -467,34 +584,21 @@ export async function startStage(
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
-    if (!runtime) {
-      throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    if (runtime.status !== 'pending') throw new StageCliError(`Stage is not pending: ${pipeline.id}/${stage}`);
+    if (pipeline.status !== 'approved' && pipeline.status !== 'in_progress') {
+      throw new StageCliError(`Cannot start stage while pipeline is ${pipeline.status}: ${pipeline.id}`);
     }
-    if (runtime.status !== 'pending') {
-      throw new StageCliError(`Stage is not pending: ${pipeline.id}/${stage}`);
-    }
-    const index = pipeline.stage_order.indexOf(stage);
-    const previousStage =
-      index > 0 ? pipeline.stages[pipeline.stage_order[index - 1] as string] : undefined;
-    if (
-      previousStage &&
-      previousStage.status !== 'completed' &&
-      previousStage.status !== 'skipped'
-    ) {
-      throw new StageCliError(`Previous stage is not complete: ${pipeline.stage_order[index - 1]}`);
-    }
-    if (state.status !== 'approved' && state.status !== 'in_progress') {
-      throw new StageCliError(`Cannot start stage while run is ${state.status}`);
-    }
-    if (pipeline.status === 'approved' || pipeline.status === 'planned') {
-      pipeline.status = 'in_progress';
-    }
+    assertPipelineDependencies(state, pipeline);
+
+    const expected = firstPendingStage(pipeline);
+    if (expected !== stage) throw new StageCliError(`Stage is not next for ${pipeline.id}: expected=${expected ?? 'none'}`);
+
+    pipeline.status = 'in_progress';
     runtime.status = 'in_progress';
     runtime.started_at = now();
     pipeline.current_stage = stage;
-    state.current_stage = `${pipeline.id}/${stage}`;
     addHistory(state, pipeline.id, stage, 'in_progress');
-    recalculateRunStatus(state);
   });
 }
 
@@ -531,23 +635,11 @@ export async function completeStage(
     addHistory(state, pipeline.id, stage, 'completed', options.message);
 
     const allCompleted = pipeline.stage_order.every((item) => {
-      const itemStatus = pipeline.stages[item]?.status;
-      return itemStatus === 'completed' || itemStatus === 'skipped';
+      const status = pipeline.stages[item]?.status;
+      return status === 'completed' || status === 'skipped';
     });
-    const releaseStage = pipeline.stage_order.find((item) => /release|deploy|smoke/i.test(item));
-    if (releaseStage && stage === releaseStage) {
-      assertStatusTransition(pipeline.status, 'release_ready');
-      pipeline.status = 'release_ready';
-    } else if (allCompleted) {
-      if (pipeline.status === 'release_ready') {
-        assertStatusTransition(pipeline.status, 'completed');
-        pipeline.status = 'completed';
-      } else {
-        assertStatusTransition(pipeline.status, 'ready');
-        pipeline.status = 'ready';
-      }
-    }
-    recalculateRunStatus(state);
+    pipeline.status = allCompleted ? 'completed' : 'in_progress';
+    if (allCompleted) pipeline.current_stage = undefined;
   });
 }
 
@@ -568,9 +660,8 @@ export async function setStageFailure(
     runtime.status = status;
     runtime.evidence = buildEvidence(stage, status, options);
     addHistory(state, pipeline.id, stage, status, options.message);
-    assertStatusTransition(pipeline.status, status);
     pipeline.status = status;
-    recalculateRunStatus(state);
+    pipeline.current_stage = undefined;
   });
 }
 
@@ -589,15 +680,14 @@ export async function resumeStage(
     if (pipeline.status !== 'failed' && pipeline.status !== 'blocked') {
       throw new StageCliError(`Pipeline is not resumable: ${pipeline.id}`);
     }
+    assertPipelineDependencies(state, pipeline);
     runtime.status = 'in_progress';
     runtime.started_at = now();
     runtime.completed_at = undefined;
     runtime.evidence = undefined;
     pipeline.status = 'in_progress';
     pipeline.current_stage = stage;
-    state.current_stage = `${pipeline.id}/${stage}`;
     addHistory(state, pipeline.id, stage, 'in_progress', 'resumed');
-    recalculateRunStatus(state);
   });
 }
 
@@ -606,21 +696,13 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
   const options: StageCommandOptions = { json: false, stateRoot: DEFAULT_STATE_ROOT };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
-    if (argument === '--json') {
-      options.json = true;
-    } else if (argument === '--state-root') {
-      options.stateRoot = args[++index] ?? DEFAULT_STATE_ROOT;
-    } else if (argument === '--pipeline') {
-      options.pipelineId = args[++index];
-    } else if (argument === '--message') {
-      options.message = args[++index];
-    } else if (argument === '--evidence') {
-      options.evidencePath = args[++index];
-    } else if (argument?.startsWith('--')) {
-      throw new StageCliError(`Unknown option: ${argument}`);
-    } else if (argument) {
-      positional.push(argument);
-    }
+    if (argument === '--json') options.json = true;
+    else if (argument === '--state-root') options.stateRoot = args[++index] ?? DEFAULT_STATE_ROOT;
+    else if (argument === '--pipeline') options.pipelineId = args[++index];
+    else if (argument === '--message') options.message = args[++index];
+    else if (argument === '--evidence') options.evidencePath = args[++index];
+    else if (argument?.startsWith('--')) throw new StageCliError(`Unknown option: ${argument}`);
+    else if (argument) positional.push(argument);
   }
   return { positional, options };
 }
@@ -632,6 +714,7 @@ function printState(state: PipelineState, asJson: boolean): void {
   }
   console.log(`Pipeline run: ${state.run_id}`);
   console.log(`Status: ${state.status}`);
+  if (state.active_stages?.length) console.log(`Active: ${state.active_stages.join(', ')}`);
   for (const pipeline of Object.values(state.pipelines)) {
     console.log(`\n${pipeline.id}: ${pipeline.status}`);
     for (const stage of pipeline.stage_order) {
@@ -642,6 +725,13 @@ function printState(state: PipelineState, asJson: boolean): void {
   }
 }
 
+function printRunnable(state: PipelineState, asJson: boolean): void {
+  const runnable = computeRunnable(state);
+  if (asJson) console.log(JSON.stringify({ run_id: state.run_id, status: state.status, runnable }, null, 2));
+  else if (runnable.length === 0) console.log('No runnable stages');
+  else for (const item of runnable) console.log(`${item.pipeline_id}/${item.stage}`);
+}
+
 function printRules(rules: ResolvedRules, asJson: boolean): void {
   const output = {
     status: 'PASS',
@@ -650,14 +740,13 @@ function printRules(rules: ResolvedRules, asJson: boolean): void {
     rules_version: rules.metadata.rules_version,
     rules_sha256: rules.sha256,
   };
-  if (asJson) {
-    console.log(JSON.stringify(output, null, 2));
-    return;
+  if (asJson) console.log(JSON.stringify(output, null, 2));
+  else {
+    console.log(`PASS rules_source=${output.rules_source}`);
+    console.log(`rules_file=${output.rules_file}`);
+    console.log(`rules_version=${output.rules_version}`);
+    console.log(`rules_sha256=${output.rules_sha256}`);
   }
-  console.log(`PASS rules_source=${output.rules_source}`);
-  console.log(`rules_file=${output.rules_file}`);
-  console.log(`rules_version=${output.rules_version}`);
-  console.log(`rules_sha256=${output.rules_sha256}`);
 }
 
 function usage(): string {
@@ -667,10 +756,11 @@ function usage(): string {
     '  stage-cli init <manifest> [--state-root <path>]',
     '  stage-cli approve <run-id> [--state-root <path>]',
     '  stage-cli status <run-id> [--json] [--state-root <path>]',
-    '  stage-cli validate <run-id> [--state-root <path>]',
+    '  stage-cli validate <run-id> [--json] [--state-root <path>]',
+    '  stage-cli next <run-id> [--json] [--state-root <path>]',
     '  stage-cli start <run-id> <stage> [--pipeline <id>]',
-    '  stage-cli complete <run-id> <stage> [--pipeline <id>] [--message <text>]',
-    '  stage-cli fail|block <run-id> <stage> [--pipeline <id>] [--message <text>]',
+    '  stage-cli complete <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
+    '  stage-cli fail|block <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
     '  stage-cli resume <run-id> <stage> [--pipeline <id>]',
   ].join('\n');
 }
@@ -678,36 +768,33 @@ function usage(): string {
 export async function runCli(args: string[]): Promise<void> {
   const { positional, options } = parseOptions(args);
   const command = positional[0];
-  if (!command) {
-    throw new StageCliError(usage());
-  }
+  if (!command) throw new StageCliError(usage());
 
   if (command === 'rules') {
-    const rulesFile = positional[1] ?? 'docs/pipeline-rules.md';
-    printRules(await resolveEffectiveRules(rulesFile), options.json);
+    printRules(await resolveEffectiveRules(positional[1] ?? 'docs/pipeline-rules.md'), options.json);
     return;
   }
-
   if (command === 'init') {
     const manifest = positional[1];
-    if (!manifest) {
-      throw new StageCliError('Manifest path is required');
-    }
+    if (!manifest) throw new StageCliError('Manifest path is required');
     printState(await initFromManifest(manifest, options.stateRoot), options.json);
     return;
   }
 
   const runId = positional[1];
-  if (!runId) {
-    throw new StageCliError('run-id is required');
-  }
+  if (!runId) throw new StageCliError('run-id is required');
   if (command === 'status') {
     printState(await readState(options.stateRoot, runId), options.json);
     return;
   }
   if (command === 'validate') {
     const state = await validateState(options.stateRoot, runId);
-    console.log(options.json ? JSON.stringify(state, null, 2) : `Valid: ${runId}`);
+    if (options.json) console.log(JSON.stringify(state, null, 2));
+    else console.log(`Valid: ${runId} status=${state.status}`);
+    return;
+  }
+  if (command === 'next') {
+    printRunnable(await validateState(options.stateRoot, runId), options.json);
     return;
   }
   if (command === 'approve') {
@@ -716,13 +803,10 @@ export async function runCli(args: string[]): Promise<void> {
   }
 
   const stage = positional[2];
-  if (!stage) {
-    throw new StageCliError('stage is required');
-  }
+  if (!stage) throw new StageCliError('stage is required');
   let state: PipelineState;
-  if (command === 'start') {
-    state = await startStage(options.stateRoot, runId, stage, options.pipelineId);
-  } else if (command === 'complete') {
+  if (command === 'start') state = await startStage(options.stateRoot, runId, stage, options.pipelineId);
+  else if (command === 'complete') {
     state = await completeStage(options.stateRoot, runId, stage, options.pipelineId, options);
   } else if (command === 'fail' || command === 'block') {
     state = await setStageFailure(
@@ -733,11 +817,8 @@ export async function runCli(args: string[]): Promise<void> {
       options.pipelineId,
       options,
     );
-  } else if (command === 'resume') {
-    state = await resumeStage(options.stateRoot, runId, stage, options.pipelineId);
-  } else {
-    throw new StageCliError(`Unknown command: ${command}\n\n${usage()}`);
-  }
+  } else if (command === 'resume') state = await resumeStage(options.stateRoot, runId, stage, options.pipelineId);
+  else throw new StageCliError(`Unknown command: ${command}\n\n${usage()}`);
   printState(state, options.json);
 }
 
