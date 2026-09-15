@@ -50,7 +50,7 @@ workspace и отсутствие forbidden paths. На этом этапе не
 
 Используй native tool `openchamber`, action `session.create`:
 
-- `directory`: текущий worktree directory;
+- не передавай `directory` или `projectId`: OpenChamber должен использовать context directory текущей PLAN-session, то есть уже утверждённый linked worktree;
 - не передавай `worktree` и `branch`: execution session должна использовать **тот же уже утверждённый worktree**, а не создавать ещё один;
 - `agent`: `OpenStageOrchestrator`;
 - `title`: `Pipeline run: <run-id>`;
@@ -65,4 +65,4 @@ Goal objective должен быть узким: выполнить frozen appro
 
 ## Результат
 
-Верни session id/title, run id и worktree directory. После dispatch пользователь может закрыть UI: дальнейшее выполнение принадлежит OpenChamber Goal-session и canonical `/pipeline-run`.
+Верни session id/title, run id и directory, подтверждённый ответом OpenChamber. После dispatch пользователь может закрыть UI: дальнейшее выполнение принадлежит OpenChamber Goal-session и canonical `/pipeline-run`.
