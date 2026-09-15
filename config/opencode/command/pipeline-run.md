@@ -32,7 +32,7 @@ GitHub validation handoff:
 
 - `stage-cli` владеет frozen rules/manifest и DAG state.
 - `stage-cli next` является единственным источником runnable pipeline/stage.
-- `git-worktree-cli` владеет branch/source/scope/publish integrity.
+- `git-worktree-cli` владеет workspace/branch/source/scope/publish integrity.
 - `gate-runner-cli` выполняет только frozen machine gates и пишет evidence.
 - LLM agents реализуют/анализируют работу, но не подменяют deterministic PASS.
 
@@ -49,15 +49,35 @@ stage-cli next <run-id> --json
 
 2. State обязан быть approved/in-progress либо terminal. Manifest/rules hash
    mismatch → `blocked`.
-3. Если manifest содержит `git_setup` и setup ещё не выполнен:
+3. Если manifest содержит `git_setup`, сначала выполни:
 
 ```text
 git-worktree-cli.ts capability <manifest>
+```
+
+   Затем выбери путь **только по frozen `git_setup.workspace_mode`**:
+
+   Canonical OpenChamber mode:
+
+```text
+git_setup.workspace_mode == linked_worktree
+git-worktree-cli.ts adopt <manifest>
+git-worktree-cli.ts verify <manifest>
+```
+
+   `adopt` обязан подтвердить physical linked Git worktree, approved branch/base
+   SHA и применить разрешённый `source_sha/checkout_paths`. Если worktree identity
+   не совпала — `blocked`. Никогда не делай fallback к `setup` или свободному Git.
+
+   Legacy advanced mode:
+
+```text
+git_setup.workspace_mode отсутствует или == legacy_current_checkout
 git-worktree-cli.ts setup <manifest>
 git-worktree-cli.ts verify <manifest>
 ```
 
-   Только PASS продолжает. Свободные Git-команды запрещены.
+   Legacy mode оставлен для совместимости/отладки и не является canonical `/pipeline` flow.
 4. Не делай отдельный LLM-preflight по conflict groups/path collisions: если
    `stage-cli next` не выдал stage, она не runnable.
 
@@ -178,7 +198,8 @@ GitHub candidate installation.
 - owner decision;
 - security/secret/destructive bypass;
 - изменение frozen manifest/rules;
-- игнорирование deterministic FAIL.
+- игнорирование deterministic FAIL;
+- обход linked-worktree identity check.
 
 Если требуется новое функциональное решение или scope expansion → `replan`.
 
