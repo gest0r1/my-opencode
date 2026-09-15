@@ -118,3 +118,52 @@ test('setup refuses checkout paths outside allowed change scope before branch mu
   assert.equal(exec(fixture.repo, 'git', ['branch', '--show-current']), 'main');
   assert.equal(exec(fixture.repo, 'git', ['rev-parse', 'HEAD']), fixture.baseSha);
 });
+
+test('adopt accepts an existing linked worktree and refuses the primary checkout', async () => {
+  const fixture = await makeRepository();
+  const linked = path.join(fixture.root, 'pipeline-worktree');
+  exec(fixture.repo, 'git', ['worktree', 'add', '-b', 'pipeline/adopt-run', linked, fixture.baseSha]);
+
+  const manifest = {
+    schema_version: 1,
+    run_id: 'adopt-run',
+    allowed_change_paths: ['src/**'],
+    git_setup: {
+      base_sha: fixture.baseSha,
+      branch: 'pipeline/adopt-run',
+      workspace_mode: 'linked_worktree',
+    },
+  };
+  const manifestPath = path.join(fixture.root, 'adopt-manifest.json');
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+  let result = runGate(linked, ['adopt', manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  const adopted = JSON.parse(result.stdout);
+  assert.equal(adopted.linked_worktree, true);
+  assert.equal(adopted.branch, 'pipeline/adopt-run');
+
+  result = runGate(fixture.repo, ['adopt', manifestPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not a linked git worktree/);
+});
+
+test('linked-worktree manifest cannot fall back to legacy setup', async () => {
+  const fixture = await makeRepository();
+  const manifest = {
+    run_id: 'linked-no-setup',
+    allowed_change_paths: ['src/**'],
+    git_setup: {
+      base_sha: fixture.baseSha,
+      branch: 'pipeline/linked-no-setup',
+      workspace_mode: 'linked_worktree',
+    },
+  };
+  const manifestPath = path.join(fixture.root, 'linked-manifest.json');
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+  const result = runGate(fixture.repo, ['setup', manifestPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /must use adopt/);
+  assert.equal(exec(fixture.repo, 'git', ['branch', '--show-current']), 'main');
+});
