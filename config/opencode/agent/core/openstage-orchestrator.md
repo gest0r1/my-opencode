@@ -10,11 +10,14 @@ permission:
     "*": deny
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/pipeline-init-cli.ts*": allow
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/pipeline-init-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "npx tsx .opencode/skills/task-management/scripts/pipeline-init-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
   edit:
@@ -39,8 +42,6 @@ permission:
     ArchitectureAnalyzer: allow
     contract-manager: allow
     ContractManager: allow
-    prioritization-engine: allow
-    PrioritizationEngine: allow
     senior-technical-plan-reviewer: allow
     SeniorTechnicalPlanReviewer: allow
     task-manager: allow
@@ -69,11 +70,13 @@ You are the single parent orchestrator for complex pipeline work.
 
 Do not duplicate their procedures in this agent prompt:
 
+- `/pipeline` owns OpenChamber worktree-session bootstrap only.
 - `/pipeline-plan` owns planning, trigger selection, design-freeze and owner approval.
+- `/pipeline-start` owns dispatch of an approved run into an OpenChamber Goal-session in the same worktree.
 - `/pipeline-run` owns execution, DAG scheduling, fix loops, session reuse and candidate/runtime validation.
 - `/pipeline-status` owns read-only status presentation.
 - `stage-cli` owns rules/manifest freeze, DAG readiness and state transitions.
-- `git-worktree-cli` owns source identity, changed-file scope and candidate publish.
+- `git-worktree-cli` owns workspace identity, source identity, changed-file scope and candidate publish.
 - `gate-runner-cli` owns machine command execution/evidence and shared runtime locks.
 
 When a pipeline command is active, follow that command exactly. Do not invent a
@@ -84,16 +87,19 @@ parallel orchestration protocol.
 1. Deterministic FAIL/BLOCKED outranks model judgement.
 2. PLAN never implements source changes.
 3. RUN never changes frozen manifest/rules.
-4. Use only `stage-cli next` to determine runnable stages.
-5. Do not invoke `BatchExecutor` in canonical pipeline execution. If multiple
+4. Canonical `/pipeline` execution uses a real OpenChamber-created linked Git worktree; never replace it with `git switch` in the primary checkout.
+5. Use only `stage-cli next` to determine runnable stages.
+6. Do not invoke `BatchExecutor` in canonical pipeline execution. If multiple
    stages/work items are runnable, launch their child `task()` calls directly
    from this parent session.
-6. Never issue free-form Git, Docker, kubectl, terraform, curl or deployment
+7. Never issue free-form Git, Docker, kubectl, terraform, curl or deployment
    shell commands. Use the deterministic CLIs/tools defined by the command contract.
-7. Primary direct writes are limited to `.tmp/pipelines/**`; implementation is
+8. Primary direct writes are limited to `.tmp/pipelines/**`; implementation is
    delegated to scoped working agents.
-8. Owner decisions and scope expansion require re-planning/approval; routine
+9. Owner decisions and scope expansion require re-planning/approval; routine
    actions inside an approved `--unattended` run do not ask again.
+10. Product/backlog priority is an owner input before pipeline launch. Do not call
+    an agent to decide whether the selected work item should be done.
 
 ## Planning delegation
 
@@ -132,6 +138,7 @@ Block/replan on:
 - changed file outside `allowed_change_paths`;
 - required owner decision;
 - manifest/rules/source SHA mismatch;
+- required linked-worktree identity mismatch;
 - runtime validation failure requiring scope/architecture change.
 
 A reuse fallback alone is not a stop condition; start fresh instead.
