@@ -30,13 +30,21 @@ stage-cli next <run-id> --json
 
 Продолжай только если state approved/in-progress и manifest/rules valid. Terminal run не dispatch'и повторно.
 
-Для manifest с `git_setup.workspace_mode: linked_worktree` дополнительно выполни:
+Для manifest с `git_setup.workspace_mode: linked_worktree` выполни только
+**non-mutating identity check**:
 
 ```text
-git-worktree-cli.ts adopt .tmp/pipelines/<run-id>/manifest.json
+git-worktree-cli.ts capability .tmp/pipelines/<run-id>/manifest.json
 ```
 
-Это должно подтвердить, что текущий directory — настоящий linked Git worktree на approved branch/base SHA. Не используй legacy `setup` как fallback.
+Он обязан подтвердить `linked_worktree: true`, approved branch/base SHA, clean
+workspace и отсутствие forbidden paths. На этом этапе не применяй `source_sha`
+и не меняй файлы.
+
+Одноразовый `git-worktree-cli.ts adopt` принадлежит только `/pipeline-run`: там
+он после dispatch проверяет ту же workspace identity и при необходимости
+применяет frozen `source_sha/checkout_paths`. Не вызывай `adopt` здесь второй раз
+и не используй legacy `setup` как fallback.
 
 ## Dispatch
 
