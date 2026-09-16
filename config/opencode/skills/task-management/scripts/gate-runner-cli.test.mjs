@@ -46,8 +46,28 @@ async function makeRun(command, gate = 'build') {
     }, null, 2)}\n`,
     'utf8',
   );
-  return { root, stateRoot, runId };
+  return { root, stateRoot, runId, manifestFile };
 }
+
+test('validate-manifest accepts safe gate commands whose executables exist', async () => {
+  const fixture = await makeRun('bash -n check.sh');
+  const result = run(fixture.root, ['validate-manifest', fixture.manifestFile]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.status, 'PASS');
+  assert.equal(output.gate, 'manifest_executability');
+  assert.equal(output.command_count, 1);
+  assert.deepEqual(output.executables, ['bash']);
+});
+
+test('validate-manifest fails closed when a safe required executable is absent', async () => {
+  const fixture = await makeRun('mypy --version', 'typecheck');
+  const result = run(fixture.root, ['validate-manifest', fixture.manifestFile]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /required executable is unavailable: mypy/i);
+});
 
 test('runner executes an approved argv command without a shell and records evidence', async () => {
   const fixture = await makeRun('bash -n check.sh');

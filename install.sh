@@ -19,6 +19,77 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
+as_root() {
+  if (( EUID == 0 )); then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "Ошибка: для установки системных зависимостей нужны root или sudo." >&2
+    return 1
+  fi
+}
+
+python_runtime_ready() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 -m pip --version >/dev/null 2>&1 || return 1
+
+  local probe
+  probe="$(mktemp -d)"
+  if ! python3 -m venv "$probe/venv" >/dev/null 2>&1; then
+    rm -rf "$probe"
+    return 1
+  fi
+  if ! "$probe/venv/bin/python" -m pip --version >/dev/null 2>&1; then
+    rm -rf "$probe"
+    return 1
+  fi
+  rm -rf "$probe"
+}
+
+ensure_python_runtime() {
+  if ! python_runtime_ready; then
+    if command -v apt-get >/dev/null 2>&1; then
+      echo "Устанавливаю системный Python baseline: python3, python3-venv, python3-pip..."
+      as_root apt-get update
+      as_root apt-get install -y python3 python3-venv python3-pip
+    else
+      echo "Ошибка: Python baseline недоступен, а поддерживаемый пакетный менеджер apt-get не найден." >&2
+      echo "Требуются: python3, python3-venv, python3-pip." >&2
+      exit 1
+    fi
+  fi
+
+  python_runtime_ready || {
+    echo "Ошибка: Python runtime не прошёл проверку после установки." >&2
+    exit 1
+  }
+
+  if ! command -v python >/dev/null 2>&1 || ! python -c 'import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)' >/dev/null 2>&1; then
+    local python3_bin
+    python3_bin="$(command -v python3)"
+    if [[ -e /usr/local/bin/python || -L /usr/local/bin/python ]]; then
+      echo "Ошибка: /usr/local/bin/python уже существует, но не является рабочим Python 3; не перезаписываю unmanaged executable." >&2
+      exit 1
+    fi
+    as_root ln -s "$python3_bin" /usr/local/bin/python
+    echo "Добавлен alias: python -> $python3_bin"
+  fi
+
+  python -c 'import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)' >/dev/null 2>&1 || {
+    echo "Ошибка: команда python не разрешается в Python 3." >&2
+    exit 1
+  }
+  python -m pip --version >/dev/null 2>&1 || {
+    echo "Ошибка: python -m pip недоступен." >&2
+    exit 1
+  }
+
+  echo "Python baseline: $(python --version 2>&1); pip/venv доступны."
+}
+
+ensure_python_runtime
+
 if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
   echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
 else
