@@ -3,7 +3,6 @@ name: Pipeline contracts
 on:
   pull_request:
     paths:
-      - 'install.sh'
       - 'config/opencode/agent/**'
       - 'config/opencode/command/pipeline-*.md'
       - 'config/opencode/config/agent-metadata.json'
@@ -14,7 +13,6 @@ on:
       - main
       - 'audit/**'
     paths:
-      - 'install.sh'
       - 'config/opencode/agent/**'
       - 'config/opencode/command/pipeline-*.md'
       - 'config/opencode/config/agent-metadata.json'
