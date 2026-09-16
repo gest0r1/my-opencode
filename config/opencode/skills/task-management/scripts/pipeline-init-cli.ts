@@ -1,12 +1,18 @@
-import { mkdir, open, readFile, readdir, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, open, readFile, readdir, rm } from 'node:fs/promises';
+import os from 'node:os';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { validateManifestExecutability } from './gate-runner-cli';
 import { initFromManifest, StageCliError } from './stage-cli';
 import type { PipelineState } from '../types/pipeline-state';
 
+const execFileAsync = promisify(execFile);
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
 const INIT_LOCK_FILE = '.init.lock';
+const GIT_WORKTREE_CLI = fileURLToPath(new URL('./git-worktree-cli.ts', import.meta.url));
 const ACTIVE_STATUSES = new Set([
   'planned',
   'approved',
@@ -20,14 +26,31 @@ const ACTIVE_STATUSES = new Set([
 interface CliOptions {
   stateRoot: string;
   json: boolean;
+  check: boolean;
+}
+
+interface ManifestPreview {
+  run_id?: unknown;
+  git_setup?: unknown;
+}
+
+interface ReadinessResult {
+  status: 'PASS';
+  gate: 'pipeline_init';
+  mode: 'check';
+  run_id: string;
+  command_count: number;
+  executables: string[];
+  workspace?: Record<string, unknown>;
 }
 
 function parseOptions(args: string[]): { manifest?: string; options: CliOptions } {
-  const options: CliOptions = { stateRoot: DEFAULT_STATE_ROOT, json: false };
+  const options: CliOptions = { stateRoot: DEFAULT_STATE_ROOT, json: false, check: false };
   let manifest: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === '--json') options.json = true;
+    else if (argument === '--check') options.check = true;
     else if (argument === '--state-root') options.stateRoot = args[++index] ?? DEFAULT_STATE_ROOT;
     else if (argument?.startsWith('--')) throw new StageCliError(`Unknown option: ${argument}`);
     else if (!manifest && argument) manifest = argument;
@@ -36,13 +59,13 @@ function parseOptions(args: string[]): { manifest?: string; options: CliOptions 
   return { manifest, options };
 }
 
-async function readRunId(manifestPath: string): Promise<string> {
+async function readManifestPreview(manifestPath: string): Promise<{ runId: string; manifest: ManifestPreview }> {
   const content = await readFile(resolve(manifestPath), 'utf8');
-  const manifest = JSON.parse(content) as { run_id?: unknown };
+  const manifest = JSON.parse(content) as ManifestPreview;
   if (typeof manifest.run_id !== 'string' || manifest.run_id.length === 0) {
     throw new StageCliError('Manifest must define run_id');
   }
-  return manifest.run_id;
+  return { runId: manifest.run_id, manifest };
 }
 
 function processAlive(pid: number): boolean {
@@ -100,20 +123,64 @@ async function findActiveSiblingRun(stateRoot: string, runId: string): Promise<P
   return undefined;
 }
 
+async function validateManifestWithoutCanonicalState(manifestPath: string): Promise<void> {
+  const temporaryRoot = await mkdtemp(join(os.tmpdir(), 'pipeline-init-check-'));
+  try {
+    await initFromManifest(manifestPath, temporaryRoot);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
+async function workspaceCapability(manifestPath: string): Promise<Record<string, unknown>> {
+  try {
+    const { stdout } = await execFileAsync(
+      'npx',
+      ['--yes', 'tsx', GIT_WORKTREE_CLI, 'capability', resolve(manifestPath)],
+      { cwd: process.cwd(), encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+    );
+    return JSON.parse(stdout.trim()) as Record<string, unknown>;
+  } catch (error: unknown) {
+    const detail = String((error as any)?.stderr ?? (error as Error)?.message ?? error).trim();
+    throw new StageCliError(`Workspace capability check failed${detail ? `: ${detail}` : ''}`);
+  }
+}
+
+export async function checkPipelineReadiness(
+  manifestPath: string,
+  stateRoot = DEFAULT_STATE_ROOT,
+): Promise<ReadinessResult> {
+  const absoluteManifestPath = resolve(manifestPath);
+  const { runId, manifest } = await readManifestPreview(absoluteManifestPath);
+
+  await validateManifestWithoutCanonicalState(absoluteManifestPath);
+  const active = await findActiveSiblingRun(stateRoot, runId);
+  if (active) {
+    throw new StageCliError(
+      `Another pipeline run is active in this worktree: ${active.run_id} (${active.status}). ` +
+        'Finish the existing run or use a separate git worktree.',
+    );
+  }
+
+  const executability = await validateManifestExecutability(absoluteManifestPath, process.cwd());
+  const workspace = manifest.git_setup ? await workspaceCapability(absoluteManifestPath) : undefined;
+  return {
+    status: 'PASS',
+    gate: 'pipeline_init',
+    mode: 'check',
+    run_id: runId,
+    ...executability,
+    ...(workspace ? { workspace } : {}),
+  };
+}
+
 export async function initPipelineForWorktree(
   manifestPath: string,
   stateRoot = DEFAULT_STATE_ROOT,
 ): Promise<PipelineState> {
-  const runId = await readRunId(manifestPath);
   const unlock = await acquireInitLock(stateRoot);
   try {
-    const active = await findActiveSiblingRun(stateRoot, runId);
-    if (active) {
-      throw new StageCliError(
-        `Another pipeline run is active in this worktree: ${active.run_id} (${active.status}). ` +
-          'Finish the existing run or use a separate git worktree.',
-      );
-    }
+    await checkPipelineReadiness(manifestPath, stateRoot);
     return initFromManifest(manifestPath, stateRoot);
   } finally {
     await unlock();
@@ -125,12 +192,21 @@ function printState(state: PipelineState, asJson: boolean): void {
   else console.log(`Pipeline run initialized: ${state.run_id} status=${state.status}`);
 }
 
+function printReadiness(result: ReadinessResult, asJson: boolean): void {
+  if (asJson) console.log(JSON.stringify(result, null, 2));
+  else console.log(`Pipeline readiness PASS: ${result.run_id}`);
+}
+
 export async function runCli(args: string[]): Promise<void> {
   const { manifest, options } = parseOptions(args);
   if (!manifest) {
     throw new StageCliError(
-      'Usage: pipeline-init-cli <manifest> [--state-root <path>] [--json]',
+      'Usage: pipeline-init-cli <manifest> [--check] [--state-root <path>] [--json]',
     );
+  }
+  if (options.check) {
+    printReadiness(await checkPipelineReadiness(manifest, options.stateRoot), options.json);
+    return;
   }
   printState(await initPipelineForWorktree(manifest, options.stateRoot), options.json);
 }

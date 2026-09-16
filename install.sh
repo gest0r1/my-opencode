@@ -19,6 +19,70 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
+as_root() {
+  if (( EUID == 0 )); then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "Ошибка: для установки системных зависимостей нужны root или sudo." >&2
+    return 1
+  fi
+}
+
+python_runtime_ready() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 -m pip --version >/dev/null 2>&1 || return 1
+
+  local probe
+  probe="$(mktemp -d)"
+  if ! python3 -m venv "$probe/venv" >/dev/null 2>&1; then
+    rm -rf "$probe"
+    return 1
+  fi
+  if ! "$probe/venv/bin/python" -m pip --version >/dev/null 2>&1; then
+    rm -rf "$probe"
+    return 1
+  fi
+  rm -rf "$probe"
+}
+
+python_command_ready() {
+  command -v python >/dev/null 2>&1 || return 1
+  python -c 'import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)' >/dev/null 2>&1
+}
+
+ensure_python_runtime() {
+  if command -v python >/dev/null 2>&1 && ! python_command_ready; then
+    echo "Ошибка: команда python уже существует, но это не Python 3; installer не будет её перезаписывать." >&2
+    exit 1
+  fi
+
+  if ! python_runtime_ready || ! python_command_ready; then
+    if ! command -v apt-get >/dev/null 2>&1; then
+      echo "Ошибка: Python baseline недоступен, а поддерживаемый пакетный менеджер apt-get не найден." >&2
+      echo "Требуются: python3, python3-venv, python3-pip и команда python -> Python 3." >&2
+      exit 1
+    fi
+    echo "Устанавливаю системный Python baseline..."
+    as_root apt-get update
+    as_root apt-get install -y python3 python3-venv python3-pip python-is-python3
+  fi
+
+  python_runtime_ready || {
+    echo "Ошибка: Python runtime не прошёл проверку после установки." >&2
+    exit 1
+  }
+  python_command_ready || {
+    echo "Ошибка: команда python не разрешается в Python 3 после установки." >&2
+    exit 1
+  }
+  python --version
+  python -m pip --version >/dev/null
+}
+
+ensure_python_runtime
+
 if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
   echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
 else
