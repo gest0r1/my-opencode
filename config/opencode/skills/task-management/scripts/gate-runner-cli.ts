@@ -5,6 +5,7 @@ import { access, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { inspectPythonProject, isPythonTestInvocation, preparePythonTestEnvironment } from './python-gate-env';
 
 type PipelineSpec = {
   id: string;
@@ -164,6 +165,7 @@ export async function validateManifestExecutability(
   }
 
   const checkedExecutables = new Map<string, boolean>();
+  let checkedPython = false;
   let commandCount = 0;
   for (const pipeline of manifest.pipelines) {
     if (!pipeline.profile) continue;
@@ -183,13 +185,24 @@ export async function validateManifestExecutability(
         const tokens = tokenizeCommand(command);
         assertSafeInvocation(tokens, gate);
         const executable = tokens[0] as string;
-        if (!checkedExecutables.has(executable)) {
-          checkedExecutables.set(executable, await executableAvailable(executable, cwd));
+        if (isPythonTestInvocation(executable, tokens.slice(1)) && !checkedPython) {
+          // Read-only dependency preflight. Actual uv sync runs only during RUN.
+          await inspectPythonProject(cwd);
+          checkedPython = true;
         }
-        if (!checkedExecutables.get(executable)) {
-          throw new GateRunnerError(
-            `required executable is unavailable: ${executable}; profile=${pipeline.profile} gate=${gate}`,
-          );
+        // A locked Python project's pytest is installed into .venv during RUN.
+        // Do not demand a globally installed pytest in PLAN.
+        if (executable !== 'pytest' || !(await inspectPythonProject(cwd)).managed) {
+          if (!checkedExecutables.has(executable)) {
+            checkedExecutables.set(executable, await executableAvailable(executable, cwd));
+          }
+          if (!checkedExecutables.get(executable)) {
+            throw new GateRunnerError(
+              `required executable is unavailable: ${executable}; profile=${pipeline.profile} gate=${gate}`,
+            );
+          }
+        } else {
+          checkedExecutables.set('pytest (project uv.lock)', true);
         }
         commandCount += 1;
       }
@@ -208,11 +221,11 @@ function substituteCandidate(tokens: string[], candidateSha?: string): string[] 
   return tokens.map((token) => token.replaceAll('{candidate_sha}', candidateSha));
 }
 
-async function runInvocation(exe: string, args: string[], cwd: string): Promise<{ exit_code: number; stdout: string; stderr: string }> {
+async function runInvocation(exe: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<{ exit_code: number; stdout: string; stderr: string }> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(exe, args, {
       cwd,
-      env: process.env,
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: false,
     });
@@ -313,13 +326,25 @@ async function main(): Promise<void> {
   const release = await acquireRuntimeLocks(stateRoot, runId, releaseLocks);
   const results: Array<Record<string, unknown>> = [];
   try {
+    let projectPythonEnv: Awaited<ReturnType<typeof preparePythonTestEnvironment>>;
+    if (invocations.some((item) => isPythonTestInvocation(item.exe, item.args))) {
+      try {
+        projectPythonEnv = await preparePythonTestEnvironment(process.cwd());
+      } catch (error: unknown) {
+        const reason = String((error as Error)?.message ?? error);
+        await writeFile(evidenceFile, `${JSON.stringify({ status: 'BLOCKED', run_id: runId, pipeline_id: pipelineId, gate, reason }, null, 2)}\n`, 'utf8');
+        throw new GateRunnerError(`Python project environment setup failed: ${reason}; evidence=${evidenceFile}`);
+      }
+    }
     for (const invocation of invocations) {
       const startedAt = new Date().toISOString();
-      const result = await runInvocation(invocation.exe, invocation.args, process.cwd());
+      const projectPython = projectPythonEnv && isPythonTestInvocation(invocation.exe, invocation.args);
+      const result = await runInvocation(invocation.exe, invocation.args, process.cwd(), projectPython ? projectPythonEnv.env : process.env);
       results.push({
         command: invocation.command,
         executable: invocation.exe,
         argv: invocation.args,
+        ...(projectPython ? { resolved_python: projectPythonEnv.python, dependency_source: projectPythonEnv.dependencySource } : {}),
         started_at: startedAt,
         completed_at: new Date().toISOString(),
         exit_code: result.exit_code,
