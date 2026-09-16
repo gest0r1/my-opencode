@@ -120,22 +120,9 @@ implementation -> fast gates -> git scope verify -> publish candidate
    - `gate_profiles` для machine gates;
    - `git_setup` при Git branch/source flow;
    - `open_decisions`.
-15. После формирования final manifest, но до owner approval и `stage-cli init`,
-    выполни mandatory deterministic executability preflight:
-
-```text
-gate-runner-cli.ts validate-manifest .tmp/pipelines/{run-id}/manifest.json
-```
-
-    Preflight использует ту же safe invocation policy, что и RUN, и проверяет
-    наличие top-level executables для всех referenced gate profiles. Он ничего
-    не устанавливает и не запускает сами build/test/runtime команды. Отсутствующий
-    executable, unsafe command или missing referenced profile → blocker; state не
-    создавай. Project package/module dependencies остаются ответственностью
-    воспроизводимого project installer/dependency files, а не PLAN.
-16. До owner approval проверь: no open decisions, DAG acyclic, references valid,
-    change scope minimal, executability preflight PASS. Не создавай state при blocker.
-17. Покажи владельцу один decision packet + manifest. После явного approval:
+15. До owner approval проверь: no open decisions, DAG acyclic, references valid,
+    change scope minimal, gate commands реально исполнимы. Не создавай state при blocker.
+16. Покажи владельцу один decision packet + manifest. После явного approval:
 
 ```text
 stage-cli init <manifest>
@@ -169,7 +156,6 @@ planning/**
 - создавать/изменять `docs/pipeline-rules.md`;
 - изменять implementation source в PLAN;
 - вызывать CoderAgent для реализации;
-- устанавливать system/project dependencies из PLAN;
 - создавать runtime conflict detector там, где конфликт можно превратить в DAG edge;
 - добавлять лишний approval внутри уже утверждаемого manifest;
 - обходить rules/Git/state gates решением LLM.

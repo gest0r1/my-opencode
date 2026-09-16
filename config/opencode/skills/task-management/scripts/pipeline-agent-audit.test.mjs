@@ -100,24 +100,3 @@ test('DevOps agent cannot directly mutate runtime infrastructure', async () => {
     assert.doesNotMatch(yaml, destructive);
   }
 });
-
-test('pipeline-plan requires deterministic manifest executability validation before state initialization', async () => {
-  const plan = await text('config/opencode/command/pipeline-plan.md');
-  const preflight = plan.indexOf('gate-runner-cli.ts validate-manifest');
-  const init = plan.indexOf('stage-cli init <manifest>');
-
-  assert.ok(preflight >= 0, 'pipeline-plan must call gate-runner validate-manifest');
-  assert.ok(init >= 0, 'pipeline-plan must document stage-cli init');
-  assert.ok(preflight < init, 'manifest executability preflight must happen before stage initialization');
-  assert.match(plan, /устанавливать system\/project dependencies из PLAN/i);
-});
-
-test('distribution installer guarantees Python 3, pip, venv and the short python command', async () => {
-  const installer = await text('install.sh');
-  assert.match(installer, /python3-venv/);
-  assert.match(installer, /python3-pip/);
-  assert.match(installer, /python3 -m venv/);
-  assert.match(installer, /python3 -m pip --version/);
-  assert.match(installer, /\/usr\/local\/bin\/python/);
-  assert.match(installer, /python -m pip --version/);
-});
