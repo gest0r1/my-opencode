@@ -161,9 +161,19 @@ implementation -> fast gates -> git scope verify -> publish candidate
    - `gate_profiles` для machine gates;
    - `git_setup` при Git branch/source flow;
    - `open_decisions`.
-14. До owner approval проверь: no open decisions, DAG acyclic, references valid,
-    change scope minimal, gate commands реально исполнимы, workspace identity
-    соответствует canonical linked worktree. Не создавай state при blocker.
+14. После формирования final manifest, но до owner approval выполни единый
+    deterministic readiness gate:
+
+```text
+pipeline-init-cli.ts <manifest> --check --json
+```
+
+    Он не создаёт canonical `state.json` и не запускает build/test/runtime commands.
+    PASS означает, что manifest/DAG/rules валидны, referenced gate profiles используют
+    разрешённые invocation и доступные top-level executables, workspace identity
+    соответствует frozen `git_setup`, а в этом worktree нет другого active run.
+    Любой FAIL/BLOCKED → не запрашивай approval и не создавай state. Project package
+    dependencies остаются ответственностью воспроизводимого project installer/dependency files.
 15. Покажи владельцу один финальный decision/manifest packet и запроси **ровно
     один** explicit approval через native `question`. Это единственный explicit
     approval canonical flow. Только после явного положительного ответа выполни:
@@ -175,11 +185,12 @@ stage-cli validate <run-id> --json
 stage-cli next <run-id> --json
 ```
 
-    `pipeline-init-cli` атомарно запрещает второй active run в том же worktree;
-    для параллельной разработки используй отдельный OpenChamber git worktree.
-    После approval не запрашивай подтверждение для routine actions внутри frozen
-    scope. Только approved state с ожидаемым runnable queue готов к execution.
-    `/pipeline-run` автоматически не запускай.
+    Обычный `pipeline-init-cli` повторяет тот же readiness gate перед freeze, поэтому
+    состояние не может быть создано в обход pre-approval проверки. Он атомарно
+    запрещает второй active run в том же worktree; для параллельной разработки
+    используй отдельный OpenChamber git worktree. После approval не запрашивай
+    подтверждение для routine actions внутри frozen scope. Только approved state с
+    ожидаемым runnable queue готов к execution. `/pipeline-run` автоматически не запускай.
 
 ## Planning artifacts
 
@@ -203,6 +214,7 @@ planning/**
 - создавать/изменять `docs/pipeline-rules.md`;
 - изменять implementation source в PLAN;
 - вызывать CoderAgent для реализации;
+- устанавливать system/project dependencies из PLAN;
 - создавать runtime conflict detector там, где конфликт можно превратить в DAG edge;
 - вычислять product/backlog priority внутри pipeline;
 - вызывать `PrioritizationEngine` в canonical pipeline;

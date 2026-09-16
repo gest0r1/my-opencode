@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { constants } from 'node:fs';
+import { access, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
+import { pathToFileURL } from 'node:url';
 
 type PipelineSpec = {
   id: string;
@@ -88,7 +90,7 @@ function isRuntimeGate(gate: string): boolean {
   return /(runtime|deploy|release|smoke|install)/i.test(gate);
 }
 
-function assertSafeInvocation(tokens: string[], gate: string): void {
+export function assertSafeInvocation(tokens: string[], gate: string): void {
   const [exe, ...args] = tokens;
   if (!exe) throw new GateRunnerError('missing executable');
 
@@ -128,6 +130,76 @@ function assertSafeInvocation(tokens: string[], gate: string): void {
   }
 
   throw new GateRunnerError(`executable is outside the deterministic gate policy: ${exe}`);
+}
+
+async function executableAvailable(executable: string, cwd: string): Promise<boolean> {
+  if (executable.includes('/') || executable.includes('\\')) {
+    try {
+      await access(resolve(cwd, executable), constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  for (const directory of (process.env.PATH ?? '').split(delimiter)) {
+    const base = directory ? resolve(cwd, directory) : cwd;
+    try {
+      await access(resolve(base, executable), constants.X_OK);
+      return true;
+    } catch {
+      // Continue through PATH.
+    }
+  }
+  return false;
+}
+
+export async function validateManifestExecutability(
+  manifestPath: string,
+  cwd = process.cwd(),
+): Promise<{ command_count: number; executables: string[] }> {
+  const manifest = JSON.parse(await readFile(resolve(manifestPath), 'utf8')) as Manifest;
+  if (!manifest || typeof manifest !== 'object' || !Array.isArray(manifest.pipelines)) {
+    throw new GateRunnerError('manifest pipelines must be an array');
+  }
+
+  const checkedExecutables = new Map<string, boolean>();
+  let commandCount = 0;
+  for (const pipeline of manifest.pipelines) {
+    if (!pipeline.profile) continue;
+    const gates = manifest.gate_profiles?.[pipeline.profile];
+    if (!gates || typeof gates !== 'object') {
+      throw new GateRunnerError(`referenced gate profile is missing: ${pipeline.profile}`);
+    }
+
+    for (const [gate, commands] of Object.entries(gates)) {
+      if (!Array.isArray(commands) || commands.length === 0) {
+        throw new GateRunnerError(`gate profile has no executable commands: profile=${pipeline.profile} gate=${gate}`);
+      }
+      for (const command of commands) {
+        if (typeof command !== 'string') {
+          throw new GateRunnerError(`gate command must be a string: profile=${pipeline.profile} gate=${gate}`);
+        }
+        const tokens = tokenizeCommand(command);
+        assertSafeInvocation(tokens, gate);
+        const executable = tokens[0] as string;
+        if (!checkedExecutables.has(executable)) {
+          checkedExecutables.set(executable, await executableAvailable(executable, cwd));
+        }
+        if (!checkedExecutables.get(executable)) {
+          throw new GateRunnerError(
+            `required executable is unavailable: ${executable}; profile=${pipeline.profile} gate=${gate}`,
+          );
+        }
+        commandCount += 1;
+      }
+    }
+  }
+
+  return {
+    command_count: commandCount,
+    executables: [...checkedExecutables.keys()].sort(),
+  };
 }
 
 function substituteCandidate(tokens: string[], candidateSha?: string): string[] {
@@ -273,8 +345,10 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ status: 'PASS', gate, pipeline_id: pipelineId, candidate_sha: candidateSha ?? null, evidence: evidenceFile }));
 }
 
-main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`BLOCKED: gate_runner: ${message}`);
-  process.exitCode = 1;
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  main().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`BLOCKED: gate_runner: ${message}`);
+    process.exitCode = 1;
+  });
+}

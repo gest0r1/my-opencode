@@ -3,6 +3,7 @@ name: Pipeline contracts
 on:
   pull_request:
     paths:
+      - 'install.sh'
       - 'config/opencode/agent/**'
       - 'config/opencode/command/pipeline-*.md'
       - 'config/opencode/config/agent-metadata.json'
@@ -13,6 +14,7 @@ on:
       - main
       - 'audit/**'
     paths:
+      - 'install.sh'
       - 'config/opencode/agent/**'
       - 'config/opencode/command/pipeline-*.md'
       - 'config/opencode/config/agent-metadata.json'
@@ -48,4 +50,5 @@ jobs:
             config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs \
             config/opencode/skills/task-management/scripts/git-worktree-cli.test.mjs \
             config/opencode/skills/task-management/scripts/github-handoff-core.test.mjs \
+            config/opencode/skills/task-management/scripts/pipeline-init-cli.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-agent-audit.test.mjs
