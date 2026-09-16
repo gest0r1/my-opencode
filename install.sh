@@ -81,7 +81,34 @@ ensure_python_runtime() {
   python -m pip --version >/dev/null
 }
 
+ensure_uv_runtime() {
+  local uv_bin
+  uv_bin="$(command -v uv || true)"
+  if [[ -z "$uv_bin" || ! -x "$uv_bin" ]]; then
+    if [[ -x "$HOME/.local/bin/uv" ]]; then
+      uv_bin="$HOME/.local/bin/uv"
+    else
+      echo "Устанавливаю общий uv в профиль пользователя..."
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+      uv_bin="$HOME/.local/bin/uv"
+    fi
+  fi
+  [[ -x "$uv_bin" ]] || {
+    echo "Ошибка: uv не найден после установки: $uv_bin" >&2
+    exit 1
+  }
+  "$uv_bin" --version
+  # 3.13 нужен Otclick-hh. uv хранит интерпретаторы и cache общими для проектов,
+  # не подменяет /usr/bin/python и не устанавливает app-deps глобально.
+  "$uv_bin" python install 3.13
+  "$uv_bin" python find 3.13 >/dev/null || {
+    echo "Ошибка: uv не смог подготовить Python 3.13." >&2
+    exit 1
+  }
+}
+
 ensure_python_runtime
+ensure_uv_runtime
 
 if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
   echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
