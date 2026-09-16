@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { constants } from 'node:fs';
+import { access, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 
 type PipelineSpec = {
@@ -130,6 +131,74 @@ function assertSafeInvocation(tokens: string[], gate: string): void {
   throw new GateRunnerError(`executable is outside the deterministic gate policy: ${exe}`);
 }
 
+async function executableAvailable(executable: string): Promise<boolean> {
+  if (executable.includes('/') || executable.includes('\\')) {
+    try {
+      await access(resolve(executable), constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  for (const directory of (process.env.PATH ?? '').split(delimiter)) {
+    const candidate = resolve(directory || '.', executable);
+    try {
+      await access(candidate, constants.X_OK);
+      return true;
+    } catch {
+      // Continue through PATH.
+    }
+  }
+  return false;
+}
+
+async function validateManifestExecutability(manifest: Manifest): Promise<{ command_count: number; executables: string[] }> {
+  if (!manifest || typeof manifest !== 'object') throw new GateRunnerError('manifest must be an object');
+  if (!Array.isArray(manifest.pipelines)) throw new GateRunnerError('manifest pipelines must be an array');
+
+  const profiles = new Set(
+    manifest.pipelines
+      .map((pipeline) => pipeline.profile)
+      .filter((profile): profile is string => typeof profile === 'string' && profile.length > 0),
+  );
+  const checkedExecutables = new Map<string, boolean>();
+  let commandCount = 0;
+
+  for (const profile of profiles) {
+    const gates = manifest.gate_profiles?.[profile];
+    if (!gates || typeof gates !== 'object') {
+      throw new GateRunnerError(`referenced gate profile is missing: ${profile}`);
+    }
+
+    for (const [gate, commands] of Object.entries(gates)) {
+      if (!Array.isArray(commands) || commands.length === 0) {
+        throw new GateRunnerError(`gate profile has no executable commands: profile=${profile} gate=${gate}`);
+      }
+      for (const command of commands) {
+        if (typeof command !== 'string') {
+          throw new GateRunnerError(`gate command must be a string: profile=${profile} gate=${gate}`);
+        }
+        const tokens = tokenizeCommand(command);
+        assertSafeInvocation(tokens, gate);
+        const executable = tokens[0] as string;
+        if (!checkedExecutables.has(executable)) {
+          checkedExecutables.set(executable, await executableAvailable(executable));
+        }
+        if (!checkedExecutables.get(executable)) {
+          throw new GateRunnerError(`required executable is unavailable: ${executable}; profile=${profile} gate=${gate}`);
+        }
+        commandCount += 1;
+      }
+    }
+  }
+
+  return {
+    command_count: commandCount,
+    executables: [...checkedExecutables.keys()].sort(),
+  };
+}
+
 function substituteCandidate(tokens: string[], candidateSha?: string): string[] {
   if (!tokens.some((token) => token.includes('{candidate_sha}'))) return tokens;
   if (!candidateSha || !SHA.test(candidateSha)) throw new GateRunnerError('candidate_sha placeholder used but candidate evidence is missing');
@@ -196,6 +265,18 @@ async function acquireRuntimeLocks(stateRoot: string, runId: string, locks: stri
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+
+  if (args[0] === 'validate-manifest') {
+    const manifestPath = args[1];
+    if (!manifestPath || args.length !== 2) {
+      throw new GateRunnerError('usage: gate-runner-cli.ts validate-manifest <manifest.json>');
+    }
+    const manifest = JSON.parse(await readFile(resolve(manifestPath), 'utf8')) as Manifest;
+    const details = await validateManifestExecutability(manifest);
+    console.log(JSON.stringify({ status: 'PASS', gate: 'manifest_executability', manifest: resolve(manifestPath), ...details }));
+    return;
+  }
+
   const runId = args[0];
   const pipelineId = args[1];
   const gate = args[2];
@@ -203,7 +284,7 @@ async function main(): Promise<void> {
   const stateRootIndex = args.indexOf('--state-root');
   if (stateRootIndex >= 0) stateRoot = args[stateRootIndex + 1] ?? DEFAULT_STATE_ROOT;
   if (!runId || !pipelineId || !gate) {
-    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>]');
+    throw new GateRunnerError('usage: gate-runner-cli.ts validate-manifest <manifest.json> | <run-id> <pipeline-id> <gate> [--state-root <path>]');
   }
 
   const stateFile = join(resolve(stateRoot), runId, 'state.json');
