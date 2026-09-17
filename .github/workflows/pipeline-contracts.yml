@@ -52,3 +52,5 @@ jobs:
             config/opencode/skills/task-management/scripts/github-handoff-core.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-init-cli.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-agent-audit.test.mjs
+          npx --yes tsx --test \
+            config/opencode/skills/task-management/scripts/github-release-wait.test.ts
