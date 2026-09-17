@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { basename } from 'node:path';
 
 type InvocationResult = {
   exit_code: number;
@@ -6,7 +7,7 @@ type InvocationResult = {
   stderr: string;
 };
 
-type WorkflowRun = {
+export type WorkflowRun = {
   id?: number;
   workflow_id?: number;
   name?: string;
@@ -114,6 +115,26 @@ function latestRuns(runs: WorkflowRun[]): WorkflowRun[] {
   return [...latest.values()];
 }
 
+export function selectProducerRuns(runs: WorkflowRun[], workflow?: string): WorkflowRun[] {
+  const current = latestRuns(runs);
+  if (workflow) {
+    const expected = workflow.replace(/^\.\//, '');
+    return current.filter((run) => {
+      const path = (run.path ?? '').replace(/^\.\//, '');
+      return run.name === workflow || path === expected || basename(path) === basename(expected);
+    });
+  }
+
+  // Backward compatibility for already-frozen manifests that predate an explicit
+  // producer selector. Prefer workflows whose name/path clearly indicates that
+  // they build or publish install/release artifacts; fall back to all exact-SHA
+  // runs only when no such workflow exists.
+  const likelyProducer = current.filter((run) =>
+    /(release|artifact|install|publish|package)/i.test(`${run.name ?? ''} ${run.path ?? ''}`),
+  );
+  return likelyProducer.length > 0 ? likelyProducer : current;
+}
+
 export function classifyWorkflowRuns(runs: WorkflowRun[]): {
   state: ReleaseWaitObservation['ci_state'];
   runs: WorkflowRun[];
@@ -166,6 +187,7 @@ export async function waitForGitHubRelease(options: {
   firstResult: InvocationResult;
   rerun: () => Promise<InvocationResult>;
   onWaiting?: (observation: ReleaseWaitObservation) => Promise<void>;
+  workflow?: string;
   timing?: Partial<Timing>;
 }): Promise<{ result: InvocationResult; observations: ReleaseWaitObservation[] } | undefined> {
   if (options.executable !== 'curl' || !is404(options.firstResult)) return undefined;
@@ -187,7 +209,8 @@ export async function waitForGitHubRelease(options: {
 
     let classified: ReturnType<typeof classifyWorkflowRuns>;
     try {
-      classified = classifyWorkflowRuns(await fetchRuns(target.repo, options.candidateSha, options.cwd, options.env));
+      const allRuns = await fetchRuns(target.repo, options.candidateSha, options.cwd, options.env);
+      classified = classifyWorkflowRuns(selectProducerRuns(allRuns, options.workflow));
     } catch (error) {
       throw new GitHubReleaseWaitError(
         'ci_inspection_failed',
@@ -206,19 +229,19 @@ export async function waitForGitHubRelease(options: {
 
     if (classified.state === 'failed') {
       observations.push(observation);
-      throw new GitHubReleaseWaitError('producer_failed', 'GitHub Actions for the exact candidate SHA completed without a successful run', observations, result);
+      throw new GitHubReleaseWaitError('producer_failed', 'producer GitHub Actions workflow for the exact candidate SHA failed', observations, result);
     }
 
     if (classified.state === 'missing' && now - startedAt >= timing.ciStartGraceMs) {
       observations.push(observation);
-      throw new GitHubReleaseWaitError('ci_not_observed', 'no GitHub Actions run appeared for the exact candidate SHA within the CI start grace period', observations, result);
+      throw new GitHubReleaseWaitError('ci_not_observed', 'no producer GitHub Actions run appeared for the exact candidate SHA within the CI start grace period', observations, result);
     }
 
     if (classified.state === 'success') {
       successObservedAt ??= now;
       if (now - successObservedAt >= timing.artifactGraceMs) {
         observations.push(observation);
-        throw new GitHubReleaseWaitError('artifact_missing_after_success', 'GitHub Actions succeeded but the candidate release remained unavailable past the artifact grace period', observations, result);
+        throw new GitHubReleaseWaitError('artifact_missing_after_success', 'producer CI succeeded but the candidate release remained unavailable past the artifact grace period', observations, result);
       }
     }
 
