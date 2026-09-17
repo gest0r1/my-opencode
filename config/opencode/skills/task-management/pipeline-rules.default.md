@@ -83,6 +83,25 @@ fail-closed.
 - Evidence identifies run/pipeline/gate, observed result and immutable candidate
   identity when relevant.
 
+## Asynchronous external readiness
+
+- Expected external latency is not an owner decision and must not end an
+  `--unattended` run merely because an exact candidate artifact is not ready yet.
+- When a release gate receives a transient GitHub release `404` for the exact
+  `candidate_sha`, the deterministic runner inspects GitHub Actions for that same
+  SHA and keeps the stage `in_progress` while the producer CI is queued/running.
+- Polling interval is one minute. The runner writes `WAITING` evidence on every
+  observation and retries the same frozen release command; the LLM does not poll
+  and the owner is not asked to resume the run.
+- Producer CI failure/cancellation/timed-out terminal state is a real gate
+  failure, not a wait condition. It must stop waiting immediately so the normal
+  technical-fix/block path can handle the defect.
+- A successful producer CI may have a short publication lag. Missing artifacts
+  after the bounded post-CI grace period, missing producer CI after its start
+  grace period, inability to inspect CI, or the overall wait timeout are blocking.
+- Waiting is bounded and fail-closed; an external `404` must never create an
+  unbounded retry loop.
+
 ## Candidate provenance and runtime validation
 
 - For deployable runtime with a reproducible installer, validation should trace:
