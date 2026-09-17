@@ -5,6 +5,7 @@ import { access, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { GitHubReleaseWaitError, waitForGitHubRelease } from './github-release-wait';
 import { inspectPythonProject, isPythonTestInvocation, preparePythonTestEnvironment } from './python-gate-env';
 
 type PipelineSpec = {
@@ -279,6 +280,29 @@ async function acquireRuntimeLocks(stateRoot: string, runId: string, locks: stri
   };
 }
 
+function resultRecord(
+  invocation: { command: string; exe: string; args: string[] },
+  result: { exit_code: number; stdout: string; stderr: string },
+  startedAt: string,
+  projectPython?: Awaited<ReturnType<typeof preparePythonTestEnvironment>>,
+  waitObservations?: unknown[],
+): Record<string, unknown> {
+  return {
+    command: invocation.command,
+    executable: invocation.exe,
+    argv: invocation.args,
+    ...(projectPython ? { resolved_python: projectPython.python, dependency_source: projectPython.dependencySource } : {}),
+    ...(waitObservations?.length ? { wait_observations: waitObservations } : {}),
+    started_at: startedAt,
+    completed_at: new Date().toISOString(),
+    exit_code: result.exit_code,
+    stdout: redact(result.stdout),
+    stderr: redact(result.stderr),
+    stdout_sha256: sha256(result.stdout),
+    stderr_sha256: sha256(result.stderr),
+  };
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const runId = args[0];
@@ -336,23 +360,71 @@ async function main(): Promise<void> {
         throw new GateRunnerError(`Python project environment setup failed: ${reason}; evidence=${evidenceFile}`);
       }
     }
+
     for (const invocation of invocations) {
       const startedAt = new Date().toISOString();
       const projectPython = projectPythonEnv && isPythonTestInvocation(invocation.exe, invocation.args);
-      const result = await runInvocation(invocation.exe, invocation.args, process.cwd(), projectPython ? projectPythonEnv.env : process.env);
-      results.push({
-        command: invocation.command,
-        executable: invocation.exe,
-        argv: invocation.args,
-        ...(projectPython ? { resolved_python: projectPythonEnv.python, dependency_source: projectPythonEnv.dependencySource } : {}),
-        started_at: startedAt,
-        completed_at: new Date().toISOString(),
-        exit_code: result.exit_code,
-        stdout: redact(result.stdout),
-        stderr: redact(result.stderr),
-        stdout_sha256: sha256(result.stdout),
-        stderr_sha256: sha256(result.stderr),
-      });
+      const invocationEnv = projectPython ? projectPythonEnv.env : process.env;
+      let result = await runInvocation(invocation.exe, invocation.args, process.cwd(), invocationEnv);
+      let waitObservations: unknown[] = [];
+
+      if (result.exit_code !== 0 && candidateSha) {
+        try {
+          const waited = await waitForGitHubRelease({
+            candidateSha,
+            executable: invocation.exe,
+            args: invocation.args,
+            cwd: process.cwd(),
+            env: invocationEnv,
+            firstResult: result,
+            rerun: () => runInvocation(invocation.exe, invocation.args, process.cwd(), invocationEnv),
+            onWaiting: async (observation) => {
+              await writeFile(
+                evidenceFile,
+                `${JSON.stringify({
+                  status: 'WAITING',
+                  run_id: runId,
+                  pipeline_id: pipelineId,
+                  gate,
+                  candidate_sha: candidateSha,
+                  reason: 'candidate_release_not_ready',
+                  observation,
+                }, null, 2)}\n`,
+                'utf8',
+              );
+            },
+          });
+          if (waited) {
+            result = waited.result;
+            waitObservations = waited.observations;
+          }
+        } catch (error: unknown) {
+          if (error instanceof GitHubReleaseWaitError) {
+            const status = ['producer_failed', 'release_check_failed'].includes(error.classification) ? 'FAIL' : 'BLOCKED';
+            const record = resultRecord(invocation, error.lastResult, startedAt, projectPython, error.observations);
+            results.push(record);
+            await writeFile(
+              evidenceFile,
+              `${JSON.stringify({
+                status,
+                run_id: runId,
+                pipeline_id: pipelineId,
+                gate,
+                runtime_locks: releaseLocks,
+                candidate_sha: candidateSha,
+                reason: error.classification,
+                message: error.message,
+                results,
+              }, null, 2)}\n`,
+              'utf8',
+            );
+            throw new GateRunnerError(`release readiness ${error.classification}: ${error.message}; evidence=${evidenceFile}`);
+          }
+          throw error;
+        }
+      }
+
+      results.push(resultRecord(invocation, result, startedAt, projectPython, waitObservations));
       if (result.exit_code !== 0) {
         await writeFile(evidenceFile, `${JSON.stringify({ status: 'FAIL', run_id: runId, pipeline_id: pipelineId, gate, runtime_locks: releaseLocks, results }, null, 2)}\n`, 'utf8');
         throw new GateRunnerError(`gate command failed (${result.exit_code}): ${invocation.command}; evidence=${evidenceFile}`);
