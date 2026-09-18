@@ -12,6 +12,7 @@ config/                          # Глобальная конфигурация
   opencode.env.example           # единый env для OpenCode CLI и OpenChamber
 scripts/                         # Пользовательские скрипты
   opencode-web-reboot/           # Скрипт перезапуска opencode-web сервиса
+mcp/1c-buddy/                    # Pinned upstream, Compose и инструкция
 ```
 
 > ⚠️ **Канон агентов (с 2026-08-01):** `~/.opencode/agent/` — install-дир, его читает бинарник.  
@@ -54,16 +55,24 @@ opencode auth list
 
 ```bash
 YANDEX_DISK_TOKEN=...
-YONOTE_API_KEY=...
 YANDEX_METRIKA_TOKEN=...
+ONEC_AI_TOKEN=...
 OPENCODE_DISABLE_DEFAULT_PLUGINS=1
 ```
+
+Никогда не добавлять реальные значения в Git, issue или логи. `chmod 600 ~/.config/opencode.env`. Пример имён переменных без значений: `config/opencode.env.example`.
 
 Обычная команда `opencode` запускается через managed launcher `/usr/local/bin/opencode`, который загружает `~/.config/opencode.env` перед запуском настоящего `~/.opencode/bin/opencode`.
 
 OpenChamber использует тот же `~/.config/opencode.env` как при ручном запуске, так и через systemd startup. Поэтому CLI и OpenChamber получают одинаковые env и тот же `auth.json`.
 
 Legacy-файл `~/.config/opencode-web.env` больше не используется. Installer один раз мигрирует его содержимое в `~/.config/opencode.env`, удаляет старые LLM API-key overrides и затем удаляет legacy-файл. В репозитории `config/opencode-web.env.example` также отсутствует.
+
+## MCP
+
+Поддерживаются ровно семь серверов: `context7`, `gh_grep`, `exa`, `yadisk`, `memory`, `ya-metrika`, `1c-buddy`. Первые три — удалённые сервисы; `yadisk` ставится в изолированный uv tool; версии npm-пакетов для `memory` и `ya-metrika` зафиксированы в `opencode.json`. Для `1c-buddy` установщик скачивает исходник строго по SHA из `mcp/1c-buddy/source.lock` и собирает собственный Docker-образ; порт доступен только на 127.0.0.1:6002. Подробнее: `mcp/1c-buddy/README.md`.
+
+Для полного `install.sh` требуются доступ к Docker Engine и Compose v2, `npx`, а также `ONEC_AI_TOKEN` в локальном env. Если компонент ещё не подготовлен, установка завершается с явной ошибкой и не заменяет чужой контейнер. Чтобы выполнить **только обновление конфигурации**, не устанавливая MCP, можно явно задать `OPENCODE_SKIP_MCP_INSTALL=1` (это не означает, что MCP работают). Не запускай установку под другим пользователем через sudo: `$HOME` определяет пути окружения и Docker-контейнера.
 
 ## Upstream
 
@@ -93,6 +102,7 @@ gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/content
 - создаёт или мигрирует единый `~/.config/opencode.env`;
 - удаляет legacy `~/.config/opencode-web.env` после миграции;
 - создаёт managed launcher `/usr/local/bin/opencode`, который всегда загружает единый env;
+- устанавливает поддерживаемые локальные MCP из GitHub и pinned-пакетов, проверяет 1c-buddy;
 - удаляет временные файлы после установки.
 
 Для установки другой ветки/тега:
@@ -109,20 +119,7 @@ gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/content
 gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install-openchamber.sh | bash
 ```
 
-Он последовательно:
-- устанавливает/обновляет OpenCode и всегда накатывает актуальную конфигурацию из приватного `gest0r1/my-opencode`;
-- мигрирует runtime на единый `~/.config/opencode.env`;
-- проверяет Node.js и при необходимости ставит Node.js 22 через nvm;
-- ставит Bun, если его нет;
-- временно скачивает snapshot `gest0r1/openchamber-ru@main`;
-- выполняет `bun install --frozen-lockfile` и `bun run build:web`;
-- пакует именно собранный fork в `.tgz` и устанавливает его глобально через npm;
-- создаёт managed launcher `/usr/local/bin/openchamber`, который загружает тот же `~/.config/opencode.env`;
-- создаёт systemd drop-in `~/.config/systemd/user/openchamber.service.d/10-opencode-env.conf`, подключающий тот же env к автозагрузке;
-- при `openchamber startup enable` автоматически добавляет `--no-env-snapshot`, чтобы OpenChamber не создавал вторую копию общего окружения в своём `startup.env`;
-- удаляет временный исходный код после установки.
-
-В результате сервер не содержит dev-clone `openchamber-ru`: установлен runtime-пакет, собранный из текущего GitHub `main`.
+Он устанавливает/обновляет OpenCode и конфигурацию, затем ставит OpenChamber RU из проверенного GitHub bundle для точного SHA. Если bundle отсутствует, установка останавливается; сборка из исходников выполняется только с явным `--build-from-source`. Подключает общий `~/.config/opencode.env` через launcher и systemd drop-in. Runtime-файлы не берутся из dev-папки.
 
 ### Проверка
 
@@ -130,6 +127,7 @@ gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/content
 opencode --version
 openchamber --version
 opencode auth list
+opencode mcp list
 ```
 
 ### Запуск и порт
@@ -156,7 +154,7 @@ openchamber -p 3001 --ui-password '<password>'
 
 ### Автозагрузка OpenChamber
 
-Для Linux используется штатный `openchamber startup enable`. Наш launcher автоматически запрещает snapshot общего env, а systemd drop-in подключает `~/.config/opencode.env` напрямую.
+Для Linux используется штатный `openchamber startup enable`. Наш launcher использует общий env, а systemd drop-in подключает `~/.config/opencode.env` напрямую.
 
 Пример для Docker bridge, чтобы HTTP-порт OpenChamber не публиковался на внешнем интерфейсе:
 
@@ -194,29 +192,18 @@ GitHub: gest0r1/my-opencode + gest0r1/openchamber-ru
         ↓
 install-openchamber.sh
         ↓
-временный snapshot → build → runtime install → удаление исходников
+проверенный GitHub bundle → runtime install
 ```
 
 ### Обновление сервера
 
-После изменений и `git push` в `my-opencode` или `openchamber-ru` на сервере выполняется **та же команда**, что и при первой установке:
+После изменений и `git push` в `my-opencode` или `openchamber-ru` на сервере выполняется та же команда установки:
 
 ```bash
 gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/contents/install-openchamber.sh | bash
 ```
 
-Она повторно:
-1. обновит OpenCode;
-2. установит актуальный private config из `my-opencode@main`;
-3. мигрирует/проверит единый runtime env;
-4. скачает текущий `openchamber-ru@main`;
-5. пересоберёт fork;
-6. заменит установленный runtime OpenChamber новой сборкой;
-7. обновит launchers и systemd drop-in.
-
-Отдельный `git pull` на сервере не нужен: рабочая копия исходников там не хранится.
-
-> **Важно:** для нашего fork не использовать `openchamber update` как основной механизм обновления. Встроенный updater ориентирован на официальный `@openchamber/web` и upstream OpenChamber. Наш канонический способ обновления — повторный запуск `install-openchamber.sh` из приватного `my-opencode`.
+Обновление сверяет SHA дистрибутива и OpenChamber, сохраняя существующий env. Рабочий clone на сервере не нужен. Встроенный `openchamber update` ориентирован на upstream, а не наш fork, поэтому для fork следует использовать установщик.
 
 Для установки конкретной ветки или тега fork:
 
@@ -267,6 +254,8 @@ chmod 600 ~/.config/opencode.env
 # Legacy env больше не используется
 rm -f ~/.config/opencode-web.env
 ```
+
+Для восстановления локальных MCP отдельно запустить GitHub-установщик либо `scripts/install-mcp.sh` из проверенного snapshot после настройки Docker и `ONEC_AI_TOKEN`.
 
 Дополнительные компоненты при необходимости:
 
