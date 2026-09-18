@@ -1,0 +1,17 @@
+# Compose is invoked with -p my-opencode-1c-buddy by install-mcp.sh.
+# Secrets and source directory are supplied from runtime environment, never Git.
+services:
+  buddy:
+    build:
+      context: ${ONEC_BUDDY_SOURCE_DIR:?source directory required}
+      dockerfile: Dockerfile
+    image: my-opencode/1c-buddy:${ONEC_BUDDY_SOURCE_SHA:?pinned sha required}
+    container_name: my-opencode-1c-buddy
+    env_file:
+      - ${ONEC_BUDDY_ENV_FILE:?runtime env required}
+    ports:
+      - "127.0.0.1:6002:6002"
+    restart: unless-stopped
+    labels:
+      my-opencode.managed: "true"
+      my-opencode.source-sha: ${ONEC_BUDDY_SOURCE_SHA:?pinned sha required}
