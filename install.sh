@@ -248,6 +248,18 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
+# Installation is sourced from the same verified GitHub archive as config, never
+# from a development checkout. Refuse unknown containers; do not mutate secrets.
+if [[ "${OPENCODE_SKIP_MCP_INSTALL:-0}" != 1 ]]; then
+  [[ -f "$SRC/scripts/install-mcp.sh" ]] || {
+    echo 'Ошибка: в установленном GitHub archive нет scripts/install-mcp.sh.' >&2
+    exit 1
+  }
+  OPENCODE_SOURCE_ROOT="$SRC" OPENCODE_ENV_FILE="$ENV_FILE" bash "$SRC/scripts/install-mcp.sh"
+else
+  echo 'Внимание: MCP installation явно пропущена (OPENCODE_SKIP_MCP_INSTALL=1).'
+fi
+
 echo "Готово: OpenCode и конфигурация $REPO@$REF установлены."
 
 if command -v opencode >/dev/null 2>&1; then
