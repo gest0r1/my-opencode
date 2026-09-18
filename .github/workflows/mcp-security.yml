@@ -1,0 +1,50 @@
+name: MCP config and secrets
+
+on:
+  pull_request:
+    paths:
+      - 'config/opencode/**'
+      - 'config/opencode.env.example'
+      - 'mcp/**'
+      - 'scripts/install-mcp.sh'
+      - 'scripts/check-mcp-config.py'
+      - 'install.sh'
+      - '.gitignore'
+      - '.github/workflows/mcp-security.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'config/opencode/**'
+      - 'config/opencode.env.example'
+      - 'mcp/**'
+      - 'scripts/install-mcp.sh'
+      - 'scripts/check-mcp-config.py'
+      - 'install.sh'
+      - '.gitignore'
+      - '.github/workflows/mcp-security.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  current-tree:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate MCP configuration and shell syntax
+        run: |
+          python3 scripts/check-mcp-config.py
+          bash -n install.sh scripts/install-mcp.sh
+      - name: Validate Compose configuration without secrets
+        env:
+          ONEC_BUDDY_SOURCE_DIR: .
+          ONEC_BUDDY_SOURCE_SHA: 8a08ba009b632305b8a78d056301567a1d61e39b
+          ONEC_BUDDY_ENV_FILE: config/opencode.env.example
+        run: docker compose -f mcp/1c-buddy/compose.yml config --quiet
+      - name: Detect current-tree secrets (not historical commits)
+        run: |
+          docker run --rm --volume "$PWD:/repo:ro" --workdir /repo \
+            ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            dir --redact --no-banner /repo
