@@ -39,9 +39,9 @@ jobs:
           bash -n install.sh scripts/install-mcp.sh
       - name: Validate Compose configuration without secrets
         env:
-          ONEC_BUDDY_SOURCE_DIR: .
+          ONEC_BUDDY_SOURCE_DIR: ${{ github.workspace }}
           ONEC_BUDDY_SOURCE_SHA: 8a08ba009b632305b8a78d056301567a1d61e39b
-          ONEC_BUDDY_ENV_FILE: config/opencode.env.example
+          ONEC_BUDDY_ENV_FILE: ${{ github.workspace }}/config/opencode.env.example
         run: docker compose -f mcp/1c-buddy/compose.yml config --quiet
       - name: Detect current-tree secrets (not historical commits)
         run: |
