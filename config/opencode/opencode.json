@@ -24,7 +24,7 @@
     "yadisk": {
       "type": "local",
       "command": [
-        "/home/guber/.local/bin/yadisk-mcp"
+        "{env:HOME}/.local/bin/yadisk-mcp"
       ],
       "enabled": true,
       "env": {
@@ -32,100 +32,27 @@
         "YADISK_MCP_READ_ONLY": "false"
       }
     },
-    "yonote": {
-      "type": "remote",
-      "url": "https://fresh-logic.yonote.ru/api/v2/mcp",
-      "enabled": true,
-      "headers": {
-        "Authorization": "Bearer {env:YONOTE_API_KEY}"
-      }
-    },
     "memory": {
       "type": "local",
       "command": [
         "npx",
         "-y",
-        "@modelcontextprotocol/server-memory"
+        "@modelcontextprotocol/server-memory@2026.8.31"
       ],
       "enabled": true
-    },
-    "exchange": {
-      "type": "remote",
-      "url": "http://localhost:8001/sse",
-      "enabled": true,
-      "headers": {
-        "X-API-Key": "x"
-      }
-    },
-    "bitrix24": {
-      "type": "remote",
-      "url": "http://127.0.0.1:8081/mcp",
-      "enabled": true
-    },
-    "n8n": {
-      "type": "local",
-      "command": [
-        "node",
-        "/home/guber/Opencode/dev/mcp_n8n/src/server.js"
-      ],
-      "enabled": true,
-      "env": {
-        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
-      }
     },
     "1c-buddy": {
       "type": "remote",
-      "url": "http://localhost:6002/mcp",
+      "url": "http://127.0.0.1:6002/mcp",
       "enabled": true,
-      "oauth": {
-        "redirectUri": "http://10.0.10.66:4099/mcp/oauth/callback?server=1c-buddy"
-      }
-    },
-    "itop": {
-      "type": "local",
-      "command": [
-        "python3",
-        "/home/guber/Opencode/dev/mcp-itop/server.py"
-      ],
-      "enabled": true,
-      "env": {
-        "ITOP_URL": "https://sd.fresh-logic.ru",
-        "ITOP_TOKEN": "x",
-        "ITOP_VERSION": "1.3",
-        "ITOP_VERIFY_SSL": "true",
-        "ITOP_TIMEOUT": "30"
-      }
-    },
-    "google-drive": {
-      "type": "local",
-      "command": [
-        "/home/guber/.local/bin/google-drive-mcp-wrapper.sh"
-      ],
-      "enabled": true,
-      "env": {
-        "GDRIVE_MCP_CLIENT_ID": "x",
-        "GDRIVE_MCP_CLIENT_SECRET": "x",
-        "GDRIVE_MCP_REFRESH_TOKEN": "x"
-      }
-    },
-    "image-gen": {
-      "type": "local",
-      "command": [
-        "python3",
-        "-m",
-        "image_gen_mcp.server"
-      ],
-      "enabled": true,
-      "env": {
-        "IMAGE_GEN_OUTPUT_DIR": "/home/guber/Opencode/site_re/документация/assets"
-      }
+      "oauth": false
     },
     "ya-metrika": {
       "type": "local",
       "command": [
         "npx",
         "-y",
-        "@theyahia/yandex-metrika-mcp"
+        "@theyahia/yandex-metrika-mcp@2.1.1"
       ],
       "enabled": true,
       "env": {
@@ -141,9 +68,6 @@
     "kagi_*": "deny",
     "webfetch": "deny",
     "worktree_*": "deny",
-    "exchange_*": "allow",
-    "image-gen_*": "allow",
-    "google-drive_*": "allow",
     "ya-metrika_*": "allow"
   },
   "instructions": [
