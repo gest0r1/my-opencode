@@ -1,13 +1,30 @@
-# Secrets
+# Secrets (examples remain tracked)
 .env
 *.env
+**/.env.*
+!**/.env.example
+**/opencode.env
 **/opencode-web.env
+**/opencode.local.json
+**/opencode.local.jsonc
+**/auth.json
+**/mcp-auth.json
+**/credentials.json
+**/token.json
+**/client_secret*.json
+*.key
+*.pem
+*.p12
+*.pfx
+*.secret
 
 # Dependencies
 node_modules/
 **/node_modules/
 package-lock.json
 **/package-lock.json
+**/.venv/
+**/venv/
 
 # Runtime data
 *.log
@@ -19,6 +36,7 @@ package-lock.json
 **/scheduler/**
 __pycache__/
 *.pyc
+**/mcp-runtime/**
 
 # Temp / session artifacts
 .tmp/
