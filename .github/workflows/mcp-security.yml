@@ -7,6 +7,7 @@ on:
       - 'config/opencode.env.example'
       - 'mcp/**'
       - 'scripts/install-mcp.sh'
+      - 'scripts/check-mcp.sh'
       - 'scripts/check-mcp-config.py'
       - 'install.sh'
       - '.gitignore'
@@ -19,6 +20,7 @@ on:
       - 'config/opencode.env.example'
       - 'mcp/**'
       - 'scripts/install-mcp.sh'
+      - 'scripts/check-mcp.sh'
       - 'scripts/check-mcp-config.py'
       - 'install.sh'
       - '.gitignore'
@@ -36,7 +38,7 @@ jobs:
       - name: Validate MCP configuration and shell syntax
         run: |
           python3 scripts/check-mcp-config.py
-          bash -n install.sh scripts/install-mcp.sh
+          bash -n install.sh scripts/install-mcp.sh scripts/check-mcp.sh
       - name: Validate Compose configuration without secrets
         env:
           ONEC_BUDDY_SOURCE_DIR: ${{ github.workspace }}
