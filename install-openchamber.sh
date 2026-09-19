@@ -126,7 +126,7 @@ OLD_TARGET=''
 [[ ! -e "$PASSWORD_ENV" ]] || cp -a "$PASSWORD_ENV" "$BACKUP/password"
 [[ ! -e "$STATE" ]] || cp -a "$STATE" "$BACKUP/state"
 rollback() {
-  local rc=$?
+  local rc="$1" failed_line="$2"
   trap - ERR
   set +e
   if [[ -n "$OLD_TARGET" ]]; then ln -s "$OLD_TARGET" "$ROOT/.current-rollback.$$"; mv -Tf "$ROOT/.current-rollback.$$" "$ROOT/current"; else rm -f "$ROOT/current"; fi
@@ -137,10 +137,10 @@ rollback() {
   done
   systemctl --user daemon-reload
   [[ ! -f "$UNIT" ]] || systemctl --user restart openchamber.service
-  echo "FAILED ($rc). Runtime restored; backup: $BACKUP" >&2
+  echo "FAILED ($rc) at installer line $failed_line. Runtime restored; backup: $BACKUP" >&2
   exit "$rc"
 }
-trap rollback ERR
+trap 'rollback "$?" "$LINENO"' ERR
 
 if (( binary_changed == 1 )); then
   if cached_release_ok; then
@@ -228,10 +228,25 @@ rm -f "$LEGACY_DROP"
 systemctl --user daemon-reload
 systemctl --user enable --now openchamber.service
 systemctl --user restart openchamber.service
-systemctl --user is-active --quiet openchamber.service
-ss -H -lnt "sport = :$PORT" | grep -Fq "$HOST:$PORT"
-HTTP="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "http://$HOST:$PORT/")"
-case "$HTTP" in 200|301|302|303|307|308|401|403) ;; *) echo "Unexpected HTTP $HTTP" >&2; false ;; esac
+# systemctl can report active before Node has bound its HTTP socket. Observe
+# the actual configured address and HTTP response, not an instantaneous status.
+HTTP=''
+ready=0
+for attempt in {1..45}; do
+  if systemctl --user is-active --quiet openchamber.service &&
+     ss -H -lnt "sport = :$PORT" | grep -Fq "$HOST:$PORT"; then
+    HTTP="$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' "http://$HOST:$PORT/" || true)"
+    case "$HTTP" in
+      200|301|302|303|307|308|401|403) ready=1; break ;;
+    esac
+  fi
+  sleep 1
+done
+if (( ready != 1 )); then
+  echo "OpenChamber did not become ready on $HOST:$PORT; last HTTP: ${HTTP:-unavailable}" >&2
+  systemctl --user status openchamber.service --no-pager -l >&2 || true
+  false
+fi
 [[ "$("$BIN" --version)" == "$OPENCODE_VERSION" ]]
 "$ROOT/bin/openchamber" --version
 printf 'config_sha=%s\nopenchamber_sha=%s\nopencode_version=%s\n' "$CONFIG_SHA" "$REF_SHA" "$OPENCODE_VERSION" > "$STATE.tmp.$$"
