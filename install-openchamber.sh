@@ -107,7 +107,7 @@ binary_changed=0
 installed_ok || binary_changed=1
 # Repair a missing/incorrect service without transferring an unchanged archive.
 need_service=0
-[[ -f "$DROP" ]] && grep -Fq "--host $HOST --port $PORT" "$DROP" 2>/dev/null || need_service=1
+[[ -f "$DROP" ]] && grep -Fq -- "--host $HOST --port $PORT" "$DROP" 2>/dev/null || need_service=1
 [[ -f "$UNIT" ]] || need_service=1
 systemctl --user is-active --quiet openchamber.service || need_service=1
 if (( config_changed == 0 && binary_changed == 0 && need_service == 0 )) && [[ "${1:-}" != --opencode-update ]]; then
@@ -118,7 +118,6 @@ fi
 BACKUP="$(mktemp -d "$ROOT/backups.XXXXXXXX")"
 OLD_TARGET=''
 [[ ! -L "$ROOT/current" ]] || OLD_TARGET="$(readlink -f "$ROOT/current")"
-for name in launcher opencode drop legacy-drop unit password state; do :; done
 [[ ! -e /usr/local/bin/openchamber && ! -L /usr/local/bin/openchamber ]] || cp -a /usr/local/bin/openchamber "$BACKUP/launcher"
 [[ ! -e "$BIN" && ! -L "$BIN" ]] || cp -a "$BIN" "$BACKUP/opencode"
 [[ ! -e "$DROP" ]] || cp -a "$DROP" "$BACKUP/drop"
