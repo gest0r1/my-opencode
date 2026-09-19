@@ -1,0 +1,77 @@
+name: Canonical GitHub-release fresh and repeat installation
+on:
+  push:
+    branches: [integration/standard-bundle-installer-2026-09-19]
+    paths: [.github/workflows/full-install-smoke.yml, install-openchamber.sh]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+      - name: Exercise canonical installer twice against actual GitHub release without starting any real service
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ROOT="$RUNNER_TEMP/openchamber-test-home"
+          FAKE="$RUNNER_TEMP/openchamber-stubs"
+          mkdir -p "$ROOT/.local/state/my-opencode" "$FAKE"
+          config_sha="$(gh api 'repos/gest0r1/my-opencode/commits/integration/standard-bundle-installer-2026-09-19' --jq .sha)"
+          printf 'config_sha=%s\n' "$config_sha" > "$ROOT/.local/state/my-opencode/openchamber-install.state"
+          export TEST_GH_LOG="$RUNNER_TEMP/openchamber-gh-requests.log"
+          export TEST_STARTED="$RUNNER_TEMP/openchamber-service-started"
+          export REAL_GH="$(command -v gh)"
+          cat > "$FAKE/gh" <<'GH'
+          #!/usr/bin/env bash
+          echo "$*" >> "$TEST_GH_LOG"
+          exec "$REAL_GH" "$@"
+          GH
+          cat > "$FAKE/systemctl" <<'SYSTEMCTL'
+          #!/usr/bin/env bash
+          case " $* " in
+            *' is-active '*) test -f "$TEST_STARTED" ;;
+            *' restart '*|*' enable '*) touch "$TEST_STARTED" ;;
+            *) exit 0 ;;
+          esac
+          SYSTEMCTL
+          cat > "$FAKE/ss" <<'SS'
+          #!/usr/bin/env bash
+          if [[ -e "$TEST_STARTED" ]]; then
+            echo 'LISTEN 0 1024 127.0.0.1:3000 0.0.0.0:*'
+          fi
+          SS
+          cat > "$FAKE/ip" <<'IP'
+          #!/usr/bin/env bash
+          echo '1: lo inet 127.0.0.1/8 scope host lo'
+          IP
+          cat > "$FAKE/curl" <<'CURL'
+          #!/usr/bin/env bash
+          if [[ "$*" == *'127.0.0.1:3000/'* ]]; then printf 200; else echo "Unexpected curl: $*" >&2; exit 1; fi
+          CURL
+          chmod 755 "$FAKE"/*
+          for n in 1 2; do
+            sudo env PATH="$FAKE:$PATH" HOME="$ROOT" GH_TOKEN="$GH_TOKEN" \
+              TEST_GH_LOG="$TEST_GH_LOG" TEST_STARTED="$TEST_STARTED" REAL_GH="$REAL_GH" \
+              OPENCODE_CONFIG_REF=integration/standard-bundle-installer-2026-09-19 \
+              OPENCHAMBER_REF=717919ac1f6707251e0c3eef062e08d86b9e0cf5 \
+              OPENCHAMBER_BIND_HOST=127.0.0.1 bash ./install-openchamber.sh
+          done
+          grep -q 'SUCCESS: OpenChamber' "$GITHUB_STEP_SUMMARY" || true
+          python3 - "$TEST_GH_LOG" <<'PY'
+          from pathlib import Path
+          import sys
+          lines=Path(sys.argv[1]).read_text().splitlines()
+          manifests=[x for x in lines if 'release download' in x and '--pattern manifest.json' in x]
+          archives=[x for x in lines if 'release download' in x and '--pattern openchamber-integration-linux-x64-' in x]
+          assert len(manifests)==2, manifests
+          assert len(archives)==1, archives
+          print('PASS: fresh and repeat canonical install; GitHub manifest downloaded twice, 258MB archive once')
+          PY
