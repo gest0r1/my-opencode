@@ -74,13 +74,16 @@ NODE
 ASSET="${META[0]}"; DIGEST="${META[1]}"; OPENCODE_VERSION="${META[2]}"
 RELEASE="$ROOT/releases/$REF_SHA"
 
-# The current server uses the Docker bridge. For a fresh host without that bridge,
-# default to loopback unless an explicit host is supplied.
-if ip -4 addr show | grep -Fq 'inet 172.18.0.1/'; then default_host=172.18.0.1; else default_host=127.0.0.1; fi
+# The Docker bridge needs a host listener reachable by NPM. A wildcard bind
+# also exposes loopback, which upstream uses for the managed OpenCode callback.
+# The operator is responsible for restricting public access with a firewall.
+# Hosts without this bridge retain the loopback-only default. Explicit override
+# remains available for other network layouts and rollback.
+if ip -4 addr show | grep -Fq 'inet 172.18.0.1/'; then default_host=0.0.0.0; else default_host=127.0.0.1; fi
 HOST="${OPENCHAMBER_BIND_HOST:-$default_host}"
 PORT="${OPENCHAMBER_BIND_PORT:-3000}"
 [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1 && "$PORT" -le 65535 ]] || { echo 'Invalid bind port' >&2; exit 1; }
-if [[ "$HOST" != 127.0.0.1 && "$HOST" != localhost ]]; then
+if [[ "$HOST" != 127.0.0.1 && "$HOST" != localhost && "$HOST" != 0.0.0.0 ]]; then
   ip -4 addr show | grep -Fq "inet $HOST/" || { echo "Bind host $HOST not assigned" >&2; exit 1; }
 fi
 # Do not mistakenly replace a competing Docker proxy's port with this service.
@@ -230,12 +233,15 @@ systemctl --user enable --now openchamber.service
 systemctl --user restart openchamber.service
 # systemctl can report active before Node has bound its HTTP socket. Observe
 # the actual configured address and HTTP response, not an instantaneous status.
+# A wildcard listener must be probed over loopback, not through 0.0.0.0.
+PROBE_HOST="$HOST"
+[[ "$HOST" != 0.0.0.0 ]] || PROBE_HOST=127.0.0.1
 HTTP=''
 ready=0
 for attempt in {1..45}; do
   if systemctl --user is-active --quiet openchamber.service &&
      ss -H -lnt "sport = :$PORT" | grep -Fq "$HOST:$PORT"; then
-    HTTP="$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' "http://$HOST:$PORT/" || true)"
+    HTTP="$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' "http://$PROBE_HOST:$PORT/" || true)"
     case "$HTTP" in
       200|301|302|303|307|308|401|403) ready=1; break ;;
     esac
@@ -252,6 +258,7 @@ fi
 printf 'config_sha=%s\nopenchamber_sha=%s\nopencode_version=%s\n' "$CONFIG_SHA" "$REF_SHA" "$OPENCODE_VERSION" > "$STATE.tmp.$$"
 mv -f "$STATE.tmp.$$" "$STATE"
 trap - ERR
-echo "SUCCESS: OpenChamber $REF_SHA + OpenCode $OPENCODE_VERSION; http://$HOST:$PORT/ ($HTTP)"
+echo "SUCCESS: OpenChamber $REF_SHA + OpenCode $OPENCODE_VERSION; http://$PROBE_HOST:$PORT/ ($HTTP)"
+echo "Bind: $HOST:$PORT (firewall is managed by the operator)"
 echo "Rollback backup: $BACKUP"
 [[ -z "$NEW_PASSWORD" ]] || echo "NEW UI PASSWORD (store securely): $NEW_PASSWORD"
