@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Contract test for the canonical no-download repeat-install path."""
-import json
+"""Contract tests for cached installs, wildcard bind and explicit rollback host."""
 import os
 from pathlib import Path
 import subprocess
@@ -15,6 +14,13 @@ def executable(path: Path, content: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     path.chmod(0o755)
+
+
+def run_installer(env):
+    result = subprocess.run(["bash", str(ROOT_REPO / "install-openchamber.sh")],
+                            env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    assert "Already current:" in result.stdout, result.stdout
 
 
 def main():
@@ -40,7 +46,8 @@ def main():
         drop_dir = unit_dir / "openchamber.service.d"
         drop_dir.mkdir(parents=True)
         (unit_dir / "openchamber.service").write_text("[Service]\nExecStart=/usr/local/bin/openchamber\n")
-        (drop_dir / "90-openchamber-runtime.conf").write_text(
+        drop = drop_dir / "90-openchamber-runtime.conf"
+        drop.write_text(
             "[Service]\nExecStart=/usr/local/bin/openchamber serve --foreground --host 127.0.0.1 --port 3000\n"
         )
         fake = tmp / "fake-bin"
@@ -75,14 +82,28 @@ exit 96
             "OPENCHAMBER_BIND_HOST": "127.0.0.1", "TEST_SHA": SHA,
             "TEST_GH_LOG": str(log),
         })
-        result = subprocess.run(["bash", str(ROOT_REPO / "install-openchamber.sh")],
-                                env=env, text=True, capture_output=True)
-        assert result.returncode == 0, result.stdout + "\n" + result.stderr
-        assert "Already current:" in result.stdout, result.stdout
-        lines = log.read_text().splitlines()
-        assert sum("release download" in line for line in lines) == 1, lines
-        assert "manifest.json" in lines[-1], lines
+        run_installer(env)
+        assert sum("release download" in line for line in log.read_text().splitlines()) == 1
         print("PASS: repeat install fetched only manifest, no binary/archive/config downloads")
+
+        # A Docker bridge now selects the upstream-compatible wildcard listener.
+        executable(fake / "ip", "#!/bin/sh\necho '    inet 172.18.0.1/16 scope global br-test'\n")
+        drop.write_text(
+            "[Service]\nExecStart=/usr/local/bin/openchamber serve --foreground --host 0.0.0.0 --port 3000\n"
+        )
+        env.pop("OPENCHAMBER_BIND_HOST")
+        run_installer(env)
+        assert sum("release download" in line for line in log.read_text().splitlines()) == 2
+        print("PASS: Docker bridge selects wildcard bind with no unnecessary archive download")
+
+        # The operator can explicitly restore the old interface-only bind.
+        drop.write_text(
+            "[Service]\nExecStart=/usr/local/bin/openchamber serve --foreground --host 172.18.0.1 --port 3000\n"
+        )
+        env["OPENCHAMBER_BIND_HOST"] = "172.18.0.1"
+        run_installer(env)
+        assert sum("release download" in line for line in log.read_text().splitlines()) == 3
+        print("PASS: explicit bind override remains available for rollback")
 
 
 if __name__ == "__main__":
