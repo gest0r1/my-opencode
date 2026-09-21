@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { lstat, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -44,7 +44,6 @@ function assertSetup(value: unknown): asserts value is GitSetup {
   if (!setup.branch || !BRANCH.test(setup.branch) || setup.branch.includes('..') || setup.branch.endsWith('/')) {
     throw new GateError('git_setup.branch must be a safe non-default branch');
   }
-  // No implicit fetch, checkout, branch creation or file transplantation in manual mode.
   if (setup.source_sha || setup.checkout_paths?.length) {
     throw new GateError('manual mode does not perform source checkout; prepare it before PLAN and use the resulting main base');
   }
@@ -72,15 +71,16 @@ function sensitive(path: string): boolean {
     /\.(key|pem|p12|pfx|secret)$/i.test(name);
 }
 async function inspect(cwd: string): Promise<Record<string, unknown>> {
-  const [head, branch, linked, main, dirty, trackedPipeline] = await Promise.all([
+  const [head, branch, gitDir, commonDir, main, dirty, trackedPipeline] = await Promise.all([
     git(['rev-parse', 'HEAD'], cwd),
     git(['branch', '--show-current'], cwd),
-    git(['rev-parse', '--is-linked-worktree'], cwd),
+    git(['rev-parse', '--path-format=absolute', '--git-dir'], cwd),
+    git(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd),
     git(['rev-parse', '--verify', 'refs/heads/main'], cwd),
     git(['status', '--porcelain', '--untracked-files=all'], cwd),
     git(['ls-files', '--', '.tmp/pipelines'], cwd),
   ]);
-  return { head, branch, linked_worktree: linked === 'true', main_sha: main,
+  return { head, branch, linked_worktree: resolve(gitDir) !== resolve(commonDir), main_sha: main,
     clean: dirty.length === 0, pipeline_artifacts_tracked: Boolean(trackedPipeline),
     directory: cwd };
 }
@@ -100,7 +100,6 @@ async function assertIdentity(setup: GitSetup, cwd: string): Promise<void> {
       throw new GateError(`forbidden tracked path exists: ${path}`);
     }
     try {
-      const { lstat } = await import('node:fs/promises');
       await lstat(join(cwd, path));
       throw new GateError(`forbidden path exists: ${path}`);
     } catch (error) {
