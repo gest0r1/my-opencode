@@ -1,170 +1,51 @@
 ---
-description: Построить design-freeze plan pipeline без запуска реализации
+description: Design-freeze PLAN in the worktree selected by its owner; no session or branch creation
 tags:
   - pipeline
   - planning
   - design-freeze
 ---
 
-# Pipeline Planning
+# Pipeline Planning — manually selected worktree
 
-Построй только утверждаемый design-freeze plan. Реализацию не запускай.
+Build a design-freeze PLAN only. Never implement source changes, create a worktree/branch/session, switch checkout, rebase, merge, clean, reset or invoke `openchamber session.create`. The owner opens an existing worktree-session and invokes this command **inside that session**. Other worktrees may PLAN concurrently, but only one RUN may execute at a time (owner-managed policy).
 
-## Аргументы
+`$ARGUMENTS` is the task description or a path to a previous plan. Defaults: `docs/plan.md` for project context and `docs/pipeline-rules.md` for rules. Existing project rules take precedence; invalid project rules block. Never create or modify rules automatically.
 
-`$ARGUMENTS` может содержать путь к plan-файлу. По умолчанию:
+## Preflight: inspect only
 
-```text
-plan: docs/plan.md
-rules: docs/pipeline-rules.md
-```
+1. Run `git-worktree-cli.ts inspect` from the current selected session. Require `linked_worktree=true`, non-default branch, a valid main SHA and clean tracked checkout. Do not use shell `cd` to pretend to switch the session directory. Verify `.tmp/pipelines/` is ignored in **this project** (`git check-ignore -q .tmp/pipelines/__probe__`); if not, block and ask the owner to configure the project ignore safely. Existing tracked `.tmp/pipelines` must block.
+2. Record the current worktree path, branch, its HEAD, and exact current local `main` commit as `git_setup.base_sha`. Verify that the main commit is an ancestor of branch HEAD. Use `stage-cli.ts rules docs/pipeline-rules.md --json` and require PASS. Never mutate Git during PLAN.
+3. `git_setup` must contain `base_sha` and `branch`, plus optional `must_absent`; do not generate `source_sha`/`checkout_paths`, which implied automatic branch preparation. Source transplantation, if required, is an owner decision *before* planning.
 
-Project rules предпочтительны. Если их нет, effective rules определяет только
-`stage-cli rules`; агент не создаёт `docs/pipeline-rules.md` автоматически.
+## Design-freeze
 
-## Принцип
+1. Read project context once through ContextScout. Produce one compact context packet with exact paths; repeat retrieval only on a documented gap.
+2. Select agents by actual triggers: StoryMapper and SeniorStoryReviewer for user-facing acceptance criteria; ArchitectureAnalyzer for architecture or cross-module changes; ContractManager for API/event/CLI contracts; ExternalScout for new external technology, security or migrations; SeniorTechnicalPlanReviewer for material risk. PrioritizationEngine only when owner explicitly requests prioritization of competing product items. Skip irrelevant agents.
+3. Planning agents write to `.tmp/pipelines/{run-id}/planning/`. PLAN must not change source or implementation code. Record unresolved owner decisions in one decision packet.
+4. Compile prerequisites, overlapping files and migrations into a DAG. Independent stages can be parallel within the single RUN. Runtime locks are only for genuinely shared external mutable targets; do not invent cross-worktree RUN scheduling.
+5. Create binary acceptance criteria, scoped implementation tasks and minimal top-level `allowed_change_paths`. Protect `.git`, secrets and protected environment files. Gate profiles must be actual executable+argv commands, without shell pipes or chaining.
+6. For deployable projects with reproducible installer, preserve `implementation -> fast gates -> Git scope verify -> publish candidate SHA -> install from GitHub SHA -> runtime validation`. Record `not_applicable` explicitly where justified.
+7. Manifest must define schema_version, unique run_id, planning_mode `design-freeze`, frozen rules source/version, `git_setup`, allowed_change_paths, pipelines/DAG, gate_profiles and open_decisions. Do not call `git-worktree-cli setup` or `capability`.
+8. Before asking for approval, validate references, DAG, scope, rules and machine commands; require no open decisions and `git-worktree-cli.ts adopt .tmp/pipelines/{run-id}/manifest.json` PASS. `adopt` does not change Git.
 
-PLAN является компилятором исполнения: он заранее превращает зависимости,
-пересечения файлов, migrations/fixtures и порядок проверок в DAG. `/pipeline-run`
-не должен повторно решать архитектурные конфликты.
+## Preservation and main refresh
 
-Оставляй runtime lock только для реально общего внешнего mutable target,
-например `deploy:staging`, `database:prod-migration`, `runtime:warehouse-01`.
-Обычные code/file conflicts кодируй dependency edge, а не runtime lock.
+Canonical results live inside this worktree under `.tmp/pipelines/{run-id}/`: `manifest.json`, planning/**, decision-register.md, technology-evidence.md, contract-inventory.md, test-strategy.md, accepted-risks.md. `state.json`, locks, candidate and gate evidence belong to deterministic tools. Never manually edit an approved manifest or state.
 
-## Обязательный flow
+When A has merged into main and owner updates worktree B, retain the entire old run as immutable historical evidence, including the old manifest. Before Git rebase/merge, owner MUST snapshot **all** `.tmp/pipelines` to a location outside B and verify it afterward; see `project/manual-worktree-flow.md`. Git does not version ignored research. Neither `git clean -fdx`, `git reset --hard` nor worktree deletion is permitted as a shortcut.
 
-1. Используй native Read/Glob/Grep и только approved deterministic CLI. Не
-   вызывай произвольный shell/git.
-2. Выполни:
+After refreshing B, create a **new run_id** and NEW manifest under its own directory using retained research as input. Check the actual diff against new main and update only affected design, dependencies, scopes and gates. Cite the previous run as evidence; do not copy its approved `state.json`, lock or candidate into the new run. Even when no design impact is found, new `base_sha` requires new manifest validation and explicit owner approval; RUN of the old run remains blocked by `STALE_PLAN`.
 
-```text
-git-worktree-cli.ts inspect
-stage-cli.ts rules docs/pipeline-rules.md --json
-```
+## Approval boundary
 
-   Rules gate обязан вернуть PASS.
-3. Один раз собери project context через ContextScout и сформируй compact
-   context packet. Downstream agents получают exact relevant paths; повторный
-   ContextScout вызывается только при обнаруженном gap.
-4. Классифицируй задачу и запускай planning agents только по trigger:
-   - `StoryMapper` + `SeniorStoryReviewer`: user-facing behavior или неясные acceptance criteria;
-   - `ArchitectureAnalyzer`: изменение architecture/domain boundaries или сложное cross-module взаимодействие;
-   - `ContractManager`: HTTP/event/CLI/external/internal interface contract изменяется;
-   - `ExternalScout`: new/changed external library/API, auth/payment/security/migration/runtime technology;
-   - `PrioritizationEngine`: только когда есть несколько конкурирующих product items и нужен выбор приоритета;
-   - `SeniorTechnicalPlanReviewer`: medium/high risk, multi-pipeline, security/migration/runtime или существенная architecture change.
-   Для low-risk локального изменения пропускай неприменимые роли.
-5. Всем planning agents передавай artifact root:
+Show one decision packet, current branch/main SHA, manifest, DAG, relevant risks, gates, and run ID. Do not initialize approved state before owner approval. After explicit approval only:
 
 ```text
-.tmp/pipelines/{run-id}/planning/
+stage-cli.ts init .tmp/pipelines/{run-id}/manifest.json
+stage-cli.ts approve {run-id}
+stage-cli.ts validate {run-id} --json
+stage-cli.ts next {run-id} --json
 ```
 
-   Они не пишут source и не используют глобальные `.tmp/planning/**` или
-   `.tmp/contracts/**` как canonical pipeline output.
-6. Собери функциональные/архитектурные решения, которые нельзя вывести
-   детерминированно, в один owner decision packet. Не принимай owner decision сам.
-7. Построй DAG:
-   - реальные prerequisite → `depends_on`;
-   - overlapping source paths → выбери порядок и добавь dependency edge;
-   - migration/fixture collision → dependency edge;
-   - dependent verification/release → dependency edge;
-   - независимые pipelines оставь параллельными.
-   Не добавляй в manifest `conflict_group`, `exclusive_paths`, `migration_paths`
-   или `fixture_paths`: это planning evidence, а не runtime state.
-8. Для shared external mutable targets добавь только `runtime_locks` на
-   соответствующий pipeline.
-9. Сформируй top-level `allowed_change_paths`: минимальный union source/test/docs
-   paths, которые этот run вправе изменить. `git_setup.checkout_paths` должны
-   входить в этот scope. Secrets, `.git` и protected env files не включай.
-10. TaskManager создаёт implementation tasks только после planning readiness.
-    Tasks содержат binary acceptance criteria, deliverables, dependencies,
-    suggested canonical agent ID и ссылки на relevant decision/research/contract.
-    Task JSON — рабочий execution aid; authority остаётся frozen manifest.
-11. Для branch/source setup добавь:
-
-```json
-{
-  "git_setup": {
-    "base_sha": "40-hex",
-    "branch": "feature/or-pipeline-branch",
-    "source_sha": "optional-40-hex",
-    "checkout_paths": [],
-    "must_absent": []
-  }
-}
-```
-
-12. `gate_profiles` содержит только machine-executable commands для
-    deterministic `gate-runner-cli`. Один array item = один процесс без pipes,
-    redirects, command substitution или command chaining. Qualitative review/docs
-    выполняют агенты и не маскируются под shell-команды.
-13. Для deployable runtime, когда проект имеет воспроизводимый installer,
-    планируй цикл candidate SHA:
-
-```text
-implementation -> fast gates -> git scope verify -> publish candidate
--> runtime_install {candidate_sha} -> runtime_validation
-```
-
-    `{candidate_sha}` разрешён как placeholder в runtime gate command и
-    подставляется deterministic runner из `candidate.json`. Если runtime install
-    объективно неприменим, явно запиши `not_applicable` и причину в planning evidence.
-14. Создай manifest минимум с:
-   - `schema_version`, `run_id`;
-   - `planning_mode: design-freeze`;
-   - `rules_file`, `rules_version`;
-   - `allowed_change_paths`;
-   - pipelines `{id, stages, depends_on, profile?, runtime_locks?}`;
-   - `gate_profiles` для machine gates;
-   - `git_setup` при Git branch/source flow;
-   - `open_decisions`.
-15. До owner approval проверь: no open decisions, DAG acyclic, references valid,
-    change scope minimal, gate commands реально исполнимы. Не создавай state при blocker.
-16. Покажи владельцу один decision packet + manifest. После явного approval:
-
-```text
-stage-cli init <manifest>
-stage-cli approve <run-id>
-stage-cli validate <run-id> --json
-stage-cli next <run-id> --json
-```
-
-    Только approved state с ожидаемым runnable queue готов к `/pipeline-run`.
-    `/pipeline-run` автоматически не запускай.
-
-## Planning artifacts
-
-Canonical artifacts находятся под `.tmp/pipelines/{run-id}/`:
-
-```text
-manifest.json
-decision-register.md
-technology-evidence.md
-contract-inventory.md
-test-strategy.md
-accepted-risks.md
-planning/**
-```
-
-`state.json`, lock-файлы, gate evidence и candidate evidence принадлежат
-детерминированным CLI/tools; LLM напрямую их не редактирует.
-
-## Запрещено
-
-- создавать/изменять `docs/pipeline-rules.md`;
-- изменять implementation source в PLAN;
-- вызывать CoderAgent для реализации;
-- создавать runtime conflict detector там, где конфликт можно превратить в DAG edge;
-- добавлять лишний approval внутри уже утверждаемого manifest;
-- обходить rules/Git/state gates решением LLM.
-
-## Результат
-
-Верни run id, выбранные planning roles и причины, DAG/runnable roots,
-`allowed_change_paths`, runtime locks, gate profiles, blockers/risks и команду:
-
-```text
-/pipeline-run {run-id} --unattended
-```
+Return the ready command `/pipeline-run {run-id} --unattended`. Do not invoke it automatically. Owner may prepare 2–3 PLANs, but only one approved RUN executes at a time, and owner merges completed work into main.

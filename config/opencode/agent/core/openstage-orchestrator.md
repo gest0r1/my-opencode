@@ -17,6 +17,8 @@ permission:
     "npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh": allow
+    "bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh --check": allow
   edit:
     "*": deny
     ".tmp/pipelines/**": allow
@@ -71,6 +73,7 @@ Do not duplicate their procedures in this agent prompt:
 
 - `/pipeline-plan` owns planning, trigger selection, design-freeze and owner approval.
 - `/pipeline-run` owns execution, DAG scheduling, fix loops, session reuse and candidate/runtime validation.
+- `/pipeline-refresh` is the only owner-triggered exception permitting an installed deterministic script to refresh the CURRENT worktree after A was merged into main. It never starts RUN or approves plans.
 - `/pipeline-status` owns read-only status presentation.
 - `stage-cli` owns rules/manifest freeze, DAG readiness and state transitions.
 - `git-worktree-cli` owns source identity, changed-file scope and candidate publish.
@@ -90,8 +93,12 @@ parallel orchestration protocol.
    from this parent session.
 6. Never issue free-form Git, Docker, kubectl, terraform, curl or deployment
    shell commands. Use the deterministic CLIs/tools defined by the command contract.
+   The installed `worktree-refresh.sh` is authorized ONLY on explicit owner
+   `/pipeline-refresh`; PLAN and RUN must never invoke it.
 7. Primary direct writes are limited to `.tmp/pipelines/**`; implementation is
-   delegated to scoped working agents.
+   delegated to scoped working agents. `/pipeline-refresh` is the explicit
+   owner exception: only the installed deterministic script may perform its
+   documented backup and Git updates; agent itself edits no source or state.
 8. Owner decisions and scope expansion require re-planning/approval; routine
    actions inside an approved `--unattended` run do not ask again.
 

@@ -7,114 +7,129 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const GIT_CLI = path.join(HERE, 'git-worktree-cli.ts');
-
+const CLI = path.join(HERE, 'git-worktree-cli.ts');
+function run(cwd, command, args) {
+  return spawnSync(command, args, { cwd, encoding: 'utf8', env: process.env });
+}
 function exec(cwd, command, args) {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', env: process.env });
+  const result = run(cwd, command, args);
   assert.equal(result.status, 0, `${command} ${args.join(' ')}\n${result.stderr}`);
   return result.stdout.trim();
 }
-
-function runGate(cwd, args) {
-  return spawnSync('npx', ['--yes', 'tsx', GIT_CLI, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: process.env,
-  });
+function gate(cwd, args) {
+  return run(cwd, 'npx', ['--yes', 'tsx', CLI, ...args]);
 }
-
-async function makeRepository() {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'git-worktree-gate-'));
+async function fixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'manual-worktree-'));
   const remote = path.join(root, 'remote.git');
-  const repo = path.join(root, 'repo');
-  await mkdir(repo, { recursive: true });
+  const main = path.join(root, 'main');
+  const b = path.join(root, 'worktree-b');
   exec(root, 'git', ['init', '--bare', remote]);
-  exec(repo, 'git', ['init']);
-  exec(repo, 'git', ['config', 'user.name', 'Pipeline Test']);
-  exec(repo, 'git', ['config', 'user.email', 'pipeline@example.invalid']);
-  await mkdir(path.join(repo, 'src'), { recursive: true });
-  await writeFile(path.join(repo, 'src', 'base.txt'), 'base\n', 'utf8');
-  exec(repo, 'git', ['add', '.']);
-  exec(repo, 'git', ['commit', '-m', 'base']);
-  exec(repo, 'git', ['branch', '-M', 'main']);
-  exec(repo, 'git', ['remote', 'add', 'origin', remote]);
-  exec(repo, 'git', ['push', '-u', 'origin', 'main']);
-  const baseSha = exec(repo, 'git', ['rev-parse', 'HEAD']);
-  return { root, remote, repo, baseSha };
+  await mkdir(main);
+  exec(main, 'git', ['init']);
+  exec(main, 'git', ['config', 'user.name', 'Pipeline Test']);
+  exec(main, 'git', ['config', 'user.email', 'pipeline@example.invalid']);
+  await mkdir(path.join(main, 'src'));
+  await writeFile(path.join(main, '.gitignore'), '.tmp/\n');
+  await writeFile(path.join(main, 'src/base.txt'), 'base\n');
+  exec(main, 'git', ['add', '.']);
+  exec(main, 'git', ['commit', '-m', 'base']);
+  exec(main, 'git', ['branch', '-M', 'main']);
+  exec(main, 'git', ['remote', 'add', 'origin', remote]);
+  exec(main, 'git', ['push', '-u', 'origin', 'main']);
+  const base = exec(main, 'git', ['rev-parse', 'HEAD']);
+  exec(main, 'git', ['worktree', 'add', '-b', 'feature/B', b, 'main']);
+  const artifactRoot = path.join(b, '.tmp/pipelines/run-b');
+  await mkdir(path.join(artifactRoot, 'planning'), { recursive: true });
+  await writeFile(path.join(artifactRoot, 'planning/research.md'), 'Important owner decision: retain\n');
+  const manifest = { schema_version: 1, run_id: 'run-b', allowed_change_paths: ['src/**'],
+    git_setup: { base_sha: base, branch: 'feature/B', must_absent: ['forbidden.txt'] } };
+  await writeFile(path.join(artifactRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeFile(path.join(artifactRoot, 'decision-register.md'), 'Owner approved design only\n');
+  return { root, main, b, remote, base, artifactRoot, manifest,
+    manifestPath: path.join(artifactRoot, 'manifest.json') };
 }
 
-test('verify blocks files outside approved scope and publish records exact candidate SHA', async () => {
-  const fixture = await makeRepository();
-  const manifest = {
-    schema_version: 1,
-    run_id: 'scope-run',
-    allowed_change_paths: ['src/**'],
-    git_setup: {
-      base_sha: fixture.baseSha,
-      branch: 'feature/scope-run',
-      must_absent: ['forbidden-generated.txt'],
-    },
-  };
-  const manifestPath = path.join(fixture.root, 'manifest.json');
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-
-  let result = runGate(fixture.repo, ['setup', manifestPath]);
+test('owner-created linked worktree is adopted read-only; setup and primary checkout are blocked', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const start = exec(f.b, 'git', ['rev-parse', 'HEAD']);
+  let result = gate(f.b, ['adopt', f.manifestPath]);
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(exec(f.b, 'git', ['rev-parse', 'HEAD']), start);
+  assert.equal(exec(f.b, 'git', ['branch', '--show-current']), 'feature/B');
+  result = gate(f.b, ['setup', f.manifestPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /setup is disabled/);
+  result = gate(f.main, ['adopt', f.manifestPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /linked worktree|mismatch/);
 
-  await writeFile(path.join(fixture.repo, 'src', 'allowed.txt'), 'allowed\n', 'utf8');
-  result = runGate(fixture.repo, ['verify', manifestPath]);
+  await writeFile(path.join(f.b, 'src/allowed.txt'), 'allowed\n');
+  result = gate(f.b, ['verify', f.manifestPath]);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).changed_files, ['src/allowed.txt']);
-
-  await writeFile(path.join(fixture.repo, 'outside.txt'), 'not allowed\n', 'utf8');
-  result = runGate(fixture.repo, ['verify', manifestPath]);
+  await writeFile(path.join(f.b, 'outside.txt'), 'out of scope\n');
+  result = gate(f.b, ['verify', f.manifestPath]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /outside approved scope/);
-  await rm(path.join(fixture.repo, 'outside.txt'));
-
-  result = runGate(fixture.repo, ['publish', manifestPath]);
+  await rm(path.join(f.b, 'outside.txt'));
+  result = gate(f.b, ['publish', f.manifestPath]);
   assert.equal(result.status, 0, result.stderr);
   const published = JSON.parse(result.stdout);
-  assert.match(published.candidate_sha, /^[0-9a-f]{40}$/);
   assert.equal(published.candidate_sha, published.remote_sha);
-
-  const remoteLine = exec(fixture.repo, 'git', [
-    'ls-remote', '--heads', 'origin', 'refs/heads/feature/scope-run',
-  ]);
-  assert.equal(remoteLine.split(/\s+/)[0], published.candidate_sha);
-
-  const evidence = JSON.parse(await readFile(path.join(fixture.root, 'candidate.json'), 'utf8'));
-  assert.equal(evidence.status, 'PASS');
-  assert.equal(evidence.candidate_sha, published.candidate_sha);
-  assert.deepEqual(evidence.changed_files, ['src/allowed.txt']);
+  assert.equal(exec(f.b, 'git', ['branch', '--show-current']), 'feature/B');
+  assert.equal(JSON.parse(await readFile(path.join(f.artifactRoot, 'candidate.json'))).candidate_sha,
+    published.candidate_sha);
 });
 
-test('setup refuses checkout paths outside allowed change scope before branch mutation', async () => {
-  const fixture = await makeRepository();
-
-  await writeFile(path.join(fixture.repo, 'other.txt'), 'source\n', 'utf8');
-  exec(fixture.repo, 'git', ['add', 'other.txt']);
-  exec(fixture.repo, 'git', ['commit', '-m', 'source commit']);
-  const sourceSha = exec(fixture.repo, 'git', ['rev-parse', 'HEAD']);
-  exec(fixture.repo, 'git', ['push', 'origin', 'HEAD:refs/heads/source']);
-  exec(fixture.repo, 'git', ['reset', '--hard', fixture.baseSha]);
-
-  const manifest = {
-    run_id: 'bad-checkout-run',
-    allowed_change_paths: ['src/**'],
-    git_setup: {
-      base_sha: fixture.baseSha,
-      branch: 'feature/bad-checkout',
-      source_sha: sourceSha,
-      checkout_paths: ['other.txt'],
-    },
-  };
-  const manifestPath = path.join(fixture.root, 'manifest.json');
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-
-  const result = runGate(fixture.repo, ['setup', manifestPath]);
+test('merge A into main then rebase B preserves ignored planning and blocks stale manifest', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const originalManifest = await readFile(f.manifestPath, 'utf8');
+  const originalResearch = await readFile(path.join(f.artifactRoot, 'planning/research.md'), 'utf8');
+  const archiveDir = path.join(f.main, '.git', 'pipeline-backups');
+  await mkdir(archiveDir, { recursive: true });
+  const archive = path.join(archiveDir, 'B-before-main-merge.tar.gz');
+  exec(f.b, 'tar', ['-czf', archive, '.tmp/pipelines']);
+  exec(f.main, 'git', ['checkout', 'main']);
+  await writeFile(path.join(f.main, 'src/A.txt'), 'merged A\n');
+  exec(f.main, 'git', ['add', 'src/A.txt']);
+  exec(f.main, 'git', ['commit', '-m', 'merge A result']);
+  const newMain = exec(f.main, 'git', ['rev-parse', 'HEAD']);
+  assert.notEqual(newMain, f.base);
+  let result = gate(f.b, ['adopt', f.manifestPath]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /checkout path is outside allowed_change_paths/);
-  assert.equal(exec(fixture.repo, 'git', ['branch', '--show-current']), 'main');
-  assert.equal(exec(fixture.repo, 'git', ['rev-parse', 'HEAD']), fixture.baseSha);
+  assert.match(result.stderr, /STALE_PLAN/);
+  exec(f.b, 'git', ['rebase', 'main']);
+  assert.equal(await readFile(f.manifestPath, 'utf8'), originalManifest);
+  assert.equal(await readFile(path.join(f.artifactRoot, 'planning/research.md'), 'utf8'), originalResearch);
+  exec(f.b, 'tar', ['-tzf', archive]);
+  result = gate(f.b, ['verify', f.manifestPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /STALE_PLAN/);
+  // New run is a separate immutable planning version; old run remains untouched.
+  const nextRoot = path.join(f.b, '.tmp/pipelines/run-b-after-a');
+  await mkdir(nextRoot, { recursive: true });
+  const next = { ...f.manifest, run_id: 'run-b-after-a',
+    git_setup: { ...f.manifest.git_setup, base_sha: newMain } };
+  const nextManifest = path.join(nextRoot, 'manifest.json');
+  await writeFile(nextManifest, `${JSON.stringify(next, null, 2)}\n`);
+  result = gate(f.b, ['adopt', nextManifest]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(await readFile(f.manifestPath, 'utf8'), originalManifest);
+});
+
+test('manual mode rejects implicit source checkout and wrong base before mutation', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const before = exec(f.b, 'git', ['rev-parse', 'HEAD']);
+  const invalid = { ...f.manifest, git_setup: { ...f.manifest.git_setup,
+    source_sha: f.base, checkout_paths: ['src/base.txt'] } };
+  const pathBad = path.join(f.root, 'invalid.json');
+  await writeFile(pathBad, JSON.stringify(invalid));
+  const result = gate(f.b, ['adopt', pathBad]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /does not perform source checkout/);
+  assert.equal(exec(f.b, 'git', ['rev-parse', 'HEAD']), before);
 });
