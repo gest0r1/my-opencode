@@ -37,6 +37,7 @@ MAIN="$(git -C "$B" worktree list --porcelain | awk '
 [[ -z "$(find "$B/.tmp/pipelines" -type l -print -quit)" ]] || fail 'PLAN contains symlinks: resolve them before taking a complete snapshot'
 git -C "$B" check-ignore -q .tmp/pipelines/__probe__ || fail '.tmp/pipelines is not ignored by this PROJECT; fix its ignore configuration safely'
 [[ -z "$(git -C "$B" ls-files -- .tmp/pipelines)" ]] || fail '.tmp/pipelines is tracked by Git; preserve/untrack it safely before refresh'
+[[ -z "$(git -C "$MAIN" ls-files -- .tmp/pipelines)" ]] || fail 'main tracks .tmp/pipelines; automatic refresh would overwrite evidence'
 for dir in "$GIT_DIR" "$COMMON"; do
   [[ ! -e "$dir/MERGE_HEAD" && ! -d "$dir/rebase-apply" && ! -d "$dir/rebase-merge" ]] || fail 'Git merge/rebase already in progress'
 done
@@ -68,10 +69,13 @@ tar -tf "$BACKUP" >/dev/null
 SNAPSHOT_SHA="$(sha256sum "$BACKUP" | awk '{print $1}')"
 printf 'SNAPSHOT VERIFIED: %s\n' "$BACKUP"
 
-# Owner already merged A on GitHub. Update main fast-forward only, then merge it into B.
-# Merge (rather than force/rebase) also works for published B and never rewrites B history.
+# Owner already merged A on GitHub. Check the fetched tree BEFORE any branch merge.
 git -C "$MAIN" fetch origin main
-git -C "$MAIN" merge --ff-only FETCH_HEAD
+INCOMING_MAIN="$(git -C "$MAIN" rev-parse FETCH_HEAD)"
+[[ -z "$(git -C "$MAIN" ls-tree -r --name-only "$INCOMING_MAIN" -- .tmp/pipelines)" ]] ||
+  fail "incoming origin/main tracks .tmp/pipelines: snapshot preserved at $BACKUP; no branches updated"
+# Merge (rather than force/rebase) also works for published B and never rewrites B history.
+git -C "$MAIN" merge --ff-only "$INCOMING_MAIN"
 NEW_MAIN="$(git -C "$MAIN" rev-parse HEAD)"
 git -C "$B" merge --no-edit "$NEW_MAIN"
 git -C "$B" merge-base --is-ancestor "$NEW_MAIN" HEAD || fail 'B does not contain refreshed main'
@@ -80,5 +84,7 @@ git -C "$B" merge-base --is-ancestor "$NEW_MAIN" HEAD || fail 'B does not contai
 CURRENT_SHA="$(tar "${TAR_ARGS[@]}" -C "$B" -cf - .tmp/pipelines | sha256sum | awk '{print $1}')"
 [[ "$CURRENT_SHA" == "$SNAPSHOT_SHA" ]] || fail "PLAN/EVIDENCE CHANGED: snapshot preserved at $BACKUP; do NOT start RUN"
 sha256sum -c "$BACKUP.sha256"
+git -C "$B" check-ignore -q .tmp/pipelines/__probe__ || fail 'updated B no longer ignores .tmp/pipelines; do NOT start RUN'
+[[ -z "$(git -C "$B" ls-files -- .tmp/pipelines)" ]] || fail 'updated B tracks pipeline evidence; do NOT start RUN'
 printf 'REFRESH PASS\nBRANCH: %s\nNEW_BASE_SHA: %s\nB_HEAD: %s\nHISTORICAL_PLAN: unchanged\nSNAPSHOT: %s\nNEXT: create NEW run-id/manifest, compare PLAN with new main, obtain owner approval; do not RUN the old manifest\n' \
   "$BRANCH" "$NEW_MAIN" "$(git -C "$B" rev-parse HEAD)" "$BACKUP"
