@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, access } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,9 +26,8 @@ async function fixture() {
 
 test('rejects missing profile BEFORE init without writing state or running a command', async () => {
   const root = await fixture();
-  const spec = manifest();
   const file = path.join(root, 'manifest.json');
-  await writeFile(file, `${JSON.stringify(spec)}\n`);
+  await writeFile(file, `${JSON.stringify(manifest())}\n`);
   const result = call(root, ['init', file]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /pipeline has no gate profile/);
@@ -39,7 +38,7 @@ test('rejects wrong profile shape and stage-to-gate mismatch', () => {
   const spec = manifest();
   spec.pipelines[0].profile = 'pytest';
   assert.throws(() => validateGateManifest(spec), /MACHINE_GATE_MISSING/);
-  spec.gate_profiles = { pytest: { 'test-rule-actions': { commands: ['pytest -q'] } } };
+  spec.gate_profiles = { pytest: { 'test-rule-actions': ['pytest -q'], legacy: { commands: ['pytest -q'] } } };
   assert.throws(() => validateGateManifest(spec), /nonempty command array/);
 });
 
@@ -71,11 +70,10 @@ test('environment preflight rejects missing executable without running gate or t
   } finally { process.env.PATH = oldPath; }
 });
 
-test('invalid manifest is rejected by explicit preflight and original state is not overwritten', async () => {
+test('invalid manifest is rejected by explicit preflight and no state is written', async () => {
   const root = await fixture();
-  const spec = manifest();
   const file = path.join(root, 'manifest.json');
-  await writeFile(file, `${JSON.stringify(spec)}\n`);
+  await writeFile(file, `${JSON.stringify(manifest())}\n`);
   const result = call(root, ['preflight', file]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /pipeline has no gate profile/);
