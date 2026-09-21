@@ -132,3 +132,21 @@ test('a merge conflict preserves the original planning snapshot and does not for
   assert.match(git(f.b, 'status', '--porcelain'), /UU src\/base\.txt/);
   assert.equal(git(f.b, 'branch', '--show-current'), 'feature/B');
 });
+
+test('incoming main tracking pipeline evidence is rejected before either branch is updated', async (t) => {
+  const f = await fixture(t);
+  const oldMain = git(f.main, 'rev-parse', 'HEAD');
+  const trackedPath = path.join(f.upstream, '.tmp/pipelines/unexpected/manifest.json');
+  await mkdir(path.dirname(trackedPath), { recursive: true });
+  await writeFile(trackedPath, 'tracked conflicting evidence\n');
+  git(f.upstream, 'add', '-f', '.tmp/pipelines/unexpected/manifest.json');
+  git(f.upstream, 'commit', '-m', 'accidental tracked plan in A');
+  git(f.upstream, 'push', 'origin', 'main');
+  const result = shell(f.b);
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /incoming origin\/main tracks \.tmp\/pipelines/);
+  assert.equal(git(f.main, 'rev-parse', 'HEAD'), oldMain);
+  assert.equal(git(f.b, 'rev-parse', 'HEAD'), oldMain);
+  assert.equal(await readFile(path.join(f.dir, 'manifest.json'), 'utf8'), f.historical);
+  assert.match(result.stdout, /SNAPSHOT VERIFIED/);
+});
