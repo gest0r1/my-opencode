@@ -1,35 +1,38 @@
 # Manual worktree pipeline: several PLANs, exactly one RUN
 
-The **owner** creates/selects worktrees and sessions in OpenChamber, approves design-freeze, merges completed branches into main and updates the next branch. The pipeline never creates/switches/rebases/merges/removes owner worktrees or sessions. RUNs are serialized by the owner; other worktrees may prepare PLANs while A runs.
+The owner creates/selects worktrees and sessions in OpenChamber, approves the plan, merges completed work into main and updates the next branch. The pipeline never creates, switches, rebases, merges or removes owner worktrees or user-facing sessions. The owner starts only one RUN at a time; B and C may PLAN while A runs.
 
-## Routine UI commands
+## OpenChamber sequence
 
-1. Owner: create worktree A from current main and open a **new session within A**, selecting OpenStageOrchestrator. Do the same independently for B/C if needed; do not create sessions through an agent in main.
-2. In A session: `/pipeline-plan <task A>`; review the decision packet and approve. Then `/pipeline-run <run-id-A> --unattended`.
-3. While A runs, use B's own session for `/pipeline-plan <task B>`; do not start RUN B. Its PLAN is valid relative to the main commit captured in B's manifest at planning time.
-4. When A reaches PASS and exact candidate has been tested from GitHub, owner reviews and merges A into main. Never merge automatically.
-5. Before RUN B, snapshot B's **entire** `.tmp/pipelines` outside B, update B from the new main, verify the snapshot, create a *new* run ID and revalidate/reapprove B's PLAN. Do not overwrite its old manifest or state. Then start RUN B.
+1. Owner creates worktree A from current main, opens a new session **inside A** and selects OpenStageOrchestrator. Repeat for B/C if desired; never dispatch creation from a session in main.
+2. In A: `/pipeline-plan <task A>`; review/approve; then `/pipeline-run <run-id-A> --unattended`.
+3. While A runs, use B's own session for `/pipeline-plan <task B>` but do not start RUN B.
+4. After A's candidate SHA is published to GitHub and tested from the installed artifact, owner reviews and merges A into main. Neither the agent nor pipeline merges automatically.
+5. Snapshot B's entire `.tmp/pipelines` **outside worktree B** before bringing in the new main. Verify preservation, create a new run ID/manifest based on the updated main and seek renewed approval. Then run B.
 
-## Exact owner shell sequence after merge A
+## Owner commands: safely refresh B after A has been merged
 
-Execute the following with real paths on the development host; `B` is the existing worktree directory and `MAIN` is the primary checkout directory. All permanent snapshot files go under the repository's **shared Git directory**, not under worktree B. No network operation touches runtime services.
+Run the blocks below in the **same bash session** so that `B`, `MAIN`, `RUN_B` and `BACKUP` survive. Replace placeholders with actual absolute paths and run IDs. A must already be merged into remote `main`. Never perform these owner Git commands through the pipeline agent.
+
+### 1. Preconditions and a private archive outside B
 
 ```bash
 set -Eeuo pipefail
-B='/absolute/path/to/worktree-B'       # set to actual existing B worktree
-MAIN='/absolute/path/to/main-checkout'  # set to actual main checkout
-RUN_B='run-id-B'                        # the historical B plan to protect
+B='/absolute/path/to/worktree-B'       # existing worktree, not main
+MAIN='/absolute/path/to/main-checkout'  # primary checkout
+RUN_B='run-id-B'                        # historical PLAN to preserve
 
 test -d "$B/.tmp/pipelines/$RUN_B"
 test -f "$B/.tmp/pipelines/$RUN_B/manifest.json"
-test -z "$(git -C "$B" status --porcelain --untracked-files=all)" || { echo 'BLOCKED: save tracked changes first'; exit 1; }
-git -C "$B" check-ignore -q .tmp/pipelines/__probe__ || { echo 'BLOCKED: add .tmp/ to project gitignore safely'; exit 1; }
-test -z "$(git -C "$B" ls-files -- .tmp/pipelines)" || { echo 'BLOCKED: pipeline artifacts are tracked'; exit 1; }
-test "$(git -C "$B" rev-parse --is-linked-worktree)" = true
-test "$(git -C "$MAIN" branch --show-current)" = main
+test -z "$(git -C "$B" status --porcelain --untracked-files=all)" || { echo 'BLOCKED: save non-ignored B changes first'; exit 1; }
+git -C "$B" check-ignore -q .tmp/pipelines/__probe__ || { echo 'BLOCKED: project must ignore .tmp/pipelines'; exit 1; }
+test -z "$(git -C "$B" ls-files -- .tmp/pipelines)" || { echo 'BLOCKED: planning artifacts are tracked'; exit 1; }
+B_GIT_DIR="$(git -C "$B" rev-parse --path-format=absolute --git-dir)"
+COMMON="$(git -C "$B" rev-parse --path-format=absolute --git-common-dir)"
+test "$B_GIT_DIR" != "$COMMON" || { echo 'BLOCKED: B is not a linked worktree'; exit 1; }
+test "$(git -C "$MAIN" branch --show-current)" = main || { echo 'BLOCKED: primary checkout must be main'; exit 1; }
 
 umask 077
-COMMON="$(git -C "$B" rev-parse --path-format=absolute --git-common-dir)"
 BACKUP_DIR="$COMMON/pipeline-backups"
 mkdir -p -- "$BACKUP_DIR"
 BACKUP="$(mktemp "$BACKUP_DIR/before-B-refresh.XXXXXXXX.tar.gz")"
@@ -37,51 +40,56 @@ tar -C "$B" -czf "$BACKUP" .tmp/pipelines
 sha256sum "$BACKUP" > "$BACKUP.sha256"
 sha256sum -c "$BACKUP.sha256"
 tar -tzf "$BACKUP" > /dev/null
-printf 'Snapshot: %s\n' "$BACKUP"
+printf 'PLAN snapshot: %s\n' "$BACKUP"
 ```
 
-**Do not run the Git commands below unless snapshot checks passed and A has already been merged into main.** The owner executes these commands, not the pipeline agent:
+The snapshot contains every manifest, decision, research artifact, pipeline state and evidence in B. `.tmp/` is ignored by Git only if **this project's** ignore rules cover it; ignored files are NOT committed or backed up by `git push`.
+
+### 2. Update main and integrate it into B, only after archive checks pass
 
 ```bash
-# Owner: sync primary main with merged A (requires clean main).
-test -z "$(git -C "$MAIN" status --porcelain --untracked-files=all)" || { echo 'BLOCKED: main is dirty'; exit 1; }
+test -z "$(git -C "$MAIN" status --porcelain --untracked-files=all)" || { echo 'BLOCKED: primary main is dirty'; exit 1; }
 git -C "$MAIN" fetch origin main
 git -C "$MAIN" merge --ff-only origin/main
 
-# Only for an unpublished, owner-only B branch. If B was already published/shared,
-# use `git -C "$B" merge main` instead of rebase, avoiding history rewrites.
+# Use this ONLY for a local unpublished owner-only B branch:
 git -C "$B" rebase main
+# If B is already shared/published, use `git -C "$B" merge main` INSTEAD
+# (not in addition to rebase). Avoid rewriting a shared branch's history.
+```
 
-# Compare every planning file to the immutable snapshot before creating a new run.
+If Git reports conflicts, stop; resolve deliberately and finish `rebase --continue` (or complete the chosen merge). Never use `git clean -fdx`, `git reset --hard`, deleting `.tmp`, or `worktree remove` to force progress. Do not launch RUN B until Git integration and all checks succeed.
+
+### 3. Verify the complete preserved PLAN byte-for-byte
+
+```bash
 VERIFY_DIR="$(mktemp -d /tmp/pipeline-verify.XXXXXXXX)"
 tar -xzf "$BACKUP" -C "$VERIFY_DIR"
-diff -qr -- "$VERIFY_DIR/.tmp/pipelines" "$B/.tmp/pipelines"
-rm -rf -- "$VERIFY_DIR"  # own /tmp test copy only; backup remains untouched
+if ! diff -qr -- "$VERIFY_DIR/.tmp/pipelines" "$B/.tmp/pipelines"; then
+  echo 'BLOCKED: planning data differs from saved snapshot; do not launch RUN B' >&2
+  exit 1
+fi
+rm -rf -- "$VERIFY_DIR"  # only the temporary copy created above
 sha256sum -c "$BACKUP.sha256"
-
-# Old manifest remains historical, but must now fail the main/base gate.
+test -f "$B/.tmp/pipelines/$RUN_B/manifest.json"
+printf 'Old PLAN preserved at %s\nBackup: %s\n' "$B/.tmp/pipelines/$RUN_B" "$BACKUP"
 git -C "$B" rev-parse HEAD
 git -C "$MAIN" rev-parse HEAD
-printf 'Old run preserved: %s\nSnapshot: %s\n' "$B/.tmp/pipelines/$RUN_B" "$BACKUP"
 ```
 
-If rebase reports conflicts, stop and resolve explicitly, without `git clean -fdx`, `reset --hard`, `worktree remove`, or deleting `.tmp` to force success. Inspect/restore from snapshot only by owner decision. If `diff -qr` fails, **do not run B**; investigate and restore the preserved files. The backup lives in the shared Git directory and survives deletion of B's worktree, but still needs ordinary server backups for disaster recovery.
+Keep the archive in the shared Git directory; it survives removal of B's worktree, but it is not a replacement for normal host backups. Investigate a failed `diff -qr` instead of silently overwriting the original data.
 
-## Refresh PLAN B without losing work
-
-In B's existing session, instruct OpenStageOrchestrator:
+## Revalidate B in its existing OpenChamber session
 
 ```text
-/pipeline-plan Revalidate the historical PLAN in .tmp/pipelines/<old-run-id>/ against current main after merge A. Reuse the full historical research and decisions as evidence, inspect changes to source/contracts/dependencies, create a NEW run ID and NEW manifest in a separate .tmp/pipelines/<new-run-id>/ folder, and show a focused delta and owner decision packet. Do not edit the historical run, state, manifest or evidence. Do not run implementation.
+/pipeline-plan Revalidate the historical PLAN in .tmp/pipelines/<old-run-id>/ against the actual current main after merge A. Reuse its research and decisions as evidence; inspect differences in source, contracts, dependencies and test strategy. Create a NEW unique run ID and a NEW manifest under .tmp/pipelines/<new-run-id>/. Do not modify the historical run, manifest, state, decisions, research or evidence. Show only the affected-plan delta plus the owner decision packet. Do not implement or start RUN.
 ```
 
-Review and approve the **new** manifest; run `/pipeline-run <new-run-id> --unattended` only after the Git preflight passes. `git_setup.base_sha` must equal the freshly updated local main SHA, and the selected branch must contain that SHA. The old run remains available for audit, not for execution. Never copy `state.json`, locks, candidate or gate evidence to the new run; deterministic CLI recreates them after approval.
+Owner approves the NEW manifest, then issues `/pipeline-run <new-run-id> --unattended`. The new `git_setup.base_sha` must equal updated local main and be an ancestor of current B. Never edit old approved manifest hashes or copy its `state.json`, locks, candidate or gate evidence into the new run. The old run is history, not an executable plan after main changes. Repeat the same process for C after B is merged.
 
-When B is completed and merged, repeat the same steps for C. A tested candidate SHA before merge does not automatically validate the integrated main SHA; validate the final production artifact separately.
+## Boundaries
 
-## Safety boundary
-
-- `.tmp/pipelines/` is worktree-local and ignored only if the **project's** `.gitignore` (or equivalent effective ignore) says so. Git does not back up ignored files. A normal rebase usually leaves them in place, but a checkout, clean or worktree removal can erase/overwrite them; snapshot is mandatory.
-- Keep backup outside the worktree under the shared Git directory and confirm content with `diff -qr`; do not overwrite an old manifest to adjust base SHA.
-- Manual one-RUN policy avoids a new scheduler. Existing external-runtime locks remain a secondary guard; avoid overlapping installs on shared runtime.
-- Agent modifies distribution code only in GitHub; owner decides when to install updates and when to merge.
+- Several PLANs, one RUN; no new cross-worktree scheduler. Existing shared runtime locks remain as a secondary safeguard.
+- Build/test/review/scope gates, candidate SHA publication, installation from GitHub and runtime validation remain mandatory.
+- A candidate tested before merging A is not proof that an integrated later main SHA passes; validate that final artifact separately.
+- All distribution changes are made on a GitHub branch; installation and merges remain owner actions.
