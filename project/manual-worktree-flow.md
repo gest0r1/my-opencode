@@ -1,95 +1,39 @@
-# Manual worktree pipeline: several PLANs, exactly one RUN
+# Worktree pipeline: several PLANs, one RUN, one-command refresh
 
-The owner creates/selects worktrees and sessions in OpenChamber, approves the plan, merges completed work into main and updates the next branch. The pipeline never creates, switches, rebases, merges or removes owner worktrees or user-facing sessions. The owner starts only one RUN at a time; B and C may PLAN while A runs.
+The owner creates/selects worktrees and sessions in OpenChamber, approves each design-freeze, merges completed branches to GitHub main, and explicitly refreshes the next branch. The pipeline never automatically creates/switches/removes worktrees, merges completed features to main, or dispatches PLAN into another user session. The owner allows only ONE RUN at a time; other worktrees can prepare independent PLANs.
 
-## OpenChamber sequence
+## Everyday workflow
 
-1. Owner creates worktree A from current main, opens a new session **inside A** and selects OpenStageOrchestrator. Repeat for B/C if desired; never dispatch creation from a session in main.
-2. In A: `/pipeline-plan <task A>`; review/approve; then `/pipeline-run <run-id-A> --unattended`.
-3. While A runs, use B's own session for `/pipeline-plan <task B>` but do not start RUN B.
-4. After A's candidate SHA is published to GitHub and tested from the installed artifact, owner reviews and merges A into main. Neither the agent nor pipeline merges automatically.
-5. Snapshot B's entire `.tmp/pipelines` **outside worktree B** before bringing in the new main. Verify preservation, create a new run ID/manifest based on the updated main and seek renewed approval. Then run B.
-
-## Owner commands: safely refresh B after A has been merged
-
-Run the blocks below in the **same bash session** so that `B`, `MAIN`, `RUN_B` and `BACKUP` survive. Replace placeholders with actual absolute paths and run IDs. A must already be merged into remote `main`. Never perform these owner Git commands through the pipeline agent.
-
-### 1. Preconditions and a private archive outside B
-
-```bash
-set -Eeuo pipefail
-B='/absolute/path/to/worktree-B'       # existing worktree, not main
-MAIN='/absolute/path/to/main-checkout'  # primary checkout
-RUN_B='run-id-B'                        # historical PLAN to preserve
-
-test -d "$B/.tmp/pipelines/$RUN_B"
-test -f "$B/.tmp/pipelines/$RUN_B/manifest.json"
-test -z "$(git -C "$B" status --porcelain --untracked-files=all)" || { echo 'BLOCKED: save non-ignored B changes first'; exit 1; }
-git -C "$B" check-ignore -q .tmp/pipelines/__probe__ || { echo 'BLOCKED: project must ignore .tmp/pipelines'; exit 1; }
-test -z "$(git -C "$B" ls-files -- .tmp/pipelines)" || { echo 'BLOCKED: planning artifacts are tracked'; exit 1; }
-B_GIT_DIR="$(git -C "$B" rev-parse --path-format=absolute --git-dir)"
-COMMON="$(git -C "$B" rev-parse --path-format=absolute --git-common-dir)"
-test "$B_GIT_DIR" != "$COMMON" || { echo 'BLOCKED: B is not a linked worktree'; exit 1; }
-test "$(git -C "$MAIN" branch --show-current)" = main || { echo 'BLOCKED: primary checkout must be main'; exit 1; }
-
-umask 077
-BACKUP_DIR="$COMMON/pipeline-backups"
-mkdir -p -- "$BACKUP_DIR"
-BACKUP="$(mktemp "$BACKUP_DIR/before-B-refresh.XXXXXXXX.tar.gz")"
-tar -C "$B" -czf "$BACKUP" .tmp/pipelines
-sha256sum "$BACKUP" > "$BACKUP.sha256"
-sha256sum -c "$BACKUP.sha256"
-tar -tzf "$BACKUP" > /dev/null
-printf 'PLAN snapshot: %s\n' "$BACKUP"
-```
-
-The snapshot contains every manifest, decision, research artifact, pipeline state and evidence in B. `.tmp/` is ignored by Git only if **this project's** ignore rules cover it; ignored files are NOT committed or backed up by `git push`.
-
-### 2. Update main and integrate it into B, only after archive checks pass
-
-```bash
-test -z "$(git -C "$MAIN" status --porcelain --untracked-files=all)" || { echo 'BLOCKED: primary main is dirty'; exit 1; }
-git -C "$MAIN" fetch origin main
-git -C "$MAIN" merge --ff-only origin/main
-
-# Use this ONLY for a local unpublished owner-only B branch:
-git -C "$B" rebase main
-# If B is already shared/published, use `git -C "$B" merge main` INSTEAD
-# (not in addition to rebase). Avoid rewriting a shared branch's history.
-```
-
-If Git reports conflicts, stop; resolve deliberately and finish `rebase --continue` (or complete the chosen merge). Never use `git clean -fdx`, `git reset --hard`, deleting `.tmp`, or `worktree remove` to force progress. Do not launch RUN B until Git integration and all checks succeed.
-
-### 3. Verify the complete preserved PLAN byte-for-byte
-
-```bash
-VERIFY_DIR="$(mktemp -d /tmp/pipeline-verify.XXXXXXXX)"
-tar -xzf "$BACKUP" -C "$VERIFY_DIR"
-if ! diff -qr -- "$VERIFY_DIR/.tmp/pipelines" "$B/.tmp/pipelines"; then
-  echo 'BLOCKED: planning data differs from saved snapshot; do not launch RUN B' >&2
-  exit 1
-fi
-rm -rf -- "$VERIFY_DIR"  # only the temporary copy created above
-sha256sum -c "$BACKUP.sha256"
-test -f "$B/.tmp/pipelines/$RUN_B/manifest.json"
-printf 'Old PLAN preserved at %s\nBackup: %s\n' "$B/.tmp/pipelines/$RUN_B" "$BACKUP"
-git -C "$B" rev-parse HEAD
-git -C "$MAIN" rev-parse HEAD
-```
-
-Keep the archive in the shared Git directory; it survives removal of B's worktree, but it is not a replacement for normal host backups. Investigate a failed `diff -qr` instead of silently overwriting the original data.
-
-## Revalidate B in its existing OpenChamber session
+1. Owner creates worktree A from current main in OpenChamber and opens a session **inside A** with OpenStageOrchestrator. Repeat for B/C if desired.
+2. In A: `/pipeline-plan <task A>` → owner approval → `/pipeline-run <run-id-A> --unattended`.
+3. During RUN A, in B: `/pipeline-plan <task B>`. No RUN B yet.
+4. After A passes verified GitHub-release/runtime gates, owner reviews and merges A → `origin/main` manually in GitHub.
+5. In the already-open B worktree session, owner invokes exactly **one command**:
 
 ```text
-/pipeline-plan Revalidate the historical PLAN in .tmp/pipelines/<old-run-id>/ against the actual current main after merge A. Reuse its research and decisions as evidence; inspect differences in source, contracts, dependencies and test strategy. Create a NEW unique run ID and a NEW manifest under .tmp/pipelines/<new-run-id>/. Do not modify the historical run, manifest, state, decisions, research or evidence. Show only the affected-plan delta plus the owner decision packet. Do not implement or start RUN.
+/pipeline-refresh
 ```
 
-Owner approves the NEW manifest, then issues `/pipeline-run <new-run-id> --unattended`. The new `git_setup.base_sha` must equal updated local main and be an ancestor of current B. Never edit old approved manifest hashes or copy its `state.json`, locks, candidate or gate evidence into the new run. The old run is history, not an executable plan after main changes. Repeat the same process for C after B is merged.
+Optional nonmutating preflight: `/pipeline-refresh --check`.
 
-## Boundaries
+6. Only after `REFRESH PASS`, in the SAME B session:
 
-- Several PLANs, one RUN; no new cross-worktree scheduler. Existing shared runtime locks remain as a secondary safeguard.
-- Build/test/review/scope gates, candidate SHA publication, installation from GitHub and runtime validation remain mandatory.
-- A candidate tested before merging A is not proof that an integrated later main SHA passes; validate that final artifact separately.
-- All distribution changes are made on a GitHub branch; installation and merges remain owner actions.
+```text
+/pipeline-plan Revalidate the historical PLAN in .tmp/pipelines/<old-run-id>/ against the refreshed main. Reuse all preserved research and owner decisions. Create a NEW run ID, NEW manifest and focused delta/decision packet; never edit the old run/manifest/state/evidence. Do not implement.
+```
+
+Owner reviews and explicitly approves the new manifest, then runs `/pipeline-run <new-run-id> --unattended`. Repeat for C after owner merges B into main. Never run B with the old approved manifest: its `base_sha` is stale. The final integrated main SHA needs its own release verification.
+
+## What /pipeline-refresh does (installed distribution, no custom OpenChamber patch)
+
+The command invokes only the installed deterministic `~/.config/opencode/skills/task-management/scripts/worktree-refresh.sh` in the CURRENT session. It has no path or branch arguments: it derives B and the checked-out main from the shared Git repository and rejects main/primary or detached sessions. The script:
+
+- Blocks if B or main is dirty, a Git operation is in progress, no historical PLAN exists, `.tmp/pipelines` is not ignored by this project's Git configuration or is tracked, or planning evidence contains symlinks. It never calls `reset --hard`, `clean`, `stash`, `worktree remove`, `switch` or force-push.
+- Stores a verified archive of the **ENTIRE** `.tmp/pipelines/` (all run IDs, frozen manifests, decisions, research, hidden files, state/evidence) outside B at `<shared-git-dir>/pipeline-backups/before-B-refresh.*/pipelines.tar`. The checksum is stored alongside it. Git does not otherwise protect ignored `.tmp` files.
+- Fetches only `origin/main`, fast-forwards the owner's clean local main checkout, then merges that exact main commit into B using `git merge --no-edit` (does not rewrite published B history).
+- Re-hashes the complete planning archive as it exists after the Git merge and compares the byte-identical, normalized tar stream to the original. Prints `REFRESH PASS`, main SHA, B HEAD, and backup path only when all checks pass.
+- Does **not** create a new manifest/run, change approved state, dispatch model prompts, start RUN or merge B into main. These require a subsequent PLAN/reapproval and owner action.
+
+If Git reports a conflict, the script stops and preserves the snapshot; owner resolves the conflict explicitly and verifies historical evidence before another attempt. Do not wipe the worktree, delete `.tmp`, automatically restore or let an agent run manual Git fallbacks. If evidence comparison fails, do not start RUN; the original archive is retained for recovery. Backups in `.git` still require ordinary off-host backups for disaster recovery.
+
+The command is available after the owner installs this `my-opencode` configuration from the exact approved GitHub commit. The existing `install.sh` copies `config/opencode/**` (including commands and scripts) into `~/.config/opencode/`. Its use does not require any change to the OpenChamber upstream application.
