@@ -9,50 +9,53 @@ tags:
 
 # Pipeline Run — one owner-selected worktree
 
-Execute only a frozen, owner-approved manifest in the **current worktree-session**. Never create/switch/rebase/merge/delete a worktree or branch, never create a user-facing OpenChamber session or dispatch PLAN into another session. Owner runs exactly one RUN at a time across worktrees, then merges manually.
+Execute only a frozen, owner-approved manifest in the CURRENT worktree-session. Never create/switch/rebase/merge/delete a worktree or branch; never create another user-facing OpenChamber session or dispatch PLAN elsewhere. Owner permits one RUN at a time across all worktrees.
 
 ```text
 /pipeline-run <run-id> [--unattended] [--no-session-reuse]
 /pipeline-run <run-id> github <handoff-id> [--unattended] [--no-session-reuse]
 ```
 
-Unknown modes/arguments block. The GitHub handoff mode preserves its immutable-source validation and does not use implicit worktree setup.
+Unknown modes and arguments BLOCK. Github handoff mode preserves exact immutable-source validation and does not create implicit worktree setup.
 
 ## Authority
 
-`stage-cli` owns frozen rules/manifest/DAG/state; `git-worktree-cli` owns read-only checkout identity/main SHA/scope and non-force candidate publication; `gate-runner-cli` owns executable machine gates/evidence. LLM judgement cannot override deterministic FAIL/BLOCKED or owner decisions. Не делегируй orchestration в BatchExecutor; OpenStage directly dispatches child agents in its current session.
+`stage-cli` owns rules, manifest freeze, DAG and state. `git-worktree-cli` owns identity/scope/non-force publication. `gate-runner-cli` owns machine commands and evidence. Model output never overrides deterministic FAIL/BLOCKED or owner decisions. Не делегируй orchestration в BatchExecutor; OpenStage dispatches child agents in its selected session.
 
 ## Preflight — normal mode
 
-1. `stage-cli validate <run-id> --json` and `stage-cli next <run-id> --json`: require approved or in-progress state, matching frozen manifest and rules hashes; terminal results are reported without rerunning stages.
-2. `git-worktree-cli.ts adopt <manifest>`: require owner-created linked worktree, current branch equals approved branch, clean tracked checkout, local main equals frozen `git_setup.base_sha`, branch contains that main commit and `.tmp/pipelines` is not tracked. This is read-only. **Never call `capability`, `setup`, `git switch`, `git checkout`, `git worktree add`, `rebase` or `merge`.**
-3. `git-worktree-cli.ts verify <manifest>` checks committed changes since base, staged, unstaged and untracked paths against `allowed_change_paths`. Protected secrets and outside-scope files block. Call again at each stage boundary and immediately before publication.
-4. If main advanced: `STALE_PLAN`/BLOCKED. Owner snapshots all B planning artifacts outside B, updates the branch from main, verifies preservation, creates NEW run ID/manifest and gives explicit new approval. See `project/manual-worktree-flow.md`. Do not edit the old frozen manifest/state.
-5. Owner ensures no other RUN is active. Do not build a cross-worktree scheduler. Existing shared-runtime locks remain a secondary safety gate.
+1. `stage-cli validate <run-id> --json` then `stage-cli next <run-id> --json`: require approved or in-progress state and matching frozen manifest/rules hashes; terminal states must be reported, not retried blindly. Inspect the referenced frozen manifest and invoke `stage-cli preflight <manifest.json> --environment` BEFORE dispatch. If it fails, BLOCK and preserve old run/manifest.
+2. `git-worktree-cli.ts adopt <manifest>`: require owner-created linked worktree, approved branch, clean tracked checkout, local main equals frozen git_setup.base_sha, branch includes main and `.tmp/pipelines` is not tracked. Do not run capability/setup/switch/checkout/worktree add/rebase/merge.
+3. `git-worktree-cli.ts verify <manifest>` checks committed, staged, unstaged and untracked paths against frozen allowed_change_paths. Re-run at every stage boundary and before publish. An out-of-scope helper is BLOCKED, not automatically deleted or added to scope.
+4. If main changed, STALE_PLAN/BLOCKED: owner refreshes B while preserving historical materials, makes a new run ID/manifest and explicitly reapproves. No edits to old manifest/state.
+5. Owner ensures no other RUN is active. Keep shared runtime locks as secondary safety only.
 
-## Scheduler loop
+## Scheduler
 
-Use `stage-cli next <run-id> --json` as the sole source of runnable stages. Independent approved work items **within this one RUN** may execute concurrently according to the frozen DAG. Before every stage, call `git-worktree-cli verify <manifest>`; on failure block before dispatch. Then call `stage-cli start`, execute the stage, record evidence, `stage-cli complete|block|fail`, and query `next` until terminal. Do not recompute planning dependencies/conflicts during RUN.
+`stage-cli next <run-id> --json` is the ONLY runnable queue. Independent approved work items within one RUN can execute concurrently per frozen DAG. Before each stage verify Git scope, `stage-cli start`, execute, record evidence, `stage-cli complete|block|fail`, then query next. Do not recompute planning dependencies during RUN.
 
-## Dispatch
+## Dispatch and machine gates
 
-- Implementation/technical_fix: delegate exact approved work item/context/scope to CoderAgent. After each source change require `git-worktree-cli verify`; CoderAgent does not do state transitions or publish.
-- Build/tests/lint/typecheck: `gate-runner-cli.ts <run-id> <pipeline-id> <gate>` is the only source of machine PASS. TestEngineer and BuildAgent may analyse evidence, not substitute an LLM PASS.
-- Review: fresh CodeReviewer, classifying technical_fix/replan/security_stop/scope_stop/secret_stop/optional. Review evidence stays under run-scoped `.tmp/`.
-- Docs: DocWriter modifies only approved docs scope.
-- Publish candidate: `git-worktree-cli verify <manifest>` followed by `git-worktree-cli publish <manifest>`; scoped commit, non-force push of current branch, remote SHA check and `candidate.json`. Pipeline never merges to main.
-- Runtime install/release validation/smoke: use frozen gate-runner commands and exact `{candidate_sha}` from candidate.json with existing runtime_locks. Never test uncommitted development files as a replacement for installation from GitHub.
+- Implementation / technical_fix: CoderAgent receives exact frozen item/context/allowed_change_paths. After changes require Git verify. Agents do not publish or transition stage state.
+- Machine build/test/lint/typecheck/runtime stages: call `gate-runner-cli.ts <run-id> <pipeline-id> <stage-id>` with the EXACT current machine stage ID as gate. It must resolve `gate_profiles[profile][stage-id]`. Do not substitute an informal `pytest` gate key when stage is `test-rule-actions`. Use only PASS evidence from this CLI; TestEngineer/BuildAgent may diagnose but not substitute a reported manual test pass.
+- Machine commands are a single executable and argv, with `shell:false`, executed from the project root. No `cd`, `&&`, pipes or shell composition. Python + pytest must be available before RUN; no stage-time ad-hoc venv or dependency bootstrap unless explicitly approved in scope and project installation strategy.
+- Review: fresh CodeReviewer with technical_fix/replan/security_stop/scope_stop/secret_stop/optional classification. Evidence remains inside run-scoped `.tmp`.
+- Docs: DocWriter only modifies approved docs scope.
+- Publish: Git verify then git-worktree publish, scoped commit and non-force branch push with candidate.json; never merge main.
+- Runtime install/smoke: use frozen machine stage gate commands with exact `{candidate_sha}` and runtime locks, install from GitHub candidate and verify installed runtime, never substitute uncommitted source execution.
 
-After technical_fix of a published candidate, revalidate scope, rerun affected fast gates, publish a new exact SHA, reinstall from GitHub and retest. A blocker requiring scope/architecture change causes replan, never a silent mutation of manifest.
+After technical_fix on published candidate reverify scope, rerun affected gates, publish new exact SHA, reinstall from GitHub and retest. Scope/architecture changes require replan.
 
-## Approval, unattended and child reuse
+## Owner approval and unattended
 
-`--unattended` avoids redundant questions inside frozen scope only; it does not approve a new base SHA, expanded scope, security exceptions or merge. Reuse child task sessions only for CoderAgent/TestEngineer/BuildAgent technical fixes with exact `{run_id,pipeline_id,stage,role,work_item_id}`. Planning/review sessions remain fresh; invalid reuse falls back to a fresh child, never another user worktree-session. Registry/metrics remain under `.tmp/pipelines/{run-id}/`.
+`--unattended` skips questions ONLY inside a previously owner-approved frozen plan. It never grants approval for a decision, modified manifest/base/scope/security exception or merge. An omitted decision such as D1 is BLOCKED pending a new owner answer; a review agent cannot self-approve. Only an explicit separate owner response to `/pipeline-plan` permits init and approve.
+
+Reuse child task sessions only for CoderAgent/TestEngineer/BuildAgent technical fixes with exact `{run_id,pipeline_id,stage,role,work_item_id}`. Planning/reviews always fresh; invalid reuse creates fresh child, never another user worktree session.
 
 ## GitHub handoff mode
 
-`github_handoff_prepare(run_id, handoff_id)` and `github_handoff_status` must verify immutable ref/source SHA and worktree; execute only generated validation stages and their approved fix scope (max two loops). `github_handoff_publish` publishes only validated result. No implicit Git setup, force-push or handoff-ref change.
+`github_handoff_prepare(run_id,handoff_id)` and `github_handoff_status` verify immutable ref/source SHA and worktree; run only generated validation and approved fix scope (max two loops). `github_handoff_publish` publishes only validated outcome. No implicit Git setup, force push or ref change.
 
-## Stops and result
+## Stops
 
-Block on stale main/base SHA, wrong worktree, out-of-scope changes, owner decision, deterministic failure, secret/security/destructive condition or runtime failure requiring design change. If runnable queue is empty, report real terminal state; never bypass prerequisites. Return run/pipeline statuses, branch, source/candidate SHA, machine evidence, runtime results, fix loops and blockers. Owner merges manually, then refreshes the next worktree and PLAN. Never remove historical `.tmp/pipelines` runs.
+BLOCK on stale main/base, wrong worktree, scope violation, unresolved owner decision, manifest/rules mismatch, missing/non-executable gate, Python environment failure, secret/security/destructive condition or runtime failure needing design change. If queue empty, report actual terminal state; do not bypass prerequisites or rewrite frozen evidence. Include run/pipeline status, branch, source/candidate SHA, machine evidence, runtime result, fix loops and blocker dossier. Owner merges manually, then refreshes next worktree/PLAN. Never delete historical runs.
