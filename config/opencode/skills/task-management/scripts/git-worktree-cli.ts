@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstat, readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -14,276 +14,177 @@ type GitSetup = {
   checkout_paths?: string[];
   must_absent?: string[];
 };
-
 type Manifest = {
   run_id?: string;
   git_setup?: GitSetup;
   allowed_change_paths?: string[];
 };
-
 class GateError extends Error {}
-
-function assertRelativePath(value: unknown, field: string): asserts value is string {
-  if (
-    typeof value !== 'string' ||
-    !value ||
-    value.startsWith('/') ||
-    value.includes('\\') ||
-    value.split('/').includes('..') ||
-    value.split('/').includes('.git')
-  ) {
-    throw new GateError(`${field} must be a safe repository-relative path`);
-  }
-}
-
-function assertSetup(value: unknown): asserts value is GitSetup {
-  if (!value || typeof value !== 'object') throw new GateError('manifest.git_setup is required');
-  const setup = value as Partial<GitSetup>;
-  if (!SHA.test(setup.base_sha ?? '')) throw new GateError('git_setup.base_sha must be a 40-hex SHA');
-  if (
-    typeof setup.branch !== 'string' ||
-    !BRANCH.test(setup.branch) ||
-    setup.branch.includes('..') ||
-    setup.branch.endsWith('/')
-  ) {
-    throw new GateError('git_setup.branch is unsafe or protected');
-  }
-  if (setup.source_sha !== undefined && !SHA.test(setup.source_sha)) {
-    throw new GateError('git_setup.source_sha must be a 40-hex SHA');
-  }
-  for (const path of setup.checkout_paths ?? []) assertRelativePath(path, 'git_setup.checkout_paths[]');
-  for (const path of setup.must_absent ?? []) assertRelativePath(path, 'git_setup.must_absent[]');
-  if (setup.source_sha && (!Array.isArray(setup.checkout_paths) || setup.checkout_paths.length === 0)) {
-    throw new GateError('git_setup.source_sha requires non-empty checkout_paths');
-  }
-}
-
-function assertAllowedChangePaths(value: unknown): asserts value is string[] | undefined {
-  if (value === undefined) return;
-  if (!Array.isArray(value)) throw new GateError('allowed_change_paths must be an array');
-  for (const path of value) {
-    if (typeof path !== 'string' || !path) throw new GateError('allowed_change_paths must contain strings');
-    const normalized = path.endsWith('/**') ? path.slice(0, -3) : path;
-    assertRelativePath(normalized, 'allowed_change_paths[]');
-  }
-}
-
-function pathMatches(path: string, scope: string): boolean {
-  if (scope.endsWith('/**')) {
-    const prefix = scope.slice(0, -3).replace(/\/$/, '');
-    return path === prefix || path.startsWith(`${prefix}/`);
-  }
-  return path === scope;
-}
-
-function isSensitivePath(path: string): boolean {
-  const name = path.split('/').pop() ?? path;
-  if (name === '.env' || (/^\.env\./.test(name) && name !== '.env.example')) return true;
-  return /\.(?:key|pem|p12|pfx|secret)$/i.test(name);
-}
 
 async function git(args: string[], cwd?: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 4 * 1024 * 1024 });
     return stdout.trim();
   } catch (error: any) {
-    const detail = String(error?.stderr ?? error?.message ?? error).trim();
-    throw new GateError(`git ${args[0] ?? 'command'} failed${detail ? `: ${detail}` : ''}`);
+    throw new GateError(`git ${args[0] ?? 'command'} failed: ${String(error?.stderr ?? error?.message ?? error).trim()}`);
   }
 }
-
 async function gitSucceeds(args: string[], cwd?: string): Promise<boolean> {
-  try {
-    await execFileAsync('git', args, { cwd, maxBuffer: 4 * 1024 * 1024 });
-    return true;
-  } catch {
-    return false;
+  try { await execFileAsync('git', args, { cwd }); return true; } catch { return false; }
+}
+function safePath(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && !value.startsWith('/') &&
+    !value.includes('\\') && !value.includes('\0') &&
+    !value.split('/').some((part) => part === '..' || part === '.git');
+}
+function assertSetup(value: unknown): asserts value is GitSetup {
+  if (!value || typeof value !== 'object') throw new GateError('manifest.git_setup is required');
+  const setup = value as Partial<GitSetup>;
+  if (!SHA.test(setup.base_sha ?? '')) throw new GateError('git_setup.base_sha must be 40-hex SHA');
+  if (!setup.branch || !BRANCH.test(setup.branch) || setup.branch.includes('..') || setup.branch.endsWith('/')) {
+    throw new GateError('git_setup.branch must be a safe non-default branch');
   }
-}
-
-async function rootDir(): Promise<string> {
-  return git(['rev-parse', '--show-toplevel']);
-}
-
-async function assertCleanAndBase(setup: GitSetup, cwd: string): Promise<void> {
-  if (await git(['status', '--porcelain'], cwd)) throw new GateError('worktree is not clean');
-  const head = await git(['rev-parse', 'HEAD'], cwd);
-  if (head.toLowerCase() !== setup.base_sha.toLowerCase()) {
-    throw new GateError(`HEAD does not match approved base_sha (${head})`);
+  // No implicit fetch, checkout, branch creation or file transplantation in manual mode.
+  if (setup.source_sha || setup.checkout_paths?.length) {
+    throw new GateError('manual mode does not perform source checkout; prepare it before PLAN and use the resulting main base');
   }
-  await git(['rev-parse', '--verify', `${setup.base_sha}^{commit}`], cwd);
-}
-
-async function sourceAvailable(setup: GitSetup, cwd: string): Promise<boolean> {
-  if (!setup.source_sha) return true;
-  return gitSucceeds(['rev-parse', '--verify', `${setup.source_sha}^{commit}`], cwd);
-}
-
-async function ensureSource(setup: GitSetup, cwd: string): Promise<void> {
-  if (!setup.source_sha || (await sourceAvailable(setup, cwd))) return;
-  await git(['fetch', '--no-tags', '--depth=1', 'origin', setup.source_sha], cwd);
-  await git(['rev-parse', '--verify', `${setup.source_sha}^{commit}`], cwd);
-}
-
-async function assertCheckoutPathsExist(setup: GitSetup, cwd: string): Promise<void> {
-  if (!setup.source_sha) return;
-  for (const path of setup.checkout_paths ?? []) {
-    const exists = await gitSucceeds(['cat-file', '-e', `${setup.source_sha}:${path}`], cwd);
-    if (!exists) throw new GateError(`checkout path not found in source_sha: ${path}`);
-  }
-}
-
-async function assertAbsent(setup: GitSetup, cwd: string): Promise<void> {
   for (const path of setup.must_absent ?? []) {
+    if (!safePath(path)) throw new GateError(`unsafe must_absent path: ${String(path)}`);
+  }
+}
+function assertScope(paths: unknown): asserts paths is string[] | undefined {
+  if (paths === undefined) return;
+  if (!Array.isArray(paths) || paths.some((path) =>
+    !safePath(typeof path === 'string' && path.endsWith('/**') ? path.slice(0, -3) : path))) {
+    throw new GateError('allowed_change_paths must contain safe repository-relative paths');
+  }
+}
+function matches(path: string, pattern: string): boolean {
+  if (pattern.endsWith('/**')) {
+    const prefix = pattern.slice(0, -3).replace(/\/$/, '');
+    return path === prefix || path.startsWith(`${prefix}/`);
+  }
+  return path === pattern;
+}
+function sensitive(path: string): boolean {
+  const name = path.split('/').pop() ?? path;
+  return name === '.env' || (/^\.env\./.test(name) && name !== '.env.example') ||
+    /\.(key|pem|p12|pfx|secret)$/i.test(name);
+}
+async function inspect(cwd: string): Promise<Record<string, unknown>> {
+  const [head, branch, linked, main, dirty, trackedPipeline] = await Promise.all([
+    git(['rev-parse', 'HEAD'], cwd),
+    git(['branch', '--show-current'], cwd),
+    git(['rev-parse', '--is-linked-worktree'], cwd),
+    git(['rev-parse', '--verify', 'refs/heads/main'], cwd),
+    git(['status', '--porcelain', '--untracked-files=all'], cwd),
+    git(['ls-files', '--', '.tmp/pipelines'], cwd),
+  ]);
+  return { head, branch, linked_worktree: linked === 'true', main_sha: main,
+    clean: dirty.length === 0, pipeline_artifacts_tracked: Boolean(trackedPipeline),
+    directory: cwd };
+}
+async function assertIdentity(setup: GitSetup, cwd: string): Promise<void> {
+  const info = await inspect(cwd);
+  if (!info.linked_worktree) throw new GateError('current checkout must be an owner-created linked worktree (not primary/main)');
+  if (info.branch !== setup.branch) throw new GateError(`selected branch mismatch: ${String(info.branch)}`);
+  if (info.pipeline_artifacts_tracked) throw new GateError('.tmp/pipelines is tracked: archive/untrack safely before proceeding');
+  if (String(info.main_sha).toLowerCase() !== setup.base_sha.toLowerCase()) {
+    throw new GateError(`STALE_PLAN: main moved from approved base ${setup.base_sha} to ${String(info.main_sha)}; preserve old run, refresh PLAN and obtain new approval`);
+  }
+  if (!await gitSucceeds(['merge-base', '--is-ancestor', setup.base_sha, 'HEAD'], cwd)) {
+    throw new GateError('current branch does not contain approved main base; owner must update worktree and re-plan');
+  }
+  for (const path of setup.must_absent ?? []) {
+    if (await gitSucceeds(['ls-files', '--error-unmatch', '--', path], cwd)) {
+      throw new GateError(`forbidden tracked path exists: ${path}`);
+    }
     try {
+      const { lstat } = await import('node:fs/promises');
       await lstat(join(cwd, path));
-      throw new GateError(`forbidden path is present: ${path}`);
+      throw new GateError(`forbidden path exists: ${path}`);
     } catch (error) {
       if (error instanceof GateError) throw error;
-      const code = (error as NodeJS.ErrnoException)?.code;
-      if (code !== 'ENOENT') throw new GateError(`cannot verify forbidden path ${path}: ${String(error)}`);
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
 }
-
-async function changedFiles(cwd: string): Promise<string[]> {
+async function changedFiles(setup: GitSetup, cwd: string): Promise<string[]> {
   const outputs = await Promise.all([
+    git(['diff', '--name-only', setup.base_sha, 'HEAD'], cwd),
     git(['diff', '--name-only'], cwd),
     git(['diff', '--cached', '--name-only'], cwd),
     git(['ls-files', '--others', '--exclude-standard'], cwd),
   ]);
-  return [...new Set(outputs.flatMap((value) => value.split('\n').filter(Boolean)))].sort();
+  return [...new Set(outputs.flatMap((out) => out.split('\n').filter(Boolean)))].sort();
 }
-
-function effectiveScope(manifest: Manifest): string[] {
-  if (manifest.allowed_change_paths?.length) return manifest.allowed_change_paths;
-  return manifest.git_setup?.checkout_paths ?? [];
-}
-
-async function verifyScope(manifest: Manifest, cwd: string): Promise<string[]> {
+async function verify(manifest: Manifest, cwd: string): Promise<string[]> {
   assertSetup(manifest.git_setup);
-  assertAllowedChangePaths(manifest.allowed_change_paths);
-  const branch = await git(['branch', '--show-current'], cwd);
-  if (branch !== manifest.git_setup.branch) {
-    throw new GateError(`current branch does not match approved branch (${branch || 'detached'})`);
-  }
-  await assertAbsent(manifest.git_setup, cwd);
-
-  const changed = await changedFiles(cwd);
-  const scope = effectiveScope(manifest);
-  if (changed.length > 0 && scope.length === 0) {
-    throw new GateError('changed files exist but allowed_change_paths is empty');
-  }
+  assertScope(manifest.allowed_change_paths);
+  await assertIdentity(manifest.git_setup, cwd);
+  const changed = await changedFiles(manifest.git_setup, cwd);
+  const scope = manifest.allowed_change_paths ?? [];
   for (const path of changed) {
-    if (isSensitivePath(path)) throw new GateError(`sensitive path changed: ${path}`);
-    if (!scope.some((allowed) => pathMatches(path, allowed))) {
+    if (sensitive(path)) throw new GateError(`sensitive path changed: ${path}`);
+    if (!scope.some((allowed) => matches(path, allowed))) {
       throw new GateError(`changed path is outside approved scope: ${path}`);
     }
   }
   return changed;
 }
-
-async function capability(setup: GitSetup, cwd: string): Promise<{ source_local: boolean }> {
-  await assertCleanAndBase(setup, cwd);
-  await assertAbsent(setup, cwd);
-  return { source_local: await sourceAvailable(setup, cwd) };
-}
-
-async function setupWorktree(manifest: Manifest, cwd: string): Promise<void> {
+async function publish(manifest: Manifest, manifestPath: string, cwd: string): Promise<Record<string, unknown>> {
   assertSetup(manifest.git_setup);
-  assertAllowedChangePaths(manifest.allowed_change_paths);
-  const setup = manifest.git_setup;
-  await assertCleanAndBase(setup, cwd);
-  await assertAbsent(setup, cwd);
-  const existing = await gitSucceeds(['show-ref', '--verify', '--quiet', `refs/heads/${setup.branch}`], cwd);
-  if (existing) throw new GateError(`task branch already exists: ${setup.branch}`);
-
-  await ensureSource(setup, cwd);
-  await assertCheckoutPathsExist(setup, cwd);
-  if (setup.checkout_paths?.length && manifest.allowed_change_paths?.length) {
-    for (const path of setup.checkout_paths) {
-      if (!manifest.allowed_change_paths.some((scope) => pathMatches(path, scope))) {
-        throw new GateError(`checkout path is outside allowed_change_paths: ${path}`);
-      }
-    }
-  }
-
-  await git(['switch', '-c', setup.branch, setup.base_sha], cwd);
-  if (setup.source_sha) await git(['checkout', setup.source_sha, '--', ...(setup.checkout_paths ?? [])], cwd);
-  await verifyScope(manifest, cwd);
-}
-
-async function publishCandidate(manifest: Manifest, manifestPath: string, cwd: string): Promise<Record<string, unknown>> {
-  assertSetup(manifest.git_setup);
-  const changed = await verifyScope(manifest, cwd);
-  if (changed.length > 0) {
+  let changed = await verify(manifest, cwd);
+  const working = await Promise.all([
+    git(['diff', '--name-only'], cwd), git(['diff', '--cached', '--name-only'], cwd),
+    git(['ls-files', '--others', '--exclude-standard'], cwd),
+  ]);
+  if (working.some((value) => value.length > 0)) {
     await git(['add', '-A'], cwd);
-    await verifyScope(manifest, cwd);
-    const runId = String(manifest.run_id ?? 'run').replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 80);
-    await git(['commit', '-m', `pipeline(${runId}): candidate`], cwd);
+    await verify(manifest, cwd);
+    const run = String(manifest.run_id ?? 'run').replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 80);
+    await git(['commit', '-m', `pipeline(${run}): candidate`], cwd);
   }
-
-  const candidateSha = await git(['rev-parse', 'HEAD'], cwd);
+  changed = await verify(manifest, cwd);
+  const candidate = await git(['rev-parse', 'HEAD'], cwd);
   await git(['push', 'origin', `HEAD:refs/heads/${manifest.git_setup.branch}`], cwd);
-  const remoteLine = await git(['ls-remote', '--heads', 'origin', `refs/heads/${manifest.git_setup.branch}`], cwd);
-  const remoteSha = remoteLine.split(/\s+/)[0] ?? '';
-  if (remoteSha.toLowerCase() !== candidateSha.toLowerCase()) {
-    throw new GateError(`remote SHA mismatch after publish: local=${candidateSha} remote=${remoteSha || 'missing'}`);
-  }
-
+  const remote = (await git(['ls-remote', '--heads', 'origin', `refs/heads/${manifest.git_setup.branch}`], cwd))
+    .split(/\s+/)[0] ?? '';
+  if (candidate.toLowerCase() !== remote.toLowerCase()) throw new GateError('remote candidate SHA mismatch');
   const evidencePath = join(dirname(resolve(manifestPath)), 'candidate.json');
-  const evidence = {
-    status: 'PASS',
-    branch: manifest.git_setup.branch,
-    candidate_sha: candidateSha,
-    remote_sha: remoteSha,
-    changed_files: changed,
-    published_at: new Date().toISOString(),
-  };
+  const evidence = { status: 'PASS', branch: manifest.git_setup.branch,
+    candidate_sha: candidate, remote_sha: remote, changed_files: changed,
+    published_at: new Date().toISOString() };
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
   return { ...evidence, evidence: evidencePath };
 }
-
 async function main(): Promise<void> {
   const [command, manifestPath] = process.argv.slice(2);
-  const cwd = await rootDir();
-
+  const cwd = await git(['rev-parse', '--show-toplevel']);
   if (command === 'inspect' && !manifestPath) {
-    const head = await git(['rev-parse', 'HEAD'], cwd);
-    const branch = await git(['branch', '--show-current'], cwd);
-    const dirty = Boolean(await git(['status', '--porcelain'], cwd));
-    const branches = (await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads'], cwd))
-      .split('\n')
-      .filter(Boolean);
-    console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, head, branch, clean: !dirty, branches }));
+    console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await inspect(cwd) }));
     return;
   }
-
-  if (!manifestPath || !['capability', 'setup', 'verify', 'publish'].includes(command ?? '')) {
-    throw new GateError('usage: git-worktree-cli.ts inspect | capability|setup|verify|publish <manifest.json>');
+  if (!manifestPath || !['adopt', 'verify', 'publish'].includes(command ?? '')) {
+    throw new GateError('usage: git-worktree-cli.ts inspect | adopt|verify|publish <manifest.json>; setup is disabled');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
   assertSetup(manifest.git_setup);
-  assertAllowedChangePaths(manifest.allowed_change_paths);
-
+  assertScope(manifest.allowed_change_paths);
   let details: Record<string, unknown> = {};
-  if (command === 'capability') details = await capability(manifest.git_setup, cwd);
-  if (command === 'setup') await setupWorktree(manifest, cwd);
-  if (command === 'verify') details = { changed_files: await verifyScope(manifest, cwd) };
-  if (command === 'publish') details = await publishCandidate(manifest, manifestPath, cwd);
-  console.log(
-    JSON.stringify({
-      status: 'PASS',
-      gate: 'git_worktree',
-      command,
-      branch: manifest.git_setup.branch,
-      ...details,
-    }),
-  );
+  if (command === 'adopt') {
+    await assertIdentity(manifest.git_setup, cwd);
+    if (await git(['status', '--porcelain', '--untracked-files=all'], cwd)) {
+      throw new GateError('adopt requires clean checkout; save tracked preparation before approval');
+    }
+    details = { main_sha: manifest.git_setup.base_sha, directory: cwd };
+  }
+  if (command === 'verify') details = { changed_files: await verify(manifest, cwd) };
+  if (command === 'publish') details = await publish(manifest, manifestPath, cwd);
+  console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command,
+    branch: manifest.git_setup.branch, ...details }));
 }
-
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`BLOCKED: git_worktree: ${message}`);
+  console.error(`BLOCKED: git_worktree: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 });
