@@ -4,6 +4,7 @@ set -Eeuo pipefail
 REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 REF="${OPENCODE_CONFIG_REF:-main}"
 OPENCODE_BIN="$HOME/.opencode/bin/opencode"
+OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-1.18.31}"
 ENV_FILE="$HOME/.config/opencode.env"
 LEGACY_ENV_FILE="$HOME/.config/opencode-web.env"
 
@@ -22,8 +23,8 @@ fi
 if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
   echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
 else
-  echo "Устанавливаю/обновляю OpenCode официальным установщиком..."
-  curl -fsSL https://opencode.ai/install | bash
+  echo "Устанавливаю/обновляю OpenCode до $OPENCODE_INSTALL_VERSION официальным установщиком..."
+  curl -fsSL https://opencode.ai/install | bash -s -- --version "$OPENCODE_INSTALL_VERSION"
 fi
 
 if [[ ! -x "$OPENCODE_BIN" ]]; then
