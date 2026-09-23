@@ -32,7 +32,15 @@ jobs:
           bash -n install-openchamber.sh install.sh scripts/install-opencode-agents.sh tests/test_agent_path_migration.sh
           git diff --check
       - name: Verify standard OpenCode agent path migration
-        run: bash tests/test_agent_path_migration.sh
+        run: |
+          set -Eeuo pipefail
+          bash tests/test_agent_path_migration.sh
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          bash scripts/install-opencode-agents.sh config/opencode/agent "$tmp/agents"
+          source_count=$(find config/opencode/agent -type f -name '*.md' | wc -l)
+          installed_count=$(find "$tmp/agents" -type f -name '*.md' | wc -l)
+          test "$source_count" -eq "$installed_count"
       - name: Verify repeat install downloads only small manifest
         run: |
           set -Eeuo pipefail
