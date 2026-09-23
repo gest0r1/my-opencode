@@ -9,7 +9,7 @@ TARGET="$ROOT/home/.config/opencode/agents"
 RUNTIME_LEGACY="$ROOT/home/.opencode/agent"
 CONFIG_LEGACY="$ROOT/home/.config/opencode/agent"
 
-mkdir -p   "$SRC/core"   "$SRC/content"   "$SRC/subagents/code"   "$RUNTIME_LEGACY/subagents/planning"   "$RUNTIME_LEGACY/subagents/utils"   "$CONFIG_LEGACY"
+mkdir -p   "$SRC/core"   "$SRC/content"   "$SRC/subagents/code"   "$RUNTIME_LEGACY/subagents/planning"   "$RUNTIME_LEGACY/subagents/code"   "$RUNTIME_LEGACY/subagents/utils"   "$CONFIG_LEGACY"
 
 cat > "$SRC/core/primary-agent.md" <<'EOF'
 ---
