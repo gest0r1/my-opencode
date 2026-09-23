@@ -45,15 +45,28 @@ tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
 
 mkdir -p \
   "$HOME/.config/opencode" \
-  "$HOME/.opencode/agent" \
+  "$HOME/.config/opencode/agents" \
   "$HOME/.agents/skills"
 
-# Глобальная конфигурация OpenCode, включая скрытые файлы.
-# agent/ ставится отдельно в ~/.opencode/agent, поэтому не оставляем его копию
-# в ~/.config/opencode.
-cp -a "$SRC/config/opencode/." "$HOME/.config/opencode/"
-rm -rf "$HOME/.config/opencode/agent"
-cp -a "$SRC/config/opencode/agent/." "$HOME/.opencode/agent/"
+# Глобальная конфигурация OpenCode, включая скрытые файлы. Каталог agent/
+# из репозитория ставится отдельно в канонический upstream-путь agents/, поэтому
+# не копируем его как ~/.config/opencode/agent и не удаляем существующий legacy.
+shopt -s dotglob nullglob
+for entry in "$SRC/config/opencode/"*; do
+  [[ "$(basename "$entry")" == "agent" ]] && continue
+  cp -a "$entry" "$HOME/.config/opencode/"
+done
+shopt -u dotglob nullglob
+
+# OpenCode 1.18.x штатно читает ~/.config/opencode/agent(s)/**/*.md.
+# Устанавливаем управляемые файлы в plural-путь и мигрируем оба прежних корня
+# без удаления: rollback остаётся возможным до фактической проверки runtime.
+bash "$SRC/scripts/install-opencode-agents.sh" \
+  "$SRC/config/opencode/agent" \
+  "$HOME/.config/opencode/agents" \
+  "$HOME/.opencode/agent" \
+  "$HOME/.config/opencode/agent"
+
 cp -a "$SRC/config/agents/skills/." "$HOME/.agents/skills/"
 
 # Единый runtime env для OpenCode CLI и OpenChamber.
