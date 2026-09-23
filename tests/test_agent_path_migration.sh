@@ -70,6 +70,8 @@ test -f "$TARGET/code/CoderAgent.md"
 test -f "$TARGET/planning/Reviewer.md"
 test -f "$TARGET/utils/helper.md"
 test -f "$TARGET/LegacyFlat.md"
+test ! -e "$TARGET/primary-agent.md"
+test ! -d "$TARGET/subagents"
 
 grep -Fq 'managed coder' "$TARGET/code/CoderAgent.md"
 ! grep -Fq 'legacy coder must be replaced' "$TARGET/code/CoderAgent.md"
