@@ -30,6 +30,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash -n install-openchamber.sh install.sh scripts/install-opencode-agents.sh tests/test_agent_path_migration.sh
+          grep -Fq 'OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-1.18.31}"' install.sh
+          grep -Fq 'bash -s -- --version "$OPENCODE_INSTALL_VERSION"' install.sh
           git diff --check
       - name: Verify standard OpenCode agent path migration
         run: |
