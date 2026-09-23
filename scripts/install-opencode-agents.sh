@@ -46,8 +46,16 @@ frontmatter_name() {
 
 validate_component() {
   local kind=$1 value=$2
-  [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
-    echo "Invalid agent $kind '$value'" >&2
+  if [[ "$kind" == "category" ]]; then
+    [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+      echo "Invalid agent category '$value'" >&2
+      return 1
+    }
+    return 0
+  fi
+
+  [[ -n "$value" && "$value" != "." && "$value" != ".." && "$value" != */* && "$value" != *\\* ]] || {
+    echo "Invalid agent name '$value'" >&2
     return 1
   }
 }
