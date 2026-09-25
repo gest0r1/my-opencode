@@ -33,6 +33,7 @@ class GateRunnerError extends Error {}
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
 const MAX_CAPTURE = 256 * 1024;
 const SHA = /^[0-9a-f]{40}$/i;
+const RUNTIME_GATE = /(runtime|deploy|release|smoke|install)/i;
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
@@ -162,7 +163,7 @@ async function main(): Promise<void> {
 
   const evidenceFile = join(resolve(stateRoot), runId, 'gates', `${pipelineId}-${gate}.json`);
   await mkdir(dirname(evidenceFile), { recursive: true });
-  const releaseLocks = isRuntimeGate(gate) ? pipeline.runtime_locks ?? [] : [];
+  const releaseLocks = RUNTIME_GATE.test(gate) ? pipeline.runtime_locks ?? [] : [];
   const release = await acquireRuntimeLocks(stateRoot, runId, releaseLocks);
   const results: Array<Record<string, unknown>> = [];
   try {

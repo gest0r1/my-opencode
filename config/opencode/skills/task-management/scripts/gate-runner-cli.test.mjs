@@ -111,7 +111,7 @@ test('runner executes frozen uv pytest and rejects every non-pytest uv form', as
   await writeFile(path.join(bin, 'uv'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const oldPath = process.env.PATH;
   try {
-    process.env.PATH = `${bin}:/bin`;
+    process.env.PATH = `${bin}:${oldPath}`;
     const pass = run(fixture.root, [fixture.runId, 'app', 'build', '--state-root', fixture.stateRoot]);
     assert.equal(pass.status, 0, pass.stderr);
     for (const command of ['uv run pytest -q', 'uv run bash -c id', 'uv run sh -c id', 'uv run python script.py', 'uv run --frozen python script.py', 'uv run --frozen arbitrary-command', 'uv run --frozen pytest -q | tee out']) {
