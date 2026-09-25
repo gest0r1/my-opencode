@@ -98,7 +98,7 @@ test('accepts frozen uv pytest gates and validates the locked project environmen
     process.env.PATH = `${bin}:${oldPath}`;
     assert.deepEqual(validateGateManifest(spec, { environment: true, cwd: root }), { status: 'PASS', checked_commands: 2, environment_checked: true });
     const manifestFile = path.join(root, 'manifest.json');
-    await writeFile(manifestFile, `${JSON.stringify(spec)}\\n`);
+    await writeFile(manifestFile, `${JSON.stringify(spec)}\n`);
     const result = call(root, ['preflight', manifestFile, '--environment']);
     assert.equal(result.status, 0, result.stderr);
   } finally { process.env.PATH = oldPath; }
