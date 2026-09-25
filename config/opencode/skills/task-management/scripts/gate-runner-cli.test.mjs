@@ -102,3 +102,22 @@ test('runtime candidate placeholder fails closed without published candidate evi
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /candidate evidence is missing/);
 });
+
+
+test('runner executes frozen uv pytest and rejects every non-pytest uv form', async () => {
+  const fixture = await makeRun('uv run --frozen pytest backend/tests/test_x.py -q');
+  const bin = path.join(fixture.root, 'bin');
+  await mkdir(bin);
+  await writeFile(path.join(bin, 'uv'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${bin}:/bin`;
+    const pass = run(fixture.root, [fixture.runId, 'app', 'build', '--state-root', fixture.stateRoot]);
+    assert.equal(pass.status, 0, pass.stderr);
+    for (const command of ['uv run pytest -q', 'uv run bash -c id', 'uv run sh -c id', 'uv run python script.py', 'uv run --frozen python script.py', 'uv run --frozen arbitrary-command', 'uv run --frozen pytest -q | tee out']) {
+      const rejected = await makeRun(command);
+      const result = run(rejected.root, [rejected.runId, 'app', 'build', '--state-root', rejected.stateRoot]);
+      assert.notEqual(result.status, 0, command);
+    }
+  } finally { process.env.PATH = oldPath; }
+});

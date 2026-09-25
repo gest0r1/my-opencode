@@ -2,6 +2,7 @@ import { readFileSync, accessSync, constants } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { gatePolicyError, isFrozenUvPytest, tokenizeGateCommand as tokenizeGateCommandPolicy } from './gate-command-policy.mjs';
 
 export class ManifestPreflightError extends Error {}
 
@@ -12,71 +13,22 @@ const RUNTIME_GATE = /(runtime|deploy|release|smoke|install)/i;
 const SAFE_SHA = /^[0-9a-f]{40}$/i;
 
 export function tokenizeGateCommand(command) {
-  if (typeof command !== 'string' || !command.trim() || /[\n\r\0]/.test(command)) {
-    throw new ManifestPreflightError('empty or multiline gate command is forbidden');
+  try {
+    return tokenizeGateCommandShared(command);
+  } catch (error) {
+    throw new ManifestPreflightError(error instanceof Error ? error.message : String(error));
   }
-  if (/[;&|<>`]/.test(command) || /\$\(/.test(command)) {
-    throw new ManifestPreflightError('shell composition, redirects and substitution are forbidden');
-  }
-  const tokens = [];
-  let current = '';
-  let quote;
-  let escaped = false;
-  const push = () => { if (current) tokens.push(current); current = ''; };
-  for (const char of command) {
-    if (escaped) { current += char; escaped = false; continue; }
-    if (char === '\\' && quote !== "'") { escaped = true; continue; }
-    if (quote) { if (char === quote) quote = undefined; else current += char; continue; }
-    if (char === "'" || char === '"') { quote = char; continue; }
-    if (/\s/.test(char)) push(); else current += char;
-  }
-  if (escaped || quote) throw new ManifestPreflightError('unterminated escape or quote');
-  push();
-  if (!tokens.length) throw new ManifestPreflightError('gate command has no executable');
-  return tokens;
 }
 
-function safeRelativePath(value) {
-  return Boolean(value) && !value.startsWith('/') && !value.includes('\\') &&
-    !value.split('/').some((part) => part === '..' || part === '.git');
+function tokenizeGateCommandShared(command) {
+  return tokenizeGateCommandPolicy(command);
 }
 
-// Mirror gate-runner's allowlist, but never execute a gate during validation.
 export function assertSafeGateInvocation(tokens, gate) {
-  const [exe, ...args] = tokens;
-  if (exe === 'bash') {
-    if (args[0] === '-n' && args.length >= 2 && safeRelativePath(args[1])) return;
-    if (RUNTIME_GATE.test(gate) && args.length >= 1 && safeRelativePath(args[0]) && !args[0].startsWith('-')) return;
-    throw new ManifestPreflightError('bash is allowed only for -n or a repository script in runtime gate');
-  }
-  if (exe === 'pytest') return;
-  if ((exe === 'python' || exe === 'python3') && args[0] === '-m' && args[1] === 'pytest') return;
-  if (exe === 'tsc' || exe === 'mypy') return;
-  if (exe === 'npx' && (args[0] === '--yes' ? ['tsc', 'vitest', 'jest'].includes(args[1]) : ['tsc', 'vitest', 'jest'].includes(args[0]))) return;
-  if (exe === 'npm' && (args[0] === 'test' || (args[0] === 'run' && ['test', 'build', 'typecheck', 'lint'].includes(args[1])))) return;
-  if (exe === 'pnpm' && (args[0] === 'test' || (args[0] === 'run' && ['test', 'build', 'typecheck', 'lint'].includes(args[1])) || (args[0] === 'exec' && ['tsc', 'vitest'].includes(args[1])))) return;
-  if (exe === 'corepack' && args[0] === 'pnpm') return assertSafeGateInvocation(['pnpm', ...args.slice(1)], gate);
-  if (exe === 'yarn' && ['test', 'build', 'lint'].includes(args[0])) return;
-  if (exe === 'bun' && args[0] === 'test') return;
-  if (exe === 'go' && ['test', 'build'].includes(args[0])) return;
-  if (exe === 'cargo' && ['test', 'check', 'build'].includes(args[0])) return;
-  if (exe === 'docker') {
-    if (args[0] === 'pull' || args[0] === 'inspect' || (args[0] === 'image' && args[1] === 'inspect')) return;
-    if (args[0] === 'compose') {
-      const subcommands = new Set(['config', 'ps', 'build', 'pull', 'up', 'restart']);
-      const command = args.find((arg) => subcommands.has(arg));
-      if (['config', 'ps', 'pull'].includes(command)) return;
-      if (RUNTIME_GATE.test(gate) && ['build', 'up', 'restart'].includes(command)) return;
-    }
-    throw new ManifestPreflightError('docker invocation is outside the safe gate policy');
-  }
-  if (exe === 'curl') {
-    const forbidden = new Set(['-o', '--output', '-O', '--remote-name', '-d', '--data', '--data-raw', '-T', '--upload-file', '-X', '--request']);
-    if (args.some((arg) => forbidden.has(arg))) throw new ManifestPreflightError('curl mutation/output options are forbidden');
-    if (args.some((arg) => /^https?:\/\//.test(arg))) return;
-  }
-  throw new ManifestPreflightError(`executable is outside deterministic gate policy: ${exe}`);
+  const reason = gatePolicyError(tokens, gate);
+  if (reason) throw new ManifestPreflightError(reason);
 }
+
 
 function executableOnPath(exe) {
   if (isAbsolute(exe) || exe.includes('/')) return false;
@@ -86,16 +38,82 @@ function executableOnPath(exe) {
   });
 }
 
+function runChecked(exe, args, cwd, label) {
+  const result = spawnSync(exe, args, { cwd, shell: false, encoding: 'utf8', timeout: 30000, maxBuffer: 64 * 1024 });
+  if (result.error || result.status !== 0) {
+    const reason = result.error?.code || String(result.stderr || result.error?.message || result.status).trim().slice(0, 300);
+    throw new ManifestPreflightError(`${label}: ${reason}`);
+  }
+  return String(result.stdout ?? '');
+}
+
+function projectPythonContract(cwd) {
+  const versionFile = join(cwd, '.python-version');
+  try {
+    const value = readFileSync(versionFile, 'utf8').trim().split(/\s+/)[0];
+    if (value) return { source: '.python-version', value };
+  } catch {}
+  try {
+    const pyproject = readFileSync(join(cwd, 'pyproject.toml'), 'utf8');
+    const match = pyproject.match(/^\s*requires-python\s*=\s*["']([^"']+)["']/m);
+    if (match?.[1]) return { source: 'pyproject.toml requires-python', value: match[1] };
+  } catch {}
+  return undefined;
+}
+
+function versionTuple(value) {
+  const match = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(value.trim());
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)] : undefined;
+}
+
+function compareVersion(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1;
+  }
+  return 0;
+}
+
+function matchesPythonContract(version, contract) {
+  const actual = versionTuple(version);
+  if (!actual || !contract) return false;
+  if (/^\d+\.\d+(?:\.\d+)?$/.test(contract)) return version.startsWith(contract);
+  for (const clause of contract.split(',').map((item) => item.trim()).filter(Boolean)) {
+    const match = /^(>=|<=|==|!=|>|<|~=)\s*(\d+(?:\.\d+){1,2})/.exec(clause);
+    if (!match) continue;
+    const expected = versionTuple(match[2]);
+    const comparison = compareVersion(actual, expected);
+    const ok = match[1] === '>=' ? comparison >= 0 : match[1] === '<=' ? comparison <= 0 :
+      match[1] === '>' ? comparison > 0 : match[1] === '<' ? comparison < 0 :
+      match[1] === '!=' ? comparison !== 0 : match[1] === '==' ? comparison === 0 :
+      (actual[0] === expected[0] && actual[1] >= expected[1]);
+    if (!ok) return false;
+  }
+  return true;
+}
+
+function checkUv(tokens, cwd) {
+  if (!isFrozenUvPytest(tokens)) return;
+  if (!executableOnPath('uv')) throw new ManifestPreflightError('EXECUTABLE_NOT_FOUND: uv is absent from runner PATH');
+  try { accessSync(join(cwd, 'pyproject.toml'), constants.R_OK); }
+  catch { throw new ManifestPreflightError('UV_PROJECT_NOT_FOUND: pyproject.toml is required for uv gate'); }
+  try { accessSync(join(cwd, 'uv.lock'), constants.R_OK); }
+  catch { throw new ManifestPreflightError('UV_LOCK_NOT_FOUND: uv.lock is required for uv run --frozen gate'); }
+
+  const output = runChecked('uv', ['run', '--frozen', 'python', '-c', 'import sys, pytest; print(sys.version.split()[0]); print(pytest.__version__)'], cwd, 'UV_LOCKED_ENV_NOT_READY');
+  const version = output.trim().split(/\r?\n/)[0] ?? '';
+  const contract = projectPythonContract(cwd);
+  if (contract && !matchesPythonContract(version, contract.value)) {
+    throw new ManifestPreflightError(`PYTHON_CONTRACT_MISMATCH: uv Python ${version} does not satisfy ${contract.source}=${contract.value}`);
+  }
+}
+
 function checkPython(tokens, cwd) {
   const exe = tokens[0];
   if (!['python', 'python3', 'pytest'].includes(exe)) return;
   const args = exe === 'pytest' ? ['--version'] : ['-m', 'pytest', '--version'];
-  const result = spawnSync(exe, args, { cwd, shell: false, encoding: 'utf8', timeout: 15000, maxBuffer: 64 * 1024 });
-  if (result.error || result.status !== 0) {
-    const reason = result.error?.code || String(result.stderr || result.error?.message || result.status).trim().slice(0, 300);
-    throw new ManifestPreflightError(`PYTHON_ENV_NOT_READY: ${exe} cannot run pytest (${reason}). Install interpreter, pytest and project dependencies in the runner environment before approval`);
-  }
+  runChecked(exe, args, cwd, `PYTHON_ENV_NOT_READY: ${exe} cannot run pytest`);
 }
+
 
 export function validateGateManifest(manifest, { environment = false, cwd = process.cwd() } = {}) {
   if (!manifest || typeof manifest !== 'object' || !Array.isArray(manifest.pipelines)) {
@@ -148,6 +166,7 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
       if (!executableOnPath(tokens[0])) {
         throw new ManifestPreflightError(`EXECUTABLE_NOT_FOUND: ${tokens[0]} for ${profile}/${gate} is absent from runner PATH`);
       }
+      checkUv(tokens, cwd);
       checkPython(tokens, cwd);
     }
   }
