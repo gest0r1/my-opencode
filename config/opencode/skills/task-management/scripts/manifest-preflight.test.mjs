@@ -95,8 +95,12 @@ test('accepts frozen uv pytest gates and validates the locked project environmen
   spec.gate_profiles = { pytest: { 'test-rule-actions': ['uv run --frozen pytest backend/tests/test_x.py -q', 'uv run --frozen python -m pytest backend/tests/test_x.py -q'] } };
   const oldPath = process.env.PATH;
   try {
-    process.env.PATH = `${bin}:/bin`;
+    process.env.PATH = `${bin}:${oldPath}`;
     assert.deepEqual(validateGateManifest(spec, { environment: true, cwd: root }), { status: 'PASS', checked_commands: 2, environment_checked: true });
+    const manifestFile = path.join(root, 'manifest.json');
+    await writeFile(manifestFile, `${JSON.stringify(spec)}\\n`);
+    const result = call(root, ['preflight', manifestFile, '--environment']);
+    assert.equal(result.status, 0, result.stderr);
   } finally { process.env.PATH = oldPath; }
 });
 
@@ -122,10 +126,14 @@ test('uv environment preflight fails closed for missing uv, lock, pytest, or Pyt
     assert.throws(() => validateGateManifest(spec, { environment: true, cwd: root }), /EXECUTABLE_NOT_FOUND/);
     const bin = path.join(root, 'bin');
     await mkdir(bin);
-    await writeFile(path.join(bin, 'uv'), '#!/bin/sh\necho 3.11.9\nexit 0\n', { mode: 0o755 });
+    await writeFile(path.join(bin, 'uv'), '#!/bin/sh\nif [ "${UV_NO_PYTEST:-0}" = 1 ]; then echo "pytest missing" >&2; exit 1; fi\necho 3.11.9\nexit 0\n', { mode: 0o755 });
     process.env.PATH = `${bin}:/bin`;
     assert.throws(() => validateGateManifest(spec, { environment: true, cwd: root }), /UV_LOCK_NOT_FOUND/);
     await writeFile(path.join(root, 'uv.lock'), 'version = 1\n');
     assert.throws(() => validateGateManifest(spec, { environment: true, cwd: root }), /PYTHON_CONTRACT_MISMATCH/);
-  } finally { process.env.PATH = oldPath; }
+    await writeFile(path.join(root, '.python-version'), '3.11\\n');
+    process.env.UV_NO_PYTEST = '1';
+    assert.throws(() => validateGateManifest(spec, { environment: true, cwd: root }), /UV_LOCKED_ENV_NOT_READY/);
+    delete process.env.UV_NO_PYTEST;
+  } finally { delete process.env.UV_NO_PYTEST; process.env.PATH = oldPath; }
 });
