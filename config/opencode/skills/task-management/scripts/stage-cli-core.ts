@@ -783,7 +783,7 @@ export async function runCli(args: string[]): Promise<void> {
     const { preflightFile } = await import('./manifest-preflight.mjs');
     const result = await preflightFile(manifest, { environment: options.environment, cwd: process.cwd() });
     if (options.json) console.log(JSON.stringify(result, null, 2));
-    else console.log(\`PASS checked_commands=\${result.checked_commands} environment_checked=\${result.environment_checked}\`);
+    else console.log('PASS checked_commands=' + result.checked_commands + ' environment_checked=' + result.environment_checked);
     return;
   }
   if (command === 'init') {
