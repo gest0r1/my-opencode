@@ -35,7 +35,7 @@ Never split, rewrite, normalize or temporarily edit the authoritative snapshot. 
 
 ## Planning gate protocol
 
-Planning gates are sequential. A later gate never makes an earlier `needs_revision` gate pass.
+Planning gates are sequential. A gate advances only on literal `status: ready`. A later gate never makes an earlier `needs_revision` gate pass.
 
 For each triggered gate:
 1. run a fresh planning/review agent;
