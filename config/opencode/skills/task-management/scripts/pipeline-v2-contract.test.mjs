@@ -283,3 +283,33 @@ test('project policy CLI reports immutable path and SHA-256', async () => {
   assert.equal(output.sha256, sha(policyText));
   assert.deepEqual(output.protected_paths, ['protected/**']);
 });
+
+
+test('technical fix counter permits exactly three cycles and blocks the fourth', async () => {
+  const fx = await fixture('v2-fix-cycle-limit');
+  const stateRoot = path.join(fx.root, '.tmp', 'fix-cycle-state');
+
+  let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['approve', fx.manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['start', fx.manifest.run_id, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  for (let cycle = 1; cycle <= 3; cycle += 1) {
+    result = run(fx.root, [
+      'fix-cycle', fx.manifest.run_id, 'implementation', '--pipeline', 'app',
+      '--state-root', stateRoot, '--json',
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    const state = JSON.parse(result.stdout);
+    assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, cycle);
+  }
+
+  result = run(fx.root, [
+    'fix-cycle', fx.manifest.run_id, 'implementation', '--pipeline', 'app',
+    '--state-root', stateRoot,
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /TECHNICAL_FIX_LIMIT_EXCEEDED/);
+});
