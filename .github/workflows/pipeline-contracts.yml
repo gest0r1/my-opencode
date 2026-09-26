@@ -10,6 +10,8 @@ on:
       - 'config/opencode/command/pipeline-*.md'
       - 'config/opencode/config/agent-metadata.json'
       - 'config/opencode/skills/task-management/**'
+      - 'install.sh'
+      - 'install.sh'
       - '.github/workflows/pipeline-contracts.yml'
   push:
     branches:
