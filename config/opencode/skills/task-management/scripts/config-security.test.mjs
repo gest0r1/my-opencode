@@ -13,9 +13,7 @@ const allowedMcp = [
   'exa',
   'yadisk',
   'memory',
-  'itop',
-  'google-drive',
-  'image-gen',
+  '1c-buddy',
 ].sort();
 
 const retiredMcp = [
@@ -23,8 +21,10 @@ const retiredMcp = [
   'exchange',
   'bitrix24',
   'n8n',
-  '1c-buddy',
   'ya-metrika',
+  'itop',
+  'google-drive',
+  'image-gen',
 ];
 
 const secretKey = /(token|secret|api.?key|password|authorization|credential|refresh.?token)/i;
@@ -84,8 +84,10 @@ test('retired MCP permission references are absent from active agents', () => {
     'exchange_*',
     'bitrix24_*',
     'n8n_*',
-    '1c-buddy_*',
     'ya-metrika_*',
+    'itop_*',
+    'google-drive_*',
+    'image-gen_*',
   ];
 
   for (const path of agentFiles) {
@@ -125,10 +127,6 @@ test('unified env template contains placeholders only for runtime credentials', 
 
   const required = [
     'YANDEX_DISK_TOKEN',
-    'ITOP_TOKEN',
-    'GDRIVE_MCP_CLIENT_ID',
-    'GDRIVE_MCP_CLIENT_SECRET',
-    'GDRIVE_MCP_REFRESH_TOKEN',
     'TELEGRAM_BOT_TOKEN',
     'GEMINI_API_KEY',
     'MINIMAX_API_KEY',
