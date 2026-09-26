@@ -4,9 +4,14 @@ on:
   pull_request:
     paths:
       - 'config/opencode/agent/**'
+      - 'config/opencode/opencode.json'
+      - 'config/opencode.env.example'
+      - 'config/opencode/skills/**'
       - 'config/opencode/command/pipeline-*.md'
       - 'config/opencode/config/agent-metadata.json'
       - 'config/opencode/skills/task-management/**'
+      - 'install.sh'
+      - 'install.sh'
       - '.github/workflows/pipeline-contracts.yml'
   push:
     branches:
@@ -14,6 +19,9 @@ on:
       - 'audit/**'
     paths:
       - 'config/opencode/agent/**'
+      - 'config/opencode/opencode.json'
+      - 'config/opencode.env.example'
+      - 'config/opencode/skills/**'
       - 'config/opencode/command/pipeline-*.md'
       - 'config/opencode/config/agent-metadata.json'
       - 'config/opencode/skills/task-management/**'
@@ -43,6 +51,7 @@ jobs:
           NODE_NO_WARNINGS: '1'
         run: |
           node --test \
+            config/opencode/skills/task-management/scripts/config-security.test.mjs \
             config/opencode/skills/task-management/scripts/agent-models.test.mjs \
             config/opencode/skills/task-management/scripts/manifest-preflight.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-rules.test.mjs \
