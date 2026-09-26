@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
+import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -32,6 +33,7 @@ class GateRunnerError extends Error {}
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
 const MAX_CAPTURE = 256 * 1024;
 const SHA = /^[0-9a-f]{40}$/i;
+const RUNTIME_GATE = /(runtime|deploy|release|smoke|install)/i;
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
@@ -42,92 +44,16 @@ function safeRelativePath(value: string): boolean {
 }
 
 export function tokenizeCommand(command: string): string[] {
-  if (!command.trim() || /[\n\r\0]/.test(command)) throw new GateRunnerError('empty or multiline command is not allowed');
-  if (/[;&|<>`]/.test(command) || /\$\(/.test(command)) {
-    throw new GateRunnerError('shell composition, redirects and substitution are forbidden');
+  try {
+    return tokenizeGateCommand(command);
+  } catch (error) {
+    throw new GateRunnerError(error instanceof Error ? error.message : String(error));
   }
-
-  const tokens: string[] = [];
-  let current = '';
-  let quote: "'" | '"' | undefined;
-  let escaped = false;
-  const push = () => {
-    if (current.length) tokens.push(current);
-    current = '';
-  };
-
-  for (const char of command) {
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
-    }
-    if (char === '\\' && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) quote = undefined;
-      else current += char;
-      continue;
-    }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) push();
-    else current += char;
-  }
-  if (escaped || quote) throw new GateRunnerError('unterminated escape or quote');
-  push();
-  if (tokens.length === 0) throw new GateRunnerError('command has no executable');
-  return tokens;
-}
-
-function isRuntimeGate(gate: string): boolean {
-  return /(runtime|deploy|release|smoke|install)/i.test(gate);
 }
 
 function assertSafeInvocation(tokens: string[], gate: string): void {
-  const [exe, ...args] = tokens;
-  if (!exe) throw new GateRunnerError('missing executable');
-
-  if (exe === 'bash') {
-    if (args[0] === '-n' && args.length >= 2 && safeRelativePath(args[1] as string)) return;
-    if (isRuntimeGate(gate) && args.length >= 1 && safeRelativePath(args[0] as string) && !args[0]?.startsWith('-')) return;
-    throw new GateRunnerError('bash is allowed only for -n checks or an approved repository script in a runtime gate');
-  }
-
-  if (exe === 'pytest') return;
-  if ((exe === 'python' || exe === 'python3') && args[0] === '-m' && args[1] === 'pytest') return;
-  if (exe === 'tsc' || exe === 'mypy') return;
-  if (exe === 'npx' && (args[0] === '--yes' ? ['tsc', 'vitest', 'jest'].includes(args[1] ?? '') : ['tsc', 'vitest', 'jest'].includes(args[0] ?? ''))) return;
-  if (exe === 'npm' && (args[0] === 'test' || (args[0] === 'run' && ['test', 'build', 'typecheck', 'lint'].includes(args[1] ?? '')))) return;
-  if (exe === 'pnpm' && (args[0] === 'test' || (args[0] === 'run' && ['test', 'build', 'typecheck', 'lint'].includes(args[1] ?? '')) || (args[0] === 'exec' && ['tsc', 'vitest'].includes(args[1] ?? '')))) return;
-  if (exe === 'corepack' && args[0] === 'pnpm') return assertSafeInvocation(['pnpm', ...args.slice(1)], gate);
-  if (exe === 'yarn' && ['test', 'build', 'lint'].includes(args[0] ?? '')) return;
-  if (exe === 'bun' && args[0] === 'test') return;
-  if (exe === 'go' && ['test', 'build'].includes(args[0] ?? '')) return;
-  if (exe === 'cargo' && ['test', 'check', 'build'].includes(args[0] ?? '')) return;
-
-  if (exe === 'docker') {
-    if (args[0] === 'pull' || args[0] === 'inspect' || (args[0] === 'image' && args[1] === 'inspect')) return;
-    if (args[0] === 'compose') {
-      const subcommands = new Set(['config', 'ps', 'build', 'pull', 'up', 'restart']);
-      const subcommand = args.find((arg) => subcommands.has(arg));
-      if (subcommand === 'config' || subcommand === 'ps' || subcommand === 'pull') return;
-      if (isRuntimeGate(gate) && (subcommand === 'build' || subcommand === 'up' || subcommand === 'restart')) return;
-    }
-    throw new GateRunnerError('docker invocation is outside the safe gate policy');
-  }
-
-  if (exe === 'curl') {
-    const forbidden = new Set(['-o', '--output', '-O', '--remote-name', '-d', '--data', '--data-raw', '-T', '--upload-file', '-X', '--request']);
-    if (args.some((arg) => forbidden.has(arg))) throw new GateRunnerError('curl mutation/output options are forbidden');
-    if (args.some((arg) => /^https?:\/\//.test(arg))) return;
-  }
-
-  throw new GateRunnerError(`executable is outside the deterministic gate policy: ${exe}`);
+  const reason = gatePolicyError(tokens, gate);
+  if (reason) throw new GateRunnerError(reason);
 }
 
 function substituteCandidate(tokens: string[], candidateSha?: string): string[] {
@@ -237,7 +163,7 @@ async function main(): Promise<void> {
 
   const evidenceFile = join(resolve(stateRoot), runId, 'gates', `${pipelineId}-${gate}.json`);
   await mkdir(dirname(evidenceFile), { recursive: true });
-  const releaseLocks = isRuntimeGate(gate) ? pipeline.runtime_locks ?? [] : [];
+  const releaseLocks = RUNTIME_GATE.test(gate) ? pipeline.runtime_locks ?? [] : [];
   const release = await acquireRuntimeLocks(stateRoot, runId, releaseLocks);
   const results: Array<Record<string, unknown>> = [];
   try {

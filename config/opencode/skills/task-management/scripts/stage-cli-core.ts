@@ -51,6 +51,7 @@ export interface StageCommandOptions {
   pipelineId?: string;
   message?: string;
   evidencePath?: string;
+  environment?: boolean;
 }
 
 export interface RunnableStage {
@@ -701,6 +702,7 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
     else if (argument === '--pipeline') options.pipelineId = args[++index];
     else if (argument === '--message') options.message = args[++index];
     else if (argument === '--evidence') options.evidencePath = args[++index];
+    else if (argument === '--environment') options.environment = true;
     else if (argument?.startsWith('--')) throw new StageCliError(`Unknown option: ${argument}`);
     else if (argument) positional.push(argument);
   }
@@ -753,7 +755,8 @@ function usage(): string {
   return [
     'Usage:',
     '  stage-cli rules [rules-file] [--json]',
-    '  stage-cli init <manifest> [--state-root <path>]',
+    '  stage-cli preflight <manifest> [--environment] [--json]',
+    '  stage-cli init <manifest> [--state-root <path>] [--environment]',
     '  stage-cli approve <run-id> [--state-root <path>]',
     '  stage-cli status <run-id> [--json] [--state-root <path>]',
     '  stage-cli validate <run-id> [--json] [--state-root <path>]',
@@ -774,9 +777,20 @@ export async function runCli(args: string[]): Promise<void> {
     printRules(await resolveEffectiveRules(positional[1] ?? 'docs/pipeline-rules.md'), options.json);
     return;
   }
+  if (command === 'preflight') {
+    const manifest = positional[1];
+    if (!manifest) throw new StageCliError('Manifest path is required');
+    const { preflightFile } = await import('./manifest-preflight.mjs');
+    const result = await preflightFile(manifest, { environment: options.environment, cwd: process.cwd() });
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else console.log('PASS checked_commands=' + result.checked_commands + ' environment_checked=' + result.environment_checked);
+    return;
+  }
   if (command === 'init') {
     const manifest = positional[1];
     if (!manifest) throw new StageCliError('Manifest path is required');
+    const { preflightFile } = await import('./manifest-preflight.mjs');
+    await preflightFile(manifest, { environment: options.environment, cwd: process.cwd() });
     printState(await initFromManifest(manifest, options.stateRoot), options.json);
     return;
   }
@@ -798,6 +812,10 @@ export async function runCli(args: string[]): Promise<void> {
     return;
   }
   if (command === 'approve') {
+    const state = await readState(options.stateRoot, runId);
+    if (!state.manifest_file) throw new StageCliError('Frozen manifest is missing');
+    const { preflightFile } = await import('./manifest-preflight.mjs');
+    await preflightFile(state.manifest_file, { environment: true, cwd: process.cwd() });
     printState(await approvePipeline(options.stateRoot, runId), options.json);
     return;
   }
