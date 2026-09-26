@@ -86,7 +86,7 @@ test('default rules are recorded as the frozen rules source during init', async 
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(result.stdout);
   assert.equal(state.rules_source, 'opencode_default');
-  assert.equal(state.rules_version, 1);
+  assert.equal(state.rules_version, 2);
   assert.match(state.rules_sha256, /^[0-9a-f]{64}$/);
 });
 
