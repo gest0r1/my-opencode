@@ -4,7 +4,6 @@ description: Fresh read-only code/security reviewer for approved pipeline change
 mode: subagent
 model: openai/gpt-6-sol
 reasoningEffort: low
-temperature: 0.1
 permission:
   bash: deny
   edit:
