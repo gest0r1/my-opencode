@@ -125,7 +125,7 @@ approved base/source -> candidate SHA -> installed candidate/artifact -> evidenc
 
 - Review findings are `technical_fix | replan | security_stop | scope_stop | secret_stop | destructive_stop | optional`.
 - Only `technical_fix` may be repaired automatically inside frozen scope.
-- Maximum automatic technical-fix cycles are **3 per stage/work-item**. A fourth required fix blocks.
+- Before every automatic repair, RUN records the attempt through deterministic `stage-cli fix-cycle`; maximum automatic technical-fix cycles are **3 per stage/work-item**. The fourth call fails closed.
 - `replan` and security/scope/secret/destructive findings block immediately and never consume a fix cycle.
 
 ## Status semantics
