@@ -30,7 +30,7 @@ Never split, rewrite, normalize or temporarily edit the authoritative snapshot. 
 
 1. `git-worktree-cli.ts inspect`: require owner-created linked worktree, non-default branch, valid local main and clean tracked checkout. Verify `.tmp/pipelines/` is ignored; tracked pipeline state BLOCKS.
 2. Record exact worktree directory, branch, HEAD and local main SHA in `git_setup.base_sha`; require main ancestor of HEAD. `stage-cli.ts rules docs/pipeline-rules.md --json` must PASS. PLAN never mutates Git.
-3. If `.opencode/pipeline-policy.json` exists, treat it as repository policy. Freeze its path+SHA-256 in `project_policy`; v2 preflight enforces protected paths and triggered project gates.
+3. Inspect repository policy only through `stage-cli.ts policy --json`. If `.opencode/pipeline-policy.json` exists, freeze the returned path+SHA-256 in `project_policy`; v2 preflight enforces protected paths and triggered project gates.
 4. `git_setup` contains `base_sha` and `branch`, optional `must_absent`, but no `source_sha` or `checkout_paths`.
 
 ## Planning gate protocol
@@ -87,7 +87,13 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
 6. Create binary acceptance criteria and minimal `allowed_change_paths` including source, tests, docs and approved helper scripts. Protect `.git`, secrets and environment files.
 7. Preserve deployable release flow: implementation → functional gates → Git scope verify → publish candidate SHA → GitHub SHA installation → runtime validation → docs/finalization. Define `ready_after_stage` and `release_ready_after_stage` when applicable.
 8. Before manifest freeze call TaskManager. It writes atomic work items under `.tmp/pipelines/{run-id}/work-items/**`; freeze every work-item ID, path and SHA-256 in the manifest. Each pipeline maps its own work-item IDs and defines `decision_ids`, `research_ids`, `contract_ids`.
-9. Canonical planning artifacts are `decision-register.md`, `technology-evidence.md`, `contract-inventory.md`, `test-strategy.md`, `accepted-risks.md` and the work-item index. Freeze path+SHA-256 for all of them.
+9. Canonical planning artifacts are `decision-register.md`, `technology-evidence.md`, `contract-inventory.md`, `test-strategy.md`, `accepted-risks.md` and the work-item index. Obtain hashes only through:
+
+```text
+stage-cli.ts artifacts {run-id} <run-relative-path>... --json
+```
+
+Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum` or model-computed hashes.
 
 ## Manifest schema v2
 
