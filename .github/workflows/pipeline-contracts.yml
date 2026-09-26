@@ -11,7 +11,6 @@ on:
       - 'config/opencode/config/agent-metadata.json'
       - 'config/opencode/skills/task-management/**'
       - 'install.sh'
-      - 'install.sh'
       - '.github/workflows/pipeline-contracts.yml'
   push:
     branches:
@@ -54,6 +53,7 @@ jobs:
             config/opencode/skills/task-management/scripts/config-security.test.mjs \
             config/opencode/skills/task-management/scripts/agent-models.test.mjs \
             config/opencode/skills/task-management/scripts/manifest-preflight.test.mjs \
+            config/opencode/skills/task-management/scripts/pipeline-v2-contract.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-rules.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-dag.test.mjs \
             config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs \
