@@ -100,3 +100,17 @@ test('DevOps agent cannot directly mutate runtime infrastructure', async () => {
     assert.doesNotMatch(yaml, destructive);
   }
 });
+
+
+test('OpenStage exposes only deterministic GitHub lifecycle commands', async () => {
+  const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
+  for (const required of [
+    /github-issue-cli\.ts\*": allow/,
+    /github-pr-cli\.ts\*": allow/,
+    /pipeline-github-sync\.mjs\*": allow/,
+  ]) {
+    assert.match(yaml, required);
+  }
+  assert.doesNotMatch(yaml, /["']gh\s+\*["']:\s*allow/i);
+  assert.doesNotMatch(yaml, /gh\s+pr\s+merge/i);
+});

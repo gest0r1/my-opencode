@@ -51,5 +51,7 @@ jobs:
             config/opencode/skills/task-management/scripts/git-worktree-cli.test.mjs \
             config/opencode/skills/task-management/scripts/worktree-refresh.test.mjs \
             config/opencode/skills/task-management/scripts/github-handoff-core.test.mjs \
+            config/opencode/skills/task-management/scripts/github-issue-cli.test.mjs \
+            config/opencode/skills/task-management/scripts/github-pr-cli.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-github-sync.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-agent-audit.test.mjs
