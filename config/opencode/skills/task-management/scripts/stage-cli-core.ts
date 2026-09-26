@@ -655,6 +655,19 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
     const manifest = JSON.parse(manifestContent) as unknown;
     assertManifest(manifest);
     assertStateMatchesManifest(state, manifest);
+    if ((manifest as PipelineManifest).schema_version === 2) {
+      const { validateManifestV2Policy } = await import('./manifest-v2-policy.mjs');
+      try {
+        validateManifestV2Policy(manifest as PipelineManifest, {
+          cwd: process.cwd(),
+          manifestPath: state.manifest_file,
+        });
+      } catch (error) {
+        throw new StageCliError(
+          `Frozen planning evidence validation failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
   if (state.source_snapshot_sha256 && state.manifest_file) {
