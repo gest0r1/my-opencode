@@ -6,7 +6,7 @@
 name: Simple Responder
 description: "Test agent that responds with 'AWESOME TESTING' - for eval framework testing"
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.0
 ---
 
