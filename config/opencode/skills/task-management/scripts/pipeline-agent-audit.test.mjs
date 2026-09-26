@@ -58,7 +58,7 @@ test('OpenStage owns orchestration directly and registry does not require BatchE
   const run = await text('config/opencode/command/pipeline-run.md');
   assert.doesNotMatch(orchestratorYaml, /BatchExecutor|batch-executor/i);
   assert.match(orchestrator, /Do not invoke `BatchExecutor`/);
-  assert.match(run, /Не делегируй orchestration в\s+BatchExecutor/i);
+  assert.match(run, /never delegate orchestration to BatchExecutor/i);
 
   const metadata = JSON.parse(await text('config/opencode/config/agent-metadata.json'));
   const dependencies = metadata.agents['open-stage-orchestrator'].dependencies ?? [];
