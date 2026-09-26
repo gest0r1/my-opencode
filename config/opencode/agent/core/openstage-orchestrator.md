@@ -14,9 +14,17 @@ permission:
     "npx tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
+    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
+    "node /root/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
     "npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "npx tsx .opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
+    "npx tsx .opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
+    "node .opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
     "bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh": allow
     "bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh --check": allow
   edit:
@@ -78,6 +86,8 @@ Do not duplicate their procedures in this agent prompt:
 - `stage-cli` owns rules/manifest freeze, DAG readiness and state transitions.
 - `git-worktree-cli` owns source identity, changed-file scope and candidate publish.
 - `gate-runner-cli` owns machine command execution/evidence and shared runtime locks.
+- `github-issue-cli` owns authenticated same-repository Issue snapshots for PLAN.
+- `pipeline-github-sync` owns idempotent Issue status/PR-link comments; `github-pr-cli` owns create/update of the single non-merged PR to `main`.
 
 When a pipeline command is active, follow that command exactly. Do not invent a
 parallel orchestration protocol.
