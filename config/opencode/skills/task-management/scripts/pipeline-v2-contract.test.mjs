@@ -46,7 +46,7 @@ async function fixture(runId = 'v2-run') {
     schema_version: 2,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
-    rules_version: 1,
+    rules_version: 2,
     planning_mode: 'design-freeze',
     planning_readiness: {
       design_freeze: true,
@@ -68,13 +68,13 @@ async function fixture(runId = 'v2-run') {
     allowed_change_paths: ['src/**'],
     pipelines: [{
       id: 'app',
-      stages: ['implementation', 'functional-review', 'release-review', 'finalize'],
+      stages: ['implementation', 'functional-review', 'candidate-review', 'finalize'],
       work_items: ['wi-1'],
       decision_ids: [],
       research_ids: [],
       contract_ids: [],
       ready_after_stage: 'functional-review',
-      release_ready_after_stage: 'release-review',
+      release_ready_after_stage: 'candidate-review',
     }],
     work_items: [{ id: 'wi-1', pipeline_id: 'app', ...item }],
     gate_profiles: {},
@@ -215,7 +215,7 @@ test('stage state exposes ready and release_ready milestones before completed', 
   let state = complete('functional-review');
   assert.equal(state.pipelines.app.status, 'ready');
 
-  state = complete('release-review');
+  state = complete('candidate-review');
   assert.equal(state.pipelines.app.status, 'release_ready');
 
   state = complete('finalize');
