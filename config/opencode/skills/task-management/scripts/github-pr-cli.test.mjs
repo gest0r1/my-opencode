@@ -73,7 +73,7 @@ exit 2
 echo "$*" >> "$GH_LOG"
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-  if [ "${EXISTING_PR:-0}" = "1" ]; then
+  if [ "\${EXISTING_PR:-0}" = "1" ]; then
     echo '[{"number":77,"title":"Human title","body":"Human notes","headRefName":"feature/run-1","baseRefName":"main","url":"https://github.com/gest0r1/sevami/pull/77"}]'
   else
     echo '[]'
