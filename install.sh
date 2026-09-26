@@ -4,6 +4,7 @@ set -Eeuo pipefail
 REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 REF="${OPENCODE_CONFIG_REF:-main}"
 OPENCODE_BIN="$HOME/.opencode/bin/opencode"
+OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-1.18.31}"
 ENV_FILE="$HOME/.config/opencode.env"
 LEGACY_ENV_FILE="$HOME/.config/opencode-web.env"
 
@@ -22,8 +23,8 @@ fi
 if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
   echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
 else
-  echo "Устанавливаю/обновляю OpenCode официальным установщиком..."
-  curl -fsSL https://opencode.ai/install | bash
+  echo "Устанавливаю/обновляю OpenCode до $OPENCODE_INSTALL_VERSION официальным установщиком..."
+  curl -fsSL https://opencode.ai/install | bash -s -- --version "$OPENCODE_INSTALL_VERSION"
 fi
 
 if [[ ! -x "$OPENCODE_BIN" ]]; then
@@ -45,15 +46,28 @@ tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
 
 mkdir -p \
   "$HOME/.config/opencode" \
-  "$HOME/.opencode/agent" \
+  "$HOME/.config/opencode/agents" \
   "$HOME/.agents/skills"
 
-# Глобальная конфигурация OpenCode, включая скрытые файлы.
-# agent/ ставится отдельно в ~/.opencode/agent, поэтому не оставляем его копию
-# в ~/.config/opencode.
-cp -a "$SRC/config/opencode/." "$HOME/.config/opencode/"
-rm -rf "$HOME/.config/opencode/agent"
-cp -a "$SRC/config/opencode/agent/." "$HOME/.opencode/agent/"
+# Глобальная конфигурация OpenCode, включая скрытые файлы. Каталог agent/
+# из репозитория ставится отдельно в канонический upstream-путь agents/, поэтому
+# не копируем его как ~/.config/opencode/agent и не удаляем существующий legacy.
+shopt -s dotglob nullglob
+for entry in "$SRC/config/opencode/"*; do
+  [[ "$(basename "$entry")" == "agent" ]] && continue
+  cp -a "$entry" "$HOME/.config/opencode/"
+done
+shopt -u dotglob nullglob
+
+# OpenCode 1.18.x штатно читает ~/.config/opencode/agent(s)/**/*.md.
+# Устанавливаем управляемые файлы в plural-путь и мигрируем оба прежних корня
+# без удаления: rollback остаётся возможным до фактической проверки runtime.
+bash "$SRC/scripts/install-opencode-agents.sh" \
+  "$SRC/config/opencode/agent" \
+  "$HOME/.config/opencode/agents" \
+  "$HOME/.opencode/agent" \
+  "$HOME/.config/opencode/agent"
+
 cp -a "$SRC/config/agents/skills/." "$HOME/.agents/skills/"
 
 # Единый runtime env для OpenCode CLI и OpenChamber.

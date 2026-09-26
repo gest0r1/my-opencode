@@ -1,15 +1,21 @@
 name: Canonical OpenChamber and OpenCode installer contract
 on:
   push:
-    branches: [integration/standard-bundle-installer-2026-09-19]
+    branches: [integration/standard-bundle-installer-2026-09-19, upgrade/openchamber-1.24.2-agents]
     paths:
       - install-openchamber.sh
+      - install.sh
+      - scripts/install-opencode-agents.sh
       - tests/test_standard_installer.py
+      - tests/test_agent_path_migration.sh
       - .github/workflows/installer-contract.yml
   pull_request:
     paths:
       - install-openchamber.sh
+      - install.sh
+      - scripts/install-opencode-agents.sh
       - tests/test_standard_installer.py
+      - tests/test_agent_path_migration.sh
 permissions:
   contents: read
 jobs:
@@ -23,8 +29,20 @@ jobs:
       - name: Validate canonical installer and config installer syntax
         run: |
           set -Eeuo pipefail
-          bash -n install-openchamber.sh install.sh
+          bash -n install-openchamber.sh install.sh scripts/install-opencode-agents.sh tests/test_agent_path_migration.sh
+          grep -Fq 'OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-1.18.31}"' install.sh
+          grep -Fq 'bash -s -- --version "$OPENCODE_INSTALL_VERSION"' install.sh
           git diff --check
+      - name: Verify standard OpenCode agent path migration
+        run: |
+          set -Eeuo pipefail
+          bash tests/test_agent_path_migration.sh
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          bash scripts/install-opencode-agents.sh config/opencode/agent "$tmp/agents"
+          source_count=$(find config/opencode/agent -type f -name '*.md' | wc -l)
+          installed_count=$(find "$tmp/agents" -type f -name '*.md' | wc -l)
+          test "$source_count" -eq "$installed_count"
       - name: Verify repeat install downloads only small manifest
         run: |
           set -Eeuo pipefail

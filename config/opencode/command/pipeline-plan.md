@@ -30,7 +30,7 @@ Build a design-freeze PLAN only. Never implement source changes, create a worktr
 
 ## Mandatory machine gate contract
 
-`gate-runner-cli` runs from the project root with `shell:false`; one command-array item equals ONE allowed executable plus argv. No `cd`, `&&`, pipes, redirects, `$()` or shell composition. Use `python -m pytest backend/tests/... -q`, not `cd backend && python -m pytest ...`. Interpreter and pytest must be installed in the actual runner PATH through project/distro installation. No unapproved stage-time bootstrap.
+`gate-runner-cli` runs from the project root with `shell:false`; one command-array item equals ONE allowed executable plus argv. No `cd`, `&&`, pipes, redirects, `$()` or shell composition. For a project that contains both `pyproject.toml` and `uv.lock`, use `uv run --frozen pytest backend/tests/... -q` (or `uv run --frozen python -m pytest ...`) so tests run in the locked project environment. Otherwise use `python -m pytest backend/tests/... -q`; never use `cd backend && ...`. No unapproved stage-time bootstrap, dependency resolution or global pytest fallback.
 
 If a stage is a machine gate (for example `test-rule-actions`), its pipeline MUST define `profile`, and `gate_profiles[profile][stage_id]` MUST be a nonempty list of executable commands. Gate key and machine stage ID must match exactly. Example:
 
