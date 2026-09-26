@@ -32,7 +32,7 @@ function baseManifest(runId, pipelines) {
     schema_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
-    rules_version: 1,
+    rules_version: 2,
     planning_mode: 'design-freeze',
     planning_readiness: 'ready',
     open_decisions: [],
