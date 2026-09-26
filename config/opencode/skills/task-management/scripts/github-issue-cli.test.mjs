@@ -28,7 +28,7 @@ exit 2
   const gh = path.join(bin, 'gh');
   await writeFile(gh, `#!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  if [ "${GH_AUTH_FAIL:-0}" = "1" ]; then exit 1; fi
+  if [ "\${GH_AUTH_FAIL:-0}" = "1" ]; then exit 1; fi
   exit 0
 fi
 case "$*" in
