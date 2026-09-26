@@ -2,7 +2,7 @@
 name: OpenRepoManager
 description: "Meta agent for managing OpenAgents Control repository development with lazy context loading, smart delegation, and automatic documentation"
 mode: primary
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.2
 permission:
   bash:

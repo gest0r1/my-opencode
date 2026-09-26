@@ -4,7 +4,7 @@ description: "Generates XML-optimized agent files (orchestrator and subagents)
   following research-backed patterns. Model: opencode-go/deepseek-v4-pro →
   opencode-go/deepseek-v4-flash"
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 ---
 

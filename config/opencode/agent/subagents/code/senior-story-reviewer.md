@@ -2,8 +2,7 @@
 name: SeniorStoryReviewer
 description: Fresh read-only review of user stories, scenarios and acceptance criteria.
 mode: subagent
-model: openai/gpt-5.6-luna
-temperature: 0.1
+model: openai/gpt-6-luna
 permission:
   read: allow
   glob: allow
