@@ -13,6 +13,7 @@ export type StageStatus =
 
 export type RulesSource = 'project' | 'opencode_default';
 export type PipelineSourceType = 'text' | 'file' | 'github_issues';
+export type PlanningGateStatus = 'ready' | 'needs_revision' | 'blocked';
 
 export interface PipelineIssueSource {
   repository: string;
@@ -42,6 +43,42 @@ export interface PipelineGithubOutboxEvent {
   delivered_issue_numbers?: number[];
 }
 
+export interface PlanningGateEvidence {
+  required: boolean;
+  status: PlanningGateStatus;
+  artifact: string;
+  review?: string;
+  cycles?: number;
+  blocking_decision_ids?: string[];
+}
+
+export interface PlanningReadinessV2 {
+  design_freeze: true;
+  artifact_language?: string;
+  required_gates: string[];
+  gates: Record<string, PlanningGateEvidence>;
+  required_artifacts: {
+    decision_register: string;
+    technology_evidence: string;
+    contract_inventory: string;
+    test_strategy: string;
+    accepted_risks: string;
+    work_items: string;
+  };
+}
+
+export interface FrozenWorkItem {
+  id: string;
+  pipeline_id: string;
+  path: string;
+  sha256: string;
+}
+
+export interface ProjectPolicyRef {
+  path: string;
+  sha256: string;
+}
+
 export interface PipelineManifestPipeline {
   id: string;
   stages: string[];
@@ -53,6 +90,10 @@ export interface PipelineManifestPipeline {
   research_ids?: string[];
   contract_ids?: string[];
   issue_numbers?: number[];
+  exclusive_paths?: string[];
+  migration_paths?: string[];
+  fixture_paths?: string[];
+  conflict_group?: string;
 }
 
 export interface GitSetup {
@@ -73,13 +114,16 @@ export interface PipelineManifest {
   allowed_change_paths?: string[];
   gate_profiles?: Record<string, Record<string, string[]>>;
   planning_mode?: string;
-  planning_readiness?: unknown;
+  planning_readiness?: PlanningReadinessV2 | unknown;
   open_decisions?: string[];
   source_type?: PipelineSourceType;
   repository?: string;
   source_issues?: PipelineIssueSource[];
+  source_snapshot_sha256?: string;
   planning_base_sha?: string;
   freshness_sensitive_paths?: string[];
+  work_items?: FrozenWorkItem[];
+  project_policy?: ProjectPolicyRef;
 }
 
 export interface StageEvidence {
@@ -120,6 +164,8 @@ export interface PipelineState {
   rules_source?: RulesSource;
   rules_version: number;
   rules_sha256: string;
+  project_policy_file?: string;
+  project_policy_sha256?: string;
   status: PipelineStatus;
   created_at: string;
   updated_at: string;
@@ -128,6 +174,7 @@ export interface PipelineState {
   source_type?: PipelineSourceType;
   repository?: string;
   source_issues?: PipelineIssueSource[];
+  source_snapshot_sha256?: string;
   planning_base_sha?: string;
   run_base_sha?: string;
   issue_results?: PipelineIssueResult[];
