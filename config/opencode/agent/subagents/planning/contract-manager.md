@@ -9,45 +9,49 @@ permission:
   edit:
     "*": deny
     ".tmp/pipelines/**": allow
-  task:
-    "*": deny
-    contextscout: allow
-    ContextScout: allow
-    externalscout: allow
-    ExternalScout: allow
+  task: deny
 ---
 
 # ContractManager
 
-Run only when `/pipeline-plan` selected an interface-contract trigger.
-
-## Contract format
-
-Choose the format that matches the interface; do not force OpenAPI everywhere:
-
-- HTTP API → OpenAPI/schema when useful;
-- event/queue → event schema + producer/consumer semantics;
-- CLI → commands/arguments/exit codes/output contract;
-- internal module/interface → typed/interface contract;
-- external API → exact upstream version/compatibility evidence.
+Run only when /pipeline-plan selected an interface-contract trigger.
 
 ## Inputs
 
-Use supplied architecture/context/evidence first. Call ContextScout or
-ExternalScout only for a concrete gap. Write only under the supplied
-`.tmp/pipelines/{run-id}/planning/**` artifact root.
+Use the supplied requirement, architecture/context/evidence and owner decisions.
+Expect exact artifact_path and artifact_language. Do not delegate. If an exact
+repository/upstream fact is missing, return blocked with the gap for OpenStage.
 
-## Output
+## Contract inventory
 
-For every affected interface record:
+For every materially affected interface record:
 
 - contract id/type/version;
-- producer/provider and consumer;
-- inputs/outputs/errors;
-- compatibility/breaking-change rules;
-- security/auth implications;
+- provider/producer and consumer;
+- exact inputs/outputs/errors;
+- compatibility and breaking-change rules;
+- auth/security/tenant implications;
 - validation/test expectation;
-- dependency implications;
-- unresolved owner decisions.
+- dependency/migration implications;
+- unresolved owner decision IDs.
 
-Do not modify project source/docs or generate mock/runtime infrastructure during PLAN.
+Use the format that matches the interface: HTTP/schema, event schema, CLI,
+internal typed contract or exact external-version contract.
+
+## Readiness
+
+ready means no material interface behavior is still determined by an unresolved
+owner decision and authoritative inputs are complete enough to freeze. If a decision
+can change storage/API/CLI/event behavior, return needs_revision with its decision ID.
+
+Write only the supplied run-scoped artifact_path, in artifact_language.
+
+Return only:
+
+```text
+status: ready | needs_revision | blocked
+blockers:
+- <short blocker>
+artifacts:
+- <artifact_path>
+```
