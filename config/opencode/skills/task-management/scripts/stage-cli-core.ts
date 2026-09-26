@@ -296,11 +296,143 @@ function assertGateProfiles(value: unknown): void {
   }
 }
 
+function assertSha256Value(value: unknown, field: string): void {
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/i.test(value)) {
+    throw new StageCliError(`${field} must be a SHA-256 hex string`);
+  }
+}
+
+function assertFrozenArtifactShape(value: unknown, field: string): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new StageCliError(`${field} must define path + sha256`);
+  }
+  const artifact = value as { path?: unknown; sha256?: unknown };
+  if (!safeRepoPath(artifact.path)) throw new StageCliError(`${field}.path must be repository-relative and safe`);
+  assertSha256Value(artifact.sha256, `${field}.sha256`);
+}
+
+function assertV2PlanningShape(manifest: PipelineManifest): void {
+  if (manifest.planning_mode !== 'design-freeze') {
+    throw new StageCliError('schema_version=2 requires planning_mode=design-freeze');
+  }
+  const readiness = manifest.planning_readiness as any;
+  if (!readiness || typeof readiness !== 'object' || readiness.design_freeze !== true) {
+    throw new StageCliError('schema_version=2 requires planning_readiness.design_freeze=true');
+  }
+  assertStringArray(readiness.required_gates, 'planning_readiness.required_gates');
+  if (readiness.required_gates.length === 0 || new Set(readiness.required_gates).size !== readiness.required_gates.length) {
+    throw new StageCliError('planning_readiness.required_gates must be non-empty and unique');
+  }
+  if (!readiness.gates || typeof readiness.gates !== 'object' || Array.isArray(readiness.gates)) {
+    throw new StageCliError('planning_readiness.gates must be an object');
+  }
+  for (const gate of readiness.required_gates) {
+    const record = readiness.gates[gate];
+    if (!record || record.required !== true || record.status !== 'ready') {
+      throw new StageCliError(`PLANNING_GATE_NOT_READY: ${gate}`);
+    }
+    assertFrozenArtifactShape(record.artifact, `planning_readiness.gates.${gate}.artifact`);
+    if (record.review !== undefined) {
+      assertFrozenArtifactShape(record.review, `planning_readiness.gates.${gate}.review`);
+    }
+    if (record.cycles !== undefined && (!Number.isInteger(record.cycles) || record.cycles < 1 || record.cycles > 3)) {
+      throw new StageCliError(`planning gate cycles must be 1..3: ${gate}`);
+    }
+    if (record.blocking_decision_ids !== undefined) {
+      assertStringArray(record.blocking_decision_ids, `planning_readiness.gates.${gate}.blocking_decision_ids`);
+      if (record.blocking_decision_ids.length) {
+        throw new StageCliError(`ready planning gate has blocking decisions: ${gate}`);
+      }
+    }
+  }
+  const required = readiness.required_artifacts;
+  if (!required || typeof required !== 'object' || Array.isArray(required)) {
+    throw new StageCliError('planning_readiness.required_artifacts is required');
+  }
+  for (const key of [
+    'decision_register',
+    'technology_evidence',
+    'contract_inventory',
+    'test_strategy',
+    'accepted_risks',
+    'work_items',
+  ]) {
+    assertFrozenArtifactShape(required[key], `planning_readiness.required_artifacts.${key}`);
+  }
+  if (!Array.isArray(manifest.open_decisions) || manifest.open_decisions.length !== 0) {
+    throw new StageCliError('schema_version=2 requires open_decisions=[] before init');
+  }
+}
+
+function assertV2WorkItems(manifest: PipelineManifest): void {
+  if (!Array.isArray(manifest.work_items) || manifest.work_items.length === 0) {
+    throw new StageCliError('schema_version=2 requires frozen work_items');
+  }
+  const pipelineIds = new Set(manifest.pipelines.map((pipeline) => pipeline.id));
+  const items = new Map<string, { pipeline_id: string }>();
+  for (const item of manifest.work_items) {
+    if (!item || typeof item.id !== 'string' || !item.id || items.has(item.id)) {
+      throw new StageCliError('work_items must have unique non-empty ids');
+    }
+    if (!pipelineIds.has(item.pipeline_id)) {
+      throw new StageCliError(`work item references unknown pipeline: ${item.id}`);
+    }
+    if (!safeRepoPath(item.path)) throw new StageCliError(`work item path is unsafe: ${item.id}`);
+    assertSha256Value(item.sha256, `work_items.${item.id}.sha256`);
+    items.set(item.id, { pipeline_id: item.pipeline_id });
+  }
+  for (const pipeline of manifest.pipelines) {
+    assertStringArray(pipeline.work_items, `${pipeline.id}.work_items`);
+    if (!pipeline.work_items.length) throw new StageCliError(`pipeline has no frozen work items: ${pipeline.id}`);
+    for (const id of pipeline.work_items) {
+      if (items.get(id)?.pipeline_id !== pipeline.id) {
+        throw new StageCliError(`invalid work-item mapping: ${pipeline.id}/${id}`);
+      }
+    }
+    for (const field of ['decision_ids', 'research_ids', 'contract_ids'] as const) {
+      assertStringArray(pipeline[field], `${pipeline.id}.${field}`);
+    }
+    assertOptionalPathArray(pipeline.exclusive_paths, `${pipeline.id}.exclusive_paths`);
+    assertOptionalPathArray(pipeline.migration_paths, `${pipeline.id}.migration_paths`);
+    assertOptionalPathArray(pipeline.fixture_paths, `${pipeline.id}.fixture_paths`);
+    if (pipeline.conflict_group !== undefined && (!pipeline.conflict_group || typeof pipeline.conflict_group !== 'string')) {
+      throw new StageCliError(`${pipeline.id}.conflict_group must be a non-empty string`);
+    }
+    for (const [field, stage] of [
+      ['ready_after_stage', pipeline.ready_after_stage],
+      ['release_ready_after_stage', pipeline.release_ready_after_stage],
+    ] as const) {
+      if (stage !== undefined && !pipeline.stages.includes(stage)) {
+        throw new StageCliError(`${pipeline.id}.${field} must reference an existing stage`);
+      }
+    }
+    if (pipeline.ready_after_stage && pipeline.release_ready_after_stage) {
+      if (pipeline.stages.indexOf(pipeline.ready_after_stage) > pipeline.stages.indexOf(pipeline.release_ready_after_stage)) {
+        throw new StageCliError(`${pipeline.id} ready_after_stage must not follow release_ready_after_stage`);
+      }
+    }
+  }
+}
+
+function assertV2Manifest(manifest: PipelineManifest): void {
+  assertV2PlanningShape(manifest);
+  assertV2WorkItems(manifest);
+  if (manifest.source_type === 'github_issues') {
+    assertSha256Value(manifest.source_snapshot_sha256, 'source_snapshot_sha256');
+  }
+  if (manifest.project_policy !== undefined) {
+    if (!manifest.project_policy || !safeRepoPath(manifest.project_policy.path)) {
+      throw new StageCliError('project_policy.path must be repository-relative and safe');
+    }
+    assertSha256Value(manifest.project_policy.sha256, 'project_policy.sha256');
+  }
+}
+
 function assertManifest(value: unknown): asserts value is PipelineManifest {
   if (!value || typeof value !== 'object') throw new StageCliError('Manifest must be an object');
   const manifest = value as Partial<PipelineManifest>;
   if (
-    manifest.schema_version !== 1 ||
+    ![1, 2].includes(Number(manifest.schema_version)) ||
     typeof manifest.run_id !== 'string' ||
     manifest.run_id.length === 0 ||
     typeof manifest.rules_file !== 'string' ||
@@ -351,6 +483,7 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
     }
   }
   assertDependencyGraph(manifest.pipelines);
+  if (manifest.schema_version === 2) assertV2Manifest(manifest as PipelineManifest);
 }
 
 function stateDir(stateRoot: string, runId: string): string {
@@ -400,6 +533,8 @@ function createPipelineRuntime(pipeline: PipelineManifestPipeline): PipelineRunt
     stage_order: [...pipeline.stages],
     depends_on: [...(pipeline.depends_on ?? [])],
     ...(pipeline.issue_numbers?.length ? { issue_numbers: [...pipeline.issue_numbers] } : {}),
+    ...(pipeline.ready_after_stage ? { ready_after_stage: pipeline.ready_after_stage } : {}),
+    ...(pipeline.release_ready_after_stage ? { release_ready_after_stage: pipeline.release_ready_after_stage } : {}),
   };
 }
 
@@ -417,6 +552,8 @@ function assertStateMatchesManifest(state: PipelineState, manifest: PipelineMani
     if (!runtime) throw new StageCliError(`Missing runtime pipeline: ${spec.id}`);
     if (!sameStrings(runtime.stage_order, spec.stages)) throw new StageCliError(`Stage order changed: ${spec.id}`);
     if (!sameStrings(runtime.depends_on, spec.depends_on)) throw new StageCliError(`Dependencies changed: ${spec.id}`);
+    if (runtime.ready_after_stage !== spec.ready_after_stage) throw new StageCliError(`ready milestone changed: ${spec.id}`);
+    if (runtime.release_ready_after_stage !== spec.release_ready_after_stage) throw new StageCliError(`release milestone changed: ${spec.id}`);
   }
 }
 
@@ -463,6 +600,11 @@ export async function initFromManifest(
     ...(manifest.source_type ? { source_type: manifest.source_type } : {}),
     ...(manifest.repository ? { repository: manifest.repository } : {}),
     ...(manifest.source_issues ? { source_issues: manifest.source_issues.map((issue) => ({ ...issue })) } : {}),
+    ...(manifest.source_snapshot_sha256 ? { source_snapshot_sha256: manifest.source_snapshot_sha256 } : {}),
+    ...(manifest.project_policy ? {
+      project_policy_file: resolve(manifest.project_policy.path),
+      project_policy_sha256: manifest.project_policy.sha256,
+    } : {}),
     ...(manifest.planning_base_sha || manifest.git_setup?.base_sha
       ? { planning_base_sha: manifest.planning_base_sha ?? manifest.git_setup?.base_sha,
           run_base_sha: manifest.planning_base_sha ?? manifest.git_setup?.base_sha }
@@ -515,6 +657,24 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
     assertStateMatchesManifest(state, manifest);
   }
 
+  if (state.source_snapshot_sha256 && state.manifest_file) {
+    const snapshotPath = join(dirname(state.manifest_file), 'sources', 'github-issues.json');
+    const snapshot = await readFile(snapshotPath, 'utf8').catch(() => {
+      throw new StageCliError('Frozen GitHub Issue snapshot is missing');
+    });
+    if (sha256(snapshot) !== state.source_snapshot_sha256) {
+      throw new StageCliError('Frozen GitHub Issue snapshot changed since pipeline initialization');
+    }
+  }
+  if (state.project_policy_file && state.project_policy_sha256) {
+    const policy = await readFile(state.project_policy_file, 'utf8').catch(() => {
+      throw new StageCliError('Frozen project policy is missing');
+    });
+    if (sha256(policy) !== state.project_policy_sha256) {
+      throw new StageCliError('Frozen project policy changed since pipeline initialization');
+    }
+  }
+
   for (const pipeline of Object.values(state.pipelines)) {
     if (pipeline.stage_order.length === 0) throw new StageCliError(`Pipeline has no stages: ${pipeline.id}`);
     for (const stage of pipeline.stage_order) {
@@ -557,7 +717,7 @@ function firstPendingStage(pipeline: PipelineRuntime): string | undefined {
 export function computeRunnable(state: PipelineState): RunnableStage[] {
   const runnable: RunnableStage[] = [];
   for (const pipeline of Object.values(state.pipelines)) {
-    if (pipeline.status !== 'approved' && pipeline.status !== 'in_progress') continue;
+    if (!['approved', 'in_progress', 'ready', 'release_ready'].includes(pipeline.status)) continue;
     if (!dependenciesComplete(state, pipeline)) continue;
     const stage = firstPendingStage(pipeline);
     if (stage) runnable.push({ pipeline_id: pipeline.id, stage });
@@ -583,20 +743,28 @@ function recalculateRunStatus(state: PipelineState): void {
     state.status = 'completed';
     return;
   }
-  if (pipelines.some((pipeline) => pipeline.status === 'in_progress')) {
-    state.status = 'in_progress';
-    return;
-  }
-  if (computeRunnable(state).length > 0) {
-    state.status = 'approved';
-    return;
-  }
   if (pipelines.some((pipeline) => pipeline.status === 'failed')) {
     state.status = 'failed';
     return;
   }
   if (pipelines.some((pipeline) => pipeline.status === 'blocked')) {
     state.status = 'blocked';
+    return;
+  }
+  if (pipelines.some((pipeline) => pipeline.status === 'in_progress')) {
+    state.status = 'in_progress';
+    return;
+  }
+  if (computeRunnable(state).length > 0) {
+    if (pipelines.every((pipeline) => ['release_ready', 'completed'].includes(pipeline.status))) {
+      state.status = 'release_ready';
+    } else if (pipelines.every((pipeline) => ['ready', 'release_ready', 'completed'].includes(pipeline.status))) {
+      state.status = 'ready';
+    } else if (pipelines.some((pipeline) => ['ready', 'release_ready'].includes(pipeline.status))) {
+      state.status = 'in_progress';
+    } else {
+      state.status = 'approved';
+    }
     return;
   }
   state.status = pipelines.some((pipeline) => pipeline.status === 'approved') ? 'approved' : 'planned';
@@ -690,7 +858,7 @@ export async function startStage(
     const runtime = pipeline.stages[stage];
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     if (runtime.status !== 'pending') throw new StageCliError(`Stage is not pending: ${pipeline.id}/${stage}`);
-    if (pipeline.status !== 'approved' && pipeline.status !== 'in_progress') {
+    if (!['approved', 'in_progress', 'ready', 'release_ready'].includes(pipeline.status)) {
       throw new StageCliError(`Cannot start stage while pipeline is ${pipeline.status}: ${pipeline.id}`);
     }
     assertPipelineDependencies(state, pipeline);
@@ -738,11 +906,23 @@ export async function completeStage(
     runtime.evidence = buildEvidence(stage, 'completed', options);
     addHistory(state, pipeline.id, stage, 'completed', options.message);
 
+    const stageDone = (name: string | undefined): boolean => {
+      if (!name) return false;
+      const index = pipeline.stage_order.indexOf(name);
+      if (index < 0) return false;
+      return pipeline.stage_order.slice(0, index + 1).every((item) => {
+        const status = pipeline.stages[item]?.status;
+        return status === 'completed' || status === 'skipped';
+      });
+    };
     const allCompleted = pipeline.stage_order.every((item) => {
       const status = pipeline.stages[item]?.status;
       return status === 'completed' || status === 'skipped';
     });
-    pipeline.status = allCompleted ? 'completed' : 'in_progress';
+    if (allCompleted) pipeline.status = 'completed';
+    else if (stageDone(pipeline.release_ready_after_stage)) pipeline.status = 'release_ready';
+    else if (stageDone(pipeline.ready_after_stage)) pipeline.status = 'ready';
+    else pipeline.status = 'in_progress';
     if (allCompleted) pipeline.current_stage = undefined;
   });
 }
