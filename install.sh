@@ -49,6 +49,12 @@ mkdir -p \
   "$HOME/.config/opencode/agents" \
   "$HOME/.agents/skills"
 
+# Remove retired managed artifacts that an overlay copy cannot delete.
+# These paths were previously distributed by my-opencode and remain active/stale
+# on existing installations unless explicitly removed.
+rm -f -- "$HOME/.config/opencode/env.example"
+rm -rf -- "$HOME/.config/opencode/skills/bitrix24"
+
 # Глобальная конфигурация OpenCode, включая скрытые файлы. Каталог agent/
 # из репозитория ставится отдельно в канонический upstream-путь agents/, поэтому
 # не копируем его как ~/.config/opencode/agent и не удаляем существующий legacy.
@@ -86,11 +92,11 @@ else
 fi
 
 # LLM credentials являются каноничными в `opencode auth login` / auth.json.
-# Удаляем старые env-переопределения, чтобы CLI и OpenChamber использовали
-# одинаковые credentials и env не перекрывал OAuth/API credentials из auth.json.
+# Удаляем старые env-переопределения и секреты retired MCP, чтобы CLI и
+# OpenChamber использовали только актуальные runtime credentials.
 if [[ -f "$ENV_FILE" ]]; then
   ENV_TMP="$TMP_DIR/opencode.env"
-  grep -Ev '^[[:space:]]*(OPENAI_API_KEY|OPENCODE_API_KEY)=' "$ENV_FILE" > "$ENV_TMP" || true
+  grep -Ev '^[[:space:]]*(OPENAI_API_KEY|OPENCODE_API_KEY|YONOTE_API_KEY|YANDEX_METRIKA_TOKEN)=' "$ENV_FILE" > "$ENV_TMP" || true
   mv "$ENV_TMP" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
 fi
