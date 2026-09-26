@@ -146,6 +146,7 @@ export interface StageEvidence {
 
 export interface StageRuntime {
   status: StageStatus;
+  technical_fix_cycles?: number;
   started_at?: string;
   completed_at?: string;
   message?: string;
