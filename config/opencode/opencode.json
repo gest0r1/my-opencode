@@ -32,14 +32,6 @@
         "YADISK_MCP_READ_ONLY": "false"
       }
     },
-    "yonote": {
-      "type": "remote",
-      "url": "https://fresh-logic.yonote.ru/api/v2/mcp",
-      "enabled": true,
-      "headers": {
-        "Authorization": "Bearer {env:YONOTE_API_KEY}"
-      }
-    },
     "memory": {
       "type": "local",
       "command": [
@@ -48,38 +40,6 @@
         "@modelcontextprotocol/server-memory"
       ],
       "enabled": true
-    },
-    "exchange": {
-      "type": "remote",
-      "url": "http://localhost:8001/sse",
-      "enabled": true,
-      "headers": {
-        "X-API-Key": "x"
-      }
-    },
-    "bitrix24": {
-      "type": "remote",
-      "url": "http://127.0.0.1:8081/mcp",
-      "enabled": true
-    },
-    "n8n": {
-      "type": "local",
-      "command": [
-        "node",
-        "/home/guber/Opencode/dev/mcp_n8n/src/server.js"
-      ],
-      "enabled": true,
-      "env": {
-        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
-      }
-    },
-    "1c-buddy": {
-      "type": "remote",
-      "url": "http://localhost:6002/mcp",
-      "enabled": true,
-      "oauth": {
-        "redirectUri": "http://10.0.10.66:4099/mcp/oauth/callback?server=1c-buddy"
-      }
     },
     "itop": {
       "type": "local",
@@ -90,7 +50,7 @@
       "enabled": true,
       "env": {
         "ITOP_URL": "https://sd.fresh-logic.ru",
-        "ITOP_TOKEN": "x",
+        "ITOP_TOKEN": "{env:ITOP_TOKEN}",
         "ITOP_VERSION": "1.3",
         "ITOP_VERIFY_SSL": "true",
         "ITOP_TIMEOUT": "30"
@@ -103,9 +63,9 @@
       ],
       "enabled": true,
       "env": {
-        "GDRIVE_MCP_CLIENT_ID": "x",
-        "GDRIVE_MCP_CLIENT_SECRET": "x",
-        "GDRIVE_MCP_REFRESH_TOKEN": "x"
+        "GDRIVE_MCP_CLIENT_ID": "{env:GDRIVE_MCP_CLIENT_ID}",
+        "GDRIVE_MCP_CLIENT_SECRET": "{env:GDRIVE_MCP_CLIENT_SECRET}",
+        "GDRIVE_MCP_REFRESH_TOKEN": "{env:GDRIVE_MCP_REFRESH_TOKEN}"
       }
     },
     "image-gen": {
@@ -119,18 +79,6 @@
       "env": {
         "IMAGE_GEN_OUTPUT_DIR": "/home/guber/Opencode/site_re/документация/assets"
       }
-    },
-    "ya-metrika": {
-      "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@theyahia/yandex-metrika-mcp"
-      ],
-      "enabled": true,
-      "env": {
-        "YANDEX_METRIKA_TOKEN": "{env:YANDEX_METRIKA_TOKEN}"
-      }
     }
   },
   "permission": {
@@ -141,10 +89,8 @@
     "kagi_*": "deny",
     "webfetch": "deny",
     "worktree_*": "deny",
-    "exchange_*": "allow",
     "image-gen_*": "allow",
-    "google-drive_*": "allow",
-    "ya-metrika_*": "allow"
+    "google-drive_*": "allow"
   },
   "instructions": [
     "./plugins/shell-strategy/shell_strategy.md",
