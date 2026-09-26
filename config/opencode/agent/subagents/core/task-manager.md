@@ -2,7 +2,7 @@
 name: TaskManager
 description: Compiles an approved technical plan into atomic task JSON for execution.
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   bash:
