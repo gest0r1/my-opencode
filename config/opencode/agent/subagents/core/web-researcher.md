@@ -9,13 +9,8 @@ temperature: 0.1
 permission:
   exa_*: allow
   webfetch: allow
-  exchange_*: deny
-  bitrix24_*: deny
-  1c-buddy_*: deny
-  yonote_*: deny
   yadisk_*: deny
   memory_*: deny
-  n8n_*: deny
   itop_*: deny
   gh_grep_*: allow
   context7_*: deny
@@ -54,7 +49,7 @@ Use only:
 - `webfetch` only as fallback for page fetch;
 - `gh_grep_*` only for exact/regex public GitHub code search via grep.app.
 
-Never use: `bash`, `edit`, `write`, `task`, `exchange_*`, `bitrix24_*`, `1c-buddy_*`, `yonote_*`, `yadisk_*`, `memory_*`, `n8n_*`, `context7_*`, `kagi_*`.
+Never use: `bash`, `edit`, `write`, `task`, `yadisk_*`, `memory_*`, `context7_*`, `kagi_*`.
 
 ## Context-Minimization Contract
 
