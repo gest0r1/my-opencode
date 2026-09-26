@@ -11,7 +11,6 @@ permission:
   webfetch: allow
   yadisk_*: deny
   memory_*: deny
-  itop_*: deny
   gh_grep_*: allow
   context7_*: deny
   kagi_*: deny

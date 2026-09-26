@@ -41,43 +41,12 @@
       ],
       "enabled": true
     },
-    "itop": {
-      "type": "local",
-      "command": [
-        "python3",
-        "/home/guber/Opencode/dev/mcp-itop/server.py"
-      ],
+    "1c-buddy": {
+      "type": "remote",
+      "url": "http://localhost:6002/mcp",
       "enabled": true,
-      "env": {
-        "ITOP_URL": "https://sd.fresh-logic.ru",
-        "ITOP_TOKEN": "{env:ITOP_TOKEN}",
-        "ITOP_VERSION": "1.3",
-        "ITOP_VERIFY_SSL": "true",
-        "ITOP_TIMEOUT": "30"
-      }
-    },
-    "google-drive": {
-      "type": "local",
-      "command": [
-        "/home/guber/.local/bin/google-drive-mcp-wrapper.sh"
-      ],
-      "enabled": true,
-      "env": {
-        "GDRIVE_MCP_CLIENT_ID": "{env:GDRIVE_MCP_CLIENT_ID}",
-        "GDRIVE_MCP_CLIENT_SECRET": "{env:GDRIVE_MCP_CLIENT_SECRET}",
-        "GDRIVE_MCP_REFRESH_TOKEN": "{env:GDRIVE_MCP_REFRESH_TOKEN}"
-      }
-    },
-    "image-gen": {
-      "type": "local",
-      "command": [
-        "python3",
-        "-m",
-        "image_gen_mcp.server"
-      ],
-      "enabled": true,
-      "env": {
-        "IMAGE_GEN_OUTPUT_DIR": "/home/guber/Opencode/site_re/документация/assets"
+      "oauth": {
+        "redirectUri": "http://10.0.10.66:4099/mcp/oauth/callback?server=1c-buddy"
       }
     }
   },
@@ -88,9 +57,7 @@
     "gh_grep_*": "deny",
     "kagi_*": "deny",
     "webfetch": "deny",
-    "worktree_*": "deny",
-    "image-gen_*": "allow",
-    "google-drive_*": "allow"
+    "worktree_*": "deny"
   },
   "instructions": [
     "./plugins/shell-strategy/shell_strategy.md",
