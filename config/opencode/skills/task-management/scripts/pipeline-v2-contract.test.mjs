@@ -240,3 +240,46 @@ test('stage validate rejects planning evidence mutated after init', async () => 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Frozen planning evidence validation failed.*SHA-256 mismatch/s);
 });
+
+
+test('artifact hashing CLI returns run-relative SHA-256 without mutation', async () => {
+  const fx = await fixture('v2-artifact-hash-cli');
+  const target = path.join(fx.runRoot, 'decision-register.md');
+  const before = await readFile(target, 'utf8');
+
+  const result = run(fx.root, [
+    'artifacts',
+    fx.manifest.run_id,
+    'decision-register.md',
+    'planning/architecture-1.md',
+    '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.status, 'PASS');
+  assert.deepEqual(output.artifacts.map((item) => item.path), [
+    'decision-register.md',
+    'planning/architecture-1.md',
+  ]);
+  assert.match(output.artifacts[0].sha256, /^[0-9a-f]{64}$/);
+  assert.equal(await readFile(target, 'utf8'), before);
+});
+
+test('project policy CLI reports immutable path and SHA-256', async () => {
+  const fx = await fixture('v2-policy-cli');
+  await mkdir(path.join(fx.root, '.opencode'), { recursive: true });
+  const policyText = JSON.stringify({
+    schema_version: 1,
+    protected_paths: ['protected/**'],
+    required_gates: [{ stage: 'docs-validate', when_paths: ['docs/**'] }],
+  }, null, 2);
+  await writeFile(path.join(fx.root, '.opencode', 'pipeline-policy.json'), policyText);
+
+  const result = run(fx.root, ['policy', '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.status, 'PASS');
+  assert.equal(output.path, '.opencode/pipeline-policy.json');
+  assert.equal(output.sha256, sha(policyText));
+  assert.deepEqual(output.protected_paths, ['protected/**']);
+});
