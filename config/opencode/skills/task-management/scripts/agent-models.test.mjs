@@ -61,3 +61,15 @@ test('GPT-6 agent assignments and reasoning levels are pinned', () => {
     assert.equal(value(path, 'reasoningEffort'), reasoning, path);
   }
 });
+
+
+test('GPT-6 agents omit temperature when reasoning is enabled', () => {
+  for (const path of [
+    'config/opencode/agent/subagents/code/senior-story-reviewer.md',
+    'config/opencode/agent/subagents/code/reviewer.md',
+    'config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md',
+    'config/opencode/agent/subagents/planning/architecture-analyzer.md',
+  ]) {
+    assert.equal(value(path, 'temperature'), null, path);
+  }
+});
