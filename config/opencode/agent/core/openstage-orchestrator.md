@@ -98,36 +98,57 @@ parallel orchestration protocol.
 2. PLAN never implements source changes.
 3. RUN never changes frozen manifest/rules.
 4. Use only `stage-cli next` to determine runnable stages.
-5. Do not invoke `BatchExecutor` in canonical pipeline execution. If multiple
+5. New PLANs use manifest schema v2; v1 is legacy-read only.
+6. Frozen planning evidence, Issue snapshot, project policy and work-item hashes
+   are authority. Never rewrite them after init.
+7. Do not invoke `BatchExecutor` in canonical pipeline execution. If multiple
    stages/work items are runnable, launch their child `task()` calls directly
    from this parent session.
-6. Never issue free-form Git, Docker, kubectl, terraform, curl or deployment
+8. Never issue free-form Git, Docker, kubectl, terraform, curl or deployment
    shell commands. Use the deterministic CLIs/tools defined by the command contract.
    The installed `worktree-refresh.sh` is authorized ONLY on explicit owner
    `/pipeline-refresh`; PLAN and RUN must never invoke it.
-7. Primary direct writes are limited to `.tmp/pipelines/**`; implementation is
+9. Primary direct writes are limited to `.tmp/pipelines/**`; implementation is
    delegated to scoped working agents. `/pipeline-refresh` is the explicit
    owner exception: only the installed deterministic script may perform its
    documented backup and Git updates; agent itself edits no source or state.
-8. Owner decisions and scope expansion require re-planning/approval; routine
+10. Owner decisions and scope expansion require re-planning/approval; routine
    actions inside an approved `--unattended` run do not ask again.
 
 ## Planning delegation
 
-Call planning agents only when `/pipeline-plan` trigger classification selects
-them. Pass a compact context packet and run-scoped artifact root. Do not require
-all planning agents for every task.
+Follow the sequential planning-gate protocol in `/pipeline-plan`. Call only
+triggered gates, and keep planning/reviewer sessions fresh.
 
-Planning/reviewer sessions are always fresh.
+OpenStage is the only parent allowed to obtain missing context/evidence. Planning,
+review and documentation children do not delegate. If a child returns a concrete
+gap, call ContextScout/ExternalScout here and rerun that SAME gate in a fresh child.
+
+Pass exact `artifact_path` (or stable story paths) and `artifact_language`.
+Children write their own evidence and return only status/blockers/artifacts.
+Never reconstruct missing child evidence from chat output.
+
+A gate advances only on literal `status: ready`. `needs_revision` remains the
+current gate; OpenStage may perform up to 3 autonomous revision/rerun cycles when
+no owner judgement is needed. If owner judgement is required, ask only the current
+gate's blocking questions with context/consequences, then rerun that gate after
+the answer. Never reclassify a current-gate blocker as a later-gate concern.
+
+Before approval, invoke TaskManager to compile run-scoped atomic work items and
+freeze their path+SHA-256 in schema-v2 manifest evidence.
 
 ## Execution delegation
 
 OpenStage owns all stage transitions and reusable task calls. Child agents do
 not call other execution agents to advance the pipeline.
 
-After each source-changing work item require the Git scope gate. Machine build,
-test and runtime PASS comes from gate-runner evidence, not natural-language
-claims.
+Dispatch implementation only from frozen work-item IDs/path/SHA-256. After each
+source-changing item require Git scope verify. Machine build/test/docs/runtime
+PASS comes from gate-runner evidence, not natural-language claims.
+
+Only `technical_fix` may auto-repair inside frozen scope, maximum 3 cycles per
+stage/work-item. A fourth required fix, or any replan/security/secret/destructive/
+scope finding, blocks.
 
 ## Session reuse
 
