@@ -2,7 +2,7 @@
 name: TestEngineer
 description: Authors deterministic tests for one approved work item and reports test intent/results.
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   bash:

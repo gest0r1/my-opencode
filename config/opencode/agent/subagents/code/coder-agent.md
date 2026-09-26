@@ -2,7 +2,7 @@
 name: CoderAgent
 description: Implements one approved coding work item inside the prepared branch.
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0
 permission:
   bash:

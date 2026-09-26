@@ -2,8 +2,8 @@
 name: ArchitectureAnalyzer
 description: Analyzes architecture boundaries and implementation risks only when planning requires it.
 mode: subagent
-model: opencode-go/mimo-v2.5
-temperature: 0.2
+model: openai/gpt-6-sol
+reasoningEffort: medium
 permission:
   bash: deny
   edit:
