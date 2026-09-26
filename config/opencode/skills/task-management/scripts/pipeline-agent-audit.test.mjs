@@ -137,6 +137,7 @@ test('pipeline contracts pin three technical-fix cycles and literal ready planni
 
   assert.match(plan, /up to \*\*3 cycles\*\*/);
   assert.match(run, /Maximum \*\*3 automatic technical_fix cycles/);
+  assert.match(run, /stage-cli fix-cycle/);
   assert.match(orchestrator, /up to 3 autonomous revision\/rerun cycles/);
   assert.match(rules, /Maximum automatic technical-fix cycles are \*\*3 per stage\/work-item\*\*/);
   assert.match(plan, /gate advances only on literal `status: ready`/i);
