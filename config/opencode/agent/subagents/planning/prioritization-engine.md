@@ -2,7 +2,7 @@
 name: PrioritizationEngine
 description: Prioritizes competing product scope only when planning explicitly requires a trade-off.
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   bash: deny
