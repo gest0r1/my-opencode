@@ -225,3 +225,18 @@ test('stage state exposes ready and release_ready milestones before completed', 
   const frozenManifest = await readFile(fx.manifestPath, 'utf8');
   assert.ok(frozenManifest.includes('"schema_version": 2'));
 });
+
+
+test('stage validate rejects planning evidence mutated after init', async () => {
+  const fx = await fixture('v2-state-evidence-freeze');
+  const stateRoot = path.join(fx.root, '.tmp', 'state-freeze');
+
+  let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  await writeFile(path.join(fx.runRoot, 'planning', 'architecture-1.md'), '# mutated after init\n');
+
+  result = run(fx.root, ['validate', fx.manifest.run_id, '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Frozen planning evidence validation failed.*SHA-256 mismatch/s);
+});
