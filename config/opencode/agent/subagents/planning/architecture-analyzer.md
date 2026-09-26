@@ -4,7 +4,6 @@ description: Analyzes architecture boundaries and implementation risks only when
 mode: subagent
 model: openai/gpt-6-sol
 reasoningEffort: medium
-temperature: 0.2
 permission:
   bash: deny
   edit:
