@@ -25,14 +25,14 @@ Unknown modes and arguments BLOCK. Github handoff mode preserves exact immutable
 ## Preflight — normal mode
 
 1. `stage-cli validate <run-id> --json` then `stage-cli next <run-id> --json`: require approved or in-progress state and matching frozen manifest/rules hashes; terminal states must be reported, not retried blindly. Inspect the referenced frozen manifest and invoke `stage-cli preflight <manifest.json> --environment` BEFORE dispatch. If it fails, BLOCK and preserve old run/manifest.
-2. `git-worktree-cli.ts adopt <manifest>`: require owner-created linked worktree, approved branch, clean tracked checkout, local main equals frozen git_setup.base_sha, branch includes main and `.tmp/pipelines` is not tracked. Do not run capability/setup/switch/checkout/worktree add/rebase/merge.
-3. `git-worktree-cli.ts verify <manifest>` checks committed, staged, unstaged and untracked paths against frozen allowed_change_paths. Re-run at every stage boundary and before publish. An out-of-scope helper is BLOCKED, not automatically deleted or added to scope.
-4. If main changed, STALE_PLAN/BLOCKED: owner refreshes B while preserving historical materials, makes a new run ID/manifest and explicitly reapproves. No edits to old manifest/state.
+2. Run `git-worktree-cli.ts freshness <manifest>` before adopt. It fetches `origin/main`. If upstream changes intersect `allowed_change_paths`, `freshness_sensitive_paths` or global dependency/pipeline configuration, it returns `STALE_PLAN` and RUN stops for `/pipeline-refresh` + new approval. If changes are unrelated, it deterministically merges that exact `origin/main` into the selected branch, writes `git-runtime.json`/`run_base_sha`, and keeps the frozen manifest unchanged. Merge conflict is `STALE_PLAN`, never an agent-resolved scope expansion.
+3. `git-worktree-cli.ts adopt <manifest>` requires the approved owner-created worktree and effective run base in HEAD.
+4. `git-worktree-cli.ts verify <manifest>` checks candidate changes relative to the effective run base against frozen scope. Re-run `freshness` immediately before publish; any new plan-relevant main drift blocks.
 5. Owner ensures no other RUN is active. Keep shared runtime locks as secondary safety only.
 
 ## Scheduler
 
-`stage-cli next <run-id> --json` is the ONLY runnable queue. Independent approved work items within one RUN can execute concurrently per frozen DAG. Before each stage verify Git scope, `stage-cli start`, execute, record evidence, `stage-cli complete|block|fail`, then query next. Do not recompute planning dependencies during RUN.
+`stage-cli next <run-id> --json` is the ONLY runnable queue. Independent approved work items within one RUN can execute concurrently per frozen DAG. Before each stage verify Git scope, `stage-cli start`, then run `pipeline-github-sync.mjs sync <run-id>`; execute, record evidence, `stage-cli complete|block|fail`, sync GitHub again, then query next. Resume follows the same sync rule. Delivery is idempotent; transient failure leaves the outbox pending, but pending MUST be zero before publish/PR handoff. Do not recompute planning dependencies during RUN.
 
 ## Dispatch and machine gates
 
@@ -45,6 +45,16 @@ Unknown modes and arguments BLOCK. Github handoff mode preserves exact immutable
 - Runtime install/smoke: use frozen machine stage gate commands with exact `{candidate_sha}` and runtime locks, install from GitHub candidate and verify installed runtime, never substitute uncommitted source execution.
 
 After technical_fix on published candidate reverify scope, rerun affected gates, publish new exact SHA, reinstall from GitHub and retest. Scope/architecture changes require replan.
+
+## GitHub Issue / PR handoff
+
+For a successful `github_issues` run, require `pipeline-github-sync.mjs sync <run-id>` with `pending=0`. Create or update one PR for the current branch without merging it; include `Closes #N` for completed mapped Issues. Capture the PR number and run:
+
+```text
+node /root/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs link-pr <run-id> <pr-number>
+```
+
+The Issue comment and state record the exact PR. The owner still merges main; GitHub close keywords close the completed Issues and preserve Issue -> run -> PR -> merge history.
 
 ## Owner approval and unattended
 

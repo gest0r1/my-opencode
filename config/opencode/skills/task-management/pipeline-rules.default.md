@@ -33,6 +33,9 @@ fail-closed.
 
 ## Planning and scope
 
+- PLAN has no implicit backlog-file source. `/pipeline-plan` requires explicit text/file/`#N` input or GitHub Issue refs attached by the current OpenChamber session; missing source is an error.
+- GitHub Issue refs are restricted to the current worktree repository. OpenChamber supplies identifiers only; PLAN re-fetches authoritative Issue content/state from GitHub.
+- Each Issue story has one stable mutable planning file; review evidence is append-only.
 - PLAN does not modify implementation source, Git history, runtime or secrets.
 - Decisions requiring owner judgement are explicit before design-freeze approval.
 - Open decisions prohibit initialization of an approved design-freeze run.
@@ -56,6 +59,7 @@ fail-closed.
 
 - Source/base/candidate identity uses exact immutable commit SHA values where Git
   flow applies.
+- PLAN freezes the planning main SHA. RUN fetches `origin/main` before execution and publish. Relevant drift is stale-plan blocking; unrelated drift may be deterministically merged while recording an effective run base outside the frozen manifest.
 - Protected/default branches are not directly mutated by working agents.
 - Branch/source setup, changed-file scope and candidate publication use the
   deterministic Git gate rather than free-form agent Git commands.
@@ -112,6 +116,12 @@ approved base/source -> candidate SHA -> installed candidate/artifact -> evidenc
   does not waive deterministic gates, scope, security or owner decisions.
 - Explicit exceptions are scoped and recorded; they cannot bypass deterministic
   safety controls.
+
+## GitHub Issue audit
+
+- GitHub Issue sourced runs persist each actual pipeline-status transition to a durable outbox and synchronize idempotent Issue comments.
+- Failed delivery stays pending and must be drained before publish/PR handoff.
+- PR handoff records the exact PR number and uses close keywords for completed Issues; the owner merges the PR.
 
 ## Completion
 

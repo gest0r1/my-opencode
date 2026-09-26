@@ -83,7 +83,7 @@ test('owner-created linked worktree is adopted read-only; setup and primary chec
     published.candidate_sha);
 });
 
-test('merge A into main then rebase B preserves ignored planning and blocks stale manifest', async (t) => {
+test('plan-relevant origin/main change is blocked by deterministic freshness', async (t) => {
   const f = await fixture();
   t.after(() => rm(f.root, { recursive: true, force: true }));
   const originalManifest = await readFile(f.manifestPath, 'utf8');
@@ -97,27 +97,16 @@ test('merge A into main then rebase B preserves ignored planning and blocks stal
   exec(f.main, 'git', ['add', 'src/A.txt']);
   exec(f.main, 'git', ['commit', '-m', 'merge A result']);
   const newMain = exec(f.main, 'git', ['rev-parse', 'HEAD']);
+  exec(f.main, 'git', ['push', 'origin', 'main']);
   assert.notEqual(newMain, f.base);
-  let result = gate(f.b, ['adopt', f.manifestPath]);
+  let result = gate(f.b, ['freshness', f.manifestPath]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /STALE_PLAN/);
-  exec(f.b, 'git', ['rebase', 'main']);
+  assert.match(result.stderr, /STALE_PLAN.*src\/A\.txt/);
   assert.equal(await readFile(f.manifestPath, 'utf8'), originalManifest);
   assert.equal(await readFile(path.join(f.artifactRoot, 'planning/research.md'), 'utf8'), originalResearch);
   exec(f.b, 'tar', ['-tzf', archive]);
-  result = gate(f.b, ['verify', f.manifestPath]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /STALE_PLAN/);
-  // New run is a separate immutable planning version; old run remains untouched.
-  const nextRoot = path.join(f.b, '.tmp/pipelines/run-b-after-a');
-  await mkdir(nextRoot, { recursive: true });
-  const next = { ...f.manifest, run_id: 'run-b-after-a',
-    git_setup: { ...f.manifest.git_setup, base_sha: newMain } };
-  const nextManifest = path.join(nextRoot, 'manifest.json');
-  await writeFile(nextManifest, `${JSON.stringify(next, null, 2)}\n`);
-  result = gate(f.b, ['adopt', nextManifest]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(await readFile(f.manifestPath, 'utf8'), originalManifest);
+  assert.equal(exec(f.b, 'git', ['rev-parse', 'HEAD']), f.base);
+  assert.equal(newMain, exec(f.main, 'git', ['rev-parse', 'HEAD']));
 });
 
 test('manual mode rejects implicit source checkout and wrong base before mutation', async (t) => {
@@ -132,4 +121,10 @@ test('manual mode rejects implicit source checkout and wrong base before mutatio
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /does not perform source checkout/);
   assert.equal(exec(f.b, 'git', ['rev-parse', 'HEAD']), before);
+});
+
+
+test('unrelated origin/main change is merged and becomes effective run base', async (t) => {
+  const f=await fixture();t.after(()=>rm(f.root,{recursive:true,force:true}));const original=await readFile(f.manifestPath,'utf8');await mkdir(path.join(f.main,'notes'),{recursive:true});await writeFile(path.join(f.main,'notes/unrelated.txt'),'safe upstream\n');exec(f.main,'git',['add','notes/unrelated.txt']);exec(f.main,'git',['commit','-m','unrelated upstream']);exec(f.main,'git',['push','origin','main']);const newMain=exec(f.main,'git',['rev-parse','HEAD']);
+  const result=gate(f.b,['freshness',f.manifestPath]);assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).run_base_sha,newMain);assert.equal(await readFile(f.manifestPath,'utf8'),original);assert.equal(JSON.parse(await readFile(path.join(f.artifactRoot,'git-runtime.json'))).run_base_sha,newMain);const verify=gate(f.b,['verify',f.manifestPath]);assert.equal(verify.status,0,verify.stderr);
 });

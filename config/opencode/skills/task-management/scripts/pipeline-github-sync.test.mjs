@@ -1,0 +1,3 @@
+import assert from 'node:assert/strict';import test from 'node:test';import{markerFor,renderComment}from'./pipeline-github-sync.mjs';
+test('status audit marker and transition',()=>{const e={id:'pipeline-status:api:2:approved:in_progress',kind:'pipeline_status',pipeline_id:'api',issue_numbers:[51],from_status:'approved',to_status:'in_progress'};assert.equal(markerFor(e,51),'<!-- pipeline-event:pipeline-status:api:2:approved:in_progress:issue-51 -->');assert.match(renderComment({run_id:'run-1'},e,51),/Status: approved -> in_progress/);});
+test('PR audit records exact PR',()=>{assert.match(renderComment({run_id:'run-2'},{id:'pr-link:web:123',kind:'pr_link',pipeline_id:'web',issue_numbers:[47],pr_number:123},47),/PR: #123/);});

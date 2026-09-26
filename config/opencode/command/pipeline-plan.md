@@ -10,10 +10,11 @@ tags:
 
 Build a design-freeze PLAN only. Never implement source changes, create a worktree/branch/session, switch checkout, rebase, merge, clean, reset or invoke `openchamber session.create`. Owner opens an existing worktree-session and invokes this command inside that session. Other worktrees may PLAN concurrently; only one RUN executes at a time.
 
-`$ARGUMENTS` is the task description or path to a previous plan. Defaults: `docs/plan.md` for context and `docs/pipeline-rules.md` for rules. Project rules take precedence. Invalid rules BLOCK; never rewrite them automatically.
+`$ARGUMENTS` selects exactly one source mode: same-repository Issue refs such as `#51 #47`; an existing task/plan file path (legacy file mode); or free task text (legacy text mode). Empty arguments are allowed only when OpenChamber attached synthetic context contains `Linked GitHub issues for this session:` with at least one `owner/repo#N` ref. There is NO fallback to `docs/plan.md`. Empty arguments without linked Issue refs are an error. Explicit `#N` arguments override linked refs instead of unioning scopes. `docs/pipeline-rules.md` remains the rules path; project rules take precedence. Invalid rules BLOCK; never rewrite them automatically.
 
 ## Preflight: inspect only
 
+0. Resolve source before planning. For GitHub Issue mode derive `owner/repo` from the current worktree GitHub `origin`; only `#N` from that repository is valid. Re-fetch each Issue from GitHub (title/body/state/updated_at; comments when requirement-relevant), reject PRs, closed/missing Issues and cross-repository refs, deduplicate numbers, and persist the snapshot in `.tmp/pipelines/{run-id}/sources/github-issues.json`. OpenChamber refs are identifiers only, never authoritative Issue bodies.
 1. `git-worktree-cli.ts inspect`: require owner-created linked worktree, non-default branch, valid local main and clean tracked checkout. Verify `.tmp/pipelines/` ignored in this project; existing tracked `.tmp/pipelines` BLOCK. Do not shell `cd` to change session directory.
 2. Record exact worktree directory, branch, HEAD and local main SHA in `git_setup.base_sha`; require main ancestor of HEAD. `stage-cli.ts rules docs/pipeline-rules.md --json` must PASS. Never mutate Git in PLAN.
 3. `git_setup` contains `base_sha` and `branch`, optional `must_absent`, but no `source_sha` or `checkout_paths`.
@@ -22,11 +23,11 @@ Build a design-freeze PLAN only. Never implement source changes, create a worktr
 
 1. Collect project context once through ContextScout into a compact packet of exact relevant paths. Fetch again only on documented gap.
 2. Select triggered planning agents only: StoryMapper + SeniorStoryReviewer for user-facing acceptance; ArchitectureAnalyzer for architecture/cross-module; ContractManager for contracts; ExternalScout for external technology/security/migration; SeniorTechnicalPlanReviewer for material risks. PrioritizationEngine only upon explicit owner prioritization request.
-3. Planning agents write only `.tmp/pipelines/{run-id}/planning/`. PLAN must not change implementation source. Collect ALL unresolved owner decisions (including a superseded-rule policy such as D1) in `decision-register.md`. Never omit a decision to make validation pass, invent owner authorization or self-approve. `open_decisions` must agree with the real register and remain nonempty until the owner decides.
+3. Planning agents write only `.tmp/pipelines/{run-id}/planning/`, `stories/`, `reviews/` and source/evidence files. In GitHub Issue mode each Issue has one stable story path `.tmp/pipelines/{run-id}/stories/issue-N.md`; owner corrections rewrite that same story file. Story reviews remain append-only/versioned under `reviews/`. PLAN must not change implementation source. Collect ALL unresolved owner decisions (including a superseded-rule policy such as D1) in `decision-register.md`. Never omit a decision to make validation pass, invent owner authorization or self-approve. `open_decisions` must agree with the real register and remain nonempty until the owner decides.
 4. Compile prerequisites, overlaps and migrations into a DAG. Independent stages may run concurrently within one RUN. Runtime locks only for genuinely shared external targets.
 5. Create binary acceptance criteria, scoped tasks and minimal `allowed_change_paths` including needed source, tests, documentation AND new helper scripts. Never allow unscoped TestEngineer bootstrap files. Protect `.git`, secrets and environment files.
 6. Preserve deployable release path: implementation → fast gates → Git scope verify → publish candidate SHA → GitHub SHA installation → runtime validation. Mark genuinely inapplicable parts with a reason in planning evidence.
-7. Manifest defines schema_version, unique run_id, planning_mode design-freeze, frozen rules version, git_setup, allowed_change_paths, pipelines/DAG, gate_profiles and open_decisions. Never call worktree setup or create sessions.
+7. Manifest defines schema_version, unique run_id, planning_mode design-freeze, frozen rules version, git_setup, allowed_change_paths, `freshness_sensitive_paths`, pipelines/DAG, gate_profiles and open_decisions. In GitHub Issue mode it additionally freezes `source_type: "github_issues"`, `repository`, `source_issues[]`, `planning_base_sha` and per-pipeline `issue_numbers[]`. `freshness_sensitive_paths` includes relevant shared contracts/dependency/config/migration surfaces even when they are not writable implementation scope. Never call worktree setup or create sessions.
 
 ## Mandatory machine gate contract
 
@@ -67,6 +68,7 @@ Only AFTER a separate explicit owner message approving this exact manifest/run I
 stage-cli.ts preflight .tmp/pipelines/{run-id}/manifest.json --environment
 stage-cli.ts init .tmp/pipelines/{run-id}/manifest.json
 stage-cli.ts approve {run-id}
+node /root/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs sync {run-id}
 stage-cli.ts validate {run-id} --json
 stage-cli.ts next {run-id} --json
 ```
