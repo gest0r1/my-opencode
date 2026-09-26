@@ -27,7 +27,7 @@ Unknown modes and arguments BLOCK. Github handoff mode preserves exact immutable
 1. `stage-cli validate <run-id> --json` then `stage-cli next <run-id> --json`: require approved or in-progress state and matching frozen manifest/rules hashes; terminal states must be reported, not retried blindly. Inspect the referenced frozen manifest and invoke `stage-cli preflight <manifest.json> --environment` BEFORE dispatch. If it fails, BLOCK and preserve old run/manifest.
 2. Run `git-worktree-cli.ts freshness <manifest>` before adopt. It fetches `origin/main`. If upstream changes intersect `allowed_change_paths`, `freshness_sensitive_paths` or global dependency/pipeline configuration, it returns `STALE_PLAN` and RUN stops for `/pipeline-refresh` + new approval. If changes are unrelated, it deterministically merges that exact `origin/main` into the selected branch, writes `git-runtime.json`/`run_base_sha`, and keeps the frozen manifest unchanged. Merge conflict is `STALE_PLAN`, never an agent-resolved scope expansion.
 3. `git-worktree-cli.ts adopt <manifest>` requires the approved owner-created worktree and effective run base in HEAD.
-4. `git-worktree-cli.ts verify <manifest>` checks candidate changes relative to the effective run base against frozen scope. Re-run `freshness` immediately before publish; any new plan-relevant main drift blocks.
+4. `git-worktree-cli.ts verify <manifest>` checks candidate changes relative to the effective run base against frozen scope. `freshness` is a RUN-start gate while the selected worktree is clean; normal implementation changes do not trigger an implicit mid-RUN merge.
 5. Owner ensures no other RUN is active. Keep shared runtime locks as secondary safety only.
 
 ## Scheduler
