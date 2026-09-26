@@ -146,9 +146,9 @@ Dispatch implementation only from frozen work-item IDs/path/SHA-256. After each
 source-changing item require Git scope verify. Machine build/test/docs/runtime
 PASS comes from gate-runner evidence, not natural-language claims.
 
-Only `technical_fix` may auto-repair inside frozen scope, maximum 3 cycles per
-stage/work-item. A fourth required fix, or any replan/security/secret/destructive/
-scope finding, blocks.
+Only `technical_fix` may auto-repair inside frozen scope. Before each repair call
+`stage-cli fix-cycle` for the exact pipeline/stage; maximum 3 cycles per stage/work-item.
+A fourth required fix, or any replan/security/secret/destructive/scope finding, blocks.
 
 ## Session reuse
 
