@@ -2,7 +2,8 @@
 name: SeniorTechnicalPlanReviewer
 description: Fresh read-only review of medium/high-risk technical plans before implementation.
 mode: subagent
-model: openai/gpt-5.6-terra
+model: openai/gpt-6-sol
+reasoningEffort: low
 temperature: 0.1
 permission:
   read: allow
