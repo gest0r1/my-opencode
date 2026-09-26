@@ -987,6 +987,28 @@ export async function completeStage(
   });
 }
 
+export async function recordTechnicalFixCycle(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  pipelineId?: string,
+): Promise<PipelineState> {
+  return updateState(stateRoot, runId, (state) => {
+    const pipeline = getPipeline(state, pipelineId);
+    const runtime = pipeline.stages[stage];
+    if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
+      throw new StageCliError(`Technical fix cycle is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
+    }
+    const next = (runtime.technical_fix_cycles ?? 0) + 1;
+    if (next > 3) {
+      throw new StageCliError(`TECHNICAL_FIX_LIMIT_EXCEEDED: ${pipeline.id}/${stage} already used 3 cycles`);
+    }
+    runtime.technical_fix_cycles = next;
+    runtime.message = `technical_fix cycle ${next}/3`;
+  });
+}
+
 export async function setStageFailure(
   stateRoot: string,
   runId: string,
@@ -1110,6 +1132,7 @@ function usage(): string {
     '  stage-cli complete <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
     '  stage-cli fail|block <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
     '  stage-cli resume <run-id> <stage> [--pipeline <id>]',
+    '  stage-cli fix-cycle <run-id> <stage> [--pipeline <id>] [--json]',
   ].join('\n');
 }
 
@@ -1177,6 +1200,12 @@ export async function runCli(args: string[]): Promise<void> {
     const { preflightFile } = await import('./manifest-preflight.mjs');
     await preflightFile(state.manifest_file, { environment: true, cwd: process.cwd() });
     printState(await approvePipeline(options.stateRoot, runId), options.json);
+    return;
+  }
+  if (command === 'fix-cycle') {
+    const stage = positional[2];
+    if (!stage) throw new StageCliError('stage is required');
+    printState(await recordTechnicalFixCycle(options.stateRoot, runId, stage, options.pipelineId), options.json);
     return;
   }
 
