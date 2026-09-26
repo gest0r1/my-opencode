@@ -185,6 +185,53 @@ function pathMatchesScope(path: string, scope: string): boolean {
   return path === scope;
 }
 
+export async function hashRunArtifacts(
+  stateRoot: string,
+  runId: string,
+  artifactPaths: string[],
+): Promise<{ status: 'PASS'; run_id: string; artifacts: Array<{ path: string; sha256: string }> }> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId)) {
+    throw new StageCliError('run-id must be path-safe');
+  }
+  if (!artifactPaths.length) throw new StageCliError('at least one artifact path is required');
+  const root = resolve(stateRoot, runId);
+  const artifacts: Array<{ path: string; sha256: string }> = [];
+  for (const artifactPath of artifactPaths) {
+    if (!safeRepoPath(artifactPath)) throw new StageCliError(`unsafe artifact path: ${artifactPath}`);
+    const absolute = resolve(root, artifactPath);
+    if (!absolute.startsWith(`${root}/`)) throw new StageCliError(`artifact escapes run root: ${artifactPath}`);
+    const content = await readFile(absolute, 'utf8').catch(() => {
+      throw new StageCliError(`artifact not found: ${artifactPath}`);
+    });
+    artifacts.push({ path: artifactPath, sha256: sha256(content) });
+  }
+  return { status: 'PASS', run_id: runId, artifacts };
+}
+
+export async function inspectProjectPolicy(
+  policyPath = '.opencode/pipeline-policy.json',
+): Promise<Record<string, unknown>> {
+  if (!safeRepoPath(policyPath)) throw new StageCliError('project policy path must be repository-relative and safe');
+  const absolute = resolve(policyPath);
+  if (!(await fileExists(absolute))) return { status: 'ABSENT', path: policyPath };
+  const content = await readFile(absolute, 'utf8');
+  let policy: any;
+  try {
+    policy = JSON.parse(content);
+  } catch {
+    throw new StageCliError('project policy is not valid JSON');
+  }
+  if (policy?.schema_version !== 1) throw new StageCliError('project policy schema_version must be 1');
+  return {
+    status: 'PASS',
+    path: policyPath,
+    sha256: sha256(content),
+    schema_version: 1,
+    protected_paths: Array.isArray(policy.protected_paths) ? policy.protected_paths : [],
+    required_gates: Array.isArray(policy.required_gates) ? policy.required_gates : [],
+  };
+}
+
 function assertGitSetup(value: PipelineManifest['git_setup'], allowedChangePaths?: string[]): void {
   if (!value) return;
   const sha = /^[0-9a-f]{40}$/i;
@@ -1052,6 +1099,8 @@ function usage(): string {
     'Usage:',
     '  stage-cli rules [rules-file] [--json]',
     '  stage-cli preflight <manifest> [--environment] [--json]',
+    '  stage-cli artifacts <run-id> <run-relative-path>... [--state-root <path>] [--json]',
+    '  stage-cli policy [repo-relative-path] [--json]',
     '  stage-cli init <manifest> [--state-root <path>] [--environment]',
     '  stage-cli approve <run-id> [--state-root <path>]',
     '  stage-cli status <run-id> [--json] [--state-root <path>]',
@@ -1088,6 +1137,21 @@ export async function runCli(args: string[]): Promise<void> {
     const { preflightFile } = await import('./manifest-preflight.mjs');
     await preflightFile(manifest, { environment: options.environment, cwd: process.cwd() });
     printState(await initFromManifest(manifest, options.stateRoot), options.json);
+    return;
+  }
+
+  if (command === 'artifacts') {
+    const runId = positional[1];
+    if (!runId) throw new StageCliError('run-id is required');
+    const result = await hashRunArtifacts(options.stateRoot, runId, positional.slice(2));
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else for (const artifact of result.artifacts) console.log(`${artifact.sha256}  ${artifact.path}`);
+    return;
+  }
+  if (command === 'policy') {
+    const result = await inspectProjectPolicy(positional[1] ?? '.opencode/pipeline-policy.json');
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else console.log(result.status === 'ABSENT' ? `ABSENT ${String(result.path)}` : `PASS ${String(result.sha256)}  ${String(result.path)}`);
     return;
   }
 
