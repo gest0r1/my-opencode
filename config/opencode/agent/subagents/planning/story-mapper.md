@@ -2,7 +2,7 @@
 name: StoryMapper
 description: Converts user-facing behavior into concise stories, scenarios and acceptance criteria.
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   bash: deny
