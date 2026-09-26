@@ -14,7 +14,13 @@ Build a design-freeze PLAN only. Never implement source changes, create a worktr
 
 ## Preflight: inspect only
 
-0. Resolve source before planning. For GitHub Issue mode derive `owner/repo` from the current worktree GitHub `origin`; only `#N` from that repository is valid. Re-fetch each Issue from GitHub (title/body/state/updated_at; comments when requirement-relevant), reject PRs, closed/missing Issues and cross-repository refs, deduplicate numbers, and persist the snapshot in `.tmp/pipelines/{run-id}/sources/github-issues.json`. OpenChamber refs are identifiers only, never authoritative Issue bodies.
+0. Resolve source before planning. For GitHub Issue mode use the deterministic authenticated reader:
+
+```text
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts fetch {run-id} <issue-number>...
+```
+
+It derives `owner/repo` from the current worktree GitHub `origin`, accepts only same-repository numeric Issue refs, checks `gh auth`, re-fetches title/body/state/updated_at plus comments, rejects PRs, closed/missing Issues, deduplicates numbers, and atomically persists `.tmp/pipelines/{run-id}/sources/github-issues.json`. The persisted authenticated snapshot is the authoritative planning source. OpenChamber refs are identifiers only, never authoritative Issue bodies. Do not use anonymous GitHub HTML/API requests, `webfetch`, free-form `curl`, or `github_handoff_probe` as a substitute for Issue content.
 1. `git-worktree-cli.ts inspect`: require owner-created linked worktree, non-default branch, valid local main and clean tracked checkout. Verify `.tmp/pipelines/` ignored in this project; existing tracked `.tmp/pipelines` BLOCK. Do not shell `cd` to change session directory.
 2. Record exact worktree directory, branch, HEAD and local main SHA in `git_setup.base_sha`; require main ancestor of HEAD. `stage-cli.ts rules docs/pipeline-rules.md --json` must PASS. Never mutate Git in PLAN.
 3. `git_setup` contains `base_sha` and `branch`, optional `must_absent`, but no `source_sha` or `checkout_paths`.
@@ -74,5 +80,7 @@ stage-cli.ts next {run-id} --json
 ```
 
 On a requested change or unresolved decision, revise the not-yet-frozen plan and re-present it. Do not forge an owner answer, delete decisions, bypass validation or approve on your own. The owner-message boundary is procedural, not cryptographic: same-OS-account commands cannot authenticate whether agent or owner invoked them.
+
+The approval sync posts the initial planned/approved audit state to every mapped Issue and must finish with `pending=0`.
 
 Return `/pipeline-run {run-id} --unattended` only after approval; never automatically invoke RUN.
