@@ -59,7 +59,7 @@ fail-closed.
 
 - Source/base/candidate identity uses exact immutable commit SHA values where Git
   flow applies.
-- PLAN freezes the planning main SHA. RUN fetches `origin/main` before execution and publish. Relevant drift is stale-plan blocking; unrelated drift may be deterministically merged while recording an effective run base outside the frozen manifest.
+- PLAN freezes the planning main SHA. RUN fetches `origin/main` before execution while the selected worktree is clean. Relevant drift is stale-plan blocking; unrelated drift may be deterministically merged while recording an effective run base outside the frozen manifest.
 - Protected/default branches are not directly mutated by working agents.
 - Branch/source setup, changed-file scope and candidate publication use the
   deterministic Git gate rather than free-form agent Git commands.
