@@ -99,6 +99,8 @@ export interface PipelineManifestPipeline {
   migration_paths?: string[];
   fixture_paths?: string[];
   conflict_group?: string;
+  ready_after_stage?: string;
+  release_ready_after_stage?: string;
 }
 
 export interface GitSetup {
@@ -157,6 +159,8 @@ export interface PipelineRuntime {
   stage_order: string[];
   depends_on: string[];
   issue_numbers?: number[];
+  ready_after_stage?: string;
+  release_ready_after_stage?: string;
   current_stage?: string;
 }
 
