@@ -37,7 +37,7 @@ test('uses OpenCode default rules when project rules are absent', async () => {
   const output = JSON.parse(result.stdout);
   assert.equal(output.status, 'PASS');
   assert.equal(output.rules_source, 'opencode_default');
-  assert.equal(output.rules_version, 1);
+  assert.equal(output.rules_version, 2);
   assert.match(output.rules_file, /pipeline-rules\.default\.md$/);
   assert.match(output.rules_sha256, /^[0-9a-f]{64}$/);
 });
@@ -70,7 +70,7 @@ test('default rules are recorded as the frozen rules source during init', async 
     schema_version: 1,
     run_id: 'default-rules-run',
     rules_file: 'docs/pipeline-rules.md',
-    rules_version: 1,
+    rules_version: 2,
     pipelines: [{ id: 'app', stages: ['implementation'] }],
   };
   const manifestPath = path.join(root, 'manifest.json');
