@@ -6,6 +6,8 @@
 
 ### Control your AI patterns. Get repeatable results.
 
+> Pipeline GitHub Issue → RUN → PR → main: [PIPELINE.md](./PIPELINE.md)
+
 **AI agents that learn YOUR coding patterns and generate matching code every time.**
 
 🎯 **Pattern Control** - Define your patterns once, AI uses them forever  
