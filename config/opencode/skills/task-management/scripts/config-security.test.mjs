@@ -140,3 +140,24 @@ test('unified env template contains placeholders only for runtime credentials', 
   const literalSecretAssignment = /^\s*(?!#)([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*)\s*=\s*(\S.+)$/gm;
   assert.equal(literalSecretAssignment.test(text), false, 'env example must not contain literal secrets');
 });
+
+
+test('installer purges retired managed MCP artifacts and env secrets', () => {
+  const installer = readFileSync(join(root, 'install.sh'), 'utf8');
+
+  assert.match(
+    installer,
+    /rm -f -- "\$HOME\/\.config\/opencode\/env\.example"/,
+    'installer must remove the legacy secret-bearing env template from existing installs',
+  );
+  assert.match(
+    installer,
+    /rm -rf -- "\$HOME\/\.config\/opencode\/skills\/bitrix24"/,
+    'installer must remove the retired Bitrix24 skill from existing installs',
+  );
+  assert.match(
+    installer,
+    /YONOTE_API_KEY\|YANDEX_METRIKA_TOKEN/,
+    'installer must strip retired MCP secrets from the shared runtime env',
+  );
+});
