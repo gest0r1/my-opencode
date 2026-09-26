@@ -43,11 +43,16 @@ export interface PipelineGithubOutboxEvent {
   delivered_issue_numbers?: number[];
 }
 
+export interface FrozenArtifact {
+  path: string;
+  sha256: string;
+}
+
 export interface PlanningGateEvidence {
   required: boolean;
   status: PlanningGateStatus;
-  artifact: string;
-  review?: string;
+  artifact: FrozenArtifact;
+  review?: FrozenArtifact;
   cycles?: number;
   blocking_decision_ids?: string[];
 }
@@ -58,12 +63,12 @@ export interface PlanningReadinessV2 {
   required_gates: string[];
   gates: Record<string, PlanningGateEvidence>;
   required_artifacts: {
-    decision_register: string;
-    technology_evidence: string;
-    contract_inventory: string;
-    test_strategy: string;
-    accepted_risks: string;
-    work_items: string;
+    decision_register: FrozenArtifact;
+    technology_evidence: FrozenArtifact;
+    contract_inventory: FrozenArtifact;
+    test_strategy: FrozenArtifact;
+    accepted_risks: FrozenArtifact;
+    work_items: FrozenArtifact;
   };
 }
 
