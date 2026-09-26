@@ -2,6 +2,10 @@
 
 Бэкап конфигурации opencode: агенты, плагины, скиллы, systemd-сервис, скрипты.
 
+## Документация
+
+- [Pipeline разработки: Issue → PLAN → RUN → PR](project/pipeline.md)
+
 ## Структура
 
 ```

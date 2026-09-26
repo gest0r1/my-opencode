@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstat, readFile, writeFile } from 'node:fs/promises';
+import { lstat, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -14,11 +14,8 @@ type GitSetup = {
   checkout_paths?: string[];
   must_absent?: string[];
 };
-type Manifest = {
-  run_id?: string;
-  git_setup?: GitSetup;
-  allowed_change_paths?: string[];
-};
+type Manifest = { run_id?: string; git_setup?: GitSetup; allowed_change_paths?: string[]; freshness_sensitive_paths?: string[]; };
+type GitRuntime = { planning_base_sha: string; run_base_sha: string; merged_head_sha: string; upstream_changed_files: string[]; refreshed_at: string; };
 class GateError extends Error {}
 
 async function git(args: string[], cwd?: string): Promise<string> {
@@ -65,6 +62,10 @@ function matches(path: string, pattern: string): boolean {
   }
   return path === pattern;
 }
+function freshnessGlobal(path: string): boolean {
+  const name=path.split('/').pop()??path;
+  return path.startsWith('.github/')||path==='docs/pipeline-rules.md'||['package.json','pnpm-lock.yaml','package-lock.json','yarn.lock','bun.lock','bun.lockb','pyproject.toml','uv.lock','go.mod','go.sum','Cargo.toml','Cargo.lock'].includes(path)||/^tsconfig(?:\..+)?\.json$/.test(name)||/^requirements(?:\..+)?\.txt$/.test(name);
+}
 function sensitive(path: string): boolean {
   const name = path.split('/').pop() ?? path;
   return name === '.env' || (/^\.env\./.test(name) && name !== '.env.example') ||
@@ -84,17 +85,18 @@ async function inspect(cwd: string): Promise<Record<string, unknown>> {
     clean: dirty.length === 0, pipeline_artifacts_tracked: Boolean(trackedPipeline),
     directory: cwd };
 }
-async function assertIdentity(setup: GitSetup, cwd: string): Promise<void> {
+function runtimeEvidencePath(manifestPath:string):string{return join(dirname(resolve(manifestPath)),'git-runtime.json');}
+async function readRuntime(manifestPath:string,setup:GitSetup):Promise<GitRuntime|undefined>{try{const runtime=JSON.parse(await readFile(runtimeEvidencePath(manifestPath),'utf8')) as GitRuntime;if(runtime.planning_base_sha.toLowerCase()!==setup.base_sha.toLowerCase()||!SHA.test(runtime.run_base_sha))throw new GateError('git-runtime.json does not match approved planning base');return runtime;}catch(error){if(error instanceof GateError)throw error;return undefined;}}
+async function writeJsonAtomic(file:string,value:unknown):Promise<void>{const tmp=`${file}.tmp-${process.pid}`;await writeFile(tmp,`${JSON.stringify(value,null,2)}\n`,'utf8');await rename(tmp,file);}
+async function assertIdentity(setup: GitSetup, cwd: string, manifestPath?:string): Promise<void> {
   const info = await inspect(cwd);
   if (!info.linked_worktree) throw new GateError('current checkout must be an owner-created linked worktree (not primary/main)');
   if (info.branch !== setup.branch) throw new GateError(`selected branch mismatch: ${String(info.branch)}`);
   if (info.pipeline_artifacts_tracked) throw new GateError('.tmp/pipelines is tracked: archive/untrack safely before proceeding');
-  if (String(info.main_sha).toLowerCase() !== setup.base_sha.toLowerCase()) {
-    throw new GateError(`STALE_PLAN: main moved from approved base ${setup.base_sha} to ${String(info.main_sha)}; preserve old run, refresh PLAN and obtain new approval`);
-  }
-  if (!await gitSucceeds(['merge-base', '--is-ancestor', setup.base_sha, 'HEAD'], cwd)) {
-    throw new GateError('current branch does not contain approved main base; owner must update worktree and re-plan');
-  }
+  const runtime=manifestPath?await readRuntime(manifestPath,setup):undefined;
+  if(!runtime&&String(info.main_sha).toLowerCase()!==setup.base_sha.toLowerCase())throw new GateError(`STALE_PLAN: local main moved from approved base ${setup.base_sha} to ${String(info.main_sha)}; run freshness or refresh PLAN`);
+  const effectiveBase=runtime?.run_base_sha??setup.base_sha;
+  if(!await gitSucceeds(['merge-base','--is-ancestor',effectiveBase,'HEAD'],cwd))throw new GateError('current branch does not contain effective run base; refresh/re-plan required');
   for (const path of setup.must_absent ?? []) {
     if (await gitSucceeds(['ls-files', '--error-unmatch', '--', path], cwd)) {
       throw new GateError(`forbidden tracked path exists: ${path}`);
@@ -108,20 +110,20 @@ async function assertIdentity(setup: GitSetup, cwd: string): Promise<void> {
     }
   }
 }
-async function changedFiles(setup: GitSetup, cwd: string): Promise<string[]> {
-  const outputs = await Promise.all([
-    git(['diff', '--name-only', setup.base_sha, 'HEAD'], cwd),
+async function changedFiles(baseSha:string,cwd:string):Promise<string[]>{
+  const outputs=await Promise.all([
+    git(['diff','--name-only',baseSha,'HEAD'],cwd),
     git(['diff', '--name-only'], cwd),
     git(['diff', '--cached', '--name-only'], cwd),
     git(['ls-files', '--others', '--exclude-standard'], cwd),
   ]);
   return [...new Set(outputs.flatMap((out) => out.split('\n').filter(Boolean)))].sort();
 }
-async function verify(manifest: Manifest, cwd: string): Promise<string[]> {
-  assertSetup(manifest.git_setup);
-  assertScope(manifest.allowed_change_paths);
-  await assertIdentity(manifest.git_setup, cwd);
-  const changed = await changedFiles(manifest.git_setup, cwd);
+async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<string[]>{
+  assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
+  await assertIdentity(manifest.git_setup,cwd,manifestPath);
+  const runtime=await readRuntime(manifestPath,manifest.git_setup);
+  const changed=await changedFiles(runtime?.run_base_sha??manifest.git_setup.base_sha,cwd);
   const scope = manifest.allowed_change_paths ?? [];
   for (const path of changed) {
     if (sensitive(path)) throw new GateError(`sensitive path changed: ${path}`);
@@ -131,20 +133,31 @@ async function verify(manifest: Manifest, cwd: string): Promise<string[]> {
   }
   return changed;
 }
+async function updateRunBaseState(manifestPath:string,runBaseSha:string):Promise<void>{const file=join(dirname(resolve(manifestPath)),'state.json');try{const state=JSON.parse(await readFile(file,'utf8')) as Record<string,unknown>;state.run_base_sha=runBaseSha;await writeJsonAtomic(file,state);}catch{}}
+async function freshness(manifest:Manifest,manifestPath:string,cwd:string):Promise<Record<string,unknown>>{
+  assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
+  const info=await inspect(cwd);if(!info.linked_worktree||info.branch!==manifest.git_setup.branch)throw new GateError('freshness requires the approved owner-created linked worktree');if(!info.clean)throw new GateError('freshness requires a clean tracked checkout');
+  if(!await gitSucceeds(['merge-base','--is-ancestor',manifest.git_setup.base_sha,'HEAD'],cwd))throw new GateError('current branch no longer contains planning base');
+  await git(['fetch','origin','main:refs/remotes/origin/main'],cwd);const remoteMain=await git(['rev-parse','refs/remotes/origin/main'],cwd);const previousRuntime=await readRuntime(manifestPath,manifest.git_setup);const previousBase=previousRuntime?.run_base_sha??manifest.git_setup.base_sha;
+  if(!await gitSucceeds(['merge-base','--is-ancestor',previousBase,remoteMain],cwd))throw new GateError('STALE_PLAN: origin/main history diverged from approved/effective base');
+  const upstreamChanged=(await git(['diff','--name-only',previousBase,remoteMain],cwd)).split('\n').filter(Boolean).sort();const scopes=[...(manifest.allowed_change_paths??[]),...(manifest.freshness_sensitive_paths??[])];const relevant=upstreamChanged.filter(file=>freshnessGlobal(file)||scopes.some(scope=>matches(file,scope)));if(relevant.length)throw new GateError(`STALE_PLAN: origin/main changed plan-relevant paths: ${relevant.join(', ')}`);
+  if(!await gitSucceeds(['merge-base','--is-ancestor',remoteMain,'HEAD'],cwd)){try{await git(['merge','--no-edit','refs/remotes/origin/main'],cwd);}catch(error){await gitSucceeds(['merge','--abort'],cwd);throw new GateError(`STALE_PLAN: safe main merge conflicted: ${error instanceof Error?error.message:String(error)}`);}}
+  const mergedHead=await git(['rev-parse','HEAD'],cwd);const runtime:GitRuntime={planning_base_sha:manifest.git_setup.base_sha,run_base_sha:remoteMain,merged_head_sha:mergedHead,upstream_changed_files:upstreamChanged,refreshed_at:new Date().toISOString()};await writeJsonAtomic(runtimeEvidencePath(manifestPath),runtime);await updateRunBaseState(manifestPath,remoteMain);return runtime;
+}
 async function publish(manifest: Manifest, manifestPath: string, cwd: string): Promise<Record<string, unknown>> {
   assertSetup(manifest.git_setup);
-  let changed = await verify(manifest, cwd);
+  let changed = await verify(manifest, manifestPath, cwd);
   const working = await Promise.all([
     git(['diff', '--name-only'], cwd), git(['diff', '--cached', '--name-only'], cwd),
     git(['ls-files', '--others', '--exclude-standard'], cwd),
   ]);
   if (working.some((value) => value.length > 0)) {
     await git(['add', '-A'], cwd);
-    await verify(manifest, cwd);
+    await verify(manifest, manifestPath, cwd);
     const run = String(manifest.run_id ?? 'run').replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 80);
     await git(['commit', '-m', `pipeline(${run}): candidate`], cwd);
   }
-  changed = await verify(manifest, cwd);
+  changed = await verify(manifest, manifestPath, cwd);
   const candidate = await git(['rev-parse', 'HEAD'], cwd);
   await git(['push', 'origin', `HEAD:refs/heads/${manifest.git_setup.branch}`], cwd);
   const remote = (await git(['ls-remote', '--heads', 'origin', `refs/heads/${manifest.git_setup.branch}`], cwd))
@@ -164,21 +177,21 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await inspect(cwd) }));
     return;
   }
-  if (!manifestPath || !['adopt', 'verify', 'publish'].includes(command ?? '')) {
-    throw new GateError('usage: git-worktree-cli.ts inspect | adopt|verify|publish <manifest.json>; setup is disabled');
+  if (!manifestPath || !['freshness', 'adopt', 'verify', 'publish'].includes(command ?? '')) {
+    throw new GateError('usage: git-worktree-cli.ts inspect | freshness|adopt|verify|publish <manifest.json>; setup is disabled');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
-  assertSetup(manifest.git_setup);
-  assertScope(manifest.allowed_change_paths);
+  assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
   let details: Record<string, unknown> = {};
+  if(command==='freshness')details=await freshness(manifest,manifestPath,cwd);
   if (command === 'adopt') {
-    await assertIdentity(manifest.git_setup, cwd);
+    await assertIdentity(manifest.git_setup, cwd, manifestPath);
     if (await git(['status', '--porcelain', '--untracked-files=all'], cwd)) {
       throw new GateError('adopt requires clean checkout; save tracked preparation before approval');
     }
     details = { main_sha: manifest.git_setup.base_sha, directory: cwd };
   }
-  if (command === 'verify') details = { changed_files: await verify(manifest, cwd) };
+  if (command === 'verify') details = { changed_files: await verify(manifest, manifestPath, cwd) };
   if (command === 'publish') details = await publish(manifest, manifestPath, cwd);
   console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command,
     branch: manifest.git_setup.branch, ...details }));

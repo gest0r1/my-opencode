@@ -32,6 +32,7 @@ tags:
 5. Покажи текущую стадию.
 6. Покажи завершённые, активные, ожидающие и заблокированные stages.
 7. Покажи последние ошибки и evidence.
+8. Для GitHub Issue run покажи repository/source issues, `planning_base_sha`/`run_base_sha`, `issue_results`, PR number и количество недоставленных событий `github_outbox`.
 
 ## Запрещено
 

@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type {
   PipelineManifest,
   PipelineManifestPipeline,
+  PipelineGithubOutboxEvent,
   PipelineRuntime,
   PipelineState,
   RulesSource,
@@ -213,6 +214,50 @@ function assertGitSetup(value: PipelineManifest['git_setup'], allowedChangePaths
   }
 }
 
+function assertIssueSource(manifest: PipelineManifest): void {
+  if (manifest.freshness_sensitive_paths !== undefined) {
+    assertOptionalPathArray(manifest.freshness_sensitive_paths, 'freshness_sensitive_paths');
+  }
+  if (manifest.planning_base_sha !== undefined && !/^[0-9a-f]{40}$/i.test(manifest.planning_base_sha)) {
+    throw new StageCliError('planning_base_sha must be a 40-hex SHA');
+  }
+  if (manifest.planning_base_sha && manifest.git_setup?.base_sha &&
+      manifest.planning_base_sha.toLowerCase() !== manifest.git_setup.base_sha.toLowerCase()) {
+    throw new StageCliError('planning_base_sha must equal git_setup.base_sha');
+  }
+  if (manifest.source_type !== 'github_issues') return;
+  if (!manifest.repository || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(manifest.repository)) {
+    throw new StageCliError('github_issues source requires repository=owner/repo');
+  }
+  if (!Array.isArray(manifest.source_issues) || manifest.source_issues.length === 0) {
+    throw new StageCliError('github_issues source requires non-empty source_issues');
+  }
+  const issueNumbers = new Set<number>();
+  for (const issue of manifest.source_issues) {
+    if (!issue || issue.repository !== manifest.repository || !Number.isInteger(issue.number) || issue.number <= 0 ||
+        typeof issue.url !== 'string' || typeof issue.title !== 'string') {
+      throw new StageCliError('source_issues must belong to repository and define number/url/title');
+    }
+    if (issueNumbers.has(issue.number)) throw new StageCliError(`Duplicate source issue: #${issue.number}`);
+    issueNumbers.add(issue.number);
+  }
+  const mapped = new Set<number>();
+  for (const pipeline of manifest.pipelines) {
+    if (!Array.isArray(pipeline.issue_numbers) || pipeline.issue_numbers.length === 0) {
+      throw new StageCliError(`Pipeline "${pipeline.id}" must map at least one issue in github_issues mode`);
+    }
+    for (const number of pipeline.issue_numbers) {
+      if (!Number.isInteger(number) || !issueNumbers.has(number)) {
+        throw new StageCliError(`Pipeline "${pipeline.id}" references unknown issue #${String(number)}`);
+      }
+      mapped.add(number);
+    }
+  }
+  for (const number of issueNumbers) {
+    if (!mapped.has(number)) throw new StageCliError(`Source issue #${number} is not mapped to a pipeline`);
+  }
+}
+
 function assertDependencyGraph(pipelines: PipelineManifestPipeline[]): void {
   const ids = new Set(pipelines.map((pipeline) => pipeline.id));
   for (const pipeline of pipelines) {
@@ -270,6 +315,7 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
 
   assertOptionalPathArray(manifest.allowed_change_paths, 'allowed_change_paths');
   assertGitSetup(manifest.git_setup, manifest.allowed_change_paths);
+  assertIssueSource(manifest as PipelineManifest);
   assertGateProfiles(manifest.gate_profiles);
   if (manifest.open_decisions !== undefined) {
     assertStringArray(manifest.open_decisions, 'open_decisions');
@@ -298,6 +344,11 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
     }
     if (pipeline.depends_on !== undefined) assertStringArray(pipeline.depends_on, `${pipeline.id}.depends_on`);
     if (pipeline.runtime_locks !== undefined) assertStringArray(pipeline.runtime_locks, `${pipeline.id}.runtime_locks`);
+    if (pipeline.issue_numbers !== undefined) {
+      if (!Array.isArray(pipeline.issue_numbers) || pipeline.issue_numbers.some((value) => !Number.isInteger(value) || value <= 0)) {
+        throw new StageCliError(`${pipeline.id}.issue_numbers must contain positive integers`);
+      }
+    }
   }
   assertDependencyGraph(manifest.pipelines);
 }
@@ -348,6 +399,7 @@ function createPipelineRuntime(pipeline: PipelineManifestPipeline): PipelineRunt
     stages: stageRuntime,
     stage_order: [...pipeline.stages],
     depends_on: [...(pipeline.depends_on ?? [])],
+    ...(pipeline.issue_numbers?.length ? { issue_numbers: [...pipeline.issue_numbers] } : {}),
   };
 }
 
@@ -383,6 +435,18 @@ export async function initFromManifest(
   }
 
   const timestamp = now();
+  const initialOutbox: PipelineGithubOutboxEvent[] = manifest.source_type === 'github_issues'
+    ? manifest.pipelines.flatMap((pipeline, index) => pipeline.issue_numbers?.length ? [{
+        id: `pipeline-status:${pipeline.id}:${index + 1}:created:planned`,
+        kind: 'pipeline_status' as const,
+        pipeline_id: pipeline.id,
+        issue_numbers: [...pipeline.issue_numbers],
+        to_status: 'planned' as const,
+        created_at: timestamp,
+        delivered_issue_numbers: [],
+      }] : [])
+    : [];
+
   const state: PipelineState = {
     schema_version: 1,
     run_id: manifest.run_id,
@@ -396,6 +460,20 @@ export async function initFromManifest(
     created_at: timestamp,
     updated_at: timestamp,
     active_stages: [],
+    ...(manifest.source_type ? { source_type: manifest.source_type } : {}),
+    ...(manifest.repository ? { repository: manifest.repository } : {}),
+    ...(manifest.source_issues ? { source_issues: manifest.source_issues.map((issue) => ({ ...issue })) } : {}),
+    ...(manifest.planning_base_sha || manifest.git_setup?.base_sha
+      ? { planning_base_sha: manifest.planning_base_sha ?? manifest.git_setup?.base_sha,
+          run_base_sha: manifest.planning_base_sha ?? manifest.git_setup?.base_sha }
+      : {}),
+    ...(manifest.source_type === 'github_issues' && manifest.repository && manifest.source_issues
+      ? { issue_results: manifest.source_issues.map((issue) => ({
+          repository: manifest.repository!,
+          number: issue.number,
+          status: 'pending' as const,
+        })), github_outbox: initialOutbox }
+      : {}),
     pipelines: Object.fromEntries(
       manifest.pipelines.map((pipeline) => [pipeline.id, createPipelineRuntime(pipeline)]),
     ),
@@ -540,6 +618,29 @@ function addHistory(
   });
 }
 
+function queuePipelineStatusTransitions(
+  state: PipelineState,
+  before: Map<string, PipelineRuntime['status']>,
+): void {
+  if (state.source_type !== 'github_issues') return;
+  state.github_outbox ??= [];
+  for (const pipeline of Object.values(state.pipelines)) {
+    const previous = before.get(pipeline.id);
+    if (!previous || previous === pipeline.status || !pipeline.issue_numbers?.length) continue;
+    const sequence = state.github_outbox.length + 1;
+    state.github_outbox.push({
+      id: `pipeline-status:${pipeline.id}:${sequence}:${previous}:${pipeline.status}`,
+      kind: 'pipeline_status',
+      pipeline_id: pipeline.id,
+      issue_numbers: [...pipeline.issue_numbers],
+      from_status: previous,
+      to_status: pipeline.status,
+      created_at: now(),
+      delivered_issue_numbers: [],
+    });
+  }
+}
+
 async function updateState(
   stateRoot: string,
   runId: string,
@@ -548,8 +649,10 @@ async function updateState(
   const unlock = await acquireLock(stateRoot, runId);
   try {
     const state = await validateState(stateRoot, runId);
+    const before = new Map(Object.values(state.pipelines).map((pipeline) => [pipeline.id, pipeline.status]));
     updater(state);
     recalculateRunStatus(state);
+    queuePipelineStatusTransitions(state, before);
     state.updated_at = now();
     await writeJsonAtomic(statePath(stateRoot, runId), state);
     return state;
