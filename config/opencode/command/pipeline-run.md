@@ -48,13 +48,21 @@ After technical_fix on published candidate reverify scope, rerun affected gates,
 
 ## GitHub Issue / PR handoff
 
-For a successful `github_issues` run, require `pipeline-github-sync.mjs sync <run-id>` with `pending=0`. Create or update one PR for the current branch without merging it; include `Closes #N` for completed mapped Issues. Capture the PR number and run:
+For a successful `github_issues` run, first require the final status-comment delivery to reach `pending=0`:
 
 ```text
-node /root/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs link-pr <run-id> <pr-number>
+node /root/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs sync <run-id>
 ```
 
-The Issue comment and state record the exact PR. The owner still merges main; GitHub close keywords close the completed Issues and preserve Issue -> run -> PR -> merge history.
+After all frozen stages are completed and `git-worktree-cli publish` has produced a PASS `candidate.json`, create/update the delivery PR only through:
+
+```text
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts create <run-id>
+```
+
+This command is the deterministic PR boundary. It MUST fail closed unless the run and every mapped pipeline are completed, the current GitHub origin matches the frozen repository, the candidate branch is non-default, and `candidate_sha == remote_sha`. It takes the Issue set only from the frozen `source_issues[]` / `pipelines[].issue_numbers[]` mapping, creates or updates exactly one open PR from the published candidate branch to `main`, preserves human-written PR body text outside its managed block, and writes `Closes #N` for every completed mapped Issue. It then records the exact PR via the idempotent GitHub sync outbox and requires the PR-link comments to reach `pending=0`.
+
+Do not invoke free-form `gh pr create`, `gh api`, or any merge command from the orchestrator. A successful RUN returns the ready PR number/URL and stops. The owner merges the PR to `main`; GitHub close keywords then close the mapped Issues and preserve Issue -> run -> PR -> merge history.
 
 ## Owner approval and unattended
 
