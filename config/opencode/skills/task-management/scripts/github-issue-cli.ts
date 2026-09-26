@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
@@ -103,11 +104,17 @@ function normalizeComment(value: unknown): Record<string, unknown> {
   };
 }
 
-async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+async function writeJsonAtomic(file: string, value: unknown): Promise<string> {
   await mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.tmp-${process.pid}`;
-  await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  const content = `${JSON.stringify(value, null, 2)}\n`;
+  await writeFile(temp, content, 'utf8');
   await rename(temp, file);
+  return sha256(content);
 }
 
 export async function fetchIssues(
@@ -167,15 +174,22 @@ export async function fetchIssues(
     issues,
   };
   const output = path.join(path.resolve(stateRoot), runId, 'sources', 'github-issues.json');
-  await writeJsonAtomic(output, snapshot);
-  return { status: 'PASS', run_id: runId, repository, issue_numbers: numbers, snapshot: output };
+  const snapshotSha256 = await writeJsonAtomic(output, snapshot);
+  return { status: 'PASS', run_id: runId, repository, issue_numbers: numbers, snapshot: output, snapshot_sha256: snapshotSha256 };
 }
 
-function parseArgs(args: string[]): { runId: string; issueNumbers: number[]; stateRoot: string } {
+interface ParsedArgs {
+  commandName: 'fetch' | 'show';
+  runId: string;
+  issueNumbers: number[];
+  stateRoot: string;
+}
+
+function parseArgs(args: string[]): ParsedArgs {
   const [commandName, runId, ...rest] = args;
-  if (commandName !== 'fetch' || !runId) {
+  if ((commandName !== 'fetch' && commandName !== 'show') || !runId) {
     throw new GitHubIssueCliError(
-      'usage: github-issue-cli.ts fetch <run-id> <issue-number>... [--state-root <path>]',
+      'usage: github-issue-cli.ts fetch <run-id> <issue-number>... [--state-root <path>] | show <run-id> [issue-number...] [--state-root <path>]',
     );
   }
   const issueNumbers: number[] = [];
@@ -192,11 +206,69 @@ function parseArgs(args: string[]): { runId: string; issueNumbers: number[]; sta
       issueNumbers.push(parseIssueNumber(value));
     }
   }
-  return { runId, issueNumbers, stateRoot };
+  if (commandName === 'fetch' && issueNumbers.length === 0) {
+    throw new GitHubIssueCliError('fetch requires at least one issue number');
+  }
+  return { commandName, runId, issueNumbers, stateRoot };
+}
+
+export async function showIssues(
+  runId: string,
+  issueNumbers: number[],
+  options: { stateRoot?: string } = {},
+): Promise<string> {
+  if (!RUN_ID.test(runId)) throw new GitHubIssueCliError('run-id must be path-safe');
+  const stateRoot = options.stateRoot ?? DEFAULT_STATE_ROOT;
+  const file = path.join(path.resolve(stateRoot), runId, 'sources', 'github-issues.json');
+  const content = await readFile(file, 'utf8').catch(() => {
+    throw new GitHubIssueCliError(`authoritative snapshot not found: ${file}`);
+  });
+  const snapshot = parseJson<Record<string, any>>(content, 'authoritative issue snapshot');
+  const requested = new Set(issueNumbers);
+  const issues = Array.isArray(snapshot.issues)
+    ? snapshot.issues.filter((issue: any) => requested.size === 0 || requested.has(Number(issue.number)))
+    : [];
+  if (requested.size > 0) {
+    const found = new Set(issues.map((issue: any) => Number(issue.number)));
+    for (const number of requested) {
+      if (!found.has(number)) throw new GitHubIssueCliError(`issue #${number} is not present in the authoritative snapshot`);
+    }
+  }
+  const output: string[] = [
+    `snapshot: ${file}`,
+    `sha256: ${sha256(content)}`,
+    `repository: ${String(snapshot.repository ?? '')}`,
+    '',
+  ];
+  for (const issue of issues) {
+    output.push(`# Issue #${String(issue.number)} — ${String(issue.title ?? '')}`);
+    output.push(`URL: ${String(issue.url ?? '')}`);
+    output.push(`State: ${String(issue.state ?? '')}`);
+    output.push(`Updated: ${String(issue.updated_at ?? '')}`);
+    output.push('');
+    output.push('## Body');
+    output.push(typeof issue.body === 'string' ? issue.body : '');
+    const comments = Array.isArray(issue.comments) ? issue.comments : [];
+    if (comments.length) {
+      output.push('');
+      output.push('## Comments');
+      for (const comment of comments) {
+        output.push('');
+        output.push(`### ${String(comment.user ?? 'unknown')} — ${String(comment.updated_at ?? comment.created_at ?? '')}`);
+        output.push(typeof comment.body === 'string' ? comment.body : '');
+      }
+    }
+    output.push('');
+  }
+  return output.join('\n');
 }
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
+  if (parsed.commandName === 'show') {
+    console.log(await showIssues(parsed.runId, parsed.issueNumbers, { stateRoot: parsed.stateRoot }));
+    return;
+  }
   console.log(JSON.stringify(await fetchIssues(parsed.runId, parsed.issueNumbers, {
     stateRoot: parsed.stateRoot,
   }), null, 2));
