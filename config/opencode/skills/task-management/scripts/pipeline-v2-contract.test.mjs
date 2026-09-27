@@ -69,6 +69,12 @@ async function fixture(runId = 'v2-run') {
     pipelines: [{
       id: 'app',
       stages: ['implementation', 'functional-review', 'candidate-review', 'finalize'],
+      executors: {
+        implementation: 'agent',
+        'functional-review': 'review',
+        'candidate-review': 'review',
+        finalize: 'agent',
+      },
       work_items: ['wi-1'],
       decision_ids: [],
       research_ids: [],
@@ -112,19 +118,74 @@ test('schema v2 rejects changed planning evidence by SHA-256', async () => {
 
 test('schema v2 rejects pnpm workspace gates that fall back to npm or npx --yes', async () => {
   const fx = await fixture('v2-pnpm');
-  fx.manifest.pipelines[0].stages.push('tests');
+  fx.manifest.pipelines[0].stages.push('fast-tests');
+  fx.manifest.pipelines[0].executors['fast-tests'] = 'local_gate';
   fx.manifest.pipelines[0].profile = 'default';
-  fx.manifest.gate_profiles = { default: { tests: ['npm test'] } };
+  fx.manifest.gate_profiles = { default: { 'fast-tests': ['npm test'] } };
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /JS_PACKAGE_MANAGER_MISMATCH/,
   );
-  fx.manifest.gate_profiles = { default: { tests: ['npx --yes vitest run'] } };
+  fx.manifest.gate_profiles = { default: { 'fast-tests': ['npx --yes vitest run'] } };
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /DEPENDENCY_BOOTSTRAP_FORBIDDEN/,
   );
-  fx.manifest.gate_profiles = { default: { tests: ['pnpm exec vitest run'] } };
+  fx.manifest.gate_profiles = { default: { 'fast-tests': ['pnpm exec vitest run'] } };
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+});
+
+test('schema v2 requires GitHub CI for authoritative test/build stages', async () => {
+  const fx = await fixture('v2-authoritative-ci');
+  fx.manifest.pipelines[0].stages.push('tests');
+  fx.manifest.pipelines[0].executors.tests = 'local_gate';
+  fx.manifest.pipelines[0].profile = 'default';
+  fx.manifest.gate_profiles = { default: { tests: ['pnpm test'] } };
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /AUTHORITATIVE_CI_REQUIRED/,
+  );
+
+  fx.manifest.pipelines[0].executors.tests = 'github_ci';
+  delete fx.manifest.pipelines[0].profile;
+  fx.manifest.gate_profiles = {};
+  fx.manifest.pipelines[0].github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'push',
+    },
+  };
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+});
+
+test('schema v2 freezes CI bootstrap work item and workflow scope', async () => {
+  const fx = await fixture('v2-ci-bootstrap');
+  const bootstrap = await fx.frozen('work-items/wi-ci.json', '{"id":"wi-ci"}\n');
+  fx.manifest.work_items.push({ id: 'wi-ci', pipeline_id: 'app', ...bootstrap });
+  fx.manifest.pipelines[0].work_items.push('wi-ci');
+  fx.manifest.pipelines[0].stages.push('build');
+  fx.manifest.pipelines[0].executors.build = 'github_ci';
+  fx.manifest.pipelines[0].github_gates = {
+    build: {
+      workflow: '.github/workflows/pipeline-ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'push',
+      bootstrap_required: true,
+      bootstrap_work_item_id: 'wi-ci',
+    },
+  };
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /GITHUB_BOOTSTRAP_SCOPE_MISSING/,
+  );
+  fx.manifest.allowed_change_paths.push('.github/workflows/**');
   assert.equal(
     validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
     'PASS',
@@ -139,6 +200,7 @@ test('schema v2 serializes declared conflict groups through the DAG', async () =
   fx.manifest.pipelines.push({
     id: 'b',
     stages: ['implementation'],
+    executors: { implementation: 'agent' },
     work_items: ['wi-2'],
     decision_ids: [],
     research_ids: [],
