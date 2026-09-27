@@ -284,6 +284,7 @@ function validateProjectPolicy(manifest, cwd) {
       throw new ManifestV2PolicyError('project_policy.deployment_target.kind must be opencode_host');
     }
     if (!['github_ssh', 'self_hosted_runner'].includes(target.transport) ||
+        typeof target.target_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(target.target_id) ||
         typeof target.environment !== 'string' || !target.environment.trim() ||
         !safeRelativePath(target.probe_workflow) || !target.probe_workflow.startsWith('.github/workflows/') ||
         !/\.ya?ml$/i.test(target.probe_workflow) ||
@@ -692,6 +693,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
         targetEvidence.run_id !== manifest.run_id ||
         targetEvidence.kind !== 'opencode_host' ||
         targetEvidence.transport !== target.transport ||
+        targetEvidence.target_id !== target.target_id ||
         targetEvidence.environment !== target.environment ||
         targetEvidence.trusted_ref !== target.trusted_ref ||
         !Number.isInteger(Number(targetEvidence.workflow_run_id)) ||
@@ -703,6 +705,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
       const stage = pipeline.testing_strategy.opencode_host_stage;
       const gate = stage ? pipeline.github_gates?.[stage] : undefined;
       if (!gate || gate.mode !== 'stateful' ||
+          gate.target_id !== target.target_id ||
           gate.environment !== target.environment ||
           gate.trusted_ref !== target.trusted_ref) {
         throw new ManifestV2PolicyError(`OPENCODE_HOST_GATE_TARGET_MISMATCH: ${pipeline.id}`);
