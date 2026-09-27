@@ -123,6 +123,25 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
   }
 }
 
+async function rejectDirectOwnerAcceptanceTransition(args: string[]): Promise<void> {
+  if (!['complete', 'fail', 'block', 'resume'].includes(args[0] ?? '')) return;
+  const runId = args[1];
+  const stage = args[2];
+  const pipelineId = optionFromArgs(args, '--pipeline');
+  if (!runId || !stage || !pipelineId) return;
+
+  const stateRoot = resolve(stateRootFromArgs(args));
+  let state: any;
+  try { state = JSON.parse(await readFile(join(stateRoot, runId, 'state.json'), 'utf8')); }
+  catch { return; }
+  if (!state.manifest_file) return;
+  const manifest = JSON.parse(await readFile(resolve(state.manifest_file), 'utf8'));
+  const pipeline = manifest.pipelines?.find((item: any) => item.id === pipelineId);
+  if (pipeline?.executors?.[stage] === 'owner_acceptance') {
+    throw new Error(`OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT: ${pipelineId}/${stage}`);
+  }
+}
+
 async function ownerAcceptance(args: string[]): Promise<boolean> {
   if (args[0] !== 'owner-accept') return false;
   const runId = args[1];
@@ -304,6 +323,7 @@ async function main(args: string[]): Promise<void> {
     await preflightFile(state.manifest_file, { environment: true });
   }
   await enforcePublishedEvidenceCurrent(args);
+  await rejectDirectOwnerAcceptanceTransition(args);
   await runCli(await enforceCompletionEvidence(args));
 }
 
