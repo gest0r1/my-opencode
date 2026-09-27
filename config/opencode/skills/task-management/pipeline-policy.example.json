@@ -10,5 +10,20 @@
         "docs/**"
       ]
     }
-  ]
+  ],
+  "github_actions": {
+    "ci": {
+      "workflow": ".github/workflows/ci.yml",
+      "terminal_job": "pipeline_ci",
+      "trigger": "push",
+      "artifact": "candidate-build"
+    },
+    "dev": {
+      "workflow": ".github/workflows/dev.yml",
+      "terminal_job": "pipeline_dev",
+      "trigger": "workflow_dispatch",
+      "mode": "stateful",
+      "environment": "development"
+    }
+  }
 }
