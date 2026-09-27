@@ -25,7 +25,7 @@ export type StageExecutor =
   | 'github_dev';
 
 export type GithubGateTrigger = 'push' | 'workflow_dispatch';
-export type GithubDevMode = 'stateful';
+export type GithubDevMode = 'disposable' | 'stateful';
 
 export interface GithubGateContract {
   workflow: string;
