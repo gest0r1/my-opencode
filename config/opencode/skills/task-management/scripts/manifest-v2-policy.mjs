@@ -280,16 +280,33 @@ function validateProjectPolicy(manifest, cwd) {
 
   if (policy.deployment_target !== undefined) {
     const target = policy.deployment_target;
-    if (!target || typeof target !== 'object' || Array.isArray(target) ||
-        !['github_environment', 'external_ssh'].includes(target.kind)) {
-      throw new ManifestV2PolicyError('project_policy.deployment_target.kind must be github_environment|external_ssh');
+    if (!target || typeof target !== 'object' || Array.isArray(target) || target.kind !== 'opencode_host') {
+      throw new ManifestV2PolicyError('project_policy.deployment_target.kind must be opencode_host');
     }
-    if (target.kind === 'external_ssh') {
-      if (typeof target.host !== 'string' || !/^[A-Za-z0-9.-]+$/.test(target.host) ||
-          typeof target.user !== 'string' || !/^[A-Za-z0-9._-]+$/.test(target.user) ||
-          (target.port !== undefined && (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535))) {
-        throw new ManifestV2PolicyError('project_policy.deployment_target external_ssh host/user/port is invalid');
-      }
+    if (!['github_ssh', 'self_hosted_runner'].includes(target.transport) ||
+        typeof target.environment !== 'string' || !target.environment.trim() ||
+        !safeRelativePath(target.probe_workflow) || !target.probe_workflow.startsWith('.github/workflows/') ||
+        !/\.ya?ml$/i.test(target.probe_workflow) ||
+        !GITHUB_JOB_ID.test(String(target.probe_job ?? '')) ||
+        typeof target.trusted_ref !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(target.trusted_ref) ||
+        target.trusted_ref.includes('..') || target.trusted_ref.endsWith('/')) {
+      throw new ManifestV2PolicyError('project_policy.deployment_target opencode_host contract is incomplete');
+    }
+    const secrets = target.required_environment_secrets ?? [];
+    if (!Array.isArray(secrets) ||
+        secrets.some((name) => typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) ||
+        new Set(secrets).size !== secrets.length) {
+      throw new ManifestV2PolicyError('project_policy.deployment_target required_environment_secrets is invalid');
+    }
+    if (target.transport === 'github_ssh' && secrets.length === 0) {
+      throw new ManifestV2PolicyError('project_policy.deployment_target github_ssh requires environment secret names');
+    }
+    const labels = target.runner_labels ?? [];
+    if (!Array.isArray(labels) || labels.some((label) => typeof label !== 'string' || !label.trim())) {
+      throw new ManifestV2PolicyError('project_policy.deployment_target runner_labels is invalid');
+    }
+    if (target.transport === 'self_hosted_runner' && labels.length === 0) {
+      throw new ManifestV2PolicyError('project_policy.deployment_target self_hosted_runner requires labels');
     }
   }
 
