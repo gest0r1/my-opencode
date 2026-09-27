@@ -31,7 +31,8 @@ Never split, rewrite, normalize or temporarily edit the authoritative snapshot. 
 1. `git-worktree-cli.ts inspect`: require owner-created linked worktree, non-default branch, valid local main and clean tracked checkout. Verify `.tmp/pipelines/` is ignored; tracked pipeline state BLOCKS.
 2. Record exact worktree directory, branch, HEAD and local main SHA in `git_setup.base_sha`; require main ancestor of HEAD. `stage-cli.ts rules docs/pipeline-rules.md --json` must PASS. PLAN never mutates Git.
 3. Inspect repository policy only through `stage-cli.ts policy --json`. If `.opencode/pipeline-policy.json` exists, freeze the returned path+SHA-256 in `project_policy`; v2 preflight enforces protected paths and triggered project gates.
-4. `git_setup` contains `base_sha` and `branch`, optional `must_absent`, but no `source_sha` or `checkout_paths`.
+4. If project policy declares `deployment_target.kind=external_ssh`, run `deployment-target-cli.ts inspect {run-id} --policy .opencode/pipeline-policy.json`. It must prove the target host is reachable with non-interactive `BatchMode` authentication and strict host-key checking. Freeze its returned `planning/deployment-target.json` path+SHA-256 as `deployment_target_check`. A missing `ssh`, unreachable host, unknown host key or failed authentication BLOCKS PLAN. Agents never receive raw SSH permission.
+5. `git_setup` contains `base_sha` and `branch`, optional `must_absent`, but no `source_sha` or `checkout_paths`.
 
 ## Planning gate protocol
 
@@ -85,9 +86,9 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
 4. Collect ALL unresolved owner decisions in `decision-register.md`. Each decision records its owning planning gate and status. Never omit a decision to make validation pass or self-authorize it.
 5. Compile prerequisites and conflicts into a DAG. Freeze `exclusive_paths`, `migration_paths`, `fixture_paths` and/or `conflict_group` where relevant. Pipelines sharing such conflict metadata must be serialized by dependencies. Runtime locks are only for genuinely shared external mutable targets.
 6. Create binary acceptance criteria and minimal `allowed_change_paths` including source, tests, docs and approved helper scripts. Protect `.git`, secrets and environment files.
-7. Preserve deployable release flow: implementation/review → source documentation/finalization → optional local fast gates → Git scope verify → publish candidate SHA → authoritative GitHub CI on that exact SHA → immutable artifact/evidence → DEV/runtime validation of that artifact/SHA → acceptance/handoff. Any source-mutating `agent` stage must precede `git_publish`; after publication only non-source review/acceptance/handoff stages are planned. Define `ready_after_stage` and `release_ready_after_stage` when applicable.
-8. For every required authoritative CI/DEV gate, freeze a concrete GitHub Actions contract. Prefer `.opencode/pipeline-policy.json#github_actions` when present. Otherwise inspect existing compatible project workflows. If authoritative CI is missing/incompatible, use canonical bootstrap default `.github/workflows/pipeline-ci.yml` + `pipeline_ci`; runtime/E2E needed during that first bootstrap must run as an unprivileged disposable job in the candidate CI and consume its exact artifact. A separate `github_dev` gate may use an existing disposable `workflow_dispatch` workflow or a trusted stateful workflow. Both consume the exact artifact from the frozen `source_ci_stage`; disposable DEV must be secret-free, while stateful DEV runs from a frozen `trusted_ref`/environment outside candidate change scope. A missing DEV workflow is not bootstrapped separately in the same run: fold required disposable runtime/E2E into candidate `github_ci` instead. Inspect each proposed contract through `github-actions-gate-cli.ts inspect`. `READY` freezes the existing workflow; `MISSING/INCOMPATIBLE` for CI creates a bootstrap/adaptation work item; a missing stateful DEV workflow falls back to planned disposable validation, not privileged candidate CD. `BLOCKED` stops PLAN. Missing/incompatible GitHub Actions is normal planned work, never permission to substitute local final tests/builds.
-9. Before manifest freeze call TaskManager. It writes atomic work items under `.tmp/pipelines/{run-id}/work-items/**`; freeze every work-item ID, path and SHA-256 in the manifest. Each pipeline maps its own work-item IDs and defines `decision_ids`, `research_ids`, `contract_ids`. A GitHub bootstrap/adaptation work item must be mapped to the same pipeline and its exact candidate-safe workflow path must be inside `allowed_change_paths`; prefer the narrow path (for example `.github/workflows/pipeline-ci.yml`) over `.github/workflows/**`. The scope must never overlap a frozen trusted stateful DEV workflow.
+7. Classify every pipeline explicitly as `deployable: true|false`. A deployable pipeline must freeze `deployment_validation` with one GitHub stage plus two distinct required job IDs: `fresh_job` and `upgrade_job`. Those jobs must perform a clean install and an update/repeat install respectively against the same candidate artifact/SHA. Preserve release flow: implementation/review → source documentation/finalization → optional local fast gates → Git scope verify → publish candidate SHA → authoritative GitHub CI on that exact SHA → immutable artifact/evidence → fresh + upgrade validation → optional trusted DEV/runtime validation → acceptance/handoff. Any source-mutating `agent` stage must precede `git_publish`; after publication only non-source review/acceptance/handoff stages are planned.
+8. For every required authoritative CI/DEV gate, freeze a concrete GitHub Actions contract. Prefer `.opencode/pipeline-policy.json#github_actions` when present. Otherwise inspect existing compatible project workflows. Candidate CI must have explicit read-only permissions, no repository/environment secrets, no `paths`/`paths-ignore` trigger filters, SHA-pinned actions, an exact terminal job, `required_jobs[]`, and an immutable artifact when deployment/runtime consumes one. If authoritative CI is missing/incompatible, use canonical bootstrap default `.github/workflows/pipeline-ci.yml` + `pipeline_ci`; runtime/E2E needed during that first bootstrap includes the mandatory fresh+upgrade jobs in candidate CI. Existing disposable/stateful DEV consumes the exact source-CI artifact **and its SHA-256 digest**. Stateful DEV additionally freezes `trusted_ref`, protected `environment`, and a non-cancelling `concurrency_group`; `github-actions-gate-cli inspect/validate` must verify the Environment exists and accepts the trusted ref. If stateful DEV workflow is missing, PLAN creates a separate frozen work item and `future_github_gates` contract for that workflow. RUN may author it now, but it is deliberately absent from the current stage DAG and cannot execute until it is merged into the trusted ref; current-run runtime validation remains in candidate CI. A later PLAN can promote that now-trusted workflow into active `github_dev`. `BLOCKED` stops PLAN. Missing/incompatible GitHub Actions is normal planned work, never permission to substitute local final tests/builds.
+9. Before manifest freeze call TaskManager. It writes atomic work items under `.tmp/pipelines/{run-id}/work-items/**`; freeze every work-item ID, path and SHA-256 in the manifest. Each pipeline maps its own work-item IDs and defines `decision_ids`, `research_ids`, `contract_ids`. A candidate CI bootstrap/adaptation work item and any deferred future stateful DEV workflow work item must be mapped to the same pipeline and their exact workflow paths must be inside `allowed_change_paths`; prefer narrow paths over `.github/workflows/**`. An **active** trusted stateful DEV workflow must remain outside candidate change scope. A `future_github_gates` workflow is allowed in change scope only because it cannot execute in the current run.
 10. Canonical planning artifacts are `decision-register.md`, `technology-evidence.md`, `contract-inventory.md`, `test-strategy.md`, `accepted-risks.md` and the work-item index. Obtain hashes only through:
 
 ```text
@@ -102,13 +103,14 @@ New PLANs MUST use `schema_version: 2`, `planning_mode: "design-freeze"` and:
 
 - frozen rules version;
 - `git_setup`, `allowed_change_paths`, `freshness_sensitive_paths`;
-- pipelines/DAG, explicit `executors[stage_id]`, GitHub `github_gates[stage_id]`, local-only `gate_profiles`, conflict metadata and work-item mappings;
+- pipelines/DAG, explicit `deployable`, optional mandatory `deployment_validation` for deployable pipelines, explicit `executors[stage_id]`, active `github_gates[stage_id]`, deferred `future_github_gates`, local-only `gate_profiles`, conflict metadata and work-item mappings;
 - `planning_readiness.design_freeze: true`;
 - `planning_readiness.required_gates[]` and a `ready` evidence record for every required gate;
 - path+SHA-256 for every gate artifact/review and required planning artifact;
 - `open_decisions: []` before init;
 - frozen `work_items[]` with path+SHA-256;
-- optional frozen `project_policy` reference when repository policy exists.
+- optional frozen `project_policy` reference when repository policy exists;
+- frozen `deployment_target_check` evidence when policy declares an external SSH CD target.
 
 GitHub Issue mode additionally freezes `repository`, `source_issues[]`, `planning_base_sha`, per-pipeline `issue_numbers[]` and `source_snapshot_sha256`.
 
@@ -122,16 +124,16 @@ Authoritative repository test/build/typecheck/lint stages use `github_ci`. A loc
 
 For every `github_ci`/`github_dev` stage freeze `github_gates[stage_id]` with:
 - repository workflow path under `.github/workflows/*.yml|yaml`;
-- terminal job ID;
+- terminal job ID and every authoritative `required_jobs[]` job ID;
 - trigger (`push` for first-time/bootstrap candidate workflows, `workflow_dispatch` only for an already trusted workflow);
-- expected artifact when the CI contract produces one;
-- DEV `mode` (`disposable|stateful`), `source_ci_stage`, DEV evidence artifact/file; stateful additionally freezes environment and trusted workflow ref;
-- `bootstrap_required` + frozen `bootstrap_work_item_id` only for candidate CI adaptation. A separate `github_dev` workflow—disposable or stateful—is never bootstrapped and consumed in the same candidate run.
+- expected artifact when the contract produces one; runtime evidence binds its GitHub artifact ID and `sha256:` digest;
+- DEV `mode` (`disposable|stateful`), `source_ci_stage`, DEV evidence artifact/file and `ci_artifact_digest`; stateful additionally freezes environment, trusted workflow ref and `concurrency_group` with `cancel-in-progress: false`;
+- `bootstrap_required` + frozen `bootstrap_work_item_id` for candidate CI adaptation, or inside `future_github_gates` for a stateful DEV workflow that is authored now but becomes executable only after merge to the trusted ref.
 
 Before freeze inspect the proposed project workflow:
 
 ```text
-npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts inspect <workflow> <terminal-job> --trigger <push|workflow_dispatch> [--artifact <name>] [--executor github_ci|github_dev]
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts inspect <workflow> <terminal-job> --trigger <push|workflow_dispatch> [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode stateful --environment <env> --trusted-ref <ref> --concurrency-group <group>]
 ```
 
 For `local_gate`, `gate-runner-cli` still runs from project root with `shell:false`; one command-array item is one executable plus argv. No `cd`, `&&`, pipes, redirects, `$()` or stage-time dependency bootstrap/resolution. Only local-gate stages require a pipeline `profile` and `gate_profiles[profile][stage_id]`.
