@@ -30,12 +30,14 @@ export type GithubDevMode = 'disposable' | 'stateful';
 export interface GithubGateContract {
   workflow: string;
   terminal_job: string;
+  required_jobs?: string[];
   trigger: GithubGateTrigger;
   artifact?: string;
   environment?: string;
   mode?: GithubDevMode;
   source_ci_stage?: string;
   trusted_ref?: string;
+  concurrency_group?: string;
   evidence_file?: string;
   bootstrap_required?: boolean;
   bootstrap_work_item_id?: string;
@@ -111,11 +113,20 @@ export interface ProjectPolicyRef {
   sha256: string;
 }
 
+export interface DeploymentValidationContract {
+  stage: string;
+  fresh_job: string;
+  upgrade_job: string;
+}
+
 export interface PipelineManifestPipeline {
   id: string;
+  deployable?: boolean;
+  deployment_validation?: DeploymentValidationContract;
   stages: string[];
   executors?: Record<string, StageExecutor>;
   github_gates?: Record<string, GithubGateContract>;
+  future_github_gates?: Record<string, GithubGateContract>;
   depends_on?: string[];
   profile?: string;
   runtime_locks?: string[];
@@ -160,6 +171,7 @@ export interface PipelineManifest {
   freshness_sensitive_paths?: string[];
   work_items?: FrozenWorkItem[];
   project_policy?: ProjectPolicyRef;
+  deployment_target_check?: FrozenArtifact;
 }
 
 export interface StageEvidence {
