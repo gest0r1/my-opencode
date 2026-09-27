@@ -1,14 +1,17 @@
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { tmpdir } from 'node:os';
 import {
   GithubActionsGateError,
   assertGithubGateContract,
   classifyMissingWorkflow,
   inspectWorkflowText,
+  selectStatefulWorkflowRun,
   selectWorkflowRun,
+  validateDevEvidence,
   validateWorkflowResult,
 } from './github-actions-gate-core.mjs';
 
@@ -21,6 +24,8 @@ type GateContract = {
   environment?: string;
   mode?: 'disposable' | 'stateful';
   source_ci_stage?: string;
+  trusted_ref?: string;
+  evidence_file?: string;
   bootstrap_required?: boolean;
   bootstrap_work_item_id?: string;
   timeout_seconds?: number;
@@ -157,6 +162,8 @@ async function inspectCommand(args: string[]): Promise<void> {
     ...(option(args, '--mode') ? { mode: option(args, '--mode') as GateContract['mode'] } : {}),
     ...(option(args, '--source-ci-stage') ? { source_ci_stage: option(args, '--source-ci-stage') } : {}),
     ...(option(args, '--environment') ? { environment: option(args, '--environment') } : {}),
+    ...(option(args, '--trusted-ref') ? { trusted_ref: option(args, '--trusted-ref') } : {}),
+    ...(option(args, '--evidence-file') ? { evidence_file: option(args, '--evidence-file') } : {}),
   };
   try {
     const result = await inspectFile(contract, executor);
@@ -238,20 +245,62 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
-async function waitForRun(repo: string, contract: GateContract, candidate: Candidate, sourceCi: any): Promise<any> {
-  if (contract.trigger === 'workflow_dispatch') {
-    const dispatchArgs = ['workflow', 'run', workflowId(contract.workflow), '--repo', repo, '--ref', candidate.branch,
-      '-f', `candidate_sha=${candidate.candidate_sha}`];
-    if (sourceCi?.workflow_run_id) dispatchArgs.push('-f', `ci_run_id=${sourceCi.workflow_run_id}`);
-    command('gh', dispatchArgs);
-  }
-
+async function waitForRun(
+  repo: string,
+  runId: string,
+  pipeline: PipelineSpec,
+  contract: GateContract,
+  candidate: Candidate,
+  sourceCi: any,
+): Promise<any> {
   const timeoutMs = (contract.timeout_seconds ?? 900) * 1000;
   const pollMs = Math.max(250, Number(process.env.GITHUB_ACTIONS_GATE_POLL_MS ?? 5000));
   const deadline = Date.now() + timeoutMs;
-  let selected: any;
+
+  if (contract.mode === 'stateful') {
+    if (!contract.trusted_ref || !contract.source_ci_stage) throw new CliError('stateful DEV trusted/source contract is missing');
+    const sourceContract = pipeline.github_gates?.[contract.source_ci_stage];
+    if (!sourceContract?.artifact) throw new CliError('stateful DEV source CI artifact contract is missing');
+    const before = listRuns(repo, contract.workflow, contract.trusted_ref).map((item) => Number(item.id));
+    command('gh', [
+      'workflow', 'run', workflowId(contract.workflow),
+      '--repo', repo,
+      '--ref', contract.trusted_ref,
+      '-f', `candidate_sha=${candidate.candidate_sha}`,
+      '-f', `ci_run_id=${sourceCi.workflow_run_id}`,
+      '-f', `ci_artifact=${sourceContract.artifact}`,
+      '-f', `pipeline_run_id=${runId}`,
+    ]);
+    while (Date.now() < deadline) {
+      const selected = selectStatefulWorkflowRun(
+        listRuns(repo, contract.workflow, contract.trusted_ref),
+        {
+          trustedRef: contract.trusted_ref,
+          correlation: runId,
+          candidateSha: candidate.candidate_sha,
+          excludeIds: before,
+        },
+      );
+      if (selected) {
+        const current = fetchRun(repo, Number(selected.id));
+        if (current.status === 'completed') return current;
+      }
+      await sleep(pollMs);
+    }
+    throw new CliError(`GITHUB_DEV_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate.candidate_sha}`);
+  }
+
+  if (contract.trigger === 'workflow_dispatch') {
+    command('gh', [
+      'workflow', 'run', workflowId(contract.workflow),
+      '--repo', repo,
+      '--ref', candidate.branch,
+      '-f', `candidate_sha=${candidate.candidate_sha}`,
+    ]);
+  }
+
   while (Date.now() < deadline) {
-    selected = selectWorkflowRun(listRuns(repo, contract.workflow, candidate.branch), {
+    const selected = selectWorkflowRun(listRuns(repo, contract.workflow, candidate.branch), {
       candidateSha: candidate.candidate_sha,
       branch: candidate.branch,
       event: contract.trigger,
@@ -263,6 +312,34 @@ async function waitForRun(repo: string, contract: GateContract, candidate: Candi
     await sleep(pollMs);
   }
   throw new CliError(`GITHUB_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate.candidate_sha}`);
+}
+
+async function verifyStatefulDevEvidence(
+  repo: string,
+  run: any,
+  contract: GateContract,
+  candidateSha: string,
+  sourceCiRunId: number,
+): Promise<any> {
+  if (!contract.artifact || !contract.evidence_file) throw new CliError('stateful DEV evidence contract is missing');
+  const directory = await mkdtemp(join(tmpdir(), 'pipeline-dev-evidence-'));
+  try {
+    command('gh', [
+      'run', 'download', String(run.id),
+      '--repo', repo,
+      '--name', contract.artifact,
+      '--dir', directory,
+    ]);
+    const file = join(directory, contract.evidence_file);
+    const data = JSON.parse(await readFile(file, 'utf8'));
+    try {
+      return validateDevEvidence(data, { candidateSha, ciRunId: sourceCiRunId });
+    } catch (error) {
+      throw new CliError(error instanceof Error ? error.message : String(error));
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 async function runGate(runId: string, pipelineId: string, stage: string, stateRoot: string): Promise<any> {
@@ -278,7 +355,7 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
   const sourceCi = executor === 'github_dev'
     ? await sourceCiEvidence(runRoot, pipelineId, contract, candidate.candidate_sha)
     : undefined;
-  const run = await waitForRun(repo, contract, candidate, sourceCi);
+  const run = await waitForRun(repo, runId, resolveGate(manifest, pipelineId, stage).pipeline, contract, candidate, sourceCi);
   const jobs = fetchJobs(repo, Number(run.id));
   const artifacts = fetchArtifacts(repo, Number(run.id));
   let result;
@@ -297,6 +374,16 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
     throw new CliError(error instanceof Error ? error.message : String(error));
   }
 
+  const devEvidence = executor === 'github_dev' && contract.mode === 'stateful'
+    ? await verifyStatefulDevEvidence(
+        repo,
+        run,
+        contract,
+        candidate.candidate_sha,
+        Number(sourceCi?.workflow_run_id),
+      )
+    : undefined;
+
   const evidence = {
     ...result,
     gate: 'github_actions',
@@ -309,6 +396,8 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
     branch: candidate.branch,
     environment: contract.environment ?? null,
     mode: contract.mode ?? null,
+    trusted_ref: contract.trusted_ref ?? null,
+    ...(devEvidence ? { dev_evidence_validated: true, installed_sha: devEvidence.installed_sha, smoke_result: devEvidence.smoke_result } : {}),
     recorded_at: new Date().toISOString(),
   };
   const evidenceFile = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
@@ -326,7 +415,7 @@ async function showCommand(runId: string, pipelineId: string, stage: string, sta
 function usage(): string {
   return [
     'usage:',
-    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--executor github_ci|github_dev]',
+    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--evidence-file <file>]',
     '  github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts show <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
