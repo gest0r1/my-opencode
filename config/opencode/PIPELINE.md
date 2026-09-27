@@ -156,7 +156,7 @@ For `github_ci`/`github_dev`, `github-actions-gate-cli` validates the frozen pro
 
 `stage-cli complete` re-validates canonical machine evidence before allowing a `local_gate`, `github_ci`, `github_dev` or `git_publish` stage to complete. A model statement that a check passed is insufficient.
 
-If a target project has no compatible GitHub workflow, PLAN freezes a bootstrap/adaptation work item and workflow scope. RUN implements that workflow in the target project, validates it before publication, publishes it with the candidate branch and waits for GitHub Actions on that exact SHA. First-time workflows use a `push` trigger; there is no local final-build/test fallback.
+If a target project has no compatible GitHub CI workflow, PLAN freezes a bootstrap/adaptation work item and workflow scope. RUN implements that candidate-safe CI workflow in the target project, validates it before publication, publishes it with the candidate branch and waits for GitHub Actions on that exact SHA. First-time workflows use a `push` trigger; there is no local final-build/test fallback. Runtime/E2E for this first bootstrap is disposable and unprivileged inside candidate CI. A privileged stateful DEV workflow is used only when it already exists on a frozen trusted ref outside candidate change scope; the deterministic CLI dispatches that trusted workflow with candidate/CI artifact identity and verifies returned `installed_sha` evidence.
 
 Any source-changing fix after publication creates a new candidate SHA. CI/artifact/DEV evidence belonging to the previous SHA becomes stale and must be regenerated.
 
