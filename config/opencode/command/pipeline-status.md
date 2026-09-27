@@ -32,7 +32,8 @@ tags:
 5. Покажи текущую стадию.
 6. Покажи завершённые, активные, ожидающие и заблокированные stages.
 7. Покажи последние ошибки и evidence.
-8. Для GitHub Issue run покажи repository/source issues, `planning_base_sha`/`run_base_sha`, `issue_results`, PR number и количество недоставленных событий `github_outbox`.
+8. Для стадий `github_ci`/`github_dev` покажи frozen workflow, candidate SHA, workflow run ID/attempt, terminal job, artifact и source CI run (для DEV) из `.tmp/pipelines/{run-id}/github/`; не считай natural-language статус evidence.
+9. Для GitHub Issue run покажи repository/source issues, `planning_base_sha`/`run_base_sha`, `issue_results`, PR number и количество недоставленных событий `github_outbox`.
 
 ## Запрещено
 
