@@ -204,7 +204,7 @@ test('disposable DEV workflow consumes exact CI artifact without secrets', () =>
     '        required: true',
     '      ci_artifact_digest:',
     '        required: true',
-    '      pipeline_run_id:'
+    '      pipeline_run_id:',
     '        required: true',
     'permissions:',
     '  actions: read',
