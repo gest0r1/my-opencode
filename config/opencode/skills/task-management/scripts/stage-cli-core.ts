@@ -1142,10 +1142,12 @@ export async function supersedeRun(
   if(oldManifest.schema_version!==2) {
     throw new StageCliError('LEGACY_V1_REPLAN_REQUIRED: v1 cannot be mechanically superseded; create a fresh v2 PLAN with lineage reason V1_TO_V2_MIGRATION');
   }
-  const newRoot=stateDir(stateRoot,newRunId);
-  if(await fileExists(newRoot))throw new StageCliError(`supersede destination already exists: ${newRunId}`);
-  await mkdir(newRoot,{recursive:true});
   const oldRoot=dirname(resolve(oldState.manifest_file));
+  const newRoot=join(dirname(oldRoot),newRunId);
+  if(await fileExists(newRoot) || await fileExists(statePath(stateRoot,newRunId))) {
+    throw new StageCliError(`supersede destination already exists: ${newRunId}`);
+  }
+  await mkdir(newRoot,{recursive:true});
   try {
     for(const directory of ['planning','stories','reviews','sources','work-items']){
       await copyIfPresent(join(oldRoot,directory),join(newRoot,directory),true);
