@@ -394,7 +394,9 @@ async function waitForRun(
     throw new CliError(`GITHUB_DEV_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate.candidate_sha}`);
   }
 
+  let dispatchExistingIds: number[] = [];
   if (contract.trigger === 'workflow_dispatch') {
+    dispatchExistingIds = listRuns(repo, contract.workflow, candidate.branch).map((item) => Number(item.id));
     const dispatchArgs = [
       'workflow', 'run', workflowId(contract.workflow),
       '--repo', repo,
@@ -420,6 +422,7 @@ async function waitForRun(
       candidateSha: candidate.candidate_sha,
       branch: candidate.branch,
       event: contract.trigger,
+      excludeIds: dispatchExistingIds,
     });
     if (selected) {
       const current = fetchRun(repo, Number(selected.id));
