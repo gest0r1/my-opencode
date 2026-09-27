@@ -101,7 +101,7 @@ parallel orchestration protocol.
 1. Deterministic FAIL/BLOCKED outranks model judgement.
 2. PLAN never implements source changes.
 3. RUN never changes frozen manifest/rules.
-4. Use only `stage-cli next` to determine runnable stages.
+4. Before RUN scheduling require `stage-cli run-preflight`; canonical RUN accepts schema v2 only. Then use only `stage-cli next` to determine runnable stages.
 5. New PLANs use manifest schema v2; v1 is legacy-read only.
 6. Frozen planning evidence, Issue snapshot, project policy and work-item hashes
    are authority. Never rewrite them after init.
