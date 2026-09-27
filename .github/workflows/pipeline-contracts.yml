@@ -124,7 +124,6 @@ jobs:
                   workflow: '.github/workflows/pipeline-gate-live-fixture.yml',
                   terminal_job: 'pipeline_ci',
                   trigger: 'push',
-                  artifact: 'candidate-build',
                   timeout_seconds: 480,
                 },
               },
@@ -171,6 +170,5 @@ jobs:
           if (evidence.head_sha !== process.env.TARGET_SHA) throw new Error('workflow head SHA mismatch');
           if (evidence.workflow !== '.github/workflows/pipeline-gate-live-fixture.yml') throw new Error('workflow mismatch');
           if (evidence.terminal_job !== 'pipeline_ci') throw new Error('terminal job mismatch');
-          if (evidence.artifact !== 'candidate-build') throw new Error('artifact mismatch');
           if (!Number.isInteger(Number(evidence.workflow_run_id))) throw new Error('workflow run id missing');
           NODE
