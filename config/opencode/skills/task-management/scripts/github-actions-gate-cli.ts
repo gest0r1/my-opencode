@@ -421,6 +421,7 @@ async function waitForRun(
       '-f', `candidate_sha=${candidate.candidate_sha}`,
       '-f', `ci_run_id=${sourceCi.workflow_run_id}`,
       '-f', `ci_artifact=${sourceContract.artifact}`,
+      '-f', `ci_artifact_id=${sourceCi.artifact_id}`,
       '-f', `ci_artifact_digest=${sourceCi.artifact_digest}`,
       '-f', `pipeline_run_id=${runId}`,
       ...(contract.target_id ? ['-f', `deployment_target_id=${contract.target_id}`] : []),
@@ -460,6 +461,7 @@ async function waitForRun(
       dispatchArgs.push(
         '-f', 'ci_run_id=' + sourceCi.workflow_run_id,
         '-f', 'ci_artifact=' + sourceContract.artifact,
+        '-f', 'ci_artifact_id=' + sourceCi.artifact_id,
         '-f', 'ci_artifact_digest=' + sourceCi.artifact_digest,
         '-f', 'pipeline_run_id=' + runId,
         ...(contract.target_id ? ['-f', 'deployment_target_id=' + contract.target_id] : []),
@@ -490,6 +492,7 @@ async function verifyDevEvidence(
   contract: GateContract,
   candidateSha: string,
   sourceCiRunId: number,
+  sourceCiArtifactId: number,
   sourceCiArtifactDigest: string,
 ): Promise<any> {
   if (!contract.artifact || !contract.evidence_file) throw new CliError('DEV evidence contract is missing');
@@ -507,6 +510,7 @@ async function verifyDevEvidence(
       return validateDevEvidence(data, {
         candidateSha,
         ciRunId: sourceCiRunId,
+        ciArtifactId: sourceCiArtifactId,
         ciArtifactDigest: sourceCiArtifactDigest,
         targetId: contract.target_id,
       });
@@ -559,6 +563,7 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
         contract,
         candidate.candidate_sha,
         Number(sourceCi?.workflow_run_id),
+        Number(sourceCi?.artifact_id),
         String(sourceCi?.artifact_digest ?? ''),
       )
     : undefined;
@@ -589,6 +594,7 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
     ...(devEvidence ? {
       dev_evidence_validated: true,
       installed_sha: devEvidence.installed_sha,
+      ci_artifact_id: devEvidence.ci_artifact_id,
       ci_artifact_digest: devEvidence.ci_artifact_digest,
       ...(devEvidence.target_id ? { target_id: devEvidence.target_id } : {}),
       smoke_result: devEvidence.smoke_result,
