@@ -347,6 +347,66 @@ test('project policy CLI reports immutable path and SHA-256', async () => {
 });
 
 
+test('stage-cli refuses github_ci completion without exact candidate evidence', async () => {
+  const fx = await fixture('v2-github-evidence');
+  fx.manifest.pipelines[0].stages = ['implementation', 'tests'];
+  fx.manifest.pipelines[0].executors = { implementation: 'agent', tests: 'github_ci' };
+  fx.manifest.pipelines[0].github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'push',
+    },
+  };
+  delete fx.manifest.pipelines[0].ready_after_stage;
+  delete fx.manifest.pipelines[0].release_ready_after_stage;
+  await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
+
+  const stateRoot = path.join(fx.root, '.tmp', 'github-evidence-state');
+  let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['approve', fx.manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(fx.root, ['start', fx.manifest.run_id, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(fx.root, ['start', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /EVIDENCE_MISSING/);
+
+  const candidateSha = 'c'.repeat(40);
+  await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
+    status: 'PASS',
+    branch: 'feature/test',
+    candidate_sha: candidateSha,
+    remote_sha: candidateSha,
+  }, null, 2));
+  await mkdir(path.join(fx.runRoot, 'github'), { recursive: true });
+  await writeFile(path.join(fx.runRoot, 'github', 'app-tests.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: fx.manifest.run_id,
+    pipeline_id: 'app',
+    stage: 'tests',
+    executor: 'github_ci',
+    repository: 'owner/repo',
+    workflow: '.github/workflows/ci.yml',
+    workflow_run_id: 10,
+    run_attempt: 1,
+    candidate_sha: candidateSha,
+    head_sha: candidateSha,
+    terminal_job: 'pipeline_ci',
+  }, null, 2));
+
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).pipelines.app.status, 'completed');
+});
+
 test('technical fix counter permits exactly three cycles and blocks the fourth', async () => {
   const fx = await fixture('v2-fix-cycle-limit');
   const stateRoot = path.join(fx.root, '.tmp', 'fix-cycle-state');
