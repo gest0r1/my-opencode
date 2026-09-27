@@ -35,6 +35,7 @@ The v2 manifest also freezes:
 - atomic TaskManager work items by ID/path/SHA-256;
 - per-pipeline decision/research/contract IDs;
 - source/migration/fixture conflict metadata;
+- explicit stage executors and GitHub gate contracts;
 - optional repository policy SHA-256.
 
 Planning/review evidence is append-only. Stable Issue story files are the
@@ -55,17 +56,15 @@ A schema example is distributed at
 Current schema supports:
 
 - `protected_paths[]`: scopes that may not enter `allowed_change_paths`;
-- `required_gates[]`: a gate stage plus `when_paths[]`; if frozen change
-  scope intersects those paths, the manifest must include that stage.
+- `required_gates[]`: a gate stage plus `when_paths[]`; if frozen change scope intersects those paths, the manifest must include that stage;
+- optional `github_actions.ci/dev` defaults for workflow path, terminal job, trigger, artifact and DEV environment/mode.
 
 When the policy exists, PLAN freezes its path+SHA-256. Preflight and later state
 validation fail if it changes.
 
-## Package-manager integrity
+## Executor and package-manager integrity
 
-JS gates use the package manager declared by `package.json#packageManager` or
-the repository lockfile. A pnpm repository does not fall back to npm or
-dependency-installing `npx --yes`; missing pnpm is an environment blocker.
+Every schema-v2 stage has an explicit executor. Authoritative test/build/typecheck/lint stages use `github_ci`; only explicitly local fast/precheck/docs/runtime stages use `local_gate`. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate, not a reason to replace GitHub CI.
 
 ## 1. PLAN reads authoritative Issues
 
@@ -128,22 +127,38 @@ previously delivered event because each comment carries a stable hidden marker.
 Before and after pipeline stages, and before PR handoff, synchronization must
 finish with `pending=0`.
 
-## 3. Candidate publication and tests
+## 3. Candidate publication, GitHub CI and DEV
 
-RUN follows the frozen DAG and uses only deterministic gates. Machine tests,
-builds, lint/type checks, runtime gates, and reviews must reach their required
-PASS/completed states before delivery.
+RUN follows the frozen DAG and executor contract. The canonical release path is:
 
-`git-worktree-cli publish` commits any approved scoped changes, performs a
-non-force push of the selected worktree branch, verifies the remote SHA, and
-writes:
+```text
+implementation/review
+  -> optional local fast gates
+  -> Git scope verify
+  -> publish exact candidate SHA
+  -> GitHub Actions CI for that SHA
+  -> immutable artifact/evidence
+  -> DEV/runtime validation of the same SHA/artifact
+  -> acceptance/finalization
+```
+
+`git-worktree-cli publish` commits approved scoped changes, performs a non-force push of the selected worktree branch, verifies the remote SHA, and writes:
 
 ```text
 .tmp/pipelines/<run-id>/candidate.json
 ```
 
-PR creation is blocked unless `candidate.json` records `status: PASS` and
-`candidate_sha == remote_sha`.
+For `github_ci`/`github_dev`, `github-actions-gate-cli` validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch, frozen event/workflow, successful terminal job and required artifact. DEV evidence additionally points to the exact source CI run. Evidence is written under:
+
+```text
+.tmp/pipelines/<run-id>/github/<pipeline>-<stage>.json
+```
+
+`stage-cli complete` re-validates canonical machine evidence before allowing a `local_gate`, `github_ci`, `github_dev` or `git_publish` stage to complete. A model statement that a check passed is insufficient.
+
+If a target project has no compatible GitHub workflow, PLAN freezes a bootstrap/adaptation work item and workflow scope. RUN implements that workflow in the target project, validates it before publication, publishes it with the candidate branch and waits for GitHub Actions on that exact SHA. First-time workflows use a `push` trigger; there is no local final-build/test fallback.
+
+Any source-changing fix after publication creates a new candidate SHA. CI/artifact/DEV evidence belonging to the previous SHA becomes stale and must be regenerated.
 
 ## 4. Automatic PR handoff
 
@@ -208,14 +223,14 @@ selected repositories with these capabilities:
 | Contents | Read/write | branch/candidate publication |
 | Issues | Read/write | requirement reads and audit comments |
 | Pull requests | Read/write | create/update delivery PR |
+| Actions | Read/write | inspect candidate workflow runs and dispatch trusted `workflow_dispatch` gates when frozen by the project contract |
 
 `Issues: write` is needed because GitHub does not provide a separate
 comment-only write permission. The deterministic tools therefore enforce the
 narrower policy in code: they read Issues and post comments, but do not expose an
 Issue state-change/close command.
 
-No pipeline tool requires repository administration, secrets, deployments, or a
-PR merge permission path.
+The pipeline engine has no generic secrets-management or PR-merge operation. Stateful DEV deployment credentials remain inside the target repository's protected GitHub Environment/workflow; the orchestrator only invokes the frozen deterministic gate contract.
 
 ## Failure behavior
 
@@ -227,6 +242,8 @@ The lifecycle fails closed when any of these is true:
 - the run or any mapped pipeline is not completed;
 - GitHub comment outbox delivery remains pending;
 - candidate evidence is missing or its remote SHA does not match;
+- a required project workflow is missing without an approved bootstrap/adaptation work item;
+- GitHub Actions evidence references a different SHA, branch, workflow, terminal job, artifact or source CI run;
 - more than one open PR exists for the same candidate branch and `main`;
 - the existing PR contains a malformed pipeline-managed body block.
 
