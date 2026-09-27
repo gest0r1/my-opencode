@@ -199,11 +199,11 @@ test('disposable DEV workflow consumes exact CI artifact without secrets', () =>
     '          name: dev-evidence',
     '          path: dev-evidence.json',
   ];
-  const workflow = lines.join('\\n');
+  const workflow = lines.join(String.fromCharCode(10));
   const result = inspectWorkflowText(workflow, dev, 'github_dev');
   assert.equal(result.status, 'READY');
 
-  const unsafe = [...lines, '      - run: echo "${{ secrets.TEST_TOKEN }}"'].join('\\n');
+  const unsafe = [...lines, '      - run: echo "${{ secrets.TEST_TOKEN }}"'].join(String.fromCharCode(10));
   const unsafeResult = inspectWorkflowText(unsafe, dev, 'github_dev');
   assert.equal(unsafeResult.status, 'INCOMPATIBLE');
   assert.ok(unsafeResult.issues.some((item) => item.includes('must not reference')));
