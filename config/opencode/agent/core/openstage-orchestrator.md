@@ -16,6 +16,8 @@ permission:
     "npx tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
+    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
@@ -25,6 +27,7 @@ permission:
     "npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
+    "npx tsx .opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
     "node .opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
@@ -98,6 +101,7 @@ Do not duplicate their procedures in this agent prompt:
 - `git-worktree-cli` owns source identity, changed-file scope and candidate publish.
 - `gate-runner-cli` owns explicitly local fast/runtime command execution, evidence and shared runtime locks.
 - `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV inspection, validation, exact-candidate run selection and evidence.
+- `deployment-target-cli` owns PLAN-time reachability/authentication probes for non-GitHub external CD targets; agents never receive raw SSH capability.
 - `github-issue-cli` owns authenticated same-repository Issue snapshots for PLAN.
 - `pipeline-github-sync` owns idempotent Issue status/PR-link comments; `github-pr-cli` owns create/update of the single non-merged PR to `main`.
 
