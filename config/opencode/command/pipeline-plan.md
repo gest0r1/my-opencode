@@ -85,9 +85,10 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
 4. Collect ALL unresolved owner decisions in `decision-register.md`. Each decision records its owning planning gate and status. Never omit a decision to make validation pass or self-authorize it.
 5. Compile prerequisites and conflicts into a DAG. Freeze `exclusive_paths`, `migration_paths`, `fixture_paths` and/or `conflict_group` where relevant. Pipelines sharing such conflict metadata must be serialized by dependencies. Runtime locks are only for genuinely shared external mutable targets.
 6. Create binary acceptance criteria and minimal `allowed_change_paths` including source, tests, docs and approved helper scripts. Protect `.git`, secrets and environment files.
-7. Preserve deployable release flow: implementation → functional gates → Git scope verify → publish candidate SHA → GitHub SHA installation → runtime validation → docs/finalization. Define `ready_after_stage` and `release_ready_after_stage` when applicable.
-8. Before manifest freeze call TaskManager. It writes atomic work items under `.tmp/pipelines/{run-id}/work-items/**`; freeze every work-item ID, path and SHA-256 in the manifest. Each pipeline maps its own work-item IDs and defines `decision_ids`, `research_ids`, `contract_ids`.
-9. Canonical planning artifacts are `decision-register.md`, `technology-evidence.md`, `contract-inventory.md`, `test-strategy.md`, `accepted-risks.md` and the work-item index. Obtain hashes only through:
+7. Preserve deployable release flow: implementation/review → source documentation/finalization → optional local fast gates → Git scope verify → publish candidate SHA → authoritative GitHub CI on that exact SHA → immutable artifact/evidence → DEV/runtime validation of that artifact/SHA → acceptance/handoff. Any source-mutating `agent` stage must precede `git_publish`; after publication only non-source review/acceptance/handoff stages are planned. Define `ready_after_stage` and `release_ready_after_stage` when applicable.
+8. For every required authoritative CI/DEV gate, freeze a concrete GitHub Actions contract. Prefer `.opencode/pipeline-policy.json#github_actions` when present. Otherwise inspect existing compatible project workflows. If authoritative CI is missing/incompatible, use canonical bootstrap default `.github/workflows/pipeline-ci.yml` + `pipeline_ci`; runtime/E2E needed during that first bootstrap must run as an unprivileged disposable job in the candidate CI and consume its exact artifact. A separate `github_dev` gate may use an existing disposable `workflow_dispatch` workflow or a trusted stateful workflow. Both consume the exact artifact from the frozen `source_ci_stage`; disposable DEV must be secret-free, while stateful DEV runs from a frozen `trusted_ref`/environment outside candidate change scope. A missing DEV workflow is not bootstrapped separately in the same run: fold required disposable runtime/E2E into candidate `github_ci` instead. Inspect each proposed contract through `github-actions-gate-cli.ts inspect`. `READY` freezes the existing workflow; `MISSING/INCOMPATIBLE` for CI creates a bootstrap/adaptation work item; a missing stateful DEV workflow falls back to planned disposable validation, not privileged candidate CD. `BLOCKED` stops PLAN. Missing/incompatible GitHub Actions is normal planned work, never permission to substitute local final tests/builds.
+9. Before manifest freeze call TaskManager. It writes atomic work items under `.tmp/pipelines/{run-id}/work-items/**`; freeze every work-item ID, path and SHA-256 in the manifest. Each pipeline maps its own work-item IDs and defines `decision_ids`, `research_ids`, `contract_ids`. A GitHub bootstrap/adaptation work item must be mapped to the same pipeline and its exact candidate-safe workflow path must be inside `allowed_change_paths`; prefer the narrow path (for example `.github/workflows/pipeline-ci.yml`) over `.github/workflows/**`. The scope must never overlap a frozen trusted stateful DEV workflow.
+10. Canonical planning artifacts are `decision-register.md`, `technology-evidence.md`, `contract-inventory.md`, `test-strategy.md`, `accepted-risks.md` and the work-item index. Obtain hashes only through:
 
 ```text
 stage-cli.ts artifacts {run-id} <run-relative-path>... --json
@@ -101,7 +102,7 @@ New PLANs MUST use `schema_version: 2`, `planning_mode: "design-freeze"` and:
 
 - frozen rules version;
 - `git_setup`, `allowed_change_paths`, `freshness_sensitive_paths`;
-- pipelines/DAG, machine `gate_profiles`, conflict metadata and work-item mappings;
+- pipelines/DAG, explicit `executors[stage_id]`, GitHub `github_gates[stage_id]`, local-only `gate_profiles`, conflict metadata and work-item mappings;
 - `planning_readiness.design_freeze: true`;
 - `planning_readiness.required_gates[]` and a `ready` evidence record for every required gate;
 - path+SHA-256 for every gate artifact/review and required planning artifact;
@@ -113,15 +114,29 @@ GitHub Issue mode additionally freezes `repository`, `source_issues[]`, `plannin
 
 Schema v1 is legacy-read compatibility only; never create a new v1 PLAN.
 
-## Mandatory machine gate contract
+## Mandatory execution-gate contract
 
-`gate-runner-cli` runs from project root with `shell:false`; one command-array item is one executable plus argv. No `cd`, `&&`, pipes, redirects, `$()` or shell composition. No stage-time dependency bootstrap/resolution.
+Every schema-v2 stage has exactly one explicit executor: `agent | review | local_gate | git_verify | git_publish | github_ci | github_dev`. Never infer execution mode from the stage name during RUN.
 
-Respect the repository package manager. If `package.json#packageManager` or a lockfile declares pnpm/npm/yarn/bun, JS gates must use that manager. In particular, a pnpm workspace uses `pnpm run ...` / `pnpm exec ...`; missing pnpm is an environment BLOCK, never a fallback to npm/`npx --yes`. `npx --yes` is forbidden in schema v2 gates.
+Authoritative repository test/build/typecheck/lint stages use `github_ci`. A local stage whose name explicitly identifies it as fast/local/precheck may use `local_gate`, but its PASS cannot replace the authoritative GitHub CI stage. When GitHub CI is required and unavailable, PLAN must bootstrap/adapt the project workflow rather than fall back to local execution.
 
-For a project containing both `pyproject.toml` and `uv.lock`, use `uv run --frozen pytest ...` (or `uv run --frozen python -m pytest ...`). Otherwise use the approved project Python contract; never `cd backend && ...`.
+For every `github_ci`/`github_dev` stage freeze `github_gates[stage_id]` with:
+- repository workflow path under `.github/workflows/*.yml|yaml`;
+- terminal job ID;
+- trigger (`push` for first-time/bootstrap candidate workflows, `workflow_dispatch` only for an already trusted workflow);
+- expected artifact when the CI contract produces one;
+- DEV `mode` (`disposable|stateful`), `source_ci_stage`, DEV evidence artifact/file; stateful additionally freezes environment and trusted workflow ref;
+- `bootstrap_required` + frozen `bootstrap_work_item_id` only for candidate CI adaptation. A separate `github_dev` workflow—disposable or stateful—is never bootstrapped and consumed in the same candidate run.
 
-Every machine stage has a pipeline `profile`, and `gate_profiles[profile][stage_id]` is a nonempty command list with the exact stage ID key. Qualitative review, implementation, Git verification and publication are not fake machine gates.
+Before freeze inspect the proposed project workflow:
+
+```text
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts inspect <workflow> <terminal-job> --trigger <push|workflow_dispatch> [--artifact <name>] [--executor github_ci|github_dev]
+```
+
+For `local_gate`, `gate-runner-cli` still runs from project root with `shell:false`; one command-array item is one executable plus argv. No `cd`, `&&`, pipes, redirects, `$()` or stage-time dependency bootstrap/resolution. Only local-gate stages require a pipeline `profile` and `gate_profiles[profile][stage_id]`.
+
+Respect the repository package manager for local JS gates. If `package.json#packageManager` or a lockfile declares pnpm/npm/yarn/bun, local JS gates must use that manager. Missing tooling is an environment BLOCK, never a fallback to another manager or dependency-installing `npx --yes`. For a project containing both `pyproject.toml` and `uv.lock`, local pytest gates use `uv run --frozen ...`.
 
 Before presenting owner approval run:
 
@@ -130,7 +145,7 @@ stage-cli.ts preflight .tmp/pipelines/{run-id}/manifest.json --environment
 git-worktree-cli.ts adopt .tmp/pipelines/{run-id}/manifest.json
 ```
 
-Both must PASS. V2 preflight verifies planning evidence hashes, source snapshot, frozen work items, project policy/conflict serialization and package-manager contract. Never change the frozen manifest after init.
+Both must PASS. V2 preflight verifies planning evidence hashes, source snapshot, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Never change the frozen manifest after init.
 
 ## Preservation and refresh
 

@@ -107,6 +107,7 @@ test('OpenStage exposes only deterministic GitHub lifecycle commands', async () 
   for (const required of [
     /github-issue-cli\.ts\*": allow/,
     /github-pr-cli\.ts\*": allow/,
+    /github-actions-gate-cli\.ts\*": allow/,
     /pipeline-github-sync\.mjs\*": allow/,
   ]) {
     assert.match(yaml, required);
@@ -127,6 +128,24 @@ test('planning agents do not delegate nested subagents', async () => {
     const yaml = frontmatter(await text(file));
     assert.ok(permissionDenied(yaml, 'task'), `${file}: nested task delegation must be denied`);
   }
+});
+
+test('OpenStage cannot edit deterministic pipeline state or machine evidence', async () => {
+  const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
+  for (const path of [
+    'state\\.json', 'candidate\\.json', 'git-verify\\.json', 'git-runtime\\.json',
+    'github/\\*\\*', 'gates/\\*\\*', 'sources/github-issues\\.json',
+  ]) {
+    assert.match(yaml, new RegExp('\\.tmp/pipelines/\\*\\*/' + path + '"?:\\s*deny'));
+  }
+});
+
+test('canonical RUN requires deterministic v2 run-preflight before next', async () => {
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  assert.match(run, /stage-cli run-preflight <run-id>/);
+  assert.match(run, /LEGACY_V1_REPLAN_REQUIRED/);
+  assert.match(orchestrator, /stage-cli run-preflight/);
 });
 
 test('pipeline contracts pin three technical-fix cycles and literal ready planning gates', async () => {
