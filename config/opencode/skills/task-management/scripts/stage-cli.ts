@@ -114,6 +114,8 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
         String(evidence.installed_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
         source?.status === 'PASS' &&
         String(source?.candidate_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
+        Number.isInteger(Number(source?.artifact_id)) &&
+        Number(evidence.ci_artifact_id) === Number(source?.artifact_id) &&
         /^sha256:[0-9a-f]{64}$/i.test(String(source?.artifact_digest ?? '')) &&
         String(evidence.ci_artifact_digest ?? '').toLowerCase() === String(source?.artifact_digest ?? '').toLowerCase() &&
         Number(evidence.source_ci_run_id) === Number(source?.workflow_run_id);
@@ -272,6 +274,8 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
       );
       if (source.status !== 'PASS' ||
           String(source.candidate_sha).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
+          !Number.isInteger(Number(source.artifact_id)) ||
+          Number(evidence.ci_artifact_id) !== Number(source.artifact_id) ||
           !/^sha256:[0-9a-f]{64}$/i.test(String(source.artifact_digest ?? '')) ||
           String(evidence.ci_artifact_digest ?? '').toLowerCase() !== String(source.artifact_digest ?? '').toLowerCase() ||
           Number(evidence.source_ci_run_id) !== Number(source.workflow_run_id)) {
