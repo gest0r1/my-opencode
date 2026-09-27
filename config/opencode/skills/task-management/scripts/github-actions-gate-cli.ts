@@ -37,6 +37,7 @@ type PipelineSpec = {
   stages: string[];
   executors?: Record<string, string>;
   github_gates?: Record<string, GateContract>;
+  future_github_gates?: Record<string, GateContract>;
 };
 type Manifest = {
   run_id: string;
@@ -152,6 +153,19 @@ function resolveGate(manifest: Manifest, pipelineId: string, stage: string): {
   return { pipeline, executor, contract: contract as GateContract };
 }
 
+function resolveFutureGate(manifest: Manifest, pipelineId: string, gateName: string): {
+  pipeline: PipelineSpec;
+  contract: GateContract;
+} {
+  const pipeline = manifest.pipelines.find((item) => item.id === pipelineId);
+  if (!pipeline) throw new CliError(`pipeline not found: ${pipelineId}`);
+  const contract = pipeline.future_github_gates?.[gateName];
+  if (!contract) throw new CliError(`future GitHub gate not found: ${pipelineId}/${gateName}`);
+  try { assertGithubGateContract(contract, 'github_dev'); }
+  catch (error) { throw new CliError(error instanceof Error ? error.message : String(error)); }
+  return { pipeline, contract };
+}
+
 async function inspectFile(contract: GateContract, executor: Executor, context: { candidateBranch?: string } = {}): Promise<any> {
   const workflow = resolve(contract.workflow);
   if (!(await exists(workflow))) return classifyMissingWorkflow(contract, executor);
@@ -255,8 +269,8 @@ async function inspectCommand(args: string[]): Promise<void> {
       return;
     }
     const candidateBranch = command('git', ['branch', '--show-current']).trim() || undefined;
+    const environment = executor === 'github_dev' && contract.mode === 'stateful' ? validateEnvironment(repo, contract) : undefined;
     const result = await inspectFile(contract, executor, { candidateBranch });
-    const environment = result.status === 'READY' ? validateEnvironment(repo, contract) : undefined;
     console.log(JSON.stringify({
       ...result,
       repository: repo,
@@ -290,6 +304,33 @@ async function validateCommand(runId: string, pipelineId: string, stage: string,
     pipeline_id: pipelineId,
     stage,
     executor,
+    repository: repo,
+    ...result,
+    ...(environment ? { environment_validation: environment } : {}),
+  };
+}
+
+async function validateFutureCommand(
+  runId: string,
+  pipelineId: string,
+  gateName: string,
+  stateRoot: string,
+): Promise<any> {
+  const { manifest } = await loadRun(runId, stateRoot);
+  const { contract } = resolveFutureGate(manifest, pipelineId, gateName);
+  const result = await inspectFile(contract, 'github_dev', { candidateBranch: manifest.git_setup?.branch });
+  if (result.status !== 'READY') {
+    throw new CliError(`FUTURE_GITHUB_WORKFLOW_NOT_READY: ${result.status}: ${(result.issues ?? []).join('; ')}`);
+  }
+  const repo = repository(manifest);
+  const environment = validateEnvironment(repo, contract);
+  return {
+    status: 'PASS',
+    gate: 'github_actions_validate_future',
+    run_id: runId,
+    pipeline_id: pipelineId,
+    future_gate: gateName,
+    executor: 'github_dev',
     repository: repo,
     ...result,
     ...(environment ? { environment_validation: environment } : {}),
@@ -550,6 +591,7 @@ function usage(): string {
     'usage:',
     '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--concurrency-group <group>] [--evidence-file <file>]',
     '  github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
+    '  github-actions-gate-cli.ts validate-future <run-id> <pipeline-id> <gate-name> [--state-root <path>]',
     '  github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts show <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
   ].join('\n');
@@ -571,6 +613,10 @@ async function main(args: string[]): Promise<void> {
     console.log(JSON.stringify(await validateCommand(runId, pipelineId, stage, stateRoot), null, 2));
     return;
   }
+  if (commandName === 'validate-future') {
+    console.log(JSON.stringify(await validateFutureCommand(runId, pipelineId, stage, stateRoot), null, 2));
+    return;
+  }
   if (commandName === 'run') {
     console.log(JSON.stringify(await runGate(runId, pipelineId, stage, stateRoot), null, 2));
     return;
@@ -582,7 +628,7 @@ async function main(args: string[]): Promise<void> {
   throw new CliError(usage());
 }
 
-export { inspectFile, resolveGate, validateCommand, runGate };
+export { inspectFile, resolveGate, resolveFutureGate, validateCommand, validateFutureCommand, runGate };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   main(process.argv.slice(2)).catch((error: unknown) => {
