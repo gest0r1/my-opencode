@@ -122,12 +122,14 @@ function globMatch(pattern: string, value: string): boolean {
 function validateEnvironment(repo: string, target: any): Record<string, unknown> {
   const environment = ghJson(['api', `repos/${repo}/environments/${encodeURIComponent(target.environment)}`]);
   const branchPolicy = environment?.deployment_branch_policy;
+  if (!branchPolicy ||
+      (branchPolicy.protected_branches !== true && branchPolicy.custom_branch_policies !== true)) {
+    throw new DeploymentTargetError('OPENCODE_HOST_ENVIRONMENT_BRANCH_RESTRICTION_REQUIRED');
+  }
   if (branchPolicy?.protected_branches === true) {
-    const metadata = ghJson(['api', `repos/${repo}`]);
-    if (metadata?.default_branch !== target.trusted_ref) {
-      throw new DeploymentTargetError(
-        `OPENCODE_HOST_TRUSTED_REF_NOT_PROTECTED: default=${String(metadata?.default_branch)} expected=${target.trusted_ref}`,
-      );
+    const branch = ghJson(['api', `repos/${repo}/branches/${encodeURIComponent(target.trusted_ref)}`]);
+    if (branch?.protected !== true) {
+      throw new DeploymentTargetError(`OPENCODE_HOST_TRUSTED_REF_NOT_PROTECTED: ${target.trusted_ref}`);
     }
   }
   if (branchPolicy?.custom_branch_policies === true) {
