@@ -14,6 +14,7 @@ test('OpenCode-host target requires trusted transport and authorization material
   assert.throws(() => validateTarget({
     kind: 'opencode_host',
     transport: 'github_ssh',
+    target_id: 'opencode-development-host',
     environment: 'development',
     probe_workflow: '.github/workflows/deployment-target-probe.yml',
     probe_job: 'probe_target',
@@ -24,6 +25,7 @@ test('OpenCode-host target requires trusted transport and authorization material
   const target = validateTarget({
     kind: 'opencode_host',
     transport: 'github_ssh',
+    target_id: 'opencode-development-host',
     environment: 'development',
     probe_workflow: '.github/workflows/deployment-target-probe.yml',
     probe_job: 'probe_target',
@@ -50,6 +52,7 @@ async function fixture({ probeConclusion = 'success' } = {}) {
     deployment_target: {
       kind: 'opencode_host',
       transport: 'github_ssh',
+      target_id: 'opencode-development-host',
       environment: 'development',
       probe_workflow: '.github/workflows/deployment-target-probe.yml',
       probe_job: 'probe_target',
