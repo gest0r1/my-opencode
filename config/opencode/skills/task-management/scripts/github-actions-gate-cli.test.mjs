@@ -140,6 +140,26 @@ test('workflow result requires successful terminal job and artifact from same ru
   assert.equal(result.artifact_id, 90);
 });
 
+test('required candidate artifact missing from the exact run is rejected', () => {
+  assert.throws(() => validateWorkflowResult({
+    run: {
+      id: 51,
+      run_attempt: 1,
+      head_sha: 'c'.repeat(40),
+      head_branch: 'feature/x',
+      event: 'push',
+      status: 'completed',
+      conclusion: 'success',
+    },
+    jobs: [{ id: 71, name: 'pipeline_ci', status: 'completed', conclusion: 'success' }],
+    artifacts: [],
+    contract,
+    candidateSha: 'c'.repeat(40),
+    terminalJobName: 'pipeline_ci',
+    executor: 'github_ci',
+  }), /GITHUB_ARTIFACT_MISSING/);
+});
+
 test('successful run from another SHA cannot satisfy the gate', () => {
   assert.throws(() => validateWorkflowResult({
     run: {
