@@ -209,12 +209,14 @@ function validateEnvironment(repo: string, contract: GateContract): Record<strin
     `repos/${repo}/environments/${encodeURIComponent(contract.environment)}`,
   ]);
   const branchPolicy = environment?.deployment_branch_policy;
+  if (!branchPolicy ||
+      (branchPolicy.protected_branches !== true && branchPolicy.custom_branch_policies !== true)) {
+    throw new CliError('GITHUB_ENVIRONMENT_BRANCH_RESTRICTION_REQUIRED');
+  }
   if (branchPolicy?.protected_branches === true) {
-    const repository = ghJson(['api', `repos/${repo}`]);
-    if (repository?.default_branch !== contract.trusted_ref) {
-      throw new CliError(
-        `GITHUB_ENVIRONMENT_TRUSTED_REF_NOT_PROTECTED: expected default branch ${String(repository?.default_branch)}`,
-      );
+    const branch = ghJson(['api', `repos/${repo}/branches/${encodeURIComponent(contract.trusted_ref)}`]);
+    if (branch?.protected !== true) {
+      throw new CliError(`GITHUB_ENVIRONMENT_TRUSTED_REF_NOT_PROTECTED: ${contract.trusted_ref}`);
     }
   }
   if (branchPolicy?.custom_branch_policies === true) {
