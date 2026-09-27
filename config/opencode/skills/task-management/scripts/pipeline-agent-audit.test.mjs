@@ -58,7 +58,7 @@ test('OpenStage owns orchestration directly and registry does not require BatchE
   const run = await text('config/opencode/command/pipeline-run.md');
   assert.doesNotMatch(orchestratorYaml, /BatchExecutor|batch-executor/i);
   assert.match(orchestrator, /Do not invoke `BatchExecutor`/);
-  assert.match(run, /Не делегируй orchestration в\s+BatchExecutor/i);
+  assert.match(run, /never delegate orchestration to BatchExecutor/i);
 
   const metadata = JSON.parse(await text('config/opencode/config/agent-metadata.json'));
   const dependencies = metadata.agents['open-stage-orchestrator'].dependencies ?? [];
@@ -113,4 +113,32 @@ test('OpenStage exposes only deterministic GitHub lifecycle commands', async () 
   }
   assert.doesNotMatch(yaml, /["']gh\s+\*["']:\s*allow/i);
   assert.doesNotMatch(yaml, /gh\s+pr\s+merge/i);
+});
+
+
+test('planning agents do not delegate nested subagents', async () => {
+  for (const file of [
+    'config/opencode/agent/subagents/planning/story-mapper.md',
+    'config/opencode/agent/subagents/planning/architecture-analyzer.md',
+    'config/opencode/agent/subagents/planning/contract-manager.md',
+    'config/opencode/agent/subagents/core/task-manager.md',
+    'config/opencode/agent/subagents/core/documentation.md',
+  ]) {
+    const yaml = frontmatter(await text(file));
+    assert.ok(permissionDenied(yaml, 'task'), `${file}: nested task delegation must be denied`);
+  }
+});
+
+test('pipeline contracts pin three technical-fix cycles and literal ready planning gates', async () => {
+  const plan = await text('config/opencode/command/pipeline-plan.md');
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
+
+  assert.match(plan, /up to \*\*3 cycles\*\*/);
+  assert.match(run, /Maximum \*\*3 automatic technical_fix cycles/);
+  assert.match(run, /stage-cli fix-cycle/);
+  assert.match(orchestrator, /up to 3 autonomous revision\/rerun cycles/);
+  assert.match(rules, /maximum automatic technical-fix cycles are \*\*3 per stage\/work-item\*\*/i);
+  assert.match(plan, /gate advances only on literal `status: ready`/i);
 });

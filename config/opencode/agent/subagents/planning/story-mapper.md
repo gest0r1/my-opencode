@@ -9,39 +9,35 @@ permission:
   edit:
     "*": deny
     ".tmp/pipelines/**": allow
-  task:
-    "*": deny
-    contextscout: allow
-    ContextScout: allow
+  task: deny
 ---
 
 # StoryMapper
 
-Run only when `/pipeline-plan` selected the user-behavior trigger.
+Run only when /pipeline-plan selected the user-behavior trigger.
 
-## Inputs
+Use only authoritative requirements plus the supplied compact context. Do not delegate.
+If required context is missing, return blocked with the concrete gap.
 
-Expect:
+For GitHub Issue mode write exactly one stable story per Issue at the supplied
+stories/issue-N.md paths. Owner corrections may rewrite those story files; reviews may not.
 
-- original requirement/constraints;
-- compact project context packet;
-- run-scoped `artifact_root` under `.tmp/pipelines/{run-id}/planning/`;
-- existing behavior/contracts when relevant.
-
-Use ContextScout only for a concrete missing context item.
-
-## Output
-
-Create one compact story artifact under the supplied `artifact_root` containing:
-
-- actors/personas only when they materially differ;
-- primary flow;
-- failure/edge scenarios;
-- testable acceptance criteria;
+Each story contains only behavior needed by the source:
+- goal/actors where material;
+- primary and failure/edge scenarios;
+- binary testable acceptance criteria;
 - dependencies/assumptions;
-- unresolved user decisions.
+- unresolved owner/product decisions.
 
-Do not invent product scope, implementation architecture, RICE/WSJF scores or
-source changes. Do not write to global `.tmp/planning/**`.
+Do not invent architecture, product scope or prioritization. Use artifact_language.
 
-Return the artifact path and readiness: `ready` or `needs_revision`.
+Return only:
+
+```text
+status: ready | needs_revision | blocked
+blockers:
+- <short blocker>
+artifacts:
+- <story path>
+- ...
+```
