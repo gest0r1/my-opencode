@@ -426,8 +426,8 @@ function validateGithubExecutionContract(manifest) {
         }
 
         if (executor === 'github_dev') {
-          if (!['disposable', 'stateful'].includes(gate.mode)) {
-            throw new ManifestV2PolicyError(`GITHUB_DEV_MODE_INVALID: ${pipeline.id}/${stage}`);
+          if (gate.mode !== 'stateful') {
+            throw new ManifestV2PolicyError(`GITHUB_DEV_EXECUTOR_REQUIRES_STATEFUL_MODE: ${pipeline.id}/${stage}`);
           }
           if (typeof gate.source_ci_stage !== 'string' || pipeline.executors[gate.source_ci_stage] !== 'github_ci') {
             throw new ManifestV2PolicyError(`GITHUB_DEV_SOURCE_CI_INVALID: ${pipeline.id}/${stage}`);
