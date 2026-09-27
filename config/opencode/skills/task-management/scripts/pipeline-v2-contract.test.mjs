@@ -221,6 +221,42 @@ test('schema v2 freezes CI bootstrap work item and workflow scope', async () => 
   );
 });
 
+test('schema v2 supports disposable DEV only from a prior CI artifact', async () => {
+  const fx = await fixture('v2-disposable-dev');
+  fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests', 'dev');
+  fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
+  fx.manifest.pipelines[0].executors.publish = 'git_publish';
+  fx.manifest.pipelines[0].executors.tests = 'github_ci';
+  fx.manifest.pipelines[0].executors.dev = 'github_dev';
+  fx.manifest.pipelines[0].github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'push',
+      artifact: 'candidate-build',
+    },
+    dev: {
+      workflow: '.github/workflows/dev-disposable.yml',
+      terminal_job: 'pipeline_dev',
+      trigger: 'workflow_dispatch',
+      mode: 'disposable',
+      source_ci_stage: 'tests',
+      artifact: 'dev-evidence',
+      evidence_file: 'dev-evidence.json',
+    },
+  };
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+
+  delete fx.manifest.pipelines[0].github_gates.tests.artifact;
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /GITHUB_DEV_SOURCE_ARTIFACT_REQUIRED/,
+  );
+});
+
 test('schema v2 protects stateful DEV behind trusted default-branch workflow', async () => {
   const fx = await fixture('v2-stateful-dev');
   fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests', 'dev');
