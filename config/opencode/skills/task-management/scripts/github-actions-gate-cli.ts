@@ -669,21 +669,32 @@ async function diagnoseCommand(runId: string, pipelineId: string, stage: string,
   }
   const repo = repository(manifest);
   const workflowRunId = Number(prior.workflow_run_id);
-  const run = fetchRun(repo, workflowRunId);
-  const jobs = fetchJobs(repo, workflowRunId);
-  const artifacts = fetchArtifacts(repo, workflowRunId);
-  const diagnostics = buildGithubFailureEvidence({
-    run,
-    jobs,
-    artifacts,
-    candidateSha: String(prior.candidate_sha ?? ''),
-    contract,
-    validationError: prior.validation_error ?? 'GITHUB_GATE_DIAGNOSTICS',
-    failedLog: failedRunLog(repo, workflowRunId),
-  });
-  const file = join(runRoot, 'github', `${pipelineId}-${stage}-diagnostics.json`);
-  await writeFile(file, `${JSON.stringify(diagnostics, null, 2)}\n`, 'utf8');
-  return { ...diagnostics, evidence: file };
+  try {
+    const run = fetchRun(repo, workflowRunId);
+    const jobs = fetchJobs(repo, workflowRunId);
+    const artifacts = fetchArtifacts(repo, workflowRunId);
+    const diagnostics = buildGithubFailureEvidence({
+      run,
+      jobs,
+      artifacts,
+      candidateSha: String(prior.candidate_sha ?? ''),
+      contract,
+      validationError: prior.validation_error ?? 'GITHUB_GATE_DIAGNOSTICS',
+      failedLog: failedRunLog(repo, workflowRunId),
+    });
+    const file = join(runRoot, 'github', `${pipelineId}-${stage}-diagnostics.json`);
+    await writeFile(file, `${JSON.stringify(diagnostics, null, 2)}\n`, 'utf8');
+    return { ...diagnostics, evidence: file };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/\b401\b|authentication|not logged|auth login|bad credentials/i.test(message)) {
+      throw new CliError(`GITHUB_DIAGNOSTICS_AUTH_REQUIRED: ${message}`);
+    }
+    if (/\b403\b|resource not accessible|permission|forbidden/i.test(message)) {
+      throw new CliError(`GITHUB_DIAGNOSTICS_PERMISSION_DENIED: ${message}`);
+    }
+    throw error;
+  }
 }
 
 function usage(): string {
