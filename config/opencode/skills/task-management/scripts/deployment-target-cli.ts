@@ -73,7 +73,7 @@ function probeSsh(target: any): Record<string, unknown> {
   };
 }
 
-async function inspect(runId: string, policyPath: string): Promise<Record<string, unknown>> {
+async function evaluate(runId: string, policyPath: string): Promise<Record<string, unknown>> {
   if (!RUN_ID.test(runId)) throw new DeploymentTargetError('INVALID_RUN_ID');
   let policy: any;
   try { policy = JSON.parse(await readFile(resolve(policyPath), 'utf8')); }
@@ -92,34 +92,39 @@ async function inspect(runId: string, policyPath: string): Promise<Record<string
     throw new DeploymentTargetError('DEPLOYMENT_TARGET_KIND_UNSUPPORTED');
   }
 
-  const checkedAt = new Date().toISOString();
-  const evidence = {
+  return {
     status: 'READY',
     run_id: runId,
     policy: policyPath,
-    checked_at: checkedAt,
+    checked_at: new Date().toISOString(),
     ...details,
   };
+}
+
+async function inspect(runId: string, policyPath: string): Promise<Record<string, unknown>> {
+  const evidence = await evaluate(runId, policyPath);
+  if (evidence.status !== 'READY') return evidence;
   const relative = 'planning/deployment-target.json';
   const file = resolve('.tmp', 'pipelines', runId, relative);
   const digest = await writeJsonAtomic(file, evidence);
-  return {
-    ...evidence,
-    artifact: { path: relative, sha256: digest },
-  };
+  return { ...evidence, artifact: { path: relative, sha256: digest } };
+}
+
+async function check(runId: string, policyPath: string): Promise<Record<string, unknown>> {
+  return evaluate(runId, policyPath);
 }
 
 async function main(args: string[]): Promise<void> {
   const [command, runId] = args;
-  if (command !== 'inspect' || !runId) {
-    throw new DeploymentTargetError('usage: deployment-target-cli.ts inspect <run-id> [--policy <path>]');
+  if (!['inspect', 'check'].includes(command ?? '') || !runId) {
+    throw new DeploymentTargetError('usage: deployment-target-cli.ts inspect|check <run-id> [--policy <path>]');
   }
   const policy = option(args, '--policy') ?? '.opencode/pipeline-policy.json';
-  const result = await inspect(runId, policy);
+  const result = command === 'inspect' ? await inspect(runId, policy) : await check(runId, policy);
   console.log(JSON.stringify(result, null, 2));
 }
 
-export { inspect, probeSsh };
+export { check, inspect, probeSsh };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   main(process.argv.slice(2)).catch((error: unknown) => {
