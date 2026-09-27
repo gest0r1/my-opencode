@@ -89,16 +89,15 @@ fail-closed.
 
 ## Gates and evidence
 
-- Machine build/test/install/runtime/docs validation completes only from deterministic
-  gate-runner results and evidence, not natural-language PASS.
-- Repository package-manager identity is authoritative for JS gates. A pnpm project
-  must use pnpm/corepack-pnpm gates; missing pnpm blocks instead of falling back to
-  npm or dependency-installing `npx --yes`.
+- Schema-v2 execution mode is explicit per stage through `executors[stage_id]`; RUN never infers the executor from the stage name.
+- Authoritative repository test/build/typecheck/lint validation completes only from deterministic `github-actions-gate-cli` evidence for the exact published candidate SHA, frozen workflow and terminal job. Natural-language PASS or a local command cannot satisfy `github_ci`.
+- `gate-runner-cli` is authoritative only for stages explicitly frozen as `local_gate` (for example fast/precheck/docs or project/runtime checks). `stage-cli complete` verifies the canonical machine evidence before transitioning a `local_gate`, `github_ci`, `github_dev` or `git_publish` stage.
+- Missing or incompatible project GitHub Actions is planned implementation work: PLAN freezes a bootstrap/adaptation work item and workflow scope, RUN implements and validates that workflow in the target project, then the candidate is published and tested by GitHub. There is no local fallback for authoritative CI.
+- Repository package-manager identity is authoritative for local JS gates. A pnpm project must use pnpm/corepack-pnpm local gates; missing pnpm blocks instead of falling back to npm or dependency-installing `npx --yes`.
 - Qualitative review gates may be model-driven but blockers must cite an observed
   defect or approved requirement/contract/security rule.
 - Required gate that cannot execute or be verified fails closed.
-- Evidence identifies run/pipeline/gate, observed result and immutable candidate
-  identity when relevant.
+- Evidence identifies run/pipeline/gate, observed result and immutable candidate identity when relevant. GitHub evidence additionally binds workflow, run ID/attempt, event, head SHA, terminal job and required artifact; DEV evidence binds its source CI run.
 
 ## Candidate provenance and runtime validation
 
@@ -108,10 +107,8 @@ fail-closed.
 approved base/source -> candidate SHA -> installed candidate/artifact -> evidence
 ```
 
-- Runtime validation tests the approved candidate artifact/SHA, not an uncommitted
-  local development tree, when the manifest requires candidate installation.
-- A fix after candidate publication produces a new candidate identity and reruns
-  affected installation/runtime validation.
+- Runtime validation tests the approved candidate artifact/SHA, not an uncommitted local development tree, when the manifest requires candidate installation.
+- A source-changing fix after candidate publication produces a new candidate SHA. All prior GitHub CI/artifact/DEV/runtime evidence is stale and affected gates must run again for the new SHA.
 
 ## Runtime and rollback
 
