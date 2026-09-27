@@ -4,7 +4,17 @@ import { dirname, join, resolve } from 'node:path';
 
 export class ManifestV2PolicyError extends Error {}
 
+const SHA = /^[0-9a-f]{40}$/i;
 const SHA256 = /^[0-9a-f]{64}$/i;
+const SUPERSEDE_REASONS = new Set([
+  'V1_TO_V2_MIGRATION',
+  'MANIFEST_CONTRACT_CORRECTION',
+  'BASELINE_SCOPE_MISMATCH',
+  'PLANNING_EVIDENCE_CORRECTION',
+  'OWNER_SCOPE_CHANGE',
+  'ARCHITECTURE_REPLAN',
+  'MAIN_DRIFT_REPLAN',
+]);
 const JS_MANAGERS = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun', 'corepack']);
 const JS_DIRECT_TOOLS = new Set(['tsc', 'vitest', 'jest']);
 const STAGE_EXECUTORS = new Set(['agent', 'review', 'local_gate', 'git_verify', 'git_publish', 'github_ci', 'github_dev', 'owner_acceptance']);
@@ -52,6 +62,39 @@ function assertSafePathArray(value, field) {
   if (value === undefined) return;
   if (!Array.isArray(value) || value.some((item) => !safeRelativePath(item))) {
     throw new ManifestV2PolicyError(`${field} must contain safe repository-relative paths`);
+  }
+}
+
+function validatePreservedBaseline(manifest) {
+  const baseline = manifest.preserved_baseline;
+  if (baseline === undefined) return;
+  if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline) ||
+      !SHA.test(String(baseline.head_sha ?? '')) ||
+      !SHA256.test(String(baseline.diff_sha256 ?? '')) ||
+      !Array.isArray(baseline.changed_paths) ||
+      baseline.changed_paths.length === 0 ||
+      baseline.changed_paths.some((path) => !safeRelativePath(path)) ||
+      new Set(baseline.changed_paths).size !== baseline.changed_paths.length) {
+    throw new ManifestV2PolicyError('PRESERVED_BASELINE_INVALID');
+  }
+  const sorted = [...baseline.changed_paths].sort();
+  if (JSON.stringify(sorted) !== JSON.stringify(baseline.changed_paths)) {
+    throw new ManifestV2PolicyError('PRESERVED_BASELINE_PATHS_NOT_SORTED');
+  }
+  if (!manifest.git_setup || !SHA.test(String(manifest.git_setup.base_sha ?? ''))) {
+    throw new ManifestV2PolicyError('PRESERVED_BASELINE_REQUIRES_GIT_SETUP');
+  }
+}
+
+function validateLineage(manifest) {
+  const lineage = manifest.lineage;
+  if (lineage === undefined) return;
+  if (!lineage || typeof lineage !== 'object' || Array.isArray(lineage) ||
+      !['supersede', 'replan'].includes(lineage.change_class) ||
+      typeof lineage.supersedes !== 'string' || !lineage.supersedes.trim() ||
+      lineage.supersedes === manifest.run_id ||
+      !SUPERSEDE_REASONS.has(lineage.reason_code)) {
+    throw new ManifestV2PolicyError('PIPELINE_LINEAGE_INVALID');
   }
 }
 
@@ -672,6 +715,8 @@ export function validateManifestV2Policy(manifest, options = {}) {
   const root = runRoot(manifest, cwd, options.manifestPath);
   validatePlanningReadiness(manifest, root);
   validateWorkItems(manifest, root);
+  validatePreservedBaseline(manifest);
+  validateLineage(manifest);
   validateGithubExecutionContract(manifest);
   validateSourceSnapshot(manifest, root);
   assertConflictSerialization(manifest);
