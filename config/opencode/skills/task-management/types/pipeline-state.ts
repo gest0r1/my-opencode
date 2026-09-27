@@ -35,6 +35,8 @@ export interface GithubGateContract {
   environment?: string;
   mode?: GithubDevMode;
   source_ci_stage?: string;
+  trusted_ref?: string;
+  evidence_file?: string;
   bootstrap_required?: boolean;
   bootstrap_work_item_id?: string;
   timeout_seconds?: number;
