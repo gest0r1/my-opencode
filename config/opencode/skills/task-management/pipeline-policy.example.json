@@ -38,10 +38,19 @@
     }
   },
   "deployment_target": {
-    "kind": "external_ssh",
-    "host": "dev.example.com",
-    "user": "deploy",
-    "port": 22,
-    "connect_timeout_seconds": 8
+    "kind": "opencode_host",
+    "transport": "github_ssh",
+    "environment": "development",
+    "probe_workflow": ".github/workflows/deployment-target-probe.yml",
+    "probe_job": "probe_target",
+    "trusted_ref": "main",
+    "required_environment_secrets": [
+      "DEPLOY_HOST",
+      "DEPLOY_USER",
+      "DEPLOY_SSH_KEY",
+      "DEPLOY_KNOWN_HOSTS"
+    ],
+    "runner_labels": [],
+    "probe_timeout_seconds": 180
   }
 }
