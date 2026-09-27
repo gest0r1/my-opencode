@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { access, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
@@ -1015,7 +1016,7 @@ export async function recordTechnicalFixCycle(
     if (state.manifest_file) {
       let manifest: PipelineManifest | undefined;
       try {
-        manifest = JSON.parse(require('node:fs').readFileSync(state.manifest_file, 'utf8')) as PipelineManifest;
+        manifest = JSON.parse(readFileSync(state.manifest_file, 'utf8')) as PipelineManifest;
       } catch {}
       const spec = manifest?.pipelines?.find((item) => item.id === pipeline.id);
       const stageIndex = pipeline.stage_order.indexOf(stage);
