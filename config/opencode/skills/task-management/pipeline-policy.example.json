@@ -26,7 +26,8 @@
       "environment": "development",
       "trusted_ref": "main",
       "artifact": "dev-evidence",
-      "evidence_file": "dev-evidence.json"
+      "evidence_file": "dev-evidence.json",
+      "source_ci_stage": "ci"
     }
   }
 }
