@@ -230,7 +230,11 @@ test('schema v2 supports disposable DEV only from a prior CI artifact', async ()
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
   fx.manifest.pipelines[0].executors.dev = 'github_dev';
   fx.manifest.pipelines[0].deployable = true;
-  fx.manifest.pipelines[0].deployment_validation = { stage: 'tests', fresh_job: 'fresh_install', upgrade_job: 'upgrade_install' };
+  fx.manifest.pipelines[0].deployment_validation = {
+    stage: 'tests',
+    fresh_job: 'fresh_install',
+    upgrade_job: 'upgrade_install',
+  };
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
@@ -269,19 +273,11 @@ test('schema v2 protects stateful DEV behind trusted default-branch workflow', a
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
   fx.manifest.pipelines[0].executors.dev = 'github_dev';
   fx.manifest.pipelines[0].deployable = true;
-  fx.manifest.pipelines[0].deployment_validation = { stage: 'tests', fresh_job: 'fresh_install', upgrade_job: 'upgrade_install' };
-  fx.manifest.pipelines[0].github_gates = {
-    tests: {
-      workflow: '.github/workflows/ci.yml',
-test('schema v2 protects stateful DEV behind trusted default-branch workflow', async () => {
-  const fx = await fixture('v2-stateful-dev');
-  fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests', 'dev');
-  fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
-  fx.manifest.pipelines[0].executors.publish = 'git_publish';
-  fx.manifest.pipelines[0].executors.tests = 'github_ci';
-  fx.manifest.pipelines[0].executors.dev = 'github_dev';
-  fx.manifest.pipelines[0].deployable = true;
-  fx.manifest.pipelines[0].deployment_validation = { stage: 'tests', fresh_job: 'fresh_install', upgrade_job: 'upgrade_install' };
+  fx.manifest.pipelines[0].deployment_validation = {
+    stage: 'tests',
+    fresh_job: 'fresh_install',
+    upgrade_job: 'upgrade_install',
+  };
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
@@ -316,35 +312,22 @@ test('schema v2 protects stateful DEV behind trusted default-branch workflow', a
   );
 });
 
-test('schema v2 forbids bootstrapping privileged stateful DEV in candidate code', async () => {
+test('schema v2 keeps new stateful DEV workflow deferred until it becomes trusted', async () => {
   const fx = await fixture('v2-stateful-bootstrap');
   const bootstrap = await fx.frozen('work-items/wi-dev.json', '{"id":"wi-dev"}\n');
   fx.manifest.work_items.push({ id: 'wi-dev', pipeline_id: 'app', ...bootstrap });
   fx.manifest.pipelines[0].work_items.push('wi-dev');
-  fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests', 'dev');
+  fx.manifest.allowed_change_paths.push('.github/workflows/dev.yml');
+  fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests');
   fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
   fx.manifest.pipelines[0].executors.publish = 'git_publish';
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
-  fx.manifest.pipelines[0].executors.dev = 'github_dev';
-  fx.manifest.allowed_change_paths.push('.github/workflows/**');
   fx.manifest.pipelines[0].deployable = true;
-  fx.manifest.pipelines[0].deployment_validation = { stage: 'tests', fresh_job: 'fresh_install', upgrade_job: 'upgrade_install' };
-  fx.manifest.pipelines[0].github_gates = {
-    tests: {
-      workflow: '.github/workflows/ci.yml',
-test('schema v2 forbids bootstrapping privileged stateful DEV in candidate code', async () => {
-  const fx = await fixture('v2-stateful-bootstrap');
-  const bootstrap = await fx.frozen('work-items/wi-dev.json', '{"id":"wi-dev"}\n');
-  fx.manifest.work_items.push({ id: 'wi-dev', pipeline_id: 'app', ...bootstrap });
-  fx.manifest.pipelines[0].work_items.push('wi-dev');
-  fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests', 'dev');
-  fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
-  fx.manifest.pipelines[0].executors.publish = 'git_publish';
-  fx.manifest.pipelines[0].executors.tests = 'github_ci';
-  fx.manifest.pipelines[0].executors.dev = 'github_dev';
-  fx.manifest.allowed_change_paths.push('.github/workflows/**');
-  fx.manifest.pipelines[0].deployable = true;
-  fx.manifest.pipelines[0].deployment_validation = { stage: 'tests', fresh_job: 'fresh_install', upgrade_job: 'upgrade_install' };
+  fx.manifest.pipelines[0].deployment_validation = {
+    stage: 'tests',
+    fresh_job: 'fresh_install',
+    upgrade_job: 'upgrade_install',
+  };
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
@@ -353,6 +336,8 @@ test('schema v2 forbids bootstrapping privileged stateful DEV in candidate code'
       trigger: 'push',
       artifact: 'candidate-build',
     },
+  };
+  fx.manifest.pipelines[0].future_github_gates = {
     dev: {
       workflow: '.github/workflows/dev.yml',
       terminal_job: 'pipeline_dev',
@@ -368,9 +353,17 @@ test('schema v2 forbids bootstrapping privileged stateful DEV in candidate code'
       bootstrap_work_item_id: 'wi-dev',
     },
   };
+
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+
+  fx.manifest.pipelines[0].stages.push('dev');
+  fx.manifest.pipelines[0].executors.dev = 'github_dev';
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
-    /GITHUB_DEV_CANNOT_BOOTSTRAP_SEPARATELY/,
+    /FUTURE_GITHUB_DEV_MUST_NOT_EXECUTE_CURRENT_RUN|GITHUB_GATE_MISSING/,
   );
 });
 
@@ -622,22 +615,11 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     dev: 'github_dev',
   };
   fx.manifest.pipelines[0].deployable = true;
-  fx.manifest.pipelines[0].deployment_validation = { stage: 'tests', fresh_job: 'fresh_install', upgrade_job: 'upgrade_install' };
-  fx.manifest.pipelines[0].github_gates = {
-    tests: {
-      workflow: '.github/workflows/ci.yml',
-test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI', async () => {
-  const fx = await fixture('v2-stateful-dev-evidence');
-  fx.manifest.pipelines[0].stages = ['implementation', 'git-verify', 'publish', 'tests', 'dev'];
-  fx.manifest.pipelines[0].executors = {
-    implementation: 'agent',
-    'git-verify': 'git_verify',
-    publish: 'git_publish',
-    tests: 'github_ci',
-    dev: 'github_dev',
+  fx.manifest.pipelines[0].deployment_validation = {
+    stage: 'tests',
+    fresh_job: 'fresh_install',
+    upgrade_job: 'upgrade_install',
   };
-  fx.manifest.pipelines[0].deployable = true;
-  fx.manifest.pipelines[0].deployment_validation = { stage: 'tests', fresh_job: 'fresh_install', upgrade_job: 'upgrade_install' };
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
@@ -702,6 +684,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
   result = run(fx.root, ['complete', fx.manifest.run_id, 'publish', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 
+  const digest = 'sha256:' + 'a'.repeat(64);
   await mkdir(path.join(fx.runRoot, 'github'), { recursive: true });
   await writeFile(path.join(fx.runRoot, 'github', 'app-tests.json'), JSON.stringify({
     status: 'PASS',
@@ -716,7 +699,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     head_sha: candidateSha,
     terminal_job: 'pipeline_ci',
     artifact: 'candidate-build',
-    artifact_digest: 'sha256:' + 'a'.repeat(64),
+    artifact_digest: digest,
   }, null, 2));
 
   result = run(fx.root, ['start', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
@@ -762,7 +745,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     terminal_job: 'pipeline_dev',
     trusted_ref: 'main',
     dev_evidence_validated: true,
-    ci_artifact_digest: 'sha256:' + 'a'.repeat(64),
+    ci_artifact_digest: digest,
     installed_sha: 'd'.repeat(40),
   }, null, 2));
   result = run(fx.root, ['complete', fx.manifest.run_id, 'dev', '--pipeline', 'app', '--state-root', stateRoot]);
