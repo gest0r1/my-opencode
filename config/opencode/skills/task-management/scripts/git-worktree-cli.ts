@@ -131,6 +131,16 @@ async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<
       throw new GateError(`changed path is outside approved scope: ${path}`);
     }
   }
+  const headSha = await git(['rev-parse', 'HEAD'], cwd);
+  const evidence = {
+    status: 'PASS',
+    run_id: manifest.run_id ?? null,
+    branch: manifest.git_setup.branch,
+    head_sha: headSha,
+    changed_files: changed,
+    verified_at: new Date().toISOString(),
+  };
+  await writeJsonAtomic(join(dirname(resolve(manifestPath)), 'git-verify.json'), evidence);
   return changed;
 }
 async function updateRunBaseState(manifestPath:string,runBaseSha:string):Promise<void>{const file=join(dirname(resolve(manifestPath)),'state.json');try{const state=JSON.parse(await readFile(file,'utf8')) as Record<string,unknown>;state.run_base_sha=runBaseSha;await writeJsonAtomic(file,state);}catch{}}
@@ -191,7 +201,7 @@ async function main(): Promise<void> {
     }
     details = { main_sha: manifest.git_setup.base_sha, directory: cwd };
   }
-  if (command === 'verify') details = { changed_files: await verify(manifest, manifestPath, cwd) };
+  if (command === 'verify') details = { changed_files: await verify(manifest, manifestPath, cwd), evidence: join(dirname(resolve(manifestPath)), 'git-verify.json') };
   if (command === 'publish') details = await publish(manifest, manifestPath, cwd);
   console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command,
     branch: manifest.git_setup.branch, ...details }));
