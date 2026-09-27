@@ -80,10 +80,10 @@ For a failed qualitative/machine gate that is classified `technical_fix` and rem
 
 1. diagnose from evidence;
 2. BEFORE changing source, call `stage-cli fix-cycle <run-id> <stage> --pipeline <id>`; it must PASS and increments the frozen state counter;
-3. apply one scoped fix using the same frozen work item identity;
-4. Git verify;
-5. rerun the failed gate;
-6. rerun every downstream gate invalidated by the change.
+3. if a `git_publish` stage had already completed before the failed stage, `fix-cycle` deterministically reopens the chain from the preceding `git_verify` through publish/CI/DEV; do not call `resume` on the old failed gate or manually preserve its completed downstream state;
+4. apply one scoped fix using the same frozen work item identity;
+5. query `stage-cli next`; for a post-publish fix the next stage must be the reopened `git_verify`, followed by normal `git_publish` and affected GitHub gates;
+6. for a pre-publish fix, rerun the failed gate and every downstream gate invalidated by the change.
 
 Maximum **3 automatic technical_fix cycles per stage/work-item**. Record the cycle number in review/evidence. A fourth required fix is `blocked` and requires owner attention/replan. `replan`, security, secret, destructive or scope findings never consume/enter a technical-fix loop.
 
