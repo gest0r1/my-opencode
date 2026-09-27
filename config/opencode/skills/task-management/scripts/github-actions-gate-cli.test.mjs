@@ -135,7 +135,7 @@ test('stateful DEV workflow is trusted-ref dispatch and consumes CI artifact', (
   };
   const result = inspectWorkflowText(`
 name: DEV
-run-name: pipeline-dev-${{ inputs.pipeline_run_id }}-${{ inputs.candidate_sha }}
+run-name: pipeline-dev-\${{ inputs.pipeline_run_id }}-\${{ inputs.candidate_sha }}
 on:
   workflow_dispatch:
     inputs:
@@ -157,9 +157,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          run-id: ${{ inputs.ci_run_id }}
-          name: ${{ inputs.ci_artifact }}
-      - run: echo '${{ inputs.ci_run_id }} ${{ inputs.ci_artifact }}'
+          run-id: \${{ inputs.ci_run_id }}
+          name: \${{ inputs.ci_artifact }}
+      - run: echo '\${{ inputs.ci_run_id }} \${{ inputs.ci_artifact }}'
       - run: printf '{"status":"PASS"}' > dev-evidence.json
       - uses: actions/upload-artifact@v4
         with:
