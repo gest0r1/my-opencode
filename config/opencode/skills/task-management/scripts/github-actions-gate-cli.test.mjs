@@ -9,6 +9,8 @@ import {
   validateWorkflowResult,
 } from './github-actions-gate-core.mjs';
 
+const DIGEST = 'sha256:' + 'a'.repeat(64);
+
 const contract = {
   workflow: '.github/workflows/ci.yml',
   terminal_job: 'pipeline_ci',
@@ -128,7 +130,7 @@ test('workflow result requires successful terminal job and artifact from same ru
       conclusion: 'success',
     },
     jobs: [{ id: 70, name: 'pipeline_ci', status: 'completed', conclusion: 'success' }],
-    artifacts: [{ id: 90, name: 'candidate-build', expired: false }],
+    artifacts: [{ id: 90, name: 'candidate-build', expired: false, digest: DIGEST }],
     contract,
     candidateSha: 'c'.repeat(40),
     terminalJobName: 'pipeline_ci',
@@ -171,7 +173,7 @@ test('successful run from another SHA cannot satisfy the gate', () => {
       conclusion: 'success',
     },
     jobs: [{ id: 70, name: 'pipeline_ci', status: 'completed', conclusion: 'success' }],
-    artifacts: [{ id: 90, name: 'candidate-build', expired: false }],
+    artifacts: [{ id: 90, name: 'candidate-build', expired: false, digest: DIGEST }],
     contract,
     candidateSha: 'c'.repeat(40),
     terminalJobName: 'pipeline_ci',
@@ -200,7 +202,9 @@ test('disposable DEV workflow consumes exact CI artifact without secrets', () =>
     '        required: true',
     '      ci_artifact:',
     '        required: true',
-    '      pipeline_run_id:',
+    '      ci_artifact_digest:',
+    '        required: true',
+    '      pipeline_run_id:'
     '        required: true',
     'permissions:',
     '  actions: read',
@@ -212,7 +216,7 @@ test('disposable DEV workflow consumes exact CI artifact without secrets', () =>
     '      - uses: actions/download-artifact@2222222222222222222222222222222222222222',
     '        with:',
     '          name: candidate-build',
-    '      - run: echo inputs.ci_run_id inputs.ci_artifact',
+    '      - run: echo inputs.ci_run_id inputs.ci_artifact inputs.ci_artifact_digest',
     '      - run: printf "{\\\"status\\\":\\\"PASS\\\"}" > dev-evidence.json',
     '      - uses: actions/upload-artifact@3333333333333333333333333333333333333333',
     '        with:',
@@ -237,6 +241,7 @@ test('stateful DEV workflow is trusted-ref dispatch and consumes CI artifact', (
     mode: 'stateful',
     environment: 'development',
     trusted_ref: 'main',
+    concurrency_group: 'development',
     source_ci_stage: 'tests',
     artifact: 'dev-evidence',
     evidence_file: 'dev-evidence.json',
@@ -244,6 +249,9 @@ test('stateful DEV workflow is trusted-ref dispatch and consumes CI artifact', (
   const result = inspectWorkflowText(`
 name: DEV
 run-name: pipeline-dev-\${{ inputs.pipeline_run_id }}-\${{ inputs.candidate_sha }}
+concurrency:
+  group: development
+  cancel-in-progress: false
 on:
   workflow_dispatch:
     inputs:
@@ -252,6 +260,8 @@ on:
       ci_run_id:
         required: true
       ci_artifact:
+        required: true
+      ci_artifact_digest:
         required: true
       pipeline_run_id:
         required: true
@@ -267,7 +277,7 @@ jobs:
         with:
           run-id: \${{ inputs.ci_run_id }}
           name: \${{ inputs.ci_artifact }}
-      - run: echo '\${{ inputs.ci_run_id }} \${{ inputs.ci_artifact }}'
+      - run: echo '\${{ inputs.ci_run_id }} \${{ inputs.ci_artifact }} \${{ inputs.ci_artifact_digest }}'
       - run: printf '{"status":"PASS"}' > dev-evidence.json
       - uses: actions/upload-artifact@3333333333333333333333333333333333333333
         with:
@@ -299,6 +309,7 @@ test('stateful DEV result binds trusted workflow and exact source CI run', () =>
     mode: 'stateful',
     environment: 'development',
     trusted_ref: 'main',
+    concurrency_group: 'development',
     source_ci_stage: 'tests',
     artifact: 'dev-evidence',
     evidence_file: 'dev-evidence.json',
@@ -313,7 +324,7 @@ test('stateful DEV result binds trusted workflow and exact source CI run', () =>
       conclusion: 'success',
     },
     jobs: [{ id: 81, name: 'pipeline_dev', status: 'completed', conclusion: 'success' }],
-    artifacts: [{ id: 82, name: 'dev-evidence', expired: false }],
+    artifacts: [{ id: 82, name: 'dev-evidence', expired: false, digest: DIGEST }],
     contract: dev,
     candidateSha: 'e'.repeat(40),
     terminalJobName: 'pipeline_dev',
@@ -330,10 +341,12 @@ test('downloaded DEV evidence proves the installed candidate SHA', () => {
     candidate_sha: 'e'.repeat(40),
     installed_sha: 'e'.repeat(40),
     ci_run_id: 50,
+    ci_artifact_digest: DIGEST,
     smoke_result: 'PASS',
   }, {
     candidateSha: 'e'.repeat(40),
     ciRunId: 50,
+    ciArtifactDigest: DIGEST,
   });
   assert.equal(evidence.status, 'PASS');
   assert.equal(evidence.installed_sha, 'e'.repeat(40));
@@ -343,8 +356,10 @@ test('downloaded DEV evidence proves the installed candidate SHA', () => {
     candidate_sha: 'e'.repeat(40),
     installed_sha: 'd'.repeat(40),
     ci_run_id: 50,
+    ci_artifact_digest: DIGEST,
   }, {
     candidateSha: 'e'.repeat(40),
     ciRunId: 50,
+    ciArtifactDigest: DIGEST,
   }), /INSTALLED_SHA_MISMATCH/);
 });
