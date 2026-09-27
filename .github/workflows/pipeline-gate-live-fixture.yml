@@ -1,0 +1,27 @@
+name: Pipeline gate live fixture
+
+on:
+  push:
+    branches:
+      - feat/pipeline-github-ci-gates
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline_ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Write candidate identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf '%s\n' "$GITHUB_SHA" > candidate-sha.txt
+      - name: Upload immutable candidate fixture
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-build
+          path: candidate-sha.txt
+          if-no-files-found: error
+          retention-days: 1
