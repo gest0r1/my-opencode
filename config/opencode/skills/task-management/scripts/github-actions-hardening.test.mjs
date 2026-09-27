@@ -193,6 +193,7 @@ on:
       candidate_sha: { required: true }
       ci_run_id: { required: true }
       ci_artifact: { required: true }
+      ci_artifact_id: { required: true }
       ci_artifact_digest: { required: true }
       pipeline_run_id: { required: true }
 permissions:
@@ -204,10 +205,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@2222222222222222222222222222222222222222
         with:
-          name: inputs.ci_artifact
+          artifact-ids: inputs.ci_artifact_id
           run-id: inputs.ci_run_id
           github-token: github.token
-      - run: echo inputs.ci_run_id inputs.ci_artifact_digest
+      - run: echo inputs.ci_run_id inputs.ci_artifact inputs.ci_artifact_id inputs.ci_artifact_digest
       - uses: actions/upload-artifact@3333333333333333333333333333333333333333
         with:
           name: dev-evidence
