@@ -185,7 +185,7 @@ async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<
   for (const path of changed) {
     if (sensitive(path)) throw new GateError(`sensitive path changed: ${path}`);
     if (preserved.has(path) && manifest.preserved_baseline &&
-        await gitSucceeds(['diff','--quiet',manifest.preserved_baseline.head_sha,'HEAD','--',path],cwd)) {
+        await gitSucceeds(['diff','--quiet',manifest.preserved_baseline.head_sha,'--',path],cwd)) {
       continue;
     }
     writableChanged.push(path);
