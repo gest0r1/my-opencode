@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { parseWorkflowYaml, workflowEvents, workflowJob, workflowPermissions } from './github-workflow-yaml.mjs';
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
@@ -119,6 +120,139 @@ function globMatch(pattern: string, value: string): boolean {
   return new RegExp(source + '$').test(value);
 }
 
+
+function object(value: any): Record<string, any> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
+}
+
+function walk(value: any, visit: (value: any, path: Array<string | number>) => void, path: Array<string | number> = []): void {
+  visit(value, path);
+  if (Array.isArray(value)) value.forEach((item, index) => walk(item, visit, [...path, index]));
+  else if (value && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) walk(item, visit, [...path, key]);
+  }
+}
+
+function readOnlyPermissions(value: any): boolean {
+  const permissions = workflowPermissions(value);
+  if (!permissions) return false;
+  if (permissions['*']) return permissions['*'] === 'read-all';
+  return Object.values(permissions).every((level) => level === 'read' || level === 'none');
+}
+
+function pinnedActionIssues(workflow: any): string[] {
+  const issues: string[] = [];
+  walk(workflow, (value, path) => {
+    if (path[path.length - 1] !== 'uses' || typeof value !== 'string') return;
+    if (value.startsWith('./')) return;
+    if (value.startsWith('docker://')) {
+      if (!/@sha256:[0-9a-f]{64}$/i.test(value)) issues.push(value);
+      return;
+    }
+    const at = value.lastIndexOf('@');
+    if (at < 0 || !/^[0-9a-f]{40}$/i.test(value.slice(at + 1))) issues.push(value);
+  });
+  return issues;
+}
+
+function workflowInputNames(workflow: any): Set<string> {
+  const dispatch = object(object(workflow?.on)?.workflow_dispatch);
+  return new Set(Object.keys(object(dispatch?.inputs) ?? {}));
+}
+
+function jobEnvironment(job: any): string | undefined {
+  if (typeof job?.environment === 'string') return job.environment;
+  return typeof object(job?.environment)?.name === 'string' ? object(job?.environment)?.name : undefined;
+}
+
+function jobDisplayName(job: any, jobId: string): string {
+  return typeof job?.name === 'string' && job.name.trim() ? job.name.trim() : jobId;
+}
+
+function jobStrings(job: any): string[] {
+  const values: string[] = [];
+  walk(job, (value) => { if (typeof value === 'string') values.push(value); });
+  return values;
+}
+
+function runsOnLabels(job: any): string[] {
+  const value = job?.['runs-on'];
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === 'string') return [value];
+  return [];
+}
+
+function trustedWorkflow(repo: string, target: any): any {
+  const response = ghJson([
+    'api',
+    `repos/${repo}/contents/${target.probe_workflow}?ref=${encodeURIComponent(target.trusted_ref)}`,
+  ]);
+  if (response?.encoding !== 'base64' || typeof response?.content !== 'string') {
+    throw new DeploymentTargetError('OPENCODE_HOST_PROBE_WORKFLOW_CONTENT_UNAVAILABLE');
+  }
+  let text: string;
+  try { text = Buffer.from(response.content.replace(/\s+/g, ''), 'base64').toString('utf8'); }
+  catch { throw new DeploymentTargetError('OPENCODE_HOST_PROBE_WORKFLOW_CONTENT_INVALID'); }
+
+  let workflow;
+  try { workflow = parseWorkflowYaml(text); }
+  catch (error) {
+    throw new DeploymentTargetError(
+      `OPENCODE_HOST_PROBE_WORKFLOW_YAML_INVALID: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return workflow;
+}
+
+function validateProbeWorkflow(repo: string, target: any): Record<string, unknown> {
+  const workflow = trustedWorkflow(repo, target);
+  const issues: string[] = [];
+  if (!workflowEvents(workflow).includes('workflow_dispatch')) issues.push('workflow_dispatch trigger is required');
+  if (!workflowInputNames(workflow).has('pipeline_run_id')) issues.push('pipeline_run_id workflow input is required');
+  if (!String(workflow['run-name'] ?? '').includes('inputs.pipeline_run_id')) {
+    issues.push('run-name must include inputs.pipeline_run_id');
+  }
+  if (!readOnlyPermissions(workflow.permissions)) issues.push('root GitHub permissions must be explicit read-only');
+  const unpinned = pinnedActionIssues(workflow);
+  if (unpinned.length) issues.push('unpinned actions: ' + unpinned.join(', '));
+
+  const job = workflowJob(workflow, target.probe_job);
+  if (!job) issues.push('probe job id not found: ' + target.probe_job);
+  if (job && jobEnvironment(job) !== target.environment) {
+    issues.push('probe job environment must equal ' + target.environment);
+  }
+
+  const strings = job ? jobStrings(job) : [];
+  if (target.transport === 'github_ssh') {
+    for (const secret of target.required_environment_secrets) {
+      if (!strings.some((value) => value.includes(`secrets.${secret}`))) {
+        issues.push('probe job must reference Environment secret: ' + secret);
+      }
+    }
+    const runScripts = Array.isArray(job?.steps)
+      ? job.steps.map((step: any) => String(object(step)?.run ?? '')).filter(Boolean)
+      : [];
+    const strictSsh = runScripts.some((script: string) =>
+      /(^|\s)ssh(\s|$)/m.test(script) &&
+      script.includes('BatchMode=yes') &&
+      script.includes('StrictHostKeyChecking=yes'));
+    if (!strictSsh) issues.push('github_ssh probe must execute strict non-interactive ssh');
+  } else if (target.transport === 'self_hosted_runner') {
+    const labels = runsOnLabels(job);
+    for (const required of ['self-hosted', ...target.runner_labels]) {
+      if (!labels.includes(required)) issues.push('self-hosted probe is missing runner label: ' + required);
+    }
+  }
+
+  if (issues.length) throw new DeploymentTargetError('OPENCODE_HOST_PROBE_WORKFLOW_INVALID: ' + issues.join('; '));
+  return {
+    probe_workflow: target.probe_workflow,
+    probe_job_id: target.probe_job,
+    probe_job_name: jobDisplayName(job, target.probe_job),
+    trusted_ref: target.trusted_ref,
+  };
+}
+
 function validateEnvironment(repo: string, target: any): Record<string, unknown> {
   const environment = ghJson(['api', `repos/${repo}/environments/${encodeURIComponent(target.environment)}`]);
   const branchPolicy = environment?.deployment_branch_policy;
@@ -187,7 +321,7 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
-async function dispatchProbe(repo: string, runId: string, target: any): Promise<Record<string, unknown>> {
+async function dispatchProbe(repo: string, runId: string, target: any, probeWorkflow: any): Promise<Record<string, unknown>> {
   const before = new Set(listRuns(repo, target.probe_workflow, target.trusted_ref).map((run) => Number(run.id)));
   command('gh', [
     'workflow', 'run', workflowId(target.probe_workflow),
@@ -199,7 +333,7 @@ async function dispatchProbe(repo: string, runId: string, target: any): Promise<
   const deadline = Date.now() + target.probe_timeout_seconds * 1000;
   while (Date.now() < deadline) {
     const runs = listRuns(repo, target.probe_workflow, target.trusted_ref)
-      .filter((run) => !before.has(Number(run.id)))
+      .filter((run) => !before.has(Number(run.id)) && String(run?.display_title ?? '').includes(runId))
       .sort((a, b) => Number(b.id) - Number(a.id));
     for (const run of runs) {
       const current = ghJson(['api', `repos/${repo}/actions/runs/${run.id}`]);
@@ -208,11 +342,12 @@ async function dispatchProbe(repo: string, runId: string, target: any): Promise<
         throw new DeploymentTargetError(`OPENCODE_HOST_PROBE_FAILED: run=${current.id} conclusion=${String(current.conclusion)}`);
       }
       const jobs = ghJson(['api', `repos/${repo}/actions/runs/${current.id}/jobs?filter=latest&per_page=100`])?.jobs ?? [];
-      const job = jobs.find((item: any) => item?.name === target.probe_job);
-      if (!job) throw new DeploymentTargetError(`OPENCODE_HOST_PROBE_JOB_MISSING: ${target.probe_job}`);
+      const expectedJobName = String(probeWorkflow.probe_job_name);
+      const job = jobs.find((item: any) => item?.name === expectedJobName);
+      if (!job) throw new DeploymentTargetError(`OPENCODE_HOST_PROBE_JOB_MISSING: ${expectedJobName}`);
       if (job.status !== 'completed' || job.conclusion !== 'success') {
         throw new DeploymentTargetError(
-          `OPENCODE_HOST_PROBE_JOB_FAILED: ${target.probe_job} status=${String(job.status)} conclusion=${String(job.conclusion)}`,
+          `OPENCODE_HOST_PROBE_JOB_FAILED: ${expectedJobName} status=${String(job.status)} conclusion=${String(job.conclusion)}`,
         );
       }
       return {
@@ -223,6 +358,7 @@ async function dispatchProbe(repo: string, runId: string, target: any): Promise<
         head_sha: current.head_sha,
         event: current.event,
         probe_job: target.probe_job,
+        probe_job_name: expectedJobName,
         probe_job_id: job.id,
       };
     }
@@ -240,8 +376,9 @@ async function evaluate(runId: string, policyPath: string): Promise<Record<strin
   }
   const target = validateTarget(policy?.deployment_target);
   const repo = repository();
+  const probeWorkflow = validateProbeWorkflow(repo, target);
   const environment = validateEnvironment(repo, target);
-  const probe = await dispatchProbe(repo, runId, target);
+  const probe = await dispatchProbe(repo, runId, target, probeWorkflow);
 
   return {
     status: 'READY',
@@ -281,7 +418,7 @@ async function main(args: string[]): Promise<void> {
   console.log(JSON.stringify(result, null, 2));
 }
 
-export { check, inspect, validateTarget };
+export { check, inspect, validateProbeWorkflow, validateTarget };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   main(process.argv.slice(2)).catch((error: unknown) => {
