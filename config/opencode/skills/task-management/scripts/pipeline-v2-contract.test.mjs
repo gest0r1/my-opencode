@@ -925,6 +925,197 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
   assert.equal(JSON.parse(result.stdout).pipelines.app.status, 'completed');
 });
 
+test('owner acceptance cannot be completed by model-style generic complete', async () => {
+  const fx = await fixture('v2-owner-acceptance');
+  const pipeline = fx.manifest.pipelines[0];
+  pipeline.stages = ['implementation', 'git-verify', 'publish', 'tests', 'dev', 'owner-acceptance'];
+  pipeline.executors = {
+    implementation: 'agent',
+    'git-verify': 'git_verify',
+    publish: 'git_publish',
+    tests: 'github_ci',
+    dev: 'github_dev',
+    'owner-acceptance': 'owner_acceptance',
+  };
+  pipeline.deployable = true;
+  pipeline.decision_ids.push('decision-testing-strategy');
+  pipeline.deployment_validation = {
+    stage: 'tests',
+    fresh_job: 'fresh_install',
+    upgrade_job: 'upgrade_install',
+  };
+  pipeline.testing_strategy = {
+    mode: 'hybrid',
+    owner_decision_id: 'decision-testing-strategy',
+    github_validation_stage: 'tests',
+    opencode_host_stage: 'dev',
+    post_deploy_test: 'automated_then_user',
+    owner_acceptance_stage: 'owner-acceptance',
+  };
+  pipeline.github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      required_jobs: ['fresh_install', 'upgrade_install'],
+      trigger: 'push',
+      artifact: 'candidate-build',
+    },
+    dev: {
+      workflow: '.github/workflows/dev.yml',
+      terminal_job: 'pipeline_dev',
+      trigger: 'workflow_dispatch',
+      mode: 'stateful',
+      environment: 'development',
+      trusted_ref: 'main',
+      concurrency_group: 'development',
+      source_ci_stage: 'tests',
+      artifact: 'dev-evidence',
+      evidence_file: 'dev-evidence.json',
+    },
+  };
+  delete pipeline.ready_after_stage;
+  delete pipeline.release_ready_after_stage;
+  fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/test' };
+
+  await mkdir(path.join(fx.root, '.opencode'), { recursive: true });
+  const policyText = JSON.stringify({
+    schema_version: 1,
+    protected_paths: [],
+    required_gates: [],
+    deployment_target: {
+      kind: 'opencode_host',
+      transport: 'github_ssh',
+      environment: 'development',
+      probe_workflow: '.github/workflows/deployment-target-probe.yml',
+      probe_job: 'probe_target',
+      trusted_ref: 'main',
+      required_environment_secrets: ['DEPLOY_SSH_KEY'],
+      runner_labels: [],
+      probe_timeout_seconds: 180,
+    },
+  }, null, 2);
+  await writeFile(path.join(fx.root, '.opencode', 'pipeline-policy.json'), policyText);
+  fx.manifest.project_policy = { path: '.opencode/pipeline-policy.json', sha256: sha(policyText) };
+  fx.manifest.deployment_target_check = await fx.frozen(
+    'planning/deployment-target.json',
+    JSON.stringify({
+      status: 'READY',
+      run_id: fx.manifest.run_id,
+      kind: 'opencode_host',
+      transport: 'github_ssh',
+      environment: 'development',
+      trusted_ref: 'main',
+      workflow_run_id: 99,
+      probe_job: 'probe_target',
+    }, null, 2),
+  );
+  await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
+
+  const stateRoot = path.join(fx.root, '.tmp', 'owner-acceptance-state');
+  const invoke = (args) => run(fx.root, [...args, '--state-root', stateRoot]);
+  let result = invoke(['init', fx.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  result = invoke(['approve', fx.manifest.run_id]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = invoke(['start', fx.manifest.run_id, 'implementation', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+  result = invoke(['complete', fx.manifest.run_id, 'implementation', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = invoke(['start', fx.manifest.run_id, 'git-verify', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+  await writeFile(path.join(fx.runRoot, 'git-verify.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: fx.manifest.run_id,
+    branch: 'feature/test',
+    head_sha: 'b'.repeat(40),
+    changed_files: ['src/app.ts'],
+    verified_at: new Date(Date.now() + 1000).toISOString(),
+  }, null, 2));
+  result = invoke(['complete', fx.manifest.run_id, 'git-verify', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+
+  const candidateSha = 'c'.repeat(40);
+  result = invoke(['start', fx.manifest.run_id, 'publish', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+  await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: fx.manifest.run_id,
+    branch: 'feature/test',
+    candidate_sha: candidateSha,
+    remote_sha: candidateSha,
+    published_at: new Date(Date.now() + 1000).toISOString(),
+  }, null, 2));
+  result = invoke(['complete', fx.manifest.run_id, 'publish', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+
+  const digest = 'sha256:' + 'd'.repeat(64);
+  await mkdir(path.join(fx.runRoot, 'github'), { recursive: true });
+  await writeFile(path.join(fx.runRoot, 'github', 'app-tests.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: fx.manifest.run_id,
+    pipeline_id: 'app',
+    stage: 'tests',
+    executor: 'github_ci',
+    workflow: '.github/workflows/ci.yml',
+    workflow_run_id: 50,
+    run_attempt: 1,
+    candidate_sha: candidateSha,
+    head_sha: candidateSha,
+    terminal_job: 'pipeline_ci',
+    artifact: 'candidate-build',
+    artifact_digest: digest,
+  }, null, 2));
+  result = invoke(['start', fx.manifest.run_id, 'tests', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+  result = invoke(['complete', fx.manifest.run_id, 'tests', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+
+  await writeFile(path.join(fx.runRoot, 'github', 'app-dev.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: fx.manifest.run_id,
+    pipeline_id: 'app',
+    stage: 'dev',
+    executor: 'github_dev',
+    workflow: '.github/workflows/dev.yml',
+    workflow_run_id: 60,
+    source_ci_run_id: 50,
+    candidate_sha: candidateSha,
+    head_sha: 'e'.repeat(40),
+    head_branch: 'main',
+    terminal_job: 'pipeline_dev',
+    trusted_ref: 'main',
+    dev_evidence_validated: true,
+    ci_artifact_digest: digest,
+    installed_sha: candidateSha,
+  }, null, 2));
+  result = invoke(['start', fx.manifest.run_id, 'dev', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+  result = invoke(['complete', fx.manifest.run_id, 'dev', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = invoke(['start', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = invoke(['complete', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT/);
+
+  result = invoke([
+    'owner-accept', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app',
+    '--result', 'pass', '--message', 'owner tested deployed candidate',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = invoke(['status', fx.manifest.run_id, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).pipelines.app.status, 'completed');
+  const evidence = JSON.parse(await readFile(path.join(fx.runRoot, 'owner', 'app-owner-acceptance.json'), 'utf8'));
+  assert.equal(evidence.status, 'PASS');
+  assert.equal(evidence.gate, 'owner_acceptance');
+});
+
 test('technical fix after publish reopens verify and publish before GitHub CI', async () => {
   const fx = await fixture('v2-fix-invalidates-published-chain');
   fx.manifest.pipelines[0].stages = ['implementation', 'git-verify', 'publish', 'tests'];
