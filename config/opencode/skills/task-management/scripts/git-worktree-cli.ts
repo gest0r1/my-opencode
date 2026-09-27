@@ -174,10 +174,10 @@ async function publish(manifest: Manifest, manifestPath: string, cwd: string): P
     .split(/\s+/)[0] ?? '';
   if (candidate.toLowerCase() !== remote.toLowerCase()) throw new GateError('remote candidate SHA mismatch');
   const evidencePath = join(dirname(resolve(manifestPath)), 'candidate.json');
-  const evidence = { status: 'PASS', branch: manifest.git_setup.branch,
+  const evidence = { status: 'PASS', run_id: manifest.run_id ?? null, branch: manifest.git_setup.branch,
     candidate_sha: candidate, remote_sha: remote, changed_files: changed,
     published_at: new Date().toISOString() };
-  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
+  await writeJsonAtomic(evidencePath, evidence);
   return { ...evidence, evidence: evidencePath };
 }
 async function main(): Promise<void> {
