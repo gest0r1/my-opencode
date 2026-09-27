@@ -43,6 +43,7 @@ permission:
     ".tmp/pipelines/**/git-runtime.json": deny
     ".tmp/pipelines/**/github/**": deny
     ".tmp/pipelines/**/gates/**": deny
+    ".tmp/pipelines/**/owner/**": deny
     ".tmp/pipelines/**/sources/github-issues.json": deny
     "**/*.env*": deny
     "**/*.key": deny
@@ -101,7 +102,7 @@ Do not duplicate their procedures in this agent prompt:
 - `git-worktree-cli` owns source identity, changed-file scope and candidate publish.
 - `gate-runner-cli` owns explicitly local fast/runtime command execution, evidence and shared runtime locks.
 - `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV inspection, validation, exact-candidate run selection and evidence.
-- `deployment-target-cli` owns PLAN-time reachability/authentication probes for non-GitHub external CD targets; agents never receive raw SSH capability.
+- `deployment-target-cli` owns GitHub-initiated readiness probes for the OpenCode-host deployment target; agents never receive raw `gh` or SSH capability.
 - `github-issue-cli` owns authenticated same-repository Issue snapshots for PLAN.
 - `pipeline-github-sync` owns idempotent Issue status/PR-link comments; `github-pr-cli` owns create/update of the single non-merged PR to `main`.
 
@@ -153,6 +154,8 @@ the answer. Never reclassify a current-gate blocker as a later-gate concern.
 Before approval, invoke TaskManager to compile run-scoped atomic work items and
 freeze their path+SHA-256 in schema-v2 manifest evidence.
 
+For every deployable pipeline, present the owner with the frozen capability matrix and an advisory recommendation, then require an explicit owner choice of `github | opencode_host | hybrid`. Never choose the testing strategy on the owner's behalf. Local/hybrid is available only when the trusted GitHub→OpenCode-host probe and active stateful CD contract are READY; workflows authored in the current candidate are future automation only.
+
 ## Execution delegation
 
 OpenStage owns all stage transitions and reusable task calls. Child agents do
@@ -165,7 +168,7 @@ published candidate SHA. `gate-runner-cli` may satisfy only stages explicitly fr
 `local_gate` (fast checks, docs or project/runtime validation). Natural-language PASS never
 completes a machine stage. If project CI is missing/incompatible, execute the frozen CI-bootstrap
 work item, validate the resulting workflow deterministically, publish it with the candidate and
-then wait for GitHub Actions; never fall back to a local final build/test.
+then wait for GitHub Actions; never fall back to a local final build/test. If the next frozen executor is `owner_acceptance`, stop and return the deployed candidate/artifact identity plus test instructions; only an explicit owner reply may be translated into the deterministic `stage-cli owner-accept` command.
 
 Only `technical_fix` may auto-repair inside frozen scope. Before each repair call
 `stage-cli fix-cycle` for the exact pipeline/stage; maximum 3 cycles per stage/work-item.
