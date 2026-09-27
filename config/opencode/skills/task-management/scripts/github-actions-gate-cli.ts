@@ -11,6 +11,7 @@ import {
   inspectWorkflowText,
   selectStatefulWorkflowRun,
   selectWorkflowRun,
+  buildGithubFailureEvidence,
   validateDevEvidence,
   validateWorkflowResult,
 } from './github-actions-gate-core.mjs';
@@ -97,6 +98,21 @@ function command(exe: string, args: string[], cwd = process.cwd()): string {
     throw new CliError(`${exe} ${args.join(' ')} failed: ${detail}`);
   }
   return String(result.stdout ?? '');
+}
+
+function commandBestEffort(exe: string, args: string[], cwd = process.cwd()): string {
+  const result = spawnSync(exe, args, {
+    cwd,
+    shell: false,
+    encoding: 'utf8',
+    timeout: 60_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  return String(result.stdout || result.stderr || result.error?.message || '');
+}
+
+function failedRunLog(repo: string, runId: number): string {
+  return commandBestEffort('gh', ['run', 'view', String(runId), '--repo', repo, '--log-failed']);
 }
 
 function ghJson(args: string[]): any {
@@ -525,7 +541,8 @@ async function verifyDevEvidence(
 
 async function runGate(runId: string, pipelineId: string, stage: string, stateRoot: string): Promise<any> {
   const { manifest, runRoot } = await loadRun(runId, stateRoot);
-  const { executor, contract } = resolveGate(manifest, pipelineId, stage);
+  const resolved = resolveGate(manifest, pipelineId, stage);
+  const { executor, contract } = resolved;
   const validation = await inspectFile(contract, executor, { candidateBranch: manifest.git_setup?.branch });
   if (validation.status !== 'READY') {
     throw new CliError(`GITHUB_WORKFLOW_NOT_READY: ${validation.status}: ${(validation.issues ?? []).join('; ')}`);
@@ -537,10 +554,14 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
   const sourceCi = executor === 'github_dev'
     ? await sourceCiEvidence(runRoot, pipelineId, contract, candidate.candidate_sha)
     : undefined;
-  const run = await waitForRun(repo, runId, resolveGate(manifest, pipelineId, stage).pipeline, contract, candidate, sourceCi);
+  const run = await waitForRun(repo, runId, resolved.pipeline, contract, candidate, sourceCi);
   const jobs = fetchJobs(repo, Number(run.id));
   const artifacts = fetchArtifacts(repo, Number(run.id));
+  const evidenceFile = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
+  await mkdir(dirname(evidenceFile), { recursive: true });
+
   let result;
+  let devEvidence;
   try {
     result = validateWorkflowResult({
       run,
@@ -553,29 +574,55 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
       executor,
       sourceCiRunId: sourceCi?.workflow_run_id,
     });
+
+    devEvidence = executor === 'github_dev'
+      ? await verifyDevEvidence(
+          repo,
+          run,
+          contract,
+          candidate.candidate_sha,
+          Number(sourceCi?.workflow_run_id),
+          Number(sourceCi?.artifact_id),
+          String(sourceCi?.artifact_digest ?? ''),
+        )
+      : undefined;
+
+    if (executor === 'github_dev' &&
+        ['opencode_host', 'hybrid'].includes(String(resolved.pipeline.testing_strategy?.mode ?? '')) &&
+        ['automated', 'automated_then_user'].includes(
+          String(resolved.pipeline.testing_strategy?.post_deploy_test ?? ''),
+        ) &&
+        devEvidence?.smoke_result !== 'PASS') {
+      throw new CliError('GITHUB_DEV_AUTOMATED_TEST_EVIDENCE_REQUIRED');
+    }
   } catch (error) {
-    throw new CliError(error instanceof Error ? error.message : String(error));
-  }
-
-  const devEvidence = executor === 'github_dev'
-    ? await verifyDevEvidence(
-        repo,
+    const message = error instanceof Error ? error.message : String(error);
+    const failure = {
+      ...buildGithubFailureEvidence({
         run,
+        jobs,
+        artifacts,
+        candidateSha: candidate.candidate_sha,
         contract,
-        candidate.candidate_sha,
-        Number(sourceCi?.workflow_run_id),
-        Number(sourceCi?.artifact_id),
-        String(sourceCi?.artifact_digest ?? ''),
-      )
-    : undefined;
-
-  if (executor === 'github_dev' &&
-      ['opencode_host', 'hybrid'].includes(String(resolveGate(manifest, pipelineId, stage).pipeline.testing_strategy?.mode ?? '')) &&
-      ['automated', 'automated_then_user'].includes(
-        String(resolveGate(manifest, pipelineId, stage).pipeline.testing_strategy?.post_deploy_test ?? ''),
-      ) &&
-      devEvidence?.smoke_result !== 'PASS') {
-    throw new CliError('GITHUB_DEV_AUTOMATED_TEST_EVIDENCE_REQUIRED');
+        validationError: message,
+        failedLog: failedRunLog(repo, Number(run.id)),
+      }),
+      gate: 'github_actions',
+      run_id: runId,
+      pipeline_id: pipelineId,
+      stage,
+      executor,
+      repository: repo,
+      workflow: contract.workflow,
+      branch: candidate.branch,
+      environment: contract.environment ?? null,
+      ...(environmentValidation ? { environment_validation: environmentValidation } : {}),
+      mode: contract.mode ?? null,
+      trusted_ref: contract.trusted_ref ?? null,
+      recorded_at: new Date().toISOString(),
+    };
+    await writeFile(evidenceFile, `${JSON.stringify(failure, null, 2)}\n`, 'utf8');
+    throw new CliError(`${message}; evidence=${evidenceFile}`);
   }
 
   const evidence = {
@@ -602,8 +649,6 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
     } : {}),
     recorded_at: new Date().toISOString(),
   };
-  const evidenceFile = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
-  await mkdir(dirname(evidenceFile), { recursive: true });
   await writeFile(evidenceFile, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
   return { ...evidence, evidence: evidenceFile };
 }
@@ -614,6 +659,33 @@ async function showCommand(runId: string, pipelineId: string, stage: string, sta
   console.log(await readFile(file, 'utf8'));
 }
 
+async function diagnoseCommand(runId: string, pipelineId: string, stage: string, stateRoot: string): Promise<any> {
+  const { manifest, runRoot } = await loadRun(runId, stateRoot);
+  const { contract } = resolveGate(manifest, pipelineId, stage);
+  const evidenceFile = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
+  const prior = JSON.parse(await readFile(evidenceFile, 'utf8'));
+  if (!Number.isInteger(Number(prior.workflow_run_id))) {
+    throw new CliError('GITHUB_DIAGNOSTICS_RUN_ID_MISSING');
+  }
+  const repo = repository(manifest);
+  const workflowRunId = Number(prior.workflow_run_id);
+  const run = fetchRun(repo, workflowRunId);
+  const jobs = fetchJobs(repo, workflowRunId);
+  const artifacts = fetchArtifacts(repo, workflowRunId);
+  const diagnostics = buildGithubFailureEvidence({
+    run,
+    jobs,
+    artifacts,
+    candidateSha: String(prior.candidate_sha ?? ''),
+    contract,
+    validationError: prior.validation_error ?? 'GITHUB_GATE_DIAGNOSTICS',
+    failedLog: failedRunLog(repo, workflowRunId),
+  });
+  const file = join(runRoot, 'github', `${pipelineId}-${stage}-diagnostics.json`);
+  await writeFile(file, `${JSON.stringify(diagnostics, null, 2)}\n`, 'utf8');
+  return { ...diagnostics, evidence: file };
+}
+
 function usage(): string {
   return [
     'usage:',
@@ -622,6 +694,7 @@ function usage(): string {
     '  github-actions-gate-cli.ts validate-future <run-id> <pipeline-id> <gate-name> [--state-root <path>]',
     '  github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts show <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
+    '  github-actions-gate-cli.ts diagnose <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
   ].join('\n');
 }
 
@@ -653,10 +726,14 @@ async function main(args: string[]): Promise<void> {
     await showCommand(runId, pipelineId, stage, stateRoot);
     return;
   }
+  if (commandName === 'diagnose') {
+    console.log(JSON.stringify(await diagnoseCommand(runId, pipelineId, stage, stateRoot), null, 2));
+    return;
+  }
   throw new CliError(usage());
 }
 
-export { inspectFile, resolveGate, resolveFutureGate, validateCommand, validateFutureCommand, runGate };
+export { inspectFile, resolveGate, resolveFutureGate, validateCommand, validateFutureCommand, runGate, diagnoseCommand };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   main(process.argv.slice(2)).catch((error: unknown) => {
