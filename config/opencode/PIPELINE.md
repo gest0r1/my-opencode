@@ -20,7 +20,9 @@ merges it to `main` manually.
 ## Manifest v2 and planning gates
 
 New design-freeze plans use manifest schema v2. V1 remains readable only for
-historical runs.
+historical runs. Canonical RUN begins with `stage-cli run-preflight`; a V1 state
+returns `LEGACY_V1_REPLAN_REQUIRED`. Keep its state/evidence for audit, then run
+a fresh `/pipeline-plan`, approve the new V2 manifest and continue only under V2.
 
 Before owner approval, every triggered planning gate must be recorded literally
 as `ready` with frozen artifact path + SHA-256. `needs_revision` cannot be
@@ -159,7 +161,7 @@ For `github_ci`/`github_dev`, `github-actions-gate-cli` validates the frozen pro
 
 If a target project has no compatible GitHub CI workflow, PLAN freezes a bootstrap/adaptation work item and workflow scope. RUN implements that candidate-safe CI workflow in the target project, validates it before publication, publishes it with the candidate branch and waits for GitHub Actions on that exact SHA. First-time CI workflows use a `push` trigger; there is no local final-build/test fallback. Runtime/E2E may run inside candidate CI or through an existing `github_dev` workflow. Disposable `github_dev` is secret-free and runs on the candidate ref; stateful `github_dev` runs from a frozen trusted ref/environment outside candidate change scope. Both consume the exact source-CI artifact and must return `installed_sha` evidence. A missing separate DEV workflow is not bootstrapped and consumed in the same run; required disposable validation is folded into candidate CI.
 
-Any source-changing fix after publication creates a new candidate SHA. CI/artifact/DEV evidence belonging to the previous SHA becomes stale and must be regenerated.
+Any source-changing fix after publication creates a new candidate SHA. `stage-cli fix-cycle` invalidates the completed chain from the preceding `git_verify` through publish/CI/DEV, making `git_verify` runnable again while preserving old evidence as audit history. The repaired source must then pass verify → publish → GitHub CI → DEV again; CI/artifact/DEV evidence belonging to the previous SHA cannot complete the reopened stages.
 
 ## 4. Automatic PR handoff
 
