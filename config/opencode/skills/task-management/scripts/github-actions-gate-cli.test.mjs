@@ -169,7 +169,7 @@ test('disposable DEV workflow consumes exact CI artifact without secrets', () =>
     artifact: 'dev-evidence',
     evidence_file: 'dev-evidence.json',
   };
-  const workflow = [
+  const lines = [
     'name: Disposable DEV',
     'on:',
     '  workflow_dispatch:',
@@ -193,16 +193,20 @@ test('disposable DEV workflow consumes exact CI artifact without secrets', () =>
     '        with:',
     '          name: candidate-build',
     '      - run: echo inputs.ci_run_id inputs.ci_artifact',
-    '      - run: printf "{\\"status\\":\\"PASS\\"}" > dev-evidence.json',
+    '      - run: printf "{\\\"status\\\":\\\"PASS\\\"}" > dev-evidence.json',
     '      - uses: actions/upload-artifact@3333333333333333333333333333333333333333',
     '        with:',
     '          name: dev-evidence',
     '          path: dev-evidence.json',
-  ].join('\n');
+  ];
+  const workflow = lines.join('\\n');
   const result = inspectWorkflowText(workflow, dev, 'github_dev');
   assert.equal(result.status, 'READY');
 
-  const unsafe = workflow + '\n      - run: echo "' + '
+  const unsafe = [...lines, '      - run: echo "${{ secrets.TEST_TOKEN }}"'].join('\\n');
+  const unsafeResult = inspectWorkflowText(unsafe, dev, 'github_dev');
+  assert.equal(unsafeResult.status, 'INCOMPATIBLE');
+  assert.ok(unsafeResult.issues.some((item) => item.includes('must not reference')));
 });
 
 test('stateful DEV workflow is trusted-ref dispatch and consumes CI artifact', () => {
