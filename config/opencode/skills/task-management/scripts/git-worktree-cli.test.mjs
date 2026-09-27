@@ -69,6 +69,11 @@ test('owner-created linked worktree is adopted read-only; setup and primary chec
   result = gate(f.b, ['verify', f.manifestPath]);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).changed_files, ['src/allowed.txt']);
+  const verifyEvidence = JSON.parse(await readFile(path.join(f.artifactRoot, 'git-verify.json'), 'utf8'));
+  assert.equal(verifyEvidence.status, 'PASS');
+  assert.equal(verifyEvidence.run_id, 'run-b');
+  assert.equal(verifyEvidence.branch, 'feature/B');
+  assert.deepEqual(verifyEvidence.changed_files, ['src/allowed.txt']);
   await writeFile(path.join(f.b, 'outside.txt'), 'out of scope\n');
   result = gate(f.b, ['verify', f.manifestPath]);
   assert.notEqual(result.status, 0);
@@ -77,6 +82,7 @@ test('owner-created linked worktree is adopted read-only; setup and primary chec
   result = gate(f.b, ['publish', f.manifestPath]);
   assert.equal(result.status, 0, result.stderr);
   const published = JSON.parse(result.stdout);
+  assert.equal(published.run_id, 'run-b');
   assert.equal(published.candidate_sha, published.remote_sha);
   assert.equal(exec(f.b, 'git', ['branch', '--show-current']), 'feature/B');
   assert.equal(JSON.parse(await readFile(path.join(f.artifactRoot, 'candidate.json'))).candidate_sha,

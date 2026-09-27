@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { access, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
@@ -229,6 +230,7 @@ export async function inspectProjectPolicy(
     schema_version: 1,
     protected_paths: Array.isArray(policy.protected_paths) ? policy.protected_paths : [],
     required_gates: Array.isArray(policy.required_gates) ? policy.required_gates : [],
+    github_actions: policy.github_actions && typeof policy.github_actions === 'object' ? policy.github_actions : undefined,
   };
 }
 
@@ -1006,6 +1008,48 @@ export async function recordTechnicalFixCycle(
     }
     runtime.technical_fix_cycles = next;
     runtime.message = `technical_fix cycle ${next}/3`;
+
+    // If this fix happens after a candidate was already published, the source-changing
+    // repair must force a fresh verify -> publish -> GitHub CI/DEV chain. We invalidate
+    // state transitions, not historical evidence files; stale files remain audit history
+    // and completion guards reject them until replaced by evidence for the new candidate.
+    if (state.manifest_file) {
+      let manifest: PipelineManifest | undefined;
+      try {
+        manifest = JSON.parse(readFileSync(state.manifest_file, 'utf8')) as PipelineManifest;
+      } catch {}
+      const spec = manifest?.pipelines?.find((item) => item.id === pipeline.id);
+      const stageIndex = pipeline.stage_order.indexOf(stage);
+      const completedPublishIndex = spec
+        ? pipeline.stage_order.findIndex((name, index) =>
+            index < stageIndex &&
+            spec.executors?.[name] === 'git_publish' &&
+            pipeline.stages[name]?.status === 'completed')
+        : -1;
+      if (spec && completedPublishIndex >= 0) {
+        let resetIndex = completedPublishIndex;
+        for (let index = completedPublishIndex - 1; index >= 0; index -= 1) {
+          const name = pipeline.stage_order[index];
+          if (spec.executors?.[name] === 'git_verify') {
+            resetIndex = index;
+            break;
+          }
+          if (spec.executors?.[name] === 'agent') break;
+        }
+        for (const name of pipeline.stage_order.slice(resetIndex)) {
+          const item = pipeline.stages[name];
+          if (!item) continue;
+          item.status = 'pending';
+          item.started_at = undefined;
+          item.completed_at = undefined;
+          item.evidence = undefined;
+          if (name !== stage) item.message = undefined;
+          addHistory(state, pipeline.id, name, 'pending', `invalidated by technical_fix cycle ${next}/3 for ${stage}`);
+        }
+        pipeline.status = 'approved';
+        pipeline.current_stage = undefined;
+      }
+    }
   });
 }
 
@@ -1127,6 +1171,7 @@ function usage(): string {
     '  stage-cli approve <run-id> [--state-root <path>]',
     '  stage-cli status <run-id> [--json] [--state-root <path>]',
     '  stage-cli validate <run-id> [--json] [--state-root <path>]',
+    '  stage-cli run-preflight <run-id> [--json] [--state-root <path>]',
     '  stage-cli next <run-id> [--json] [--state-root <path>]',
     '  stage-cli start <run-id> <stage> [--pipeline <id>]',
     '  stage-cli complete <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
@@ -1188,6 +1233,17 @@ export async function runCli(args: string[]): Promise<void> {
     const state = await validateState(options.stateRoot, runId);
     if (options.json) console.log(JSON.stringify(state, null, 2));
     else console.log(`Valid: ${runId} status=${state.status}`);
+    return;
+  }
+  if (command === 'run-preflight') {
+    const state = await validateState(options.stateRoot, runId);
+    if (!state.manifest_file) throw new StageCliError('Frozen manifest is missing');
+    const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8')) as PipelineManifest;
+    if (manifest.schema_version !== 2) {
+      throw new StageCliError('LEGACY_V1_REPLAN_REQUIRED: schema v1 is audit/read-only for canonical RUN; create and approve a new schema v2 plan');
+    }
+    if (options.json) console.log(JSON.stringify({ status: 'PASS', run_id: runId, schema_version: 2 }, null, 2));
+    else console.log(`PASS run_id=${runId} schema_version=2`);
     return;
   }
   if (command === 'next') {

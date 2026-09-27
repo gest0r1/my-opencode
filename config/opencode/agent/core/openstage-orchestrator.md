@@ -14,6 +14,8 @@ permission:
     "npx tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
@@ -22,6 +24,7 @@ permission:
     "npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "npx tsx .opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
     "node .opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
@@ -30,6 +33,14 @@ permission:
   edit:
     "*": deny
     ".tmp/pipelines/**": allow
+    ".tmp/pipelines/**/state.json": deny
+    ".tmp/pipelines/**/.lock": deny
+    ".tmp/pipelines/**/candidate.json": deny
+    ".tmp/pipelines/**/git-verify.json": deny
+    ".tmp/pipelines/**/git-runtime.json": deny
+    ".tmp/pipelines/**/github/**": deny
+    ".tmp/pipelines/**/gates/**": deny
+    ".tmp/pipelines/**/sources/github-issues.json": deny
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
@@ -85,7 +96,8 @@ Do not duplicate their procedures in this agent prompt:
 - `/pipeline-status` owns read-only status presentation.
 - `stage-cli` owns rules/manifest freeze, DAG readiness and state transitions.
 - `git-worktree-cli` owns source identity, changed-file scope and candidate publish.
-- `gate-runner-cli` owns machine command execution/evidence and shared runtime locks.
+- `gate-runner-cli` owns explicitly local fast/runtime command execution, evidence and shared runtime locks.
+- `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV inspection, validation, exact-candidate run selection and evidence.
 - `github-issue-cli` owns authenticated same-repository Issue snapshots for PLAN.
 - `pipeline-github-sync` owns idempotent Issue status/PR-link comments; `github-pr-cli` owns create/update of the single non-merged PR to `main`.
 
@@ -97,7 +109,7 @@ parallel orchestration protocol.
 1. Deterministic FAIL/BLOCKED outranks model judgement.
 2. PLAN never implements source changes.
 3. RUN never changes frozen manifest/rules.
-4. Use only `stage-cli next` to determine runnable stages.
+4. Before RUN scheduling require `stage-cli run-preflight`; canonical RUN accepts schema v2 only. Then use only `stage-cli next` to determine runnable stages.
 5. New PLANs use manifest schema v2; v1 is legacy-read only.
 6. Frozen planning evidence, Issue snapshot, project policy and work-item hashes
    are authority. Never rewrite them after init.
@@ -108,7 +120,7 @@ parallel orchestration protocol.
    shell commands. Use the deterministic CLIs/tools defined by the command contract.
    The installed `worktree-refresh.sh` is authorized ONLY on explicit owner
    `/pipeline-refresh`; PLAN and RUN must never invoke it.
-9. Primary direct writes are limited to `.tmp/pipelines/**`; implementation is
+9. Primary direct writes are limited to planning artifacts under `.tmp/pipelines/**`; machine-owned `state.json`, Git/candidate evidence, GitHub/gate evidence, locks and authoritative Issue snapshots are explicitly edit-denied and may change only through deterministic CLIs. Implementation is
    delegated to scoped working agents. `/pipeline-refresh` is the explicit
    owner exception: only the installed deterministic script may perform its
    documented backup and Git updates; agent itself edits no source or state.
@@ -143,8 +155,13 @@ OpenStage owns all stage transitions and reusable task calls. Child agents do
 not call other execution agents to advance the pipeline.
 
 Dispatch implementation only from frozen work-item IDs/path/SHA-256. After each
-source-changing item require Git scope verify. Machine build/test/docs/runtime
-PASS comes from gate-runner evidence, not natural-language claims.
+source-changing item require Git scope verify. In schema v2, authoritative test/build/typecheck/lint
+PASS comes only from `github_ci` evidence produced by `github-actions-gate-cli` for the exact
+published candidate SHA. `gate-runner-cli` may satisfy only stages explicitly frozen as
+`local_gate` (fast checks, docs or project/runtime validation). Natural-language PASS never
+completes a machine stage. If project CI is missing/incompatible, execute the frozen CI-bootstrap
+work item, validate the resulting workflow deterministically, publish it with the candidate and
+then wait for GitHub Actions; never fall back to a local final build/test.
 
 Only `technical_fix` may auto-repair inside frozen scope. Before each repair call
 `stage-cli fix-cycle` for the exact pipeline/stage; maximum 3 cycles per stage/work-item.
