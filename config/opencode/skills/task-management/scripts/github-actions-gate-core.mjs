@@ -1,6 +1,8 @@
 export class GithubActionsGateError extends Error {}
 
-const SAFE_WORKFLOW = /^\.github\/workflows\/[A-Za-z0-9._/-]+\.ya?ml$/i;
+const SAFE_WORKFLOW = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/i;
+const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const SAFE_JSON_FILE = /^[A-Za-z0-9._-]+\.json$/;
 const JOB_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 function indentation(line) {
@@ -35,8 +37,12 @@ export function assertGithubGateContract(contract, executor = 'github_ci') {
     if (typeof contract.source_ci_stage !== 'string' || !contract.source_ci_stage) {
       throw new GithubActionsGateError('GITHUB_DEV_SOURCE_CI_INVALID');
     }
-    if (contract.mode === 'stateful' && (typeof contract.environment !== 'string' || !contract.environment.trim())) {
-      throw new GithubActionsGateError('GITHUB_DEV_ENVIRONMENT_REQUIRED');
+    if (contract.mode === 'stateful') {
+      if (contract.trigger !== 'workflow_dispatch') throw new GithubActionsGateError('GITHUB_STATEFUL_DEV_REQUIRES_DISPATCH');
+      if (typeof contract.environment !== 'string' || !contract.environment.trim()) throw new GithubActionsGateError('GITHUB_DEV_ENVIRONMENT_REQUIRED');
+      if (typeof contract.trusted_ref !== 'string' || !SAFE_REF.test(contract.trusted_ref) || contract.trusted_ref.includes('..') || contract.trusted_ref.endsWith('/')) throw new GithubActionsGateError('GITHUB_DEV_TRUSTED_REF_INVALID');
+      if (typeof contract.artifact !== 'string' || !contract.artifact.trim()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_REQUIRED');
+      if (typeof contract.evidence_file !== 'string' || !SAFE_JSON_FILE.test(contract.evidence_file)) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_FILE_INVALID');
     }
   }
   return contract;
@@ -122,6 +128,41 @@ function jobDisplayName(block, jobId) {
   return jobId;
 }
 
+function workflowDispatchInputNames(text) {
+  const lines = text.split(/\r?\n/);
+  const names = new Set();
+  let inDispatch = false;
+  let inInputs = false;
+  for (const line of lines) {
+    const indent = indentation(line);
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    if (/^\s{2}workflow_dispatch\s*:/.test(line)) { inDispatch = true; inInputs = false; continue; }
+    if (inDispatch && indent <= 2 && !/^\s{2}/.test(line)) { inDispatch = false; inInputs = false; }
+    if (inDispatch && /^\s{4}inputs\s*:/.test(line)) { inInputs = true; continue; }
+    if (inDispatch && inInputs) {
+      if (indent <= 4) { inInputs = false; continue; }
+      const match = line.match(/^\s{6}([A-Za-z_][A-Za-z0-9_-]*)\s*:/);
+      if (match?.[1]) names.add(match[1]);
+    }
+  }
+  return names;
+}
+
+function rootValue(text, key) {
+  const line = text.split(/\r?\n/).find((item) => item.startsWith(key + ':'));
+  return line ? unquote(line.slice(key.length + 1)) : undefined;
+}
+
+function jobEnvironment(block) {
+  if (!block) return undefined;
+  for (const line of block.slice(1)) {
+    if (indentation(line) <= 2 && line.trim()) break;
+    const match = line.match(/^\s{4}environment\s*:\s*(.+?)\s*$/);
+    if (match?.[1]) return unquote(match[1]);
+  }
+  return undefined;
+}
 export function inspectWorkflowText(text, contract, executor = 'github_ci') {
   assertGithubGateContract(contract, executor);
   if (typeof text !== 'string') throw new GithubActionsGateError('workflow text must be a string');
@@ -142,6 +183,21 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci') {
   const terminal = jobBlock(text, contract.terminal_job);
   if (!terminal) issues.push(`terminal job not found: ${contract.terminal_job}`);
   const terminalJobName = jobDisplayName(terminal, contract.terminal_job);
+
+  if (executor === 'github_dev' && contract.mode === 'stateful') {
+    const inputs = workflowDispatchInputNames(text);
+    for (const required of ['candidate_sha', 'ci_run_id', 'ci_artifact', 'pipeline_run_id']) {
+      if (!inputs.has(required)) issues.push(`missing workflow_dispatch input: ${required}`);
+    }
+    const runName = rootValue(text, 'run-name') ?? '';
+    if (!/inputs\.pipeline_run_id/.test(runName) || !/inputs\.candidate_sha/.test(runName)) issues.push('stateful DEV run-name must include inputs.pipeline_run_id and inputs.candidate_sha');
+    const environment = jobEnvironment(terminal);
+    if (environment !== contract.environment) issues.push(`terminal job environment must equal ${contract.environment}`);
+    if (!/inputs\.ci_run_id/.test(text) || !/inputs\.ci_artifact/.test(text)) issues.push('stateful DEV must consume source CI run/artifact inputs');
+    if (!/(actions\/download-artifact|gh\s+run\s+download)/.test(text)) issues.push('stateful DEV must download the source CI artifact');
+    if (!/actions\/upload-artifact/.test(text) || !text.includes(contract.artifact) || !text.includes(contract.evidence_file)) issues.push('stateful DEV must upload the declared DEV evidence artifact/file');
+    if (/actions\/checkout[\s\S]{0,500}ref:\s*\$\{\{\s*inputs\.candidate_sha\s*\}\}/m.test(text)) issues.push('stateful DEV must not checkout candidate source');
+  }
 
   return {
     status: issues.length ? 'INCOMPATIBLE' : 'READY',
@@ -179,10 +235,34 @@ export function selectWorkflowRun(runs, { candidateSha, branch, event }) {
   return matches[0];
 }
 
+export function selectStatefulWorkflowRun(runs, { trustedRef, event = 'workflow_dispatch', correlation, candidateSha, excludeIds = [] }) {
+  if (!Array.isArray(runs)) throw new GithubActionsGateError('workflow runs must be an array');
+  const excluded = new Set(excludeIds.map((value) => Number(value)));
+  const shortSha = String(candidateSha ?? '').slice(0, 12);
+  const matches = runs.filter((run) => {
+    const title = String(run?.display_title ?? run?.name ?? '');
+    return !excluded.has(Number(run?.id)) && run?.head_branch === trustedRef && run?.event === event &&
+      (!correlation || title.includes(correlation)) &&
+      (!candidateSha || title.includes(String(candidateSha)) || (shortSha && title.includes(shortSha)));
+  });
+  matches.sort((a, b) => Number(b?.id ?? 0) - Number(a?.id ?? 0));
+  return matches[0];
+}
+
+export function validateDevEvidence(data, { candidateSha, ciRunId }) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_INVALID');
+  if (data.status !== 'PASS') throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_FAILED');
+  if (String(data.candidate_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_CANDIDATE_MISMATCH');
+  if (String(data.installed_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_INSTALLED_SHA_MISMATCH');
+  if (Number(data.ci_run_id) !== Number(ciRunId)) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_CI_RUN_MISMATCH');
+  return { status: 'PASS', candidate_sha: data.candidate_sha, installed_sha: data.installed_sha, ci_run_id: Number(data.ci_run_id), smoke_result: data.smoke_result ?? null };
+}
 export function validateWorkflowResult({ run, jobs, artifacts, contract, candidateSha, terminalJobName, executor, sourceCiRunId }) {
   assertGithubGateContract(contract, executor);
   if (!run) throw new GithubActionsGateError('GITHUB_RUN_NOT_FOUND');
-  if (String(run.head_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) {
+  if (executor === 'github_dev' && contract.mode === 'stateful') {
+    if (run.head_branch !== contract.trusted_ref) throw new GithubActionsGateError('GITHUB_DEV_TRUSTED_REF_MISMATCH');
+  } else if (String(run.head_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) {
     throw new GithubActionsGateError('GITHUB_RUN_SHA_MISMATCH');
   }
   if (run.status !== 'completed') throw new GithubActionsGateError(`GITHUB_RUN_NOT_COMPLETE: ${String(run.status)}`);
