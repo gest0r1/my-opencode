@@ -27,4 +27,6 @@ The script enforces a clean B and main, a real owner-created linked worktree, ig
 
 After `REFRESH PASS`, report `NEW_BASE_SHA`, `B_HEAD`, historical manifest location and snapshot path, then instruct the owner to run `/pipeline-plan` **in this same B session** to revalidate the old run and create a NEW run ID/manifest. The old manifest/state/evidence remain historical and unchanged. Require a new owner approval before `/pipeline-run` of the NEW ID.
 
+If the historical run uses schema v1, it is never resumed as an executable run after refresh. The new PLAN must be schema v2, must inspect/freeze the target project's GitHub Actions contract, and must route authoritative test/build/typecheck/lint through `github_ci`. Historical v1 local machine PASS/evidence is audit history only and is not promoted into v2 GitHub evidence.
+
 Do not dispatch PLAN, execute RUN or mutate old manifest in this command, even on success.
