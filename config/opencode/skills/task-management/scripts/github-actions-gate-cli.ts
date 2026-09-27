@@ -142,11 +142,11 @@ function resolveGate(manifest: Manifest, pipelineId: string, stage: string): {
   return { pipeline, executor, contract: contract as GateContract };
 }
 
-async function inspectFile(contract: GateContract, executor: Executor): Promise<any> {
+async function inspectFile(contract: GateContract, executor: Executor, context: { candidateBranch?: string } = {}): Promise<any> {
   const workflow = resolve(contract.workflow);
   if (!(await exists(workflow))) return classifyMissingWorkflow(contract, executor);
   const text = await readFile(workflow, 'utf8');
-  return inspectWorkflowText(text, contract, executor);
+  return inspectWorkflowText(text, contract, executor, context);
 }
 
 function probeActions(repo: string): { accessible: true; enabled?: boolean } {
@@ -191,8 +191,9 @@ async function inspectCommand(args: string[]): Promise<void> {
       }, null, 2));
       return;
     }
-    const result = await inspectFile(contract, executor);
-    console.log(JSON.stringify({ ...result, repository: repo, actions_accessible: true }, null, 2));
+    const candidateBranch = command('git', ['branch', '--show-current']).trim() || undefined;
+    const result = await inspectFile(contract, executor, { candidateBranch });
+    console.log(JSON.stringify({ ...result, repository: repo, actions_accessible: true, candidate_branch: candidateBranch ?? null }, null, 2));
   } catch (error) {
     console.log(JSON.stringify({
       status: 'BLOCKED',
@@ -206,7 +207,7 @@ async function inspectCommand(args: string[]): Promise<void> {
 async function validateCommand(runId: string, pipelineId: string, stage: string, stateRoot: string): Promise<any> {
   const { manifest } = await loadRun(runId, stateRoot);
   const { executor, contract } = resolveGate(manifest, pipelineId, stage);
-  const result = await inspectFile(contract, executor);
+  const result = await inspectFile(contract, executor, { candidateBranch: manifest.git_setup?.branch });
   if (result.status !== 'READY') {
     throw new CliError(`GITHUB_WORKFLOW_NOT_READY: ${result.status}: ${(result.issues ?? []).join('; ')}`);
   }
@@ -370,7 +371,7 @@ async function verifyStatefulDevEvidence(
 async function runGate(runId: string, pipelineId: string, stage: string, stateRoot: string): Promise<any> {
   const { manifest, runRoot } = await loadRun(runId, stateRoot);
   const { executor, contract } = resolveGate(manifest, pipelineId, stage);
-  const validation = await inspectFile(contract, executor);
+  const validation = await inspectFile(contract, executor, { candidateBranch: manifest.git_setup?.branch });
   if (validation.status !== 'READY') {
     throw new CliError(`GITHUB_WORKFLOW_NOT_READY: ${validation.status}: ${(validation.issues ?? []).join('; ')}`);
   }
