@@ -243,6 +243,23 @@ function validateProjectPolicy(manifest, cwd) {
   catch { throw new ManifestV2PolicyError('project policy is not valid JSON'); }
   if (policy.schema_version !== 1) throw new ManifestV2PolicyError('project policy schema_version must be 1');
   assertSafePathArray(policy.protected_paths, 'project_policy.protected_paths');
+  if (policy.github_actions !== undefined) {
+    if (!policy.github_actions || typeof policy.github_actions !== 'object' || Array.isArray(policy.github_actions)) {
+      throw new ManifestV2PolicyError('project_policy.github_actions must be an object');
+    }
+    for (const [kind, gate] of Object.entries(policy.github_actions)) {
+      if (!['ci', 'dev'].includes(kind) || !gate || typeof gate !== 'object' || Array.isArray(gate)) {
+        throw new ManifestV2PolicyError('project_policy.github_actions may define only ci/dev objects');
+      }
+      if (!safeRelativePath(gate.workflow) || !gate.workflow.startsWith('.github/workflows/') ||
+          !/\.ya?ml$/i.test(gate.workflow) || !GITHUB_JOB_ID.test(String(gate.terminal_job ?? ''))) {
+        throw new ManifestV2PolicyError(`project_policy.github_actions.${kind} has invalid workflow/terminal_job`);
+      }
+      if (gate.trigger !== undefined && !['push', 'workflow_dispatch'].includes(gate.trigger)) {
+        throw new ManifestV2PolicyError(`project_policy.github_actions.${kind}.trigger is invalid`);
+      }
+    }
+  }
 
   for (const protectedPath of policy.protected_paths ?? []) {
     for (const scope of manifest.allowed_change_paths ?? []) {
