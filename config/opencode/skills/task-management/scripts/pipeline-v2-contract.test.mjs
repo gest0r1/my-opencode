@@ -1366,6 +1366,13 @@ test('stage-cli supersede creates a fresh draft with lineage but never copies ru
   assert.equal(oldState.superseded_by, nextRun);
   assert.equal(oldState.supersede_reason, 'BASELINE_SCOPE_MISMATCH');
 
+  result = run(fx.root, ['next', fx.manifest.run_id, '--json']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /RUN_SUPERSEDED/);
+  result = run(fx.root, ['start', fx.manifest.run_id, 'implementation', '--pipeline', 'app']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /RUN_SUPERSEDED/);
+
   result = run(fx.root, ['plan-run-preflight', nextManifestPath, '--environment']);
   assert.equal(result.status, 0, result.stderr);
 });
