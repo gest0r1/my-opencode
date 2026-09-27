@@ -451,6 +451,7 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   };
   delete fx.manifest.pipelines[0].ready_after_stage;
   delete fx.manifest.pipelines[0].release_ready_after_stage;
+  fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/test' };
   await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
 
   const stateRoot = path.join(fx.root, '.tmp', 'github-evidence-state');
@@ -464,11 +465,18 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   result = run(fx.root, ['complete', fx.manifest.run_id, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 
-  result = run(fx.root, ['start', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
+  result = run(fx.root, ['start', fx.manifest.run_id, 'git-verify', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
-  result = run(fx.root, ['complete', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /EVIDENCE_MISSING/);
+  await writeFile(path.join(fx.runRoot, 'git-verify.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: fx.manifest.run_id,
+    branch: 'feature/test',
+    head_sha: 'b'.repeat(40),
+    changed_files: ['src/app.ts'],
+    verified_at: new Date(Date.now() + 1000).toISOString(),
+  }, null, 2));
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'git-verify', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
 
   const candidateSha = 'c'.repeat(40);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
@@ -477,6 +485,17 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
     candidate_sha: candidateSha,
     remote_sha: candidateSha,
   }, null, 2));
+  result = run(fx.root, ['start', fx.manifest.run_id, 'publish', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'publish', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(fx.root, ['start', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /EVIDENCE_MISSING/);
+
   await mkdir(path.join(fx.runRoot, 'github'), { recursive: true });
   await writeFile(path.join(fx.runRoot, 'github', 'app-tests.json'), JSON.stringify({
     status: 'PASS',
@@ -529,6 +548,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
   };
   delete fx.manifest.pipelines[0].ready_after_stage;
   delete fx.manifest.pipelines[0].release_ready_after_stage;
+  fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/test' };
   await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
 
   const stateRoot = path.join(fx.root, '.tmp', 'stateful-dev-state');
@@ -542,6 +562,19 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
   result = run(fx.root, ['complete', fx.manifest.run_id, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 
+  result = run(fx.root, ['start', fx.manifest.run_id, 'git-verify', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  await writeFile(path.join(fx.runRoot, 'git-verify.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: fx.manifest.run_id,
+    branch: 'feature/test',
+    head_sha: 'b'.repeat(40),
+    changed_files: ['src/app.ts'],
+    verified_at: new Date(Date.now() + 1000).toISOString(),
+  }, null, 2));
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'git-verify', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
   const candidateSha = 'e'.repeat(40);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
     status: 'PASS',
@@ -549,6 +582,11 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     candidate_sha: candidateSha,
     remote_sha: candidateSha,
   }, null, 2));
+  result = run(fx.root, ['start', fx.manifest.run_id, 'publish', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'publish', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
   await mkdir(path.join(fx.runRoot, 'github'), { recursive: true });
   await writeFile(path.join(fx.runRoot, 'github', 'app-tests.json'), JSON.stringify({
     status: 'PASS',
