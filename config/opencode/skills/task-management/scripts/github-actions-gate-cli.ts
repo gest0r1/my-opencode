@@ -149,6 +149,19 @@ async function inspectFile(contract: GateContract, executor: Executor): Promise<
   return inspectWorkflowText(text, contract, executor);
 }
 
+function probeActions(repo: string): { accessible: true; enabled?: boolean } {
+  ghJson(['api', `repos/${repo}/actions/workflows?per_page=1`]);
+  try {
+    const permissions = ghJson(['api', `repos/${repo}/actions/permissions`]);
+    return { accessible: true, enabled: permissions?.enabled !== false };
+  } catch {
+    // Repository-admin permission is not required for pipeline execution.
+    // A successful workflows listing proves Actions API access; inability to read
+    // the admin-only permissions endpoint must not create a false blocker.
+    return { accessible: true };
+  }
+}
+
 async function inspectCommand(args: string[]): Promise<void> {
   const workflow = args[1];
   const terminalJob = args[2];
@@ -166,8 +179,20 @@ async function inspectCommand(args: string[]): Promise<void> {
     ...(option(args, '--evidence-file') ? { evidence_file: option(args, '--evidence-file') } : {}),
   };
   try {
+    const repo = repository();
+    const actions = probeActions(repo);
+    if (actions.enabled === false) {
+      console.log(JSON.stringify({
+        status: 'BLOCKED',
+        repository: repo,
+        workflow,
+        terminal_job: terminalJob,
+        reason: 'GITHUB_ACTIONS_DISABLED',
+      }, null, 2));
+      return;
+    }
     const result = await inspectFile(contract, executor);
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ ...result, repository: repo, actions_accessible: true }, null, 2));
   } catch (error) {
     console.log(JSON.stringify({
       status: 'BLOCKED',
