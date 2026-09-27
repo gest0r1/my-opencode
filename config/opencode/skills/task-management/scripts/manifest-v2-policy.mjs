@@ -404,8 +404,33 @@ function validateGithubExecutionContract(manifest) {
           if (pipeline.stages.indexOf(gate.source_ci_stage) >= pipeline.stages.indexOf(stage)) {
             throw new ManifestV2PolicyError(`GITHUB_DEV_SOURCE_CI_ORDER_INVALID: ${pipeline.id}/${stage}`);
           }
-          if (gate.mode === 'stateful' && (typeof gate.environment !== 'string' || !gate.environment.trim())) {
-            throw new ManifestV2PolicyError(`GITHUB_DEV_ENVIRONMENT_REQUIRED: ${pipeline.id}/${stage}`);
+          if (gate.mode === 'stateful') {
+            if (gate.trigger !== 'workflow_dispatch') {
+              throw new ManifestV2PolicyError(`GITHUB_STATEFUL_DEV_REQUIRES_DISPATCH: ${pipeline.id}/${stage}`);
+            }
+            if (gate.bootstrap_required === true) {
+              throw new ManifestV2PolicyError(`GITHUB_STATEFUL_DEV_CANNOT_BOOTSTRAP_IN_CANDIDATE: ${pipeline.id}/${stage}`);
+            }
+            if (typeof gate.environment !== 'string' || !gate.environment.trim()) {
+              throw new ManifestV2PolicyError(`GITHUB_DEV_ENVIRONMENT_REQUIRED: ${pipeline.id}/${stage}`);
+            }
+            if (typeof gate.trusted_ref !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(gate.trusted_ref) ||
+                gate.trusted_ref.includes('..') || gate.trusted_ref.endsWith('/')) {
+              throw new ManifestV2PolicyError(`GITHUB_DEV_TRUSTED_REF_INVALID: ${pipeline.id}/${stage}`);
+            }
+            if (typeof gate.artifact !== 'string' || !gate.artifact.trim()) {
+              throw new ManifestV2PolicyError(`GITHUB_DEV_EVIDENCE_ARTIFACT_REQUIRED: ${pipeline.id}/${stage}`);
+            }
+            if (typeof gate.evidence_file !== 'string' || !/^[A-Za-z0-9._-]+\.json$/.test(gate.evidence_file)) {
+              throw new ManifestV2PolicyError(`GITHUB_DEV_EVIDENCE_FILE_INVALID: ${pipeline.id}/${stage}`);
+            }
+            const sourceGate = pipeline.github_gates?.[gate.source_ci_stage];
+            if (!sourceGate || typeof sourceGate.artifact !== 'string' || !sourceGate.artifact.trim()) {
+              throw new ManifestV2PolicyError(`GITHUB_DEV_SOURCE_ARTIFACT_REQUIRED: ${pipeline.id}/${stage}`);
+            }
+            if ((manifest.allowed_change_paths ?? []).some((scope) => scopesOverlap(scope, gate.workflow))) {
+              throw new ManifestV2PolicyError(`GITHUB_STATEFUL_DEV_WORKFLOW_MUTABLE: ${gate.workflow} must remain trusted outside candidate change scope`);
+            }
           }
         }
       } else if (gate !== undefined) {
