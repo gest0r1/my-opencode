@@ -1,0 +1,26 @@
+name: Pipeline gate live fixture
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Expected ref SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline_ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify dispatch ref identity
+        env:
+          EXPECTED_SHA: ${{ inputs.candidate_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          printf 'verified %s\n' "$GITHUB_SHA"
