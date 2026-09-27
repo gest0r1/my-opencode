@@ -37,14 +37,13 @@ Unknown modes/arguments BLOCK.
 For implementation stages, dispatch only work-item IDs frozen in the v2 manifest. Resolve the exact frozen path+SHA-256 and pass that work item plus its `decision_ids/research_ids/contract_ids`, context files and `allowed_change_paths` to the worker. Never invent an ad-hoc work item during RUN. A missing/changed work item is BLOCKED/replan.
 
 Before each stage:
-1. Git scope verify;
-2. `stage-cli start`;
-3. GitHub sync;
-4. execute;
-5. record evidence;
-6. `stage-cli complete|block|fail`;
-7. sync again;
-8. query `next`.
+1. `stage-cli start`;
+2. GitHub sync;
+3. execute only the frozen executor; source-changing `agent` work is followed by Git scope verification, while a dedicated `git_verify` stage runs `git-worktree-cli verify` after its start so its evidence is fresh for that stage;
+4. record deterministic evidence;
+5. `stage-cli complete|block|fail`;
+6. sync again;
+7. query `next`.
 
 Pending GitHub outbox events must be zero before publish/PR handoff.
 
@@ -55,11 +54,11 @@ Dispatch strictly by the frozen `executors[stage_id]`; never infer executor from
 - `agent`: implementation / `technical_fix` work goes to the scoped worker for the exact frozen work item. Worker agents never publish or transition state.
 - `review`: fresh CodeReviewer with `technical_fix|replan|security_stop|scope_stop|secret_stop|destructive_stop|optional`.
 - `local_gate`: call `gate-runner-cli.ts <run-id> <pipeline-id> <stage-id>`. Only its PASS evidence can satisfy the stage; `stage-cli complete` verifies the canonical evidence file.
-- `git_verify`: use only `git-worktree-cli verify <manifest>`.
+- `git_verify`: after `stage-cli start`, use only `git-worktree-cli verify <manifest>`. It writes canonical `git-verify.json`; `stage-cli complete` rejects missing or pre-stage/stale verify evidence.
 - `git_publish`: Git verify, then `git-worktree-cli publish <manifest>`. `stage-cli complete` requires PASS `candidate.json` with `candidate_sha == remote_sha`.
 - `github_ci`: first run `github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id>`, then after candidate publication call `github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id>`. It accepts only the frozen workflow/event/branch and the exact published SHA, successful terminal job and required artifact. `stage-cli complete` independently verifies that evidence.
 - `github_dev`: call the same deterministic `validate` then `run`. DEV evidence must refer to the exact current candidate and the exact PASS run of its frozen `source_ci_stage`. For stateful DEV, the CLI dispatches the workflow from frozen `trusted_ref` (normally `main`), passes only `candidate_sha`, source `ci_run_id`, source artifact name and pipeline correlation ID, then validates downloaded DEV evidence including `installed_sha == candidate_sha`. Candidate code may not mutate that trusted workflow.
-- Docs are changed by DocWriter only when represented by a frozen agent work item/scope; deterministic docs checks, if any, are explicit `local_gate` or `github_ci` stages.
+- Source documentation is changed by DocWriter only when represented by a frozen `agent` work item/scope and must complete before `git_publish`. Deterministic docs checks, if any, are explicit `local_gate` or `github_ci` stages. Post-publish finalization may update pipeline/PR metadata only; any repository source change after publication requires a new candidate SHA and rerun of affected GitHub/runtime gates.
 
 ### Missing or incompatible project workflow
 
@@ -94,7 +93,7 @@ After any source-changing fix to an already published candidate: Git verify, pub
 
 - `ready`: functional/acceptance gates through frozen `ready_after_stage` passed.
 - `release_ready`: release/build/runtime gates through `release_ready_after_stage` passed.
-- `completed`: every frozen stage, including required documentation/finalization, is completed/skipped with evidence.
+- `completed`: every frozen stage, including pre-publish source documentation and post-validation non-source handoff/finalization, is completed/skipped with evidence.
 
 Do not use natural-language completion to skip these state transitions. A pipeline may continue from `ready` or `release_ready` into later frozen stages.
 
