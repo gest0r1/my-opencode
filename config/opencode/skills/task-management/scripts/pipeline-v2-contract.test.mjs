@@ -415,6 +415,87 @@ test('schema v2 freezes authoritative GitHub Issue snapshot hash', async () => {
   );
 });
 
+test('schema v2 requires fresh and upgrade jobs for deployable pipelines', async () => {
+  const fx = await fixture('v2-deployable-validation');
+  fx.manifest.pipelines[0].deployable = true;
+  fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests');
+  fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
+  fx.manifest.pipelines[0].executors.publish = 'git_publish';
+  fx.manifest.pipelines[0].executors.tests = 'github_ci';
+  fx.manifest.pipelines[0].github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'push',
+      artifact: 'candidate-build',
+    },
+  };
+
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /DEPLOYMENT_VALIDATION_REQUIRED/,
+  );
+
+  fx.manifest.pipelines[0].deployment_validation = {
+    stage: 'tests',
+    fresh_job: 'fresh_install',
+    upgrade_job: 'upgrade_install',
+  };
+  fx.manifest.pipelines[0].github_gates.tests.required_jobs = ['fresh_install'];
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /DEPLOYMENT_VALIDATION_JOBS_MISSING/,
+  );
+
+  fx.manifest.pipelines[0].github_gates.tests.required_jobs.push('upgrade_install');
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+});
+
+test('external SSH deployment target requires frozen PLAN-time probe evidence', async () => {
+  const fx = await fixture('v2-external-target');
+  await mkdir(path.join(fx.root, '.opencode'), { recursive: true });
+  const policyText = JSON.stringify({
+    schema_version: 1,
+    protected_paths: [],
+    required_gates: [],
+    deployment_target: {
+      kind: 'external_ssh',
+      host: 'dev.example.test',
+      user: 'deploy',
+      port: 22,
+    },
+  }, null, 2);
+  await writeFile(path.join(fx.root, '.opencode', 'pipeline-policy.json'), policyText);
+  fx.manifest.project_policy = {
+    path: '.opencode/pipeline-policy.json',
+    sha256: sha(policyText),
+  };
+
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /deployment_target_check/,
+  );
+
+  fx.manifest.deployment_target_check = await fx.frozen(
+    'planning/deployment-target.json',
+    JSON.stringify({
+      status: 'READY',
+      run_id: fx.manifest.run_id,
+      kind: 'external_ssh',
+      host: 'dev.example.test',
+      user: 'deploy',
+      port: 22,
+    }, null, 2),
+  );
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+});
+
 test('schema v2 freezes optional project policy and enforces protected paths', async () => {
   const fx = await fixture('v2-policy');
   await mkdir(path.join(fx.root, '.opencode'), { recursive: true });
