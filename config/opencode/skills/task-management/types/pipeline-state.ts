@@ -15,6 +15,31 @@ export type RulesSource = 'project' | 'opencode_default';
 export type PipelineSourceType = 'text' | 'file' | 'github_issues';
 export type PlanningGateStatus = 'ready' | 'needs_revision' | 'blocked';
 
+export type StageExecutor =
+  | 'agent'
+  | 'review'
+  | 'local_gate'
+  | 'git_verify'
+  | 'git_publish'
+  | 'github_ci'
+  | 'github_dev';
+
+export type GithubGateTrigger = 'push' | 'workflow_dispatch';
+export type GithubDevMode = 'disposable' | 'stateful';
+
+export interface GithubGateContract {
+  workflow: string;
+  terminal_job: string;
+  trigger: GithubGateTrigger;
+  artifact?: string;
+  environment?: string;
+  mode?: GithubDevMode;
+  source_ci_stage?: string;
+  bootstrap_required?: boolean;
+  bootstrap_work_item_id?: string;
+  timeout_seconds?: number;
+}
+
 export interface PipelineIssueSource {
   repository: string;
   number: number;
@@ -87,6 +112,8 @@ export interface ProjectPolicyRef {
 export interface PipelineManifestPipeline {
   id: string;
   stages: string[];
+  executors?: Record<string, StageExecutor>;
+  github_gates?: Record<string, GithubGateContract>;
   depends_on?: string[];
   profile?: string;
   runtime_locks?: string[];
