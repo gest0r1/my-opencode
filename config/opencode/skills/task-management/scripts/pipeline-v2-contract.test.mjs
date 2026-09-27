@@ -534,6 +534,7 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   assert.equal(result.status, 0, result.stderr);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
     status: 'PASS',
+    run_id: fx.manifest.run_id,
     branch: 'feature/test',
     candidate_sha: candidateSha,
     remote_sha: candidateSha,
@@ -632,6 +633,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
   assert.equal(result.status, 0, result.stderr);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
     status: 'PASS',
+    run_id: fx.manifest.run_id,
     branch: 'feature/test',
     candidate_sha: candidateSha,
     remote_sha: candidateSha,
@@ -664,6 +666,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
   const republishedSha = 'f'.repeat(40);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
     status: 'PASS',
+    run_id: fx.manifest.run_id,
     branch: 'feature/test',
     candidate_sha: republishedSha,
     remote_sha: republishedSha,
@@ -675,6 +678,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
 
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
     status: 'PASS',
+    run_id: fx.manifest.run_id,
     branch: 'feature/test',
     candidate_sha: candidateSha,
     remote_sha: candidateSha,
@@ -761,6 +765,7 @@ test('technical fix after publish reopens verify and publish before GitHub CI', 
   assert.equal(result.status, 0, result.stderr);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
     status: 'PASS',
+    run_id: fx.manifest.run_id,
     branch: 'feature/test',
     candidate_sha: 'c'.repeat(40),
     remote_sha: 'c'.repeat(40),
