@@ -20,12 +20,12 @@ Unknown modes/arguments BLOCK.
 
 ## Authority
 
-`stage-cli` owns frozen manifest/rules/planning evidence, DAG and state. `git-worktree-cli` owns identity/scope/non-force publication. `gate-runner-cli` owns machine commands/evidence. Model output never overrides deterministic FAIL/BLOCKED or owner decisions. OpenStage is the only orchestrator; never delegate orchestration to BatchExecutor or another child.
+`stage-cli` owns frozen manifest/rules/planning evidence, DAG, executor contracts and state. `git-worktree-cli` owns identity/scope/non-force publication. `gate-runner-cli` owns only stages explicitly frozen as `local_gate`. `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV validation, exact-candidate run selection and evidence. Model output never overrides deterministic FAIL/BLOCKED or owner decisions. OpenStage is the only orchestrator; never delegate orchestration to BatchExecutor or another child.
 
 ## Preflight
 
 1. `stage-cli validate <run-id> --json`, `stage-cli next <run-id> --json`; require approved/in-progress state and matching frozen manifest/rules/evidence/project-policy hashes.
-2. Invoke `stage-cli preflight <manifest.json> --environment` before dispatch. Schema v2 rechecks planning evidence, source snapshot, work-items, conflict serialization and package-manager contract.
+2. Invoke `stage-cli preflight <manifest.json> --environment` before dispatch. Schema v2 rechecks planning evidence, source snapshot, work-items, conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract for `local_gate` only.
 3. `git-worktree-cli freshness <manifest>`: fetch `origin/main`. Relevant drift in allowed/freshness/global dependency/pipeline config is `STALE_PLAN` → BLOCK for `/pipeline-refresh` + new approval. Unrelated drift may be deterministically merged and recorded as effective run base. Merge conflicts are never agent-resolved scope expansion.
 4. `git-worktree-cli adopt <manifest>`; then `verify <manifest>`.
 5. Owner ensures no other RUN is active. Runtime locks remain secondary safety for external mutable targets.
@@ -50,13 +50,30 @@ Pending GitHub outbox events must be zero before publish/PR handoff.
 
 ## Dispatch and machine gates
 
-- Implementation / `technical_fix`: CoderAgent receives one exact frozen work item. After changes require Git verify. Worker agents never publish or transition state.
-- Machine test/lint/typecheck/build/docs/runtime gates: call `gate-runner-cli.ts <run-id> <pipeline-id> <stage-id>` with the exact frozen stage ID. Only PASS evidence from this CLI completes the gate.
-- Respect frozen package-manager contract. Never replace missing pnpm with npm/`npx --yes`; missing required tooling is environment BLOCKED.
-- Review: fresh CodeReviewer with `technical_fix|replan|security_stop|scope_stop|secret_stop|destructive_stop|optional`.
-- Docs: DocWriter only within frozen docs scope; project policy triggered docs gates must run.
-- Publish: Git verify → deterministic publish → exact remote candidate SHA; never merge main.
-- Runtime install/smoke: install the published GitHub candidate/artifact using frozen runtime gate commands and runtime lock where declared.
+Dispatch strictly by the frozen `executors[stage_id]`; never infer executor from a stage name.
+
+- `agent`: implementation / `technical_fix` work goes to the scoped worker for the exact frozen work item. Worker agents never publish or transition state.
+- `review`: fresh CodeReviewer with `technical_fix|replan|security_stop|scope_stop|secret_stop|destructive_stop|optional`.
+- `local_gate`: call `gate-runner-cli.ts <run-id> <pipeline-id> <stage-id>`. Only its PASS evidence can satisfy the stage; `stage-cli complete` verifies the canonical evidence file.
+- `git_verify`: use only `git-worktree-cli verify <manifest>`.
+- `git_publish`: Git verify, then `git-worktree-cli publish <manifest>`. `stage-cli complete` requires PASS `candidate.json` with `candidate_sha == remote_sha`.
+- `github_ci`: first run `github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id>`, then after candidate publication call `github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id>`. It accepts only the frozen workflow/event/branch and the exact published SHA, successful terminal job and required artifact. `stage-cli complete` independently verifies that evidence.
+- `github_dev`: call the same deterministic `validate` then `run`. DEV evidence must refer to the exact current candidate and the exact PASS run of its frozen `source_ci_stage`. Stateful DEV additionally uses the frozen GitHub Environment contract.
+- Docs are changed by DocWriter only when represented by a frozen agent work item/scope; deterministic docs checks, if any, are explicit `local_gate` or `github_ci` stages.
+
+### Missing or incompatible project workflow
+
+A frozen GitHub gate marked `bootstrap_required` means RUN must implement the mapped CI/bootstrap work item in the TARGET PROJECT before candidate publication. After that source change:
+
+1. Git scope verify;
+2. `github-actions-gate-cli validate <run-id> <pipeline-id> <github-stage>`;
+3. if validation is not PASS, repair only inside the same frozen work item/scope using the normal technical-fix counter;
+4. publish the candidate branch;
+5. for first-time workflows use the frozen `push` trigger and wait for that exact candidate SHA.
+
+Never replace a missing, incompatible or failed authoritative GitHub workflow with local npm/pnpm/pytest/build commands. If the frozen bootstrap/adaptation scope cannot produce a valid workflow, BLOCK/replan.
+
+Respect the repository package-manager contract for `local_gate`. Missing local tooling is environment BLOCKED; it does not authorize changing package managers.
 
 ## technical_fix loops — maximum 3
 
@@ -71,7 +88,7 @@ For a failed qualitative/machine gate that is classified `technical_fix` and rem
 
 Maximum **3 automatic technical_fix cycles per stage/work-item**. Record the cycle number in review/evidence. A fourth required fix is `blocked` and requires owner attention/replan. `replan`, security, secret, destructive or scope findings never consume/enter a technical-fix loop.
 
-After a fix to an already published candidate: publish a NEW candidate SHA, reinstall that exact SHA and rerun affected runtime validation.
+After any source-changing fix to an already published candidate: Git verify, publish a NEW candidate SHA, then rerun every affected `github_ci`, artifact, `github_dev`/runtime and acceptance gate. Evidence from the previous candidate is stale by construction and `stage-cli complete` must reject it.
 
 ## Status semantics
 
@@ -115,6 +132,6 @@ Planning/reviews are always fresh. Invalid reuse starts a fresh child, never ano
 
 ## Stops
 
-BLOCK on stale main/base, wrong worktree, changed planning evidence/source snapshot/project policy/work item, scope violation, unresolved owner decision, manifest/rules mismatch, missing/non-executable gate, package-manager/environment failure, secret/security/destructive condition, conflict that requires a DAG change, runtime failure needing design change, or a fourth technical-fix cycle.
+BLOCK on stale main/base, wrong worktree, changed planning evidence/source snapshot/project policy/work item, scope violation, unresolved owner decision, manifest/rules mismatch, GitHub gate without a valid frozen contract, missing workflow without its frozen bootstrap/adaptation work item, GitHub run/evidence from the wrong SHA/workflow/job/artifact, local-gate package-manager/environment failure, secret/security/destructive condition, conflict that requires a DAG change, runtime failure needing design change, or a fourth technical-fix cycle.
 
 If queue is empty, report the actual terminal state; never bypass prerequisites or rewrite frozen evidence. Include run/pipeline status, branch, source/candidate SHA, work-item IDs, machine evidence, runtime result, technical-fix cycle counts and blocker dossier. Never delete historical runs.
