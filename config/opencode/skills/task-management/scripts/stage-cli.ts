@@ -105,7 +105,11 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
       const source = sourceStage
         ? await readJsonEvidence(join(artifactRoot, 'github', pipeline.id + '-' + sourceStage + '.json'), pipeline.id + '/' + sourceStage)
         : undefined;
+      const requiresAutomatedPostDeploy =
+        ['opencode_host', 'hybrid'].includes(String(pipeline.testing_strategy?.mode ?? '')) &&
+        ['automated', 'automated_then_user'].includes(String(pipeline.testing_strategy?.post_deploy_test ?? ''));
       const devCommon = evidence.dev_evidence_validated === true &&
+        (!requiresAutomatedPostDeploy || evidence.smoke_result === 'PASS') &&
         String(evidence.installed_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
         source?.status === 'PASS' &&
         String(source?.candidate_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
@@ -240,8 +244,12 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
       evidence.executor === executor && evidence.workflow === contract?.workflow &&
       evidence.terminal_job === contract?.terminal_job &&
       String(evidence.candidate_sha).toLowerCase() === String(candidate.candidate_sha).toLowerCase();
+    const requiresAutomatedPostDeploy =
+      ['opencode_host', 'hybrid'].includes(String(pipeline.testing_strategy?.mode ?? '')) &&
+      ['automated', 'automated_then_user'].includes(String(pipeline.testing_strategy?.post_deploy_test ?? ''));
     const executorSpecificValid = executor === 'github_dev'
       ? evidence.dev_evidence_validated === true &&
+        (!requiresAutomatedPostDeploy || evidence.smoke_result === 'PASS') &&
         String(evidence.installed_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
         (contract?.mode === 'stateful'
           ? evidence.trusted_ref === contract?.trusted_ref &&
