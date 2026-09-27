@@ -179,10 +179,50 @@ function globMatch(pattern: string, value: string): boolean {
     if (char === '*') {
       if (pattern[index + 1] === '*') { source += '.*'; index += 1; }
       else source += '[^/]*';
-    } else if (char === '?') source += '[^/]';
-    else source += /[\\^$.*+?()[\]{}|]/.test(char) ? '\\' + char : char;
+    } else if (char === '?') {
+      source += '[^/]';
+    } else {
+      source += /[\\^$.*+?()[\]{}|]/.test(char) ? '\\' + char : char;
+    }
   }
-  return new RegExp(source + '
+  return new RegExp(source + '$').test(value);
+}
+
+function validateEnvironment(repo: string, contract: GateContract): Record<string, unknown> | undefined {
+  if (contract.mode !== 'stateful' || !contract.environment || !contract.trusted_ref) return undefined;
+  const environment = ghJson([
+    'api',
+    `repos/${repo}/environments/${encodeURIComponent(contract.environment)}`,
+  ]);
+  const branchPolicy = environment?.deployment_branch_policy;
+  if (branchPolicy?.protected_branches === true) {
+    const repository = ghJson(['api', `repos/${repo}`]);
+    if (repository?.default_branch !== contract.trusted_ref) {
+      throw new CliError(
+        `GITHUB_ENVIRONMENT_TRUSTED_REF_NOT_PROTECTED: expected default branch ${String(repository?.default_branch)}`,
+      );
+    }
+  }
+  if (branchPolicy?.custom_branch_policies === true) {
+    const policies = ghJson([
+      'api',
+      `repos/${repo}/environments/${encodeURIComponent(contract.environment)}/deployment-branch-policies?per_page=100`,
+    ])?.branch_policies ?? [];
+    const allowed = policies.some((policy: any) =>
+      typeof policy?.name === 'string' && globMatch(policy.name, contract.trusted_ref as string));
+    if (!allowed) {
+      throw new CliError(`GITHUB_ENVIRONMENT_TRUSTED_REF_NOT_ALLOWED: ${contract.trusted_ref}`);
+    }
+  }
+  return {
+    environment_id: environment?.id ?? null,
+    environment: contract.environment,
+    trusted_ref: contract.trusted_ref,
+    protection_rules: Array.isArray(environment?.protection_rules) ? environment.protection_rules.length : 0,
+    deployment_branch_policy: branchPolicy ?? null,
+  };
+}
+
 async function inspectCommand(args: string[]): Promise<void> {
   const workflow = args[1];
   const terminalJob = args[2];
@@ -217,7 +257,13 @@ async function inspectCommand(args: string[]): Promise<void> {
     const candidateBranch = command('git', ['branch', '--show-current']).trim() || undefined;
     const result = await inspectFile(contract, executor, { candidateBranch });
     const environment = result.status === 'READY' ? validateEnvironment(repo, contract) : undefined;
-    console.log(JSON.stringify({ ...result, repository: repo, actions_accessible: true, candidate_branch: candidateBranch ?? null, ...(environment ? { environment_validation: environment } : {}) }, null, 2));
+    console.log(JSON.stringify({
+      ...result,
+      repository: repo,
+      actions_accessible: true,
+      candidate_branch: candidateBranch ?? null,
+      ...(environment ? { environment_validation: environment } : {}),
+    }, null, 2));
   } catch (error) {
     console.log(JSON.stringify({
       status: 'BLOCKED',
@@ -268,8 +314,11 @@ async function sourceCiEvidence(runRoot: string, pipelineId: string, contract: G
   if (!contract.source_ci_stage) return undefined;
   const path = join(runRoot, 'github', `${pipelineId}-${contract.source_ci_stage}.json`);
   const evidence = JSON.parse(await readFile(path, 'utf8'));
-  if (evidence.status !== 'PASS' || String(evidence.candidate_sha).toLowerCase() !== candidateSha.toLowerCase()) {
-    throw new CliError('source CI evidence is missing, failed or belongs to another candidate SHA');
+  if (evidence.status !== 'PASS' ||
+      String(evidence.candidate_sha).toLowerCase() !== candidateSha.toLowerCase() ||
+      typeof evidence.artifact_digest !== 'string' ||
+      !/^sha256:[0-9a-f]{64}$/i.test(evidence.artifact_digest)) {
+    throw new CliError('source CI evidence is missing, failed, digestless or belongs to another candidate SHA');
   }
   return evidence;
 }
@@ -401,7 +450,11 @@ async function verifyDevEvidence(
     const file = join(directory, contract.evidence_file);
     const data = JSON.parse(await readFile(file, 'utf8'));
     try {
-      return validateDevEvidence(data, { candidateSha, ciRunId: sourceCiRunId, ciArtifactDigest: sourceCiArtifactDigest });
+      return validateDevEvidence(data, {
+        candidateSha,
+        ciRunId: sourceCiRunId,
+        ciArtifactDigest: sourceCiArtifactDigest,
+      });
     } catch (error) {
       throw new CliError(error instanceof Error ? error.message : String(error));
     }
@@ -469,7 +522,12 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
     ...(environmentValidation ? { environment_validation: environmentValidation } : {}),
     mode: contract.mode ?? null,
     trusted_ref: contract.trusted_ref ?? null,
-    ...(devEvidence ? { dev_evidence_validated: true, installed_sha: devEvidence.installed_sha, ci_artifact_digest: devEvidence.ci_artifact_digest, smoke_result: devEvidence.smoke_result } : {}),
+    ...(devEvidence ? {
+      dev_evidence_validated: true,
+      installed_sha: devEvidence.installed_sha,
+      ci_artifact_digest: devEvidence.ci_artifact_digest,
+      smoke_result: devEvidence.smoke_result,
+    } : {}),
     recorded_at: new Date().toISOString(),
   };
   const evidenceFile = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
@@ -488,375 +546,6 @@ function usage(): string {
   return [
     'usage:',
     '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--concurrency-group <group>] [--evidence-file <file>]',
-    '  github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
-    '  github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
-    '  github-actions-gate-cli.ts show <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
-  ].join('\n');
-}
-
-async function main(args: string[]): Promise<void> {
-  const commandName = args[0];
-  if (commandName === 'inspect') {
-    if (!args[1] || !args[2]) throw new CliError(usage());
-    await inspectCommand(args);
-    return;
-  }
-  const runId = args[1];
-  const pipelineId = args[2];
-  const stage = args[3];
-  if (!runId || !pipelineId || !stage) throw new CliError(usage());
-  const stateRoot = option(args, '--state-root') ?? DEFAULT_STATE_ROOT;
-  if (commandName === 'validate') {
-    console.log(JSON.stringify(await validateCommand(runId, pipelineId, stage, stateRoot), null, 2));
-    return;
-  }
-  if (commandName === 'run') {
-    console.log(JSON.stringify(await runGate(runId, pipelineId, stage, stateRoot), null, 2));
-    return;
-  }
-  if (commandName === 'show') {
-    await showCommand(runId, pipelineId, stage, stateRoot);
-    return;
-  }
-  throw new CliError(usage());
-}
-
-export { inspectFile, resolveGate, validateCommand, runGate };
-
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  main(process.argv.slice(2)).catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`BLOCKED: github_actions_gate: ${message}`);
-    process.exitCode = 1;
-  });
-}
-).test(value);
-}
-
-function validateEnvironment(repo: string, contract: GateContract): Record<string, unknown> | undefined {
-  if (contract.mode !== 'stateful' || !contract.environment || !contract.trusted_ref) return undefined;
-  const environment = ghJson([
-    'api',
-    `repos/${repo}/environments/${encodeURIComponent(contract.environment)}`,
-  ]);
-  const branchPolicy = environment?.deployment_branch_policy;
-  if (branchPolicy?.protected_branches === true) {
-    const repository = ghJson(['api', `repos/${repo}`]);
-    if (repository?.default_branch !== contract.trusted_ref) {
-      throw new CliError(`GITHUB_ENVIRONMENT_TRUSTED_REF_NOT_PROTECTED: expected default branch ${repository?.default_branch}`);
-    }
-  }
-  if (branchPolicy?.custom_branch_policies === true) {
-    const policies = ghJson([
-      'api',
-      `repos/${repo}/environments/${encodeURIComponent(contract.environment)}/deployment-branch-policies?per_page=100`,
-    ])?.branch_policies ?? [];
-    const allowed = policies.some((policy: any) =>
-      typeof policy?.name === 'string' && globMatch(policy.name, contract.trusted_ref as string));
-    if (!allowed) {
-      throw new CliError(`GITHUB_ENVIRONMENT_TRUSTED_REF_NOT_ALLOWED: ${contract.trusted_ref}`);
-    }
-  }
-  return {
-    environment_id: environment?.id ?? null,
-    environment: contract.environment,
-    trusted_ref: contract.trusted_ref,
-    protection_rules: Array.isArray(environment?.protection_rules) ? environment.protection_rules.length : 0,
-    deployment_branch_policy: branchPolicy ?? null,
-  };
-}
-
-async function inspectCommand(args: string[]): Promise<void> {
-  const workflow = args[1];
-  const terminalJob = args[2];
-  const trigger = (option(args, '--trigger') ?? 'push') as GateContract['trigger'];
-  const executor = (option(args, '--executor') ?? 'github_ci') as Executor;
-  const contract: GateContract = {
-    workflow,
-    terminal_job: terminalJob,
-    trigger,
-    ...(option(args, '--artifact') ? { artifact: option(args, '--artifact') } : {}),
-    ...(option(args, '--mode') ? { mode: option(args, '--mode') as GateContract['mode'] } : {}),
-    ...(option(args, '--source-ci-stage') ? { source_ci_stage: option(args, '--source-ci-stage') } : {}),
-    ...(option(args, '--environment') ? { environment: option(args, '--environment') } : {}),
-    ...(option(args, '--trusted-ref') ? { trusted_ref: option(args, '--trusted-ref') } : {}),
-    ...(option(args, '--evidence-file') ? { evidence_file: option(args, '--evidence-file') } : {}),
-  };
-  try {
-    const repo = repository();
-    const actions = probeActions(repo);
-    if (actions.enabled === false) {
-      console.log(JSON.stringify({
-        status: 'BLOCKED',
-        repository: repo,
-        workflow,
-        terminal_job: terminalJob,
-        reason: 'GITHUB_ACTIONS_DISABLED',
-      }, null, 2));
-      return;
-    }
-    const candidateBranch = command('git', ['branch', '--show-current']).trim() || undefined;
-    const result = await inspectFile(contract, executor, { candidateBranch });
-    console.log(JSON.stringify({ ...result, repository: repo, actions_accessible: true, candidate_branch: candidateBranch ?? null }, null, 2));
-  } catch (error) {
-    console.log(JSON.stringify({
-      status: 'BLOCKED',
-      workflow,
-      terminal_job: terminalJob,
-      reason: error instanceof Error ? error.message : String(error),
-    }, null, 2));
-  }
-}
-
-async function validateCommand(runId: string, pipelineId: string, stage: string, stateRoot: string): Promise<any> {
-  const { manifest } = await loadRun(runId, stateRoot);
-  const { executor, contract } = resolveGate(manifest, pipelineId, stage);
-  const result = await inspectFile(contract, executor, { candidateBranch: manifest.git_setup?.branch });
-  if (result.status !== 'READY') {
-    throw new CliError(`GITHUB_WORKFLOW_NOT_READY: ${result.status}: ${(result.issues ?? []).join('; ')}`);
-  }
-  return {
-    status: 'PASS',
-    gate: 'github_actions_validate',
-    run_id: runId,
-    pipeline_id: pipelineId,
-    stage,
-    executor,
-    ...result,
-  };
-}
-
-async function readCandidate(runRoot: string, manifest: Manifest): Promise<Candidate> {
-  const candidate = JSON.parse(await readFile(join(runRoot, 'candidate.json'), 'utf8')) as Candidate;
-  if (candidate.status !== 'PASS' || !SHA.test(candidate.candidate_sha) || !SHA.test(candidate.remote_sha)) {
-    throw new CliError('candidate evidence is missing or invalid');
-  }
-  if (candidate.candidate_sha.toLowerCase() !== candidate.remote_sha.toLowerCase()) {
-    throw new CliError('candidate SHA does not match remote SHA');
-  }
-  if (manifest.git_setup?.branch && candidate.branch !== manifest.git_setup.branch) {
-    throw new CliError('candidate branch does not match frozen manifest');
-  }
-  return candidate;
-}
-
-async function sourceCiEvidence(runRoot: string, pipelineId: string, contract: GateContract, candidateSha: string): Promise<any> {
-  if (!contract.source_ci_stage) return undefined;
-  const path = join(runRoot, 'github', `${pipelineId}-${contract.source_ci_stage}.json`);
-  const evidence = JSON.parse(await readFile(path, 'utf8'));
-  if (evidence.status !== 'PASS' || String(evidence.candidate_sha).toLowerCase() !== candidateSha.toLowerCase()) {
-    throw new CliError('source CI evidence is missing, failed or belongs to another candidate SHA');
-  }
-  return evidence;
-}
-
-function workflowId(path: string): string {
-  return basename(path);
-}
-
-function listRuns(repo: string, workflow: string, branch: string): any[] {
-  const endpoint = `repos/${repo}/actions/workflows/${encodeURIComponent(workflowId(workflow))}/runs?branch=${encodeURIComponent(branch)}&per_page=100`;
-  return ghJson(['api', endpoint])?.workflow_runs ?? [];
-}
-
-function fetchRun(repo: string, id: number): any {
-  return ghJson(['api', `repos/${repo}/actions/runs/${id}`]);
-}
-
-function fetchJobs(repo: string, id: number): any[] {
-  return ghJson(['api', `repos/${repo}/actions/runs/${id}/jobs?filter=latest&per_page=100`])?.jobs ?? [];
-}
-
-function fetchArtifacts(repo: string, id: number): any[] {
-  return ghJson(['api', `repos/${repo}/actions/runs/${id}/artifacts?per_page=100`])?.artifacts ?? [];
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
-}
-
-async function waitForRun(
-  repo: string,
-  runId: string,
-  pipeline: PipelineSpec,
-  contract: GateContract,
-  candidate: Candidate,
-  sourceCi: any,
-): Promise<any> {
-  const timeoutMs = (contract.timeout_seconds ?? 900) * 1000;
-  const pollMs = Math.max(250, Number(process.env.GITHUB_ACTIONS_GATE_POLL_MS ?? 5000));
-  const deadline = Date.now() + timeoutMs;
-
-  if (contract.mode === 'stateful') {
-    if (!contract.trusted_ref || !contract.source_ci_stage) throw new CliError('stateful DEV trusted/source contract is missing');
-    const sourceContract = pipeline.github_gates?.[contract.source_ci_stage];
-    if (!sourceContract?.artifact) throw new CliError('stateful DEV source CI artifact contract is missing');
-    const before = listRuns(repo, contract.workflow, contract.trusted_ref).map((item) => Number(item.id));
-    command('gh', [
-      'workflow', 'run', workflowId(contract.workflow),
-      '--repo', repo,
-      '--ref', contract.trusted_ref,
-      '-f', `candidate_sha=${candidate.candidate_sha}`,
-      '-f', `ci_run_id=${sourceCi.workflow_run_id}`,
-      '-f', `ci_artifact=${sourceContract.artifact}`,
-      '-f', `pipeline_run_id=${runId}`,
-    ]);
-    while (Date.now() < deadline) {
-      const selected = selectStatefulWorkflowRun(
-        listRuns(repo, contract.workflow, contract.trusted_ref),
-        {
-          trustedRef: contract.trusted_ref,
-          correlation: runId,
-          candidateSha: candidate.candidate_sha,
-          excludeIds: before,
-        },
-      );
-      if (selected) {
-        const current = fetchRun(repo, Number(selected.id));
-        if (current.status === 'completed') return current;
-      }
-      await sleep(pollMs);
-    }
-    throw new CliError(`GITHUB_DEV_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate.candidate_sha}`);
-  }
-
-  if (contract.trigger === 'workflow_dispatch') {
-    const dispatchArgs = [
-      'workflow', 'run', workflowId(contract.workflow),
-      '--repo', repo,
-      '--ref', candidate.branch,
-      '-f', 'candidate_sha=' + candidate.candidate_sha,
-    ];
-    if (contract.mode === 'disposable') {
-      if (!sourceCi || !contract.source_ci_stage) throw new CliError('disposable DEV source CI evidence is missing');
-      const sourceContract = pipeline.github_gates?.[contract.source_ci_stage];
-      if (!sourceContract?.artifact) throw new CliError('disposable DEV source CI artifact contract is missing');
-      dispatchArgs.push(
-        '-f', 'ci_run_id=' + sourceCi.workflow_run_id,
-        '-f', 'ci_artifact=' + sourceContract.artifact,
-        '-f', 'pipeline_run_id=' + runId,
-      );
-    }
-    command('gh', dispatchArgs);
-  }
-
-  while (Date.now() < deadline) {
-    const selected = selectWorkflowRun(listRuns(repo, contract.workflow, candidate.branch), {
-      candidateSha: candidate.candidate_sha,
-      branch: candidate.branch,
-      event: contract.trigger,
-    });
-    if (selected) {
-      const current = fetchRun(repo, Number(selected.id));
-      if (current.status === 'completed') return current;
-    }
-    await sleep(pollMs);
-  }
-  throw new CliError(`GITHUB_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate.candidate_sha}`);
-}
-
-async function verifyDevEvidence(
-  repo: string,
-  run: any,
-  contract: GateContract,
-  candidateSha: string,
-  sourceCiRunId: number,
-): Promise<any> {
-  if (!contract.artifact || !contract.evidence_file) throw new CliError('DEV evidence contract is missing');
-  const directory = await mkdtemp(join(tmpdir(), 'pipeline-dev-evidence-'));
-  try {
-    command('gh', [
-      'run', 'download', String(run.id),
-      '--repo', repo,
-      '--name', contract.artifact,
-      '--dir', directory,
-    ]);
-    const file = join(directory, contract.evidence_file);
-    const data = JSON.parse(await readFile(file, 'utf8'));
-    try {
-      return validateDevEvidence(data, { candidateSha, ciRunId: sourceCiRunId });
-    } catch (error) {
-      throw new CliError(error instanceof Error ? error.message : String(error));
-    }
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-}
-
-async function runGate(runId: string, pipelineId: string, stage: string, stateRoot: string): Promise<any> {
-  const { manifest, runRoot } = await loadRun(runId, stateRoot);
-  const { executor, contract } = resolveGate(manifest, pipelineId, stage);
-  const validation = await inspectFile(contract, executor, { candidateBranch: manifest.git_setup?.branch });
-  if (validation.status !== 'READY') {
-    throw new CliError(`GITHUB_WORKFLOW_NOT_READY: ${validation.status}: ${(validation.issues ?? []).join('; ')}`);
-  }
-
-  const candidate = await readCandidate(runRoot, manifest);
-  const repo = repository(manifest);
-  const sourceCi = executor === 'github_dev'
-    ? await sourceCiEvidence(runRoot, pipelineId, contract, candidate.candidate_sha)
-    : undefined;
-  const run = await waitForRun(repo, runId, resolveGate(manifest, pipelineId, stage).pipeline, contract, candidate, sourceCi);
-  const jobs = fetchJobs(repo, Number(run.id));
-  const artifacts = fetchArtifacts(repo, Number(run.id));
-  let result;
-  try {
-    result = validateWorkflowResult({
-      run,
-      jobs,
-      artifacts,
-      contract,
-      candidateSha: candidate.candidate_sha,
-      terminalJobName: validation.terminal_job_name,
-      executor,
-      sourceCiRunId: sourceCi?.workflow_run_id,
-    });
-  } catch (error) {
-    throw new CliError(error instanceof Error ? error.message : String(error));
-  }
-
-  const devEvidence = executor === 'github_dev'
-    ? await verifyDevEvidence(
-        repo,
-        run,
-        contract,
-        candidate.candidate_sha,
-        Number(sourceCi?.workflow_run_id),
-      )
-    : undefined;
-
-  const evidence = {
-    ...result,
-    gate: 'github_actions',
-    run_id: runId,
-    pipeline_id: pipelineId,
-    stage,
-    executor,
-    repository: repo,
-    workflow: contract.workflow,
-    branch: candidate.branch,
-    environment: contract.environment ?? null,
-    mode: contract.mode ?? null,
-    trusted_ref: contract.trusted_ref ?? null,
-    ...(devEvidence ? { dev_evidence_validated: true, installed_sha: devEvidence.installed_sha, smoke_result: devEvidence.smoke_result } : {}),
-    recorded_at: new Date().toISOString(),
-  };
-  const evidenceFile = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
-  await mkdir(dirname(evidenceFile), { recursive: true });
-  await writeFile(evidenceFile, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
-  return { ...evidence, evidence: evidenceFile };
-}
-
-async function showCommand(runId: string, pipelineId: string, stage: string, stateRoot: string): Promise<void> {
-  const { runRoot } = await loadRun(runId, stateRoot);
-  const file = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
-  console.log(await readFile(file, 'utf8'));
-}
-
-function usage(): string {
-  return [
-    'usage:',
-    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--evidence-file <file>]',
     '  github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts show <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
