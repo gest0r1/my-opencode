@@ -38,6 +38,10 @@ type PipelineSpec = {
   executors?: Record<string, string>;
   github_gates?: Record<string, GateContract>;
   future_github_gates?: Record<string, GateContract>;
+  testing_strategy?: {
+    mode?: 'github' | 'opencode_host' | 'hybrid';
+    post_deploy_test?: 'automated' | 'user' | 'automated_then_user';
+  };
 };
 type Manifest = {
   run_id: string;
@@ -553,6 +557,15 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
         String(sourceCi?.artifact_digest ?? ''),
       )
     : undefined;
+
+  if (executor === 'github_dev' &&
+      ['opencode_host', 'hybrid'].includes(String(resolveGate(manifest, pipelineId, stage).pipeline.testing_strategy?.mode ?? '')) &&
+      ['automated', 'automated_then_user'].includes(
+        String(resolveGate(manifest, pipelineId, stage).pipeline.testing_strategy?.post_deploy_test ?? ''),
+      ) &&
+      devEvidence?.smoke_result !== 'PASS') {
+    throw new CliError('GITHUB_DEV_AUTOMATED_TEST_EVIDENCE_REQUIRED');
+  }
 
   const evidence = {
     ...result,
