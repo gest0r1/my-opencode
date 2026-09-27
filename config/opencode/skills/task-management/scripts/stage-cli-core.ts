@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { access, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -21,6 +21,15 @@ const STATE_FILE = 'state.json';
 const LOCK_FILE = '.lock';
 const HUMAN_ONLY = 'human_only';
 const DISTRIBUTION_ONLY = 'distribution_only';
+const SUPERSEDE_REASONS = new Set([
+  'V1_TO_V2_MIGRATION',
+  'MANIFEST_CONTRACT_CORRECTION',
+  'BASELINE_SCOPE_MISMATCH',
+  'PLANNING_EVIDENCE_CORRECTION',
+  'OWNER_SCOPE_CHANGE',
+  'ARCHITECTURE_REPLAN',
+  'MAIN_DRIFT_REPLAN',
+]);
 const DEFAULT_RULES_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -54,6 +63,7 @@ export interface StageCommandOptions {
   message?: string;
   evidencePath?: string;
   environment?: boolean;
+  reason?: string;
 }
 
 export interface RunnableStage {
@@ -615,6 +625,9 @@ export async function initFromManifest(
   const manifestContent = await readFile(absoluteManifestPath, 'utf8');
   const manifest = JSON.parse(manifestContent) as unknown;
   assertManifest(manifest);
+  if ((manifest as PipelineManifest).schema_version !== 2) {
+    throw new StageCliError('NEW_PLAN_SCHEMA_V2_REQUIRED: stage-cli init creates schema v2 runs only; legacy v1 remains audit/read-only');
+  }
 
   const rules = await resolveEffectiveRules(manifest.rules_file, absoluteManifestPath);
   if (rules.metadata.rules_version !== manifest.rules_version) {
@@ -880,6 +893,9 @@ async function updateState(
   const unlock = await acquireLock(stateRoot, runId);
   try {
     const state = await validateState(stateRoot, runId);
+    if (state.superseded_by) {
+      throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
+    }
     const before = new Map(Object.values(state.pipelines).map((pipeline) => [pipeline.id, pipeline.status]));
     updater(state);
     recalculateRunStatus(state);
@@ -1102,6 +1118,82 @@ export async function resumeStage(
   });
 }
 
+
+async function copyIfPresent(source:string,destination:string,recursive=false):Promise<void>{
+  if(!(await fileExists(source)))return;
+  await cp(source,destination,{recursive,force:false,errorOnExist:true});
+}
+
+export async function supersedeRun(
+  stateRoot:string,
+  oldRunId:string,
+  newRunId:string,
+  reason:string,
+):Promise<Record<string,unknown>>{
+  if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(newRunId) || newRunId===oldRunId) {
+    throw new StageCliError('supersede requires a new safe run-id');
+  }
+  if(!SUPERSEDE_REASONS.has(reason)) {
+    throw new StageCliError(`invalid supersede reason: ${reason}`);
+  }
+  const oldState=await validateState(stateRoot,oldRunId);
+  if(!oldState.manifest_file)throw new StageCliError('old run has no frozen manifest');
+  const oldManifest=JSON.parse(await readFile(oldState.manifest_file,'utf8')) as PipelineManifest;
+  if(oldManifest.schema_version!==2) {
+    throw new StageCliError('LEGACY_V1_REPLAN_REQUIRED: v1 cannot be mechanically superseded; create a fresh v2 PLAN with lineage reason V1_TO_V2_MIGRATION');
+  }
+  const oldRoot=dirname(resolve(oldState.manifest_file));
+  const newRoot=join(dirname(oldRoot),newRunId);
+  if(await fileExists(newRoot) || await fileExists(statePath(stateRoot,newRunId))) {
+    throw new StageCliError(`supersede destination already exists: ${newRunId}`);
+  }
+  await mkdir(newRoot,{recursive:true});
+  try {
+    for(const directory of ['planning','stories','reviews','sources','work-items']){
+      await copyIfPresent(join(oldRoot,directory),join(newRoot,directory),true);
+    }
+    await rm(join(newRoot,'planning','deployment-target.json'),{force:true});
+    for(const file of [
+      'decision-register.md','technology-evidence.md','contract-inventory.md',
+      'test-strategy.md','accepted-risks.md','work-items.json',
+    ]){
+      await copyIfPresent(join(oldRoot,file),join(newRoot,file));
+    }
+    const cloned:PipelineManifest={...oldManifest,run_id:newRunId};
+    cloned.lineage={
+      change_class: reason==='ARCHITECTURE_REPLAN'||reason==='MAIN_DRIFT_REPLAN' ? 'replan' : 'supersede',
+      supersedes:oldRunId,
+      reason_code:reason as any,
+    };
+    if(cloned.deployment_target_check)delete cloned.deployment_target_check;
+    await writeFile(join(newRoot,'manifest.json'),`${JSON.stringify(cloned,null,2)}\n`,'utf8');
+
+    const unlock=await acquireLock(stateRoot,oldRunId);
+    try{
+      const state=await validateState(stateRoot,oldRunId);
+      state.superseded_by=newRunId;
+      state.supersede_reason=reason as any;
+      state.updated_at=now();
+      await writeJsonAtomic(statePath(stateRoot,oldRunId),state);
+    }finally{await unlock();}
+
+    return {
+      status:'PASS',
+      change_class:cloned.lineage.change_class,
+      old_run_id:oldRunId,
+      new_run_id:newRunId,
+      reason_code:reason,
+      manifest:join(newRoot,'manifest.json'),
+      state_copied:false,
+      machine_evidence_copied:false,
+      deployment_target_check_reset:Boolean(oldManifest.deployment_target_check),
+    };
+  }catch(error){
+    await rm(newRoot,{recursive:true,force:true});
+    throw error;
+  }
+}
+
 function parseOptions(args: string[]): { positional: string[]; options: StageCommandOptions } {
   const positional: string[] = [];
   const options: StageCommandOptions = { json: false, stateRoot: DEFAULT_STATE_ROOT };
@@ -1113,6 +1205,7 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
     else if (argument === '--message') options.message = args[++index];
     else if (argument === '--evidence') options.evidencePath = args[++index];
     else if (argument === '--environment') options.environment = true;
+    else if (argument === '--reason') options.reason = args[++index];
     else if (argument?.startsWith('--')) throw new StageCliError(`Unknown option: ${argument}`);
     else if (argument) positional.push(argument);
   }
@@ -1166,6 +1259,7 @@ function usage(): string {
     'Usage:',
     '  stage-cli rules [rules-file] [--json]',
     '  stage-cli preflight <manifest> [--environment] [--json]',
+    '  stage-cli plan-run-preflight <manifest> [--environment] [--json]',
     '  stage-cli artifacts <run-id> <run-relative-path>... [--state-root <path>] [--json]',
     '  stage-cli policy [repo-relative-path] [--json]',
     '  stage-cli init <manifest> [--state-root <path>] [--environment]',
@@ -1180,6 +1274,7 @@ function usage(): string {
     '  stage-cli fail|block <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
     '  stage-cli resume <run-id> <stage> [--pipeline <id>]',
     '  stage-cli fix-cycle <run-id> <stage> [--pipeline <id>] [--json]',
+    '  stage-cli supersede <old-run-id> <new-run-id> --reason <reason-code> [--state-root <path>] [--json]',
   ].join('\n');
 }
 
@@ -1199,6 +1294,21 @@ export async function runCli(args: string[]): Promise<void> {
     const result = await preflightFile(manifest, { environment: options.environment, cwd: process.cwd() });
     if (options.json) console.log(JSON.stringify(result, null, 2));
     else console.log('PASS checked_commands=' + result.checked_commands + ' environment_checked=' + result.environment_checked);
+    return;
+  }
+  if (command === 'plan-run-preflight') {
+    const manifestPath = positional[1];
+    if (!manifestPath) throw new StageCliError('Manifest path is required');
+    const manifest = JSON.parse(await readFile(resolve(manifestPath), 'utf8')) as PipelineManifest;
+    if (manifest.schema_version !== 2) {
+      throw new StageCliError('NEW_PLAN_SCHEMA_V2_REQUIRED: owner approval may only be requested for schema v2');
+    }
+    const { preflightFile } = await import('./manifest-preflight.mjs');
+    const result = await preflightFile(manifestPath, { environment: options.environment, cwd: process.cwd() });
+    const output = { status: 'PASS', run_id: manifest.run_id, schema_version: 2, checked_commands: result.checked_commands,
+      environment_checked: result.environment_checked };
+    if (options.json) console.log(JSON.stringify(output, null, 2));
+    else console.log(`PASS run_id=${manifest.run_id} schema_version=2`);
     return;
   }
   if (command === 'init') {
@@ -1225,6 +1335,17 @@ export async function runCli(args: string[]): Promise<void> {
     return;
   }
 
+  if (command === 'supersede') {
+    const oldRunId = positional[1];
+    const newRunId = positional[2];
+    if (!oldRunId || !newRunId || !options.reason) {
+      throw new StageCliError('usage: stage-cli supersede <old-run-id> <new-run-id> --reason <reason-code>');
+    }
+    const result = await supersedeRun(options.stateRoot, oldRunId, newRunId, options.reason);
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
   const runId = positional[1];
   if (!runId) throw new StageCliError('run-id is required');
   if (command === 'status') {
@@ -1239,6 +1360,9 @@ export async function runCli(args: string[]): Promise<void> {
   }
   if (command === 'run-preflight') {
     const state = await validateState(options.stateRoot, runId);
+    if (state.superseded_by) {
+      throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
+    }
     if (!state.manifest_file) throw new StageCliError('Frozen manifest is missing');
     const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8')) as PipelineManifest;
     if (manifest.schema_version !== 2) {
@@ -1249,7 +1373,11 @@ export async function runCli(args: string[]): Promise<void> {
     return;
   }
   if (command === 'next') {
-    printRunnable(await validateState(options.stateRoot, runId), options.json);
+    const state = await validateState(options.stateRoot, runId);
+    if (state.superseded_by) {
+      throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
+    }
+    printRunnable(state, options.json);
     return;
   }
   if (command === 'approve') {

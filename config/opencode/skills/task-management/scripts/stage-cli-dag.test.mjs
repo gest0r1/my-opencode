@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,23 +28,77 @@ async function writeManifest(root, manifest) {
   return manifestPath;
 }
 
-function baseManifest(runId, pipelines) {
+function sha(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+async function frozen(root, relative, content) {
+  const file = path.join(root, relative);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, content, 'utf8');
+  return { path: relative, sha256: sha(content) };
+}
+
+async function baseManifest(root, runId, pipelines) {
+  const architecture = await frozen(root, 'planning/architecture.md', '# architecture\n');
+  const architectureReview = await frozen(root, 'reviews/architecture.md', '# review\n');
+  const requiredArtifacts = {
+    decision_register: await frozen(root, 'decision-register.md', '# decisions\n'),
+    technology_evidence: await frozen(root, 'technology-evidence.md', '# evidence\n'),
+    contract_inventory: await frozen(root, 'contract-inventory.md', '# contracts\n'),
+    test_strategy: await frozen(root, 'test-strategy.md', '# tests\n'),
+    accepted_risks: await frozen(root, 'accepted-risks.md', '# risks\n'),
+    work_items: await frozen(root, 'work-items/index.json', '{"schema":2}\n'),
+  };
+  const workItems = [];
+  const normalized = [];
+  for (const pipeline of pipelines) {
+    const id = `wi-${pipeline.id}`;
+    const artifact = await frozen(root, `work-items/${id}.json`, JSON.stringify({ id, pipeline_id: pipeline.id }));
+    workItems.push({ id, pipeline_id: pipeline.id, ...artifact });
+    normalized.push({
+      ...pipeline,
+      deployable: false,
+      executors: Object.fromEntries(pipeline.stages.map((stage) => [stage, 'agent'])),
+      work_items: [id],
+      decision_ids: [],
+      research_ids: [],
+      contract_ids: [],
+    });
+  }
   return {
-    schema_version: 1,
+    schema_version: 2,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,
     planning_mode: 'design-freeze',
-    planning_readiness: 'ready',
+    planning_readiness: {
+      design_freeze: true,
+      required_gates: ['architecture'],
+      gates: {
+        architecture: {
+          required: true,
+          status: 'ready',
+          cycles: 1,
+          artifact: architecture,
+          review: architectureReview,
+          blocking_decision_ids: [],
+        },
+      },
+      required_artifacts: requiredArtifacts,
+    },
     open_decisions: [],
-    pipelines,
+    allowed_change_paths: [],
+    gate_profiles: {},
+    pipelines: normalized,
+    work_items: workItems,
   };
 }
 
 test('next exposes only dependency-ready stages and supports independent parallel roots', async () => {
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
-  const manifest = baseManifest('dag-ready-run', [
+  const manifest = await baseManifest(root, 'dag-ready-run', [
     { id: 'a', stages: ['implementation'] },
     { id: 'b', stages: ['implementation'], depends_on: ['a'] },
     { id: 'c', stages: ['implementation'] },
@@ -114,7 +169,7 @@ test('next exposes only dependency-ready stages and supports independent paralle
 test('init rejects dependency cycles before execution', async () => {
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
-  const manifest = baseManifest('cycle-run', [
+  const manifest = await baseManifest(root, 'cycle-run', [
     { id: 'a', stages: ['implementation'], depends_on: ['b'] },
     { id: 'b', stages: ['implementation'], depends_on: ['a'] },
   ]);
@@ -127,7 +182,7 @@ test('init rejects dependency cycles before execution', async () => {
 test('validate fails closed when approved manifest changes', async () => {
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
-  const manifest = baseManifest('manifest-freeze-run', [
+  const manifest = await baseManifest(root, 'manifest-freeze-run', [
     { id: 'app', stages: ['implementation'] },
   ]);
   const manifestPath = await writeManifest(root, manifest);
@@ -146,8 +201,28 @@ test('validate fails closed when approved manifest changes', async () => {
 
 
 test('github issue source freezes mapping and queues status audit events', async () => {
-  const root=await tempProject(),stateRoot=path.join(root,'.tmp','pipelines');const manifest={...baseManifest('github-issue-run',[{id:'app',stages:['implementation'],issue_numbers:[51,47]}]),source_type:'github_issues',repository:'owner/repo',source_issues:[{repository:'owner/repo',number:51,url:'https://github.com/owner/repo/issues/51',title:'One'},{repository:'owner/repo',number:47,url:'https://github.com/owner/repo/issues/47',title:'Two'}]};const manifestPath=await writeManifest(root,manifest);let result=run(root,['init',manifestPath,'--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);result=run(root,['approve',manifest.run_id,'--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);result=run(root,['start',manifest.run_id,'implementation','--pipeline','app','--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);const state=JSON.parse(result.stdout);assert.deepEqual(state.pipelines.app.issue_numbers,[51,47]);assert.deepEqual(state.github_outbox.map(e=>[e.from_status??'created',e.to_status]),[['created','planned'],['planned','approved'],['approved','in_progress']]);assert.equal(new Set(state.github_outbox.map(e=>e.id)).size,state.github_outbox.length);
+  const root=await tempProject(),stateRoot=path.join(root,'.tmp','pipelines');const manifest={...(await baseManifest(root,'github-issue-run',[{id:'app',stages:['implementation'],issue_numbers:[51,47]}])),source_type:'github_issues',repository:'owner/repo',source_issues:[{repository:'owner/repo',number:51,url:'https://github.com/owner/repo/issues/51',title:'One'},{repository:'owner/repo',number:47,url:'https://github.com/owner/repo/issues/47',title:'Two'}]};const snapshot=JSON.stringify({issues:manifest.source_issues});await mkdir(path.join(root,'sources'),{recursive:true});await writeFile(path.join(root,'sources','github-issues.json'),snapshot);manifest.source_snapshot_sha256=sha(snapshot);const manifestPath=await writeManifest(root,manifest);let result=run(root,['init',manifestPath,'--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);result=run(root,['approve',manifest.run_id,'--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);result=run(root,['start',manifest.run_id,'implementation','--pipeline','app','--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);const state=JSON.parse(result.stdout);assert.deepEqual(state.pipelines.app.issue_numbers,[51,47]);assert.deepEqual(state.github_outbox.map(e=>[e.from_status??'created',e.to_status]),[['created','planned'],['planned','approved'],['approved','in_progress']]);assert.equal(new Set(state.github_outbox.map(e=>e.id)).size,state.github_outbox.length);
 });
 test('github issue source rejects an unmapped issue', async () => {
-  const root=await tempProject(),stateRoot=path.join(root,'.tmp','pipelines');const manifest={...baseManifest('github-unmapped-run',[{id:'app',stages:['implementation'],issue_numbers:[51]}]),source_type:'github_issues',repository:'owner/repo',source_issues:[{repository:'owner/repo',number:51,url:'https://github.com/owner/repo/issues/51',title:'One'},{repository:'owner/repo',number:47,url:'https://github.com/owner/repo/issues/47',title:'Two'}]};const manifestPath=await writeManifest(root,manifest);const result=run(root,['init',manifestPath,'--state-root',stateRoot]);assert.notEqual(result.status,0);assert.match(result.stderr,/Source issue #47 is not mapped/);
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = {
+    ...(await baseManifest(root, 'github-unmapped-run', [
+      { id: 'app', stages: ['implementation'], issue_numbers: [51] },
+    ])),
+    source_type: 'github_issues',
+    repository: 'owner/repo',
+    source_issues: [
+      { repository: 'owner/repo', number: 51, url: 'https://github.com/owner/repo/issues/51', title: 'One' },
+      { repository: 'owner/repo', number: 47, url: 'https://github.com/owner/repo/issues/47', title: 'Two' },
+    ],
+  };
+  const snapshot = JSON.stringify({ issues: manifest.source_issues });
+  await mkdir(path.join(root, 'sources'), { recursive: true });
+  await writeFile(path.join(root, 'sources', 'github-issues.json'), snapshot);
+  manifest.source_snapshot_sha256 = sha(snapshot);
+  const manifestPath = await writeManifest(root, manifest);
+  const result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Source issue #47 is not mapped/);
 });
