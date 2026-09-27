@@ -238,13 +238,14 @@ selected repositories with these capabilities:
 | Issues | Read/write | requirement reads and audit comments |
 | Pull requests | Read/write | create/update delivery PR |
 | Actions | Read/write | inspect candidate workflow runs and dispatch trusted `workflow_dispatch` gates when frozen by the project contract |
+| Environments | Read | validate DEV/OpenCode-host Environment, deployment branch policy and configured secret names without reading secret values |
 
 `Issues: write` is needed because GitHub does not provide a separate
 comment-only write permission. The deterministic tools therefore enforce the
 narrower policy in code: they read Issues and post comments, but do not expose an
 Issue state-change/close command.
 
-The pipeline engine has no generic secrets-management or PR-merge operation. Stateful DEV deployment credentials remain inside the target repository's protected GitHub Environment/workflow. If the actual CD target is an external SSH machine, PLAN proves non-interactive reachability/authentication through `deployment-target-cli inspect` and RUN rechecks it before deployment; OpenStage and subagents never receive raw SSH capability.
+The pipeline engine has no generic secrets-management or PR-merge operation. Stateful DEV deployment credentials remain inside the target repository's protected GitHub Environment/workflow. When the selected target is the machine where OpenCode runs, PLAN uses `deployment-target-cli inspect` to dispatch the trusted GitHub probe workflow and prove GitHub→host reachability/authentication; RUN repeats that probe immediately before CD. The CLI inspects only required Environment secret **names**, never secret values, and OpenStage/subagents never receive raw `gh` or SSH capability.
 
 ## Failure behavior
 
