@@ -14,6 +14,8 @@ permission:
     "npx tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
@@ -22,6 +24,7 @@ permission:
     "npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "npx tsx .opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
     "node .opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
@@ -85,7 +88,8 @@ Do not duplicate their procedures in this agent prompt:
 - `/pipeline-status` owns read-only status presentation.
 - `stage-cli` owns rules/manifest freeze, DAG readiness and state transitions.
 - `git-worktree-cli` owns source identity, changed-file scope and candidate publish.
-- `gate-runner-cli` owns machine command execution/evidence and shared runtime locks.
+- `gate-runner-cli` owns explicitly local fast/runtime command execution, evidence and shared runtime locks.
+- `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV inspection, validation, exact-candidate run selection and evidence.
 - `github-issue-cli` owns authenticated same-repository Issue snapshots for PLAN.
 - `pipeline-github-sync` owns idempotent Issue status/PR-link comments; `github-pr-cli` owns create/update of the single non-merged PR to `main`.
 
@@ -143,8 +147,13 @@ OpenStage owns all stage transitions and reusable task calls. Child agents do
 not call other execution agents to advance the pipeline.
 
 Dispatch implementation only from frozen work-item IDs/path/SHA-256. After each
-source-changing item require Git scope verify. Machine build/test/docs/runtime
-PASS comes from gate-runner evidence, not natural-language claims.
+source-changing item require Git scope verify. In schema v2, authoritative test/build/typecheck/lint
+PASS comes only from `github_ci` evidence produced by `github-actions-gate-cli` for the exact
+published candidate SHA. `gate-runner-cli` may satisfy only stages explicitly frozen as
+`local_gate` (fast checks, docs or project/runtime validation). Natural-language PASS never
+completes a machine stage. If project CI is missing/incompatible, execute the frozen CI-bootstrap
+work item, validate the resulting workflow deterministically, publish it with the candidate and
+then wait for GitHub Actions; never fall back to a local final build/test.
 
 Only `technical_fix` may auto-repair inside frozen scope. Before each repair call
 `stage-cli fix-cycle` for the exact pipeline/stage; maximum 3 cycles per stage/work-item.
