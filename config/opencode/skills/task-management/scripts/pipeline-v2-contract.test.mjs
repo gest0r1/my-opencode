@@ -159,6 +159,9 @@ test('schema v2 requires GitHub CI for authoritative test/build stages', async (
   );
 
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
+  fx.manifest.pipelines[0].stages.splice(-1, 0, 'git-verify', 'publish');
+  fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
+  fx.manifest.pipelines[0].executors.publish = 'git_publish';
   delete fx.manifest.pipelines[0].profile;
   fx.manifest.gate_profiles = {};
   fx.manifest.pipelines[0].github_gates = {
@@ -179,7 +182,9 @@ test('schema v2 freezes CI bootstrap work item and workflow scope', async () => 
   const bootstrap = await fx.frozen('work-items/wi-ci.json', '{"id":"wi-ci"}\n');
   fx.manifest.work_items.push({ id: 'wi-ci', pipeline_id: 'app', ...bootstrap });
   fx.manifest.pipelines[0].work_items.push('wi-ci');
-  fx.manifest.pipelines[0].stages.push('build');
+  fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'build');
+  fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
+  fx.manifest.pipelines[0].executors.publish = 'git_publish';
   fx.manifest.pipelines[0].executors.build = 'github_ci';
   fx.manifest.pipelines[0].github_gates = {
     build: {
@@ -203,7 +208,9 @@ test('schema v2 freezes CI bootstrap work item and workflow scope', async () => 
 
 test('schema v2 protects stateful DEV behind trusted default-branch workflow', async () => {
   const fx = await fixture('v2-stateful-dev');
-  fx.manifest.pipelines[0].stages.push('tests', 'dev');
+  fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests', 'dev');
+  fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
+  fx.manifest.pipelines[0].executors.publish = 'git_publish';
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
   fx.manifest.pipelines[0].executors.dev = 'github_dev';
   fx.manifest.pipelines[0].github_gates = {
@@ -243,7 +250,9 @@ test('schema v2 forbids bootstrapping privileged stateful DEV in candidate code'
   const bootstrap = await fx.frozen('work-items/wi-dev.json', '{"id":"wi-dev"}\n');
   fx.manifest.work_items.push({ id: 'wi-dev', pipeline_id: 'app', ...bootstrap });
   fx.manifest.pipelines[0].work_items.push('wi-dev');
-  fx.manifest.pipelines[0].stages.push('tests', 'dev');
+  fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests', 'dev');
+  fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
+  fx.manifest.pipelines[0].executors.publish = 'git_publish';
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
   fx.manifest.pipelines[0].executors.dev = 'github_dev';
   fx.manifest.allowed_change_paths.push('.github/workflows/**');
@@ -431,8 +440,8 @@ test('project policy CLI reports immutable path and SHA-256', async () => {
 
 test('stage-cli refuses github_ci completion without exact candidate evidence', async () => {
   const fx = await fixture('v2-github-evidence');
-  fx.manifest.pipelines[0].stages = ['implementation', 'tests'];
-  fx.manifest.pipelines[0].executors = { implementation: 'agent', tests: 'github_ci' };
+  fx.manifest.pipelines[0].stages = ['implementation', 'git-verify', 'publish', 'tests'];
+  fx.manifest.pipelines[0].executors = { implementation: 'agent', 'git-verify': 'git_verify', publish: 'git_publish', tests: 'github_ci' };
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
@@ -491,9 +500,11 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
 
 test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI', async () => {
   const fx = await fixture('v2-stateful-dev-evidence');
-  fx.manifest.pipelines[0].stages = ['implementation', 'tests', 'dev'];
+  fx.manifest.pipelines[0].stages = ['implementation', 'git-verify', 'publish', 'tests', 'dev'];
   fx.manifest.pipelines[0].executors = {
     implementation: 'agent',
+    'git-verify': 'git_verify',
+    publish: 'git_publish',
     tests: 'github_ci',
     dev: 'github_dev',
   };
