@@ -45,6 +45,7 @@ permission:
     ".tmp/pipelines/**/gates/**": deny
     ".tmp/pipelines/**/owner/**": deny
     ".tmp/pipelines/**/sources/github-issues.json": deny
+    ".tmp/pipelines/**/planning/deployment-target.json": deny
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
@@ -125,7 +126,7 @@ parallel orchestration protocol.
    shell commands. Use the deterministic CLIs/tools defined by the command contract.
    The installed `worktree-refresh.sh` is authorized ONLY on explicit owner
    `/pipeline-refresh`; PLAN and RUN must never invoke it.
-9. Primary direct writes are limited to planning artifacts under `.tmp/pipelines/**`; machine-owned `state.json`, Git/candidate evidence, GitHub/gate evidence, locks and authoritative Issue snapshots are explicitly edit-denied and may change only through deterministic CLIs. Implementation is
+9. Primary direct writes are limited to planning artifacts under `.tmp/pipelines/**`; machine-owned `state.json`, Git/candidate evidence, GitHub/gate evidence, deployment-target readiness evidence, locks and authoritative Issue snapshots are explicitly edit-denied and may change only through deterministic CLIs. Implementation is
    delegated to scoped working agents. `/pipeline-refresh` is the explicit
    owner exception: only the installed deterministic script may perform its
    documented backup and Git updates; agent itself edits no source or state.
