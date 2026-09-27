@@ -881,6 +881,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     head_sha: candidateSha,
     terminal_job: 'pipeline_ci',
     artifact: 'candidate-build',
+    artifact_id: 90,
     artifact_digest: digest,
   }, null, 2));
 
@@ -928,6 +929,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     trusted_ref: 'main',
     target_id: 'opencode-development-host',
     dev_evidence_validated: true,
+    ci_artifact_id: 90,
     ci_artifact_digest: digest,
     installed_sha: 'd'.repeat(40),
   }, null, 2));
@@ -1086,6 +1088,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
     head_sha: candidateSha,
     terminal_job: 'pipeline_ci',
     artifact: 'candidate-build',
+    artifact_id: 90,
     artifact_digest: digest,
   }, null, 2));
   result = invoke(['start', fx.manifest.run_id, 'tests', '--pipeline', 'app']);
@@ -1109,6 +1112,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
     trusted_ref: 'main',
     target_id: 'opencode-development-host',
     dev_evidence_validated: true,
+    ci_artifact_id: 90,
     ci_artifact_digest: digest,
     installed_sha: candidateSha,
   }, null, 2));
