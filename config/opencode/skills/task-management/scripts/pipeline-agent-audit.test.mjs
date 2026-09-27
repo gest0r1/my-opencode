@@ -108,11 +108,13 @@ test('OpenStage exposes only deterministic GitHub lifecycle commands', async () 
     /github-issue-cli\.ts\*": allow/,
     /github-pr-cli\.ts\*": allow/,
     /github-actions-gate-cli\.ts\*": allow/,
+    /deployment-target-cli\.ts\*": allow/,
     /pipeline-github-sync\.mjs\*": allow/,
   ]) {
     assert.match(yaml, required);
   }
   assert.doesNotMatch(yaml, /["']gh\s+\*["']:\s*allow/i);
+  assert.doesNotMatch(yaml, /["']ssh\s+\*["']:\s*allow/i);
   assert.doesNotMatch(yaml, /gh\s+pr\s+merge/i);
 });
 
