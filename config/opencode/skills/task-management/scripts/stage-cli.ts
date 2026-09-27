@@ -112,9 +112,13 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
   } else if (executor === 'git_publish') {
     evidencePath = join(artifactRoot, 'candidate.json');
     const candidate = await readJsonEvidence(evidencePath, 'candidate');
+    const runtime = state.pipelines?.[pipeline.id]?.stages?.[stage];
     if (candidate.status !== 'PASS' ||
-        String(candidate.candidate_sha).toLowerCase() !== String(candidate.remote_sha).toLowerCase()) {
-      throw new Error('EVIDENCE_INVALID: git_publish candidate is not verified');
+        candidate.branch !== manifest.git_setup?.branch ||
+        String(candidate.candidate_sha).toLowerCase() !== String(candidate.remote_sha).toLowerCase() ||
+        !runtime?.started_at || !candidate.published_at ||
+        Date.parse(candidate.published_at) < Date.parse(runtime.started_at)) {
+      throw new Error('EVIDENCE_INVALID_OR_STALE: git_publish candidate is not verified for this stage');
     }
   }
 
