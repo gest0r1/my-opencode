@@ -22,7 +22,8 @@ export type StageExecutor =
   | 'git_verify'
   | 'git_publish'
   | 'github_ci'
-  | 'github_dev';
+  | 'github_dev'
+  | 'owner_acceptance';
 
 export type GithubGateTrigger = 'push' | 'workflow_dispatch';
 export type GithubDevMode = 'disposable' | 'stateful';
@@ -113,16 +114,29 @@ export interface ProjectPolicyRef {
   sha256: string;
 }
 
+export type DeploymentTestMode = 'github' | 'opencode_host' | 'hybrid';
+export type PostDeployTestMode = 'automated' | 'user' | 'automated_then_user';
+
 export interface DeploymentValidationContract {
   stage: string;
   fresh_job: string;
   upgrade_job: string;
 }
 
+export interface DeploymentTestingStrategy {
+  mode: DeploymentTestMode;
+  owner_decision_id: string;
+  github_validation_stage?: string;
+  opencode_host_stage?: string;
+  post_deploy_test?: PostDeployTestMode;
+  owner_acceptance_stage?: string;
+}
+
 export interface PipelineManifestPipeline {
   id: string;
   deployable?: boolean;
   deployment_validation?: DeploymentValidationContract;
+  testing_strategy?: DeploymentTestingStrategy;
   stages: string[];
   executors?: Record<string, StageExecutor>;
   github_gates?: Record<string, GithubGateContract>;
