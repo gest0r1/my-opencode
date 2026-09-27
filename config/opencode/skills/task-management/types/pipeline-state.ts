@@ -132,12 +132,10 @@ export interface DeploymentTestingStrategy {
   owner_acceptance_stage?: string;
 }
 
-export type DeploymentTargetKind = 'disposable' | 'github_environment' | 'external_ssh';
 
 export interface PipelineManifestPipeline {
   id: string;
   deployable?: boolean;
-  deployment_target_kind?: DeploymentTargetKind;
   deployment_validation?: DeploymentValidationContract;
   testing_strategy?: DeploymentTestingStrategy;
   stages: string[];
