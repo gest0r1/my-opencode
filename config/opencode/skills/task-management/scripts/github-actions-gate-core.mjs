@@ -439,6 +439,69 @@ export function validateDevEvidence(data, { candidateSha, ciRunId, ciArtifactId,
   };
 }
 
+
+export function summarizeGithubJobs(jobs = []) {
+  return jobs.map((job) => ({
+    id: Number(job?.id),
+    name: String(job?.name ?? ''),
+    status: String(job?.status ?? ''),
+    conclusion: job?.conclusion ?? null,
+    failed_steps: Array.isArray(job?.steps)
+      ? job.steps
+          .filter((step) => step?.conclusion && step.conclusion !== 'success' && step.conclusion !== 'skipped')
+          .map((step) => ({
+            number: Number(step?.number),
+            name: String(step?.name ?? ''),
+            status: String(step?.status ?? ''),
+            conclusion: step?.conclusion ?? null,
+          }))
+      : [],
+  }));
+}
+
+export function sanitizeGithubFailedLog(value, maxBytes = 100_000) {
+  const raw = String(value ?? '')
+    .replace(/::add-mask::[^\r\n]*/gi, '::add-mask::[REDACTED]')
+    .replace(/((?:authorization|password|passwd|token|secret|api[_-]?key|cookie)\s*[:=]\s*)([^\s"'\r\n]+)/gi, '$1[REDACTED]');
+  if (Buffer.byteLength(raw, 'utf8') <= maxBytes) return raw;
+  let output = raw.slice(-maxBytes);
+  while (Buffer.byteLength(output, 'utf8') > maxBytes) output = output.slice(Math.ceil(output.length * 0.05));
+  return '[TRUNCATED]\n' + output;
+}
+
+export function buildGithubFailureEvidence({
+  run,
+  jobs = [],
+  artifacts = [],
+  candidateSha,
+  contract,
+  validationError,
+  failedLog = '',
+}) {
+  return {
+    status: 'FAIL',
+    workflow_run_id: Number(run?.id),
+    run_attempt: Number(run?.run_attempt ?? 1),
+    candidate_sha: candidateSha,
+    head_sha: run?.head_sha ?? null,
+    head_branch: run?.head_branch ?? null,
+    event: run?.event ?? null,
+    conclusion: run?.conclusion ?? null,
+    terminal_job: contract?.terminal_job ?? null,
+    required_jobs: contract?.required_jobs ?? [],
+    artifact: contract?.artifact ?? null,
+    validation_error: String(validationError ?? 'GITHUB_GATE_FAILED'),
+    jobs: summarizeGithubJobs(jobs),
+    artifacts: artifacts.map((artifact) => ({
+      id: Number(artifact?.id),
+      name: String(artifact?.name ?? ''),
+      expired: artifact?.expired === true,
+      digest: artifact?.digest ?? null,
+    })),
+    failed_log_excerpt: sanitizeGithubFailedLog(failedLog),
+  };
+}
+
 export function validateWorkflowResult({
   run,
   jobs,
