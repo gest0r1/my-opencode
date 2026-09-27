@@ -1376,3 +1376,35 @@ test('stage-cli supersede creates a fresh draft with lineage but never copies ru
   result = run(fx.root, ['plan-run-preflight', nextManifestPath, '--environment']);
   assert.equal(result.status, 0, result.stderr);
 });
+
+
+test('schema v2 validates preserved baseline shape and reason-coded lineage', async () => {
+  const fx = await fixture('v2-baseline-lineage');
+  fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/existing' };
+  fx.manifest.preserved_baseline = {
+    head_sha: 'b'.repeat(40),
+    changed_paths: ['src/z.ts', 'src/a.ts'],
+    diff_sha256: 'c'.repeat(64),
+  };
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /PRESERVED_BASELINE_PATHS_NOT_SORTED/,
+  );
+
+  fx.manifest.preserved_baseline.changed_paths = ['src/a.ts', 'src/z.ts'];
+  fx.manifest.lineage = {
+    change_class: 'supersede',
+    supersedes: 'older-run',
+    reason_code: 'NOT_A_REASON',
+  };
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /PIPELINE_LINEAGE_INVALID/,
+  );
+
+  fx.manifest.lineage.reason_code = 'BASELINE_SCOPE_MISMATCH';
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+});
