@@ -31,8 +31,8 @@ export function assertGithubGateContract(contract, executor = 'github_ci') {
     throw new GithubActionsGateError('GITHUB_TIMEOUT_INVALID');
   }
   if (executor === 'github_dev') {
-    if (!['disposable', 'stateful'].includes(contract.mode)) {
-      throw new GithubActionsGateError('GITHUB_DEV_MODE_INVALID');
+    if (contract.mode !== 'stateful') {
+      throw new GithubActionsGateError('GITHUB_DEV_EXECUTOR_REQUIRES_STATEFUL_MODE');
     }
     if (typeof contract.source_ci_stage !== 'string' || !contract.source_ci_stage) {
       throw new GithubActionsGateError('GITHUB_DEV_SOURCE_CI_INVALID');
