@@ -130,6 +130,14 @@ test('planning agents do not delegate nested subagents', async () => {
   }
 });
 
+test('canonical RUN requires deterministic v2 run-preflight before next', async () => {
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  assert.match(run, /stage-cli run-preflight <run-id>/);
+  assert.match(run, /LEGACY_V1_REPLAN_REQUIRED/);
+  assert.match(orchestrator, /stage-cli run-preflight/);
+});
+
 test('pipeline contracts pin three technical-fix cycles and literal ready planning gates', async () => {
   const plan = await text('config/opencode/command/pipeline-plan.md');
   const run = await text('config/opencode/command/pipeline-run.md');
