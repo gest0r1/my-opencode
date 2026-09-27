@@ -661,6 +661,25 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
   result = run(fx.root, ['complete', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 
+  const republishedSha = 'f'.repeat(40);
+  await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
+    status: 'PASS',
+    branch: 'feature/test',
+    candidate_sha: republishedSha,
+    remote_sha: republishedSha,
+    published_at: new Date(Date.now() + 2000).toISOString(),
+  }, null, 2));
+  result = run(fx.root, ['start', fx.manifest.run_id, 'dev', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /EVIDENCE_INVALID_OR_STALE/);
+
+  await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
+    status: 'PASS',
+    branch: 'feature/test',
+    candidate_sha: candidateSha,
+    remote_sha: candidateSha,
+    published_at: new Date(Date.now() + 1000).toISOString(),
+  }, null, 2));
   result = run(fx.root, ['start', fx.manifest.run_id, 'dev', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
   await writeFile(path.join(fx.runRoot, 'github', 'app-dev.json'), JSON.stringify({
