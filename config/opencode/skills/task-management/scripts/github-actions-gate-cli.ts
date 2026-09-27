@@ -19,12 +19,15 @@ type Executor = 'github_ci' | 'github_dev';
 type GateContract = {
   workflow: string;
   terminal_job: string;
+  required_jobs?: string[];
   trigger: 'push' | 'workflow_dispatch';
   artifact?: string;
   environment?: string;
   mode?: 'disposable' | 'stateful';
   source_ci_stage?: string;
   trusted_ref?: string;
+  concurrency_group?: string;
+  target_id?: string;
   evidence_file?: string;
   bootstrap_required?: boolean;
   bootstrap_work_item_id?: string;
@@ -35,6 +38,11 @@ type PipelineSpec = {
   stages: string[];
   executors?: Record<string, string>;
   github_gates?: Record<string, GateContract>;
+  future_github_gates?: Record<string, GateContract>;
+  testing_strategy?: {
+    mode?: 'github' | 'opencode_host' | 'hybrid';
+    post_deploy_test?: 'automated' | 'user' | 'automated_then_user';
+  };
 };
 type Manifest = {
   run_id: string;
@@ -62,6 +70,14 @@ class CliError extends Error {}
 function option(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
+}
+
+function options(args: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === name && args[index + 1]) values.push(args[index + 1]);
+  }
+  return values;
 }
 
 function has(args: string[], name: string): boolean {
@@ -142,6 +158,19 @@ function resolveGate(manifest: Manifest, pipelineId: string, stage: string): {
   return { pipeline, executor, contract: contract as GateContract };
 }
 
+function resolveFutureGate(manifest: Manifest, pipelineId: string, gateName: string): {
+  pipeline: PipelineSpec;
+  contract: GateContract;
+} {
+  const pipeline = manifest.pipelines.find((item) => item.id === pipelineId);
+  if (!pipeline) throw new CliError(`pipeline not found: ${pipelineId}`);
+  const contract = pipeline.future_github_gates?.[gateName];
+  if (!contract) throw new CliError(`future GitHub gate not found: ${pipelineId}/${gateName}`);
+  try { assertGithubGateContract(contract, 'github_dev'); }
+  catch (error) { throw new CliError(error instanceof Error ? error.message : String(error)); }
+  return { pipeline, contract };
+}
+
 async function inspectFile(contract: GateContract, executor: Executor, context: { candidateBranch?: string } = {}): Promise<any> {
   const workflow = resolve(contract.workflow);
   if (!(await exists(workflow))) return classifyMissingWorkflow(contract, executor);
@@ -162,6 +191,59 @@ function probeActions(repo: string): { accessible: true; enabled?: boolean } {
   }
 }
 
+function globMatch(pattern: string, value: string): boolean {
+  let source = '^';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*') {
+      if (pattern[index + 1] === '*') { source += '.*'; index += 1; }
+      else source += '[^/]*';
+    } else if (char === '?') {
+      source += '[^/]';
+    } else {
+      source += /[\\^$.*+?()[\]{}|]/.test(char) ? '\\' + char : char;
+    }
+  }
+  return new RegExp(source + '$').test(value);
+}
+
+function validateEnvironment(repo: string, contract: GateContract): Record<string, unknown> | undefined {
+  if (contract.mode !== 'stateful' || !contract.environment || !contract.trusted_ref) return undefined;
+  const environment = ghJson([
+    'api',
+    `repos/${repo}/environments/${encodeURIComponent(contract.environment)}`,
+  ]);
+  const branchPolicy = environment?.deployment_branch_policy;
+  if (!branchPolicy ||
+      (branchPolicy.protected_branches !== true && branchPolicy.custom_branch_policies !== true)) {
+    throw new CliError('GITHUB_ENVIRONMENT_BRANCH_RESTRICTION_REQUIRED');
+  }
+  if (branchPolicy?.protected_branches === true) {
+    const branch = ghJson(['api', `repos/${repo}/branches/${encodeURIComponent(contract.trusted_ref)}`]);
+    if (branch?.protected !== true) {
+      throw new CliError(`GITHUB_ENVIRONMENT_TRUSTED_REF_NOT_PROTECTED: ${contract.trusted_ref}`);
+    }
+  }
+  if (branchPolicy?.custom_branch_policies === true) {
+    const policies = ghJson([
+      'api',
+      `repos/${repo}/environments/${encodeURIComponent(contract.environment)}/deployment-branch-policies?per_page=100`,
+    ])?.branch_policies ?? [];
+    const allowed = policies.some((policy: any) =>
+      typeof policy?.name === 'string' && globMatch(policy.name, contract.trusted_ref as string));
+    if (!allowed) {
+      throw new CliError(`GITHUB_ENVIRONMENT_TRUSTED_REF_NOT_ALLOWED: ${contract.trusted_ref}`);
+    }
+  }
+  return {
+    environment_id: environment?.id ?? null,
+    environment: contract.environment,
+    trusted_ref: contract.trusted_ref,
+    protection_rules: Array.isArray(environment?.protection_rules) ? environment.protection_rules.length : 0,
+    deployment_branch_policy: branchPolicy ?? null,
+  };
+}
+
 async function inspectCommand(args: string[]): Promise<void> {
   const workflow = args[1];
   const terminalJob = args[2];
@@ -172,10 +254,13 @@ async function inspectCommand(args: string[]): Promise<void> {
     terminal_job: terminalJob,
     trigger,
     ...(option(args, '--artifact') ? { artifact: option(args, '--artifact') } : {}),
+    ...(options(args, '--required-job').length ? { required_jobs: options(args, '--required-job') } : {}),
     ...(option(args, '--mode') ? { mode: option(args, '--mode') as GateContract['mode'] } : {}),
     ...(option(args, '--source-ci-stage') ? { source_ci_stage: option(args, '--source-ci-stage') } : {}),
     ...(option(args, '--environment') ? { environment: option(args, '--environment') } : {}),
     ...(option(args, '--trusted-ref') ? { trusted_ref: option(args, '--trusted-ref') } : {}),
+    ...(option(args, '--concurrency-group') ? { concurrency_group: option(args, '--concurrency-group') } : {}),
+    ...(option(args, '--target-id') ? { target_id: option(args, '--target-id') } : {}),
     ...(option(args, '--evidence-file') ? { evidence_file: option(args, '--evidence-file') } : {}),
   };
   try {
@@ -192,8 +277,15 @@ async function inspectCommand(args: string[]): Promise<void> {
       return;
     }
     const candidateBranch = command('git', ['branch', '--show-current']).trim() || undefined;
+    const environment = executor === 'github_dev' && contract.mode === 'stateful' ? validateEnvironment(repo, contract) : undefined;
     const result = await inspectFile(contract, executor, { candidateBranch });
-    console.log(JSON.stringify({ ...result, repository: repo, actions_accessible: true, candidate_branch: candidateBranch ?? null }, null, 2));
+    console.log(JSON.stringify({
+      ...result,
+      repository: repo,
+      actions_accessible: true,
+      candidate_branch: candidateBranch ?? null,
+      ...(environment ? { environment_validation: environment } : {}),
+    }, null, 2));
   } catch (error) {
     console.log(JSON.stringify({
       status: 'BLOCKED',
@@ -211,6 +303,8 @@ async function validateCommand(runId: string, pipelineId: string, stage: string,
   if (result.status !== 'READY') {
     throw new CliError(`GITHUB_WORKFLOW_NOT_READY: ${result.status}: ${(result.issues ?? []).join('; ')}`);
   }
+  const repo = repository(manifest);
+  const environment = validateEnvironment(repo, contract);
   return {
     status: 'PASS',
     gate: 'github_actions_validate',
@@ -218,7 +312,36 @@ async function validateCommand(runId: string, pipelineId: string, stage: string,
     pipeline_id: pipelineId,
     stage,
     executor,
+    repository: repo,
     ...result,
+    ...(environment ? { environment_validation: environment } : {}),
+  };
+}
+
+async function validateFutureCommand(
+  runId: string,
+  pipelineId: string,
+  gateName: string,
+  stateRoot: string,
+): Promise<any> {
+  const { manifest } = await loadRun(runId, stateRoot);
+  const { contract } = resolveFutureGate(manifest, pipelineId, gateName);
+  const result = await inspectFile(contract, 'github_dev', { candidateBranch: manifest.git_setup?.branch });
+  if (result.status !== 'READY') {
+    throw new CliError(`FUTURE_GITHUB_WORKFLOW_NOT_READY: ${result.status}: ${(result.issues ?? []).join('; ')}`);
+  }
+  const repo = repository(manifest);
+  const environment = validateEnvironment(repo, contract);
+  return {
+    status: 'PASS',
+    gate: 'github_actions_validate_future',
+    run_id: runId,
+    pipeline_id: pipelineId,
+    future_gate: gateName,
+    executor: 'github_dev',
+    repository: repo,
+    ...result,
+    ...(environment ? { environment_validation: environment } : {}),
   };
 }
 
@@ -240,8 +363,12 @@ async function sourceCiEvidence(runRoot: string, pipelineId: string, contract: G
   if (!contract.source_ci_stage) return undefined;
   const path = join(runRoot, 'github', `${pipelineId}-${contract.source_ci_stage}.json`);
   const evidence = JSON.parse(await readFile(path, 'utf8'));
-  if (evidence.status !== 'PASS' || String(evidence.candidate_sha).toLowerCase() !== candidateSha.toLowerCase()) {
-    throw new CliError('source CI evidence is missing, failed or belongs to another candidate SHA');
+  if (evidence.status !== 'PASS' ||
+      String(evidence.candidate_sha).toLowerCase() !== candidateSha.toLowerCase() ||
+      !Number.isInteger(Number(evidence.artifact_id)) ||
+      typeof evidence.artifact_digest !== 'string' ||
+      !/^sha256:[0-9a-f]{64}$/i.test(evidence.artifact_digest)) {
+    throw new CliError('source CI evidence is missing, failed, artifact-id/digestless or belongs to another candidate SHA');
   }
   return evidence;
 }
@@ -295,7 +422,10 @@ async function waitForRun(
       '-f', `candidate_sha=${candidate.candidate_sha}`,
       '-f', `ci_run_id=${sourceCi.workflow_run_id}`,
       '-f', `ci_artifact=${sourceContract.artifact}`,
+      '-f', `ci_artifact_id=${sourceCi.artifact_id}`,
+      '-f', `ci_artifact_digest=${sourceCi.artifact_digest}`,
       '-f', `pipeline_run_id=${runId}`,
+      ...(contract.target_id ? ['-f', `deployment_target_id=${contract.target_id}`] : []),
     ]);
     while (Date.now() < deadline) {
       const selected = selectStatefulWorkflowRun(
@@ -316,7 +446,9 @@ async function waitForRun(
     throw new CliError(`GITHUB_DEV_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate.candidate_sha}`);
   }
 
+  let dispatchExistingIds: number[] = [];
   if (contract.trigger === 'workflow_dispatch') {
+    dispatchExistingIds = listRuns(repo, contract.workflow, candidate.branch).map((item) => Number(item.id));
     const dispatchArgs = [
       'workflow', 'run', workflowId(contract.workflow),
       '--repo', repo,
@@ -330,7 +462,10 @@ async function waitForRun(
       dispatchArgs.push(
         '-f', 'ci_run_id=' + sourceCi.workflow_run_id,
         '-f', 'ci_artifact=' + sourceContract.artifact,
+        '-f', 'ci_artifact_id=' + sourceCi.artifact_id,
+        '-f', 'ci_artifact_digest=' + sourceCi.artifact_digest,
         '-f', 'pipeline_run_id=' + runId,
+        ...(contract.target_id ? ['-f', 'deployment_target_id=' + contract.target_id] : []),
       );
     }
     command('gh', dispatchArgs);
@@ -341,6 +476,7 @@ async function waitForRun(
       candidateSha: candidate.candidate_sha,
       branch: candidate.branch,
       event: contract.trigger,
+      excludeIds: dispatchExistingIds,
     });
     if (selected) {
       const current = fetchRun(repo, Number(selected.id));
@@ -357,6 +493,8 @@ async function verifyDevEvidence(
   contract: GateContract,
   candidateSha: string,
   sourceCiRunId: number,
+  sourceCiArtifactId: number,
+  sourceCiArtifactDigest: string,
 ): Promise<any> {
   if (!contract.artifact || !contract.evidence_file) throw new CliError('DEV evidence contract is missing');
   const directory = await mkdtemp(join(tmpdir(), 'pipeline-dev-evidence-'));
@@ -370,7 +508,13 @@ async function verifyDevEvidence(
     const file = join(directory, contract.evidence_file);
     const data = JSON.parse(await readFile(file, 'utf8'));
     try {
-      return validateDevEvidence(data, { candidateSha, ciRunId: sourceCiRunId });
+      return validateDevEvidence(data, {
+        candidateSha,
+        ciRunId: sourceCiRunId,
+        ciArtifactId: sourceCiArtifactId,
+        ciArtifactDigest: sourceCiArtifactDigest,
+        targetId: contract.target_id,
+      });
     } catch (error) {
       throw new CliError(error instanceof Error ? error.message : String(error));
     }
@@ -389,6 +533,7 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
 
   const candidate = await readCandidate(runRoot, manifest);
   const repo = repository(manifest);
+  const environmentValidation = validateEnvironment(repo, contract);
   const sourceCi = executor === 'github_dev'
     ? await sourceCiEvidence(runRoot, pipelineId, contract, candidate.candidate_sha)
     : undefined;
@@ -404,6 +549,7 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
       contract,
       candidateSha: candidate.candidate_sha,
       terminalJobName: validation.terminal_job_name,
+      requiredJobNames: validation.required_job_names ?? [],
       executor,
       sourceCiRunId: sourceCi?.workflow_run_id,
     });
@@ -418,8 +564,19 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
         contract,
         candidate.candidate_sha,
         Number(sourceCi?.workflow_run_id),
+        Number(sourceCi?.artifact_id),
+        String(sourceCi?.artifact_digest ?? ''),
       )
     : undefined;
+
+  if (executor === 'github_dev' &&
+      ['opencode_host', 'hybrid'].includes(String(resolveGate(manifest, pipelineId, stage).pipeline.testing_strategy?.mode ?? '')) &&
+      ['automated', 'automated_then_user'].includes(
+        String(resolveGate(manifest, pipelineId, stage).pipeline.testing_strategy?.post_deploy_test ?? ''),
+      ) &&
+      devEvidence?.smoke_result !== 'PASS') {
+    throw new CliError('GITHUB_DEV_AUTOMATED_TEST_EVIDENCE_REQUIRED');
+  }
 
   const evidence = {
     ...result,
@@ -432,9 +589,17 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
     workflow: contract.workflow,
     branch: candidate.branch,
     environment: contract.environment ?? null,
+    ...(environmentValidation ? { environment_validation: environmentValidation } : {}),
     mode: contract.mode ?? null,
     trusted_ref: contract.trusted_ref ?? null,
-    ...(devEvidence ? { dev_evidence_validated: true, installed_sha: devEvidence.installed_sha, smoke_result: devEvidence.smoke_result } : {}),
+    ...(devEvidence ? {
+      dev_evidence_validated: true,
+      installed_sha: devEvidence.installed_sha,
+      ci_artifact_id: devEvidence.ci_artifact_id,
+      ci_artifact_digest: devEvidence.ci_artifact_digest,
+      ...(devEvidence.target_id ? { target_id: devEvidence.target_id } : {}),
+      smoke_result: devEvidence.smoke_result,
+    } : {}),
     recorded_at: new Date().toISOString(),
   };
   const evidenceFile = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
@@ -452,8 +617,9 @@ async function showCommand(runId: string, pipelineId: string, stage: string, sta
 function usage(): string {
   return [
     'usage:',
-    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--evidence-file <file>]',
+    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--concurrency-group <group>] [--target-id <id>] [--evidence-file <file>]',
     '  github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
+    '  github-actions-gate-cli.ts validate-future <run-id> <pipeline-id> <gate-name> [--state-root <path>]',
     '  github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts show <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
   ].join('\n');
@@ -475,6 +641,10 @@ async function main(args: string[]): Promise<void> {
     console.log(JSON.stringify(await validateCommand(runId, pipelineId, stage, stateRoot), null, 2));
     return;
   }
+  if (commandName === 'validate-future') {
+    console.log(JSON.stringify(await validateFutureCommand(runId, pipelineId, stage, stateRoot), null, 2));
+    return;
+  }
   if (commandName === 'run') {
     console.log(JSON.stringify(await runGate(runId, pipelineId, stage, stateRoot), null, 2));
     return;
@@ -486,7 +656,7 @@ async function main(args: string[]): Promise<void> {
   throw new CliError(usage());
 }
 
-export { inspectFile, resolveGate, validateCommand, runGate };
+export { inspectFile, resolveGate, resolveFutureGate, validateCommand, validateFutureCommand, runGate };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   main(process.argv.slice(2)).catch((error: unknown) => {

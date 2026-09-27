@@ -22,7 +22,8 @@ export type StageExecutor =
   | 'git_verify'
   | 'git_publish'
   | 'github_ci'
-  | 'github_dev';
+  | 'github_dev'
+  | 'owner_acceptance';
 
 export type GithubGateTrigger = 'push' | 'workflow_dispatch';
 export type GithubDevMode = 'disposable' | 'stateful';
@@ -30,12 +31,15 @@ export type GithubDevMode = 'disposable' | 'stateful';
 export interface GithubGateContract {
   workflow: string;
   terminal_job: string;
+  required_jobs?: string[];
   trigger: GithubGateTrigger;
   artifact?: string;
   environment?: string;
   mode?: GithubDevMode;
   source_ci_stage?: string;
   trusted_ref?: string;
+  concurrency_group?: string;
+  target_id?: string;
   evidence_file?: string;
   bootstrap_required?: boolean;
   bootstrap_work_item_id?: string;
@@ -111,11 +115,34 @@ export interface ProjectPolicyRef {
   sha256: string;
 }
 
+export type DeploymentTestMode = 'github' | 'opencode_host' | 'hybrid';
+export type PostDeployTestMode = 'automated' | 'user' | 'automated_then_user';
+
+export interface DeploymentValidationContract {
+  stage: string;
+  fresh_job: string;
+  upgrade_job: string;
+}
+
+export interface DeploymentTestingStrategy {
+  mode: DeploymentTestMode;
+  owner_decision_id: string;
+  github_validation_stage?: string;
+  opencode_host_stage?: string;
+  post_deploy_test?: PostDeployTestMode;
+  owner_acceptance_stage?: string;
+}
+
+
 export interface PipelineManifestPipeline {
   id: string;
+  deployable?: boolean;
+  deployment_validation?: DeploymentValidationContract;
+  testing_strategy?: DeploymentTestingStrategy;
   stages: string[];
   executors?: Record<string, StageExecutor>;
   github_gates?: Record<string, GithubGateContract>;
+  future_github_gates?: Record<string, GithubGateContract>;
   depends_on?: string[];
   profile?: string;
   runtime_locks?: string[];
@@ -160,6 +187,7 @@ export interface PipelineManifest {
   freshness_sensitive_paths?: string[];
   work_items?: FrozenWorkItem[];
   project_policy?: ProjectPolicyRef;
+  deployment_target_check?: FrozenArtifact;
 }
 
 export interface StageEvidence {

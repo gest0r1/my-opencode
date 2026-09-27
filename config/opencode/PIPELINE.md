@@ -59,14 +59,15 @@ Current schema supports:
 
 - `protected_paths[]`: scopes that may not enter `allowed_change_paths`;
 - `required_gates[]`: a gate stage plus `when_paths[]`; if frozen change scope intersects those paths, the manifest must include that stage;
-- optional `github_actions.ci/dev` defaults for workflow path, terminal job, trigger, artifact and DEV environment/mode.
+- optional `github_actions.ci/dev` defaults for workflow path, terminal/required jobs, trigger, artifact, DEV environment/mode/trusted ref/concurrency;
+- optional `deployment_target.kind=opencode_host`: GitHub-driven CD target describing either `github_ssh` or `self_hosted_runner`, protected Environment, trusted ref, deterministic probe workflow/job, required Environment secret names and optional runner labels. PLAN validates the GitHub→OpenCode-host path without exposing secret values.
 
 When the policy exists, PLAN freezes its path+SHA-256. Preflight and later state
 validation fail if it changes.
 
 ## Executor and package-manager integrity
 
-Every schema-v2 stage has an explicit executor. Authoritative test/build/typecheck/lint stages use `github_ci`; only explicitly local fast/precheck/docs/runtime stages use `local_gate`. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate, not a reason to replace GitHub CI.
+Every schema-v2 pipeline explicitly declares `deployable: true|false`, and every stage has an explicit executor. A deployable pipeline freezes distinct fresh-install and upgrade/repeat-install required jobs. Authoritative test/build/typecheck/lint stages use `github_ci`; only explicitly local fast/precheck/docs/runtime stages use `local_gate`. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate, not a reason to replace GitHub CI.
 
 ## 1. PLAN reads authoritative Issues
 
@@ -129,6 +130,16 @@ previously delivered event because each comment carries a stable hidden marker.
 Before and after pipeline stages, and before PR handoff, synchronization must
 finish with `pending=0`.
 
+## Deployment testing strategy
+
+Every deployable pipeline freezes an explicit owner decision:
+
+- `github`: fresh install, upgrade/repeat install and useful runtime/E2E validation run only in GitHub/disposable infrastructure.
+- `opencode_host`: GitHub Actions deploys the exact CI artifact to the machine where OpenCode runs, then validates there automatically, hands it to the owner, or both.
+- `hybrid`: GitHub-side automated validation completes first, then the same artifact ID/digest is deployed by trusted GitHub CD to the OpenCode host and the owner performs the final test.
+
+PLAN builds a capability matrix and may recommend one option, but the owner chooses it. The OpenCode-host capability probe is itself trusted automation: it is dispatched from the trusted ref with a correlation ID, uses explicit read-only GitHub permissions and the protected Environment, and must run the frozen probe job. `github_ssh` probes must use strict non-interactive SSH and all required Environment secret names; `self_hosted_runner` probes must execute on the frozen self-hosted runner labels. Local/hybrid requires a READY trusted GitHub→OpenCode-host probe and an already-trusted stateful CD workflow. If those workflows are being introduced in the current candidate, they may be authored as future automation but cannot be consumed as privileged CD until merged to the trusted ref.
+
 ## 3. Candidate publication, GitHub CI and DEV
 
 RUN follows the frozen DAG and executor contract. The canonical release path is:
@@ -151,7 +162,7 @@ implementation/review
 .tmp/pipelines/<run-id>/candidate.json
 ```
 
-For `github_ci`/`github_dev`, `github-actions-gate-cli` validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch, frozen event/workflow, successful terminal job and required artifact. DEV evidence additionally points to the exact source CI run. Evidence is written under:
+For `github_ci`/`github_dev`, `github-actions-gate-cli` structurally validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch and frozen event/workflow. Candidate CI must be read-only, secret-free and path-filter-free; every frozen required job plus the terminal job must complete successfully. Required artifacts are bound by GitHub artifact ID and `sha256:` digest. DEV evidence additionally points to the exact source CI run, repeats the same source artifact ID/digest, and for OpenCode-host CD repeats the frozen logical `target_id`. Evidence is written under:
 
 ```text
 .tmp/pipelines/<run-id>/github/<pipeline>-<stage>.json
@@ -159,7 +170,7 @@ For `github_ci`/`github_dev`, `github-actions-gate-cli` validates the frozen pro
 
 `stage-cli complete` re-validates canonical machine evidence before allowing a `local_gate`, `git_verify`, `git_publish`, `github_ci` or `github_dev` stage to complete. A model statement that a check passed is insufficient.
 
-If a target project has no compatible GitHub CI workflow, PLAN freezes a bootstrap/adaptation work item and workflow scope. RUN implements that candidate-safe CI workflow in the target project, validates it before publication, publishes it with the candidate branch and waits for GitHub Actions on that exact SHA. First-time CI workflows use a `push` trigger; there is no local final-build/test fallback. Runtime/E2E may run inside candidate CI or through an existing `github_dev` workflow. Disposable `github_dev` is secret-free and runs on the candidate ref; stateful `github_dev` runs from a frozen trusted ref/environment outside candidate change scope. Both consume the exact source-CI artifact and must return `installed_sha` evidence. A missing separate DEV workflow is not bootstrapped and consumed in the same run; required disposable validation is folded into candidate CI.
+If a target project has no compatible GitHub CI workflow, PLAN freezes a bootstrap/adaptation work item and workflow scope. RUN implements that candidate-safe CI workflow in the target project, validates it before publication, publishes it with the candidate branch and waits for GitHub Actions on that exact SHA. First-time CI workflows use a `push` trigger; there is no local final-build/test fallback. For `github` and `hybrid` testing strategies the GitHub validation stage includes both fresh-install and upgrade/repeat-install required jobs. For `opencode_host`, those required jobs belong to the trusted stateful CD stage on the OpenCode host. Existing disposable `github_dev` is secret-free and runs on the candidate ref. Existing stateful `github_dev` runs from a verified Environment/trusted ref with frozen non-cancelling concurrency. If stateful DEV is missing, PLAN may freeze it under `future_github_gates`; RUN authors that workflow now but cannot execute it until owner merge makes the workflow trusted. A later PLAN can promote it to active `github_dev`.
 
 Any source-changing fix after publication creates a new candidate SHA. `stage-cli fix-cycle` invalidates the completed chain from the preceding `git_verify` through publish/CI/DEV, making `git_verify` runnable again while preserving old evidence as audit history. The repaired source must then pass verify → publish → GitHub CI → DEV again; CI/artifact/DEV evidence belonging to the previous SHA cannot complete the reopened stages.
 
@@ -227,13 +238,14 @@ selected repositories with these capabilities:
 | Issues | Read/write | requirement reads and audit comments |
 | Pull requests | Read/write | create/update delivery PR |
 | Actions | Read/write | inspect candidate workflow runs and dispatch trusted `workflow_dispatch` gates when frozen by the project contract |
+| Environments | Read | validate DEV/OpenCode-host Environment, deployment branch policy and configured secret names without reading secret values |
 
 `Issues: write` is needed because GitHub does not provide a separate
 comment-only write permission. The deterministic tools therefore enforce the
 narrower policy in code: they read Issues and post comments, but do not expose an
 Issue state-change/close command.
 
-The pipeline engine has no generic secrets-management or PR-merge operation. Stateful DEV deployment credentials remain inside the target repository's protected GitHub Environment/workflow; the orchestrator only invokes the frozen deterministic gate contract.
+The pipeline engine has no generic secrets-management or PR-merge operation. Stateful DEV deployment credentials remain inside the target repository's protected GitHub Environment/workflow. When the selected target is the machine where OpenCode runs, PLAN uses `deployment-target-cli inspect` to dispatch the trusted GitHub probe workflow and prove GitHub→host reachability/authentication; RUN repeats that probe immediately before CD. The CLI inspects only required Environment secret **names**, never secret values, and OpenStage/subagents never receive raw `gh` or SSH capability.
 
 ## Failure behavior
 
@@ -246,7 +258,9 @@ The lifecycle fails closed when any of these is true:
 - GitHub comment outbox delivery remains pending;
 - candidate evidence is missing or its remote SHA does not match;
 - a required project workflow is missing without an approved bootstrap/adaptation work item;
-- GitHub Actions evidence references a different SHA, branch, workflow, terminal job, artifact or source CI run;
+- GitHub Actions evidence references a different SHA, branch, workflow, required/terminal job, artifact ID/digest or source CI run;
+- stateful DEV Environment/trusted-ref/concurrency validation fails;
+- an external CD target loses deterministic reachability/authentication;
 - more than one open PR exists for the same candidate branch and `main`;
 - the existing PR contains a malformed pipeline-managed body block.
 

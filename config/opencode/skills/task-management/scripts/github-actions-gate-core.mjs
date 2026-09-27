@@ -1,16 +1,183 @@
+import {
+  parseWorkflowYaml,
+  workflowEvents,
+  workflowJob,
+  workflowPermissions,
+} from './github-workflow-yaml.mjs';
+
 export class GithubActionsGateError extends Error {}
 
 const SAFE_WORKFLOW = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/i;
 const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const SAFE_JSON_FILE = /^[A-Za-z0-9._-]+\.json$/;
 const JOB_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/i;
+const TARGET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const READ_ONLY_PERMISSION = new Set(['read', 'none']);
 
-function indentation(line) {
-  return (line.match(/^\s*/) ?? [''])[0].length;
+function object(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
 }
 
-function unquote(value) {
-  return value.trim().replace(/^['"]|['"]$/g, '');
+function stringArray(value) {
+  if (value === undefined) return [];
+  if (Array.isArray(value)) return value.map(String);
+  return [String(value)];
+}
+
+function globToRegExp(pattern) {
+  let output = '^';
+  const special = /[\\^$.*+?()[\]{}|]/;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*') {
+      if (pattern[index + 1] === '*') {
+        output += '.*';
+        index += 1;
+      } else {
+        output += '[^/]*';
+      }
+    } else if (char === '?') {
+      output += '[^/]';
+    } else {
+      output += special.test(char) ? '\\' + char : char;
+    }
+  }
+  return new RegExp(output + '$');
+}
+
+function pushConfig(workflow) {
+  const on = workflow?.on;
+  return object(on)?.push;
+}
+
+function pushAcceptsBranch(workflow, branch) {
+  const push = pushConfig(workflow);
+  if (push === undefined) return workflowEvents(workflow).includes('push');
+  const config = object(push);
+  if (!config) return true;
+  if (config.paths !== undefined || config['paths-ignore'] !== undefined) return false;
+  const branches = stringArray(config.branches);
+  const ignored = stringArray(config['branches-ignore']);
+  const matches = (pattern) => {
+    try { return globToRegExp(pattern).test(branch); }
+    catch { return false; }
+  };
+  return (branches.length === 0 || branches.some(matches)) && !ignored.some(matches);
+}
+
+function walk(value, visit, path = []) {
+  visit(value, path);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => walk(item, visit, [...path, index]));
+  } else if (value && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) walk(item, visit, [...path, key]);
+  }
+}
+
+function actionPinIssues(workflow) {
+  const issues = [];
+  walk(workflow, (value, path) => {
+    if (path[path.length - 1] !== 'uses' || typeof value !== 'string') return;
+    const spec = value;
+    if (spec.startsWith('./')) return;
+    if (spec.startsWith('docker://')) {
+      if (!/@sha256:[0-9a-f]{64}$/i.test(spec)) issues.push(`container action is not digest-pinned: ${spec}`);
+      return;
+    }
+    const at = spec.lastIndexOf('@');
+    const ref = at >= 0 ? spec.slice(at + 1) : '';
+    if (!/^[0-9a-f]{40}$/i.test(ref)) issues.push(`action is not commit-SHA pinned: ${spec}`);
+  });
+  return issues;
+}
+
+function containsSecretReference(workflow) {
+  let found = false;
+  walk(workflow, (value) => {
+    if (typeof value === 'string' && /\$\{\{\s*secrets\./.test(value)) found = true;
+  });
+  return found;
+}
+
+function containsSecretsInherit(workflow) {
+  let found = false;
+  walk(workflow, (value, path) => {
+    if (path[path.length - 1] === 'secrets' && String(value) === 'inherit') found = true;
+  });
+  return found;
+}
+
+function containsContinueOnError(workflow) {
+  let found = false;
+  walk(workflow, (value, path) => {
+    if (path[path.length - 1] === 'continue-on-error' && value === true) found = true;
+  });
+  return found;
+}
+
+function permissionIssues(value, label) {
+  const permissions = workflowPermissions(value);
+  if (!permissions) return [`${label} permissions must be explicit`];
+  if (permissions['*']) {
+    if (permissions['*'] === 'read-all') return [];
+    if (permissions['*'] === 'write-all') return [`${label} permissions: write-all is forbidden`];
+    return [`${label} permissions must be read-all or an explicit read-only map`];
+  }
+  const issues = [];
+  for (const [scope, level] of Object.entries(permissions)) {
+    if (!READ_ONLY_PERMISSION.has(level)) issues.push(`${label} permission must be read-only: ${scope}=${level}`);
+  }
+  return issues;
+}
+
+function jobDisplayName(job, jobId) {
+  return typeof job?.name === 'string' && job.name.trim() ? job.name.trim() : jobId;
+}
+
+function workflowDispatchInputs(workflow) {
+  const dispatch = object(object(workflow?.on)?.workflow_dispatch);
+  const inputs = object(dispatch?.inputs);
+  return inputs ? new Set(Object.keys(inputs)) : new Set();
+}
+
+function jobEnvironment(job) {
+  if (typeof job?.environment === 'string') return job.environment;
+  return typeof object(job?.environment)?.name === 'string' ? object(job.environment).name : undefined;
+}
+
+function actionSteps(workflow, actionPrefix) {
+  const hits = [];
+  const jobs = object(workflow?.jobs) ?? {};
+  for (const [jobId, jobValue] of Object.entries(jobs)) {
+    const job = object(jobValue);
+    const steps = Array.isArray(job?.steps) ? job.steps : [];
+    for (const stepValue of steps) {
+      const step = object(stepValue);
+      if (typeof step?.uses === 'string' && step.uses.startsWith(actionPrefix)) hits.push({ jobId, step });
+    }
+  }
+  return hits;
+}
+
+function referencesInput(workflow, input) {
+  let found = false;
+  const needle = `inputs.${input}`;
+  walk(workflow, (value) => {
+    if (typeof value === 'string' && value.includes(needle)) found = true;
+  });
+  return found;
+}
+
+function statefulConcurrency(workflow) {
+  const value = workflow?.concurrency;
+  if (typeof value === 'string') return { group: value, cancelInProgress: undefined };
+  const config = object(value);
+  if (!config) return undefined;
+  return {
+    group: typeof config.group === 'string' ? config.group : undefined,
+    cancelInProgress: config['cancel-in-progress'],
+  };
 }
 
 export function assertGithubGateContract(contract, executor = 'github_ci') {
@@ -22,6 +189,12 @@ export function assertGithubGateContract(contract, executor = 'github_ci') {
   }
   if (typeof contract.terminal_job !== 'string' || !JOB_ID.test(contract.terminal_job)) {
     throw new GithubActionsGateError('GITHUB_TERMINAL_JOB_INVALID');
+  }
+  if (contract.required_jobs !== undefined &&
+      (!Array.isArray(contract.required_jobs) || contract.required_jobs.length === 0 ||
+       contract.required_jobs.some((job) => typeof job !== 'string' || !JOB_ID.test(job)) ||
+       new Set(contract.required_jobs).size !== contract.required_jobs.length)) {
+    throw new GithubActionsGateError('GITHUB_REQUIRED_JOBS_INVALID');
   }
   if (!['push', 'workflow_dispatch'].includes(contract.trigger)) {
     throw new GithubActionsGateError('GITHUB_TRIGGER_INVALID');
@@ -54,308 +227,133 @@ export function assertGithubGateContract(contract, executor = 'github_ci') {
           contract.trusted_ref.includes('..') || contract.trusted_ref.endsWith('/')) {
         throw new GithubActionsGateError('GITHUB_DEV_TRUSTED_REF_INVALID');
       }
-    } else if (contract.trusted_ref !== undefined || contract.environment !== undefined) {
+      if (typeof contract.concurrency_group !== 'string' || !contract.concurrency_group.trim()) {
+        throw new GithubActionsGateError('GITHUB_DEV_CONCURRENCY_GROUP_REQUIRED');
+      }
+      if (contract.target_id !== undefined &&
+          (typeof contract.target_id !== 'string' || !TARGET_ID.test(contract.target_id))) {
+        throw new GithubActionsGateError('GITHUB_DEV_TARGET_ID_INVALID');
+      }
+    } else if (contract.trusted_ref !== undefined || contract.environment !== undefined ||
+               contract.concurrency_group !== undefined) {
       throw new GithubActionsGateError('GITHUB_DISPOSABLE_DEV_MUST_NOT_USE_TRUSTED_ENVIRONMENT');
     }
   }
   return contract;
 }
 
-function eventNames(text) {
-  const lines = text.split(/\r?\n/);
-  const events = new Set();
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (!/^on\s*:/.test(line)) continue;
-    const inline = line.replace(/^on\s*:\s*/, '').trim();
-    if (inline.startsWith('[') && inline.endsWith(']')) {
-      for (const value of inline.slice(1, -1).split(',')) {
-        const event = unquote(value);
-        if (event) events.add(event);
-      }
-      return events;
-    }
-    if (inline) {
-      events.add(unquote(inline));
-      return events;
-    }
-    for (let j = i + 1; j < lines.length; j += 1) {
-      const nested = lines[j];
-      if (!nested.trim() || nested.trim().startsWith('#')) continue;
-      if (indentation(nested) === 0) break;
-      const match = nested.match(/^\s{2}([A-Za-z_][A-Za-z0-9_-]*)\s*:/);
-      if (match?.[1]) events.add(match[1]);
-    }
-    return events;
-  }
-  return events;
-}
-
-function jobBlock(text, jobId) {
-  const lines = text.split(/\r?\n/);
-  let jobsIndex = -1;
-  for (let i = 0; i < lines.length; i += 1) {
-    if (/^jobs\s*:\s*(?:#.*)?$/.test(lines[i])) {
-      jobsIndex = i;
-      break;
-    }
-  }
-  if (jobsIndex < 0) return undefined;
-
-  let start = -1;
-  for (let i = jobsIndex + 1; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (!line.trim() || line.trim().startsWith('#')) continue;
-    if (indentation(line) === 0) break;
-    const match = line.match(/^\s{2}([A-Za-z_][A-Za-z0-9_-]*)\s*:/);
-    if (match?.[1] === jobId) {
-      start = i;
-      break;
-    }
-  }
-  if (start < 0) return undefined;
-
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (!line.trim() || line.trim().startsWith('#')) continue;
-    if (indentation(line) === 0) {
-      end = i;
-      break;
-    }
-    if (/^\s{2}[A-Za-z_][A-Za-z0-9_-]*\s*:/.test(line)) {
-      end = i;
-      break;
-    }
-  }
-  return lines.slice(start, end);
-}
-
-function jobDisplayName(block, jobId) {
-  if (!block) return undefined;
-  for (const line of block.slice(1)) {
-    if (indentation(line) <= 2 && line.trim()) break;
-    const match = line.match(/^\s{4}name\s*:\s*(.+?)\s*$/);
-    if (match?.[1]) return unquote(match[1]);
-  }
-  return jobId;
-}
-
-function workflowDispatchInputNames(text) {
-  const lines = text.split(/\r?\n/);
-  const names = new Set();
-  let inDispatch = false;
-  let inInputs = false;
-  for (const line of lines) {
-    const indent = indentation(line);
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    if (/^\s{2}workflow_dispatch\s*:/.test(line)) { inDispatch = true; inInputs = false; continue; }
-    if (inDispatch && indent <= 2 && !/^\s{2}/.test(line)) { inDispatch = false; inInputs = false; }
-    if (inDispatch && /^\s{4}inputs\s*:/.test(line)) { inInputs = true; continue; }
-    if (inDispatch && inInputs) {
-      if (indent <= 4) { inInputs = false; continue; }
-      const match = line.match(/^\s{6}([A-Za-z_][A-Za-z0-9_-]*)\s*:/);
-      if (match?.[1]) names.add(match[1]);
-    }
-  }
-  return names;
-}
-
-function rootValue(text, key) {
-  const line = text.split(/\r?\n/).find((item) => item.startsWith(key + ':'));
-  return line ? unquote(line.slice(key.length + 1)) : undefined;
-}
-
-function jobEnvironment(block) {
-  if (!block) return undefined;
-  for (const line of block.slice(1)) {
-    if (indentation(line) <= 2 && line.trim()) break;
-    const match = line.match(/^\s{4}environment\s*:\s*(.+?)\s*$/);
-    if (match?.[1]) return unquote(match[1]);
-  }
-  return undefined;
-}
-function actionPinIssues(text) {
-  const issues = [];
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/^\s*-?\s*uses\s*:\s*['"]?([^'"\s]+)['"]?\s*$/);
-    if (!match?.[1]) continue;
-    const spec = match[1];
-    if (spec.startsWith('./')) continue;
-    if (spec.startsWith('docker://')) {
-      if (!/@sha256:[0-9a-f]{64}$/i.test(spec)) issues.push(`container action is not digest-pinned: ${spec}`);
-      continue;
-    }
-    const at = spec.lastIndexOf('@');
-    const ref = at >= 0 ? spec.slice(at + 1) : '';
-    if (!/^[0-9a-f]{40}$/i.test(ref)) issues.push(`action is not commit-SHA pinned: ${spec}`);
-  }
-  return issues;
-}
-
-function readYamlList(block, indent, key) {
-  if (!block) return [];
-  const inlineMatcher = new RegExp('^\\s{' + indent + '}' + key + '\\s*:\\s*\\[(.*)\\]\\s*$');
-  const keyMatcher = new RegExp('^\\s{' + indent + '}' + key + '\\s*:\\s*$');
-
-  for (let index = 0; index < block.length; index += 1) {
-    const inline = block[index].match(inlineMatcher);
-    if (inline?.[1] !== undefined) {
-      return inline[1].split(',').map(unquote).filter(Boolean);
-    }
-    if (!keyMatcher.test(block[index])) continue;
-
-    const values = [];
-    for (let nestedIndex = index + 1; nestedIndex < block.length; nestedIndex += 1) {
-      const nested = block[nestedIndex];
-      if (!nested.trim() || nested.trim().startsWith('#')) continue;
-      if (indentation(nested) <= indent) break;
-      const item = nested.match(new RegExp('^\\s{' + (indent + 2) + '}-\\s*(.+?)\\s*$'));
-      if (item?.[1]) values.push(unquote(item[1]));
-    }
-    return values;
-  }
-  return [];
-}
-
-function topLevelBlock(text, key) {
-  const lines = text.split(/\r?\n/);
-  let start = -1;
-  for (let index = 0; index < lines.length; index += 1) {
-    if (new RegExp('^' + key + '\\s*:\\s*(?:#.*)?$').test(lines[index])) {
-      start = index;
-      break;
-    }
-  }
-  if (start < 0) return undefined;
-  let end = lines.length;
-  for (let index = start + 1; index < lines.length; index += 1) {
-    if (lines[index].trim() && indentation(lines[index]) === 0) {
-      end = index;
-      break;
-    }
-  }
-  return lines.slice(start, end);
-}
-
-function nestedBlock(parent, indent, key) {
-  if (!parent) return undefined;
-  const matcher = new RegExp('^\\s{' + indent + '}' + key + '\\s*:');
-  let start = -1;
-  for (let index = 1; index < parent.length; index += 1) {
-    if (matcher.test(parent[index])) {
-      start = index;
-      break;
-    }
-  }
-  if (start < 0) return undefined;
-  let end = parent.length;
-  for (let index = start + 1; index < parent.length; index += 1) {
-    const line = parent[index];
-    if (!line.trim() || line.trim().startsWith('#')) continue;
-    if (indentation(line) <= indent) {
-      end = index;
-      break;
-    }
-  }
-  return parent.slice(start, end);
-}
-
-function eventBlock(text, event) {
-  return nestedBlock(topLevelBlock(text, 'on'), 2, event);
-}
-
-function globToRegExp(pattern) {
-  let output = '^';
-  const special = /[\\^$.*+?()[\]{}|]/;
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index];
-    if (char === '*') {
-      if (pattern[index + 1] === '*') {
-        output += '.*';
-        index += 1;
-      } else {
-        output += '[^/]*';
-      }
-    } else if (char === '?') {
-      output += '[^/]';
-    } else {
-      output += special.test(char) ? '\\' + char : char;
-    }
-  }
-  return new RegExp(output + '$');
-}
-
-function pushAcceptsBranch(text, branch) {
-  const block = eventBlock(text, 'push');
-  if (!block) return false;
-  const branches = readYamlList(block, 4, 'branches');
-  const ignore = readYamlList(block, 4, 'branches-ignore');
-  const matches = (pattern) => {
-    try { return globToRegExp(pattern).test(branch); }
-    catch { return false; }
-  };
-  return (branches.length === 0 || branches.some(matches)) && !ignore.some(matches);
-}
-
 export function inspectWorkflowText(text, contract, executor = 'github_ci', context = {}) {
   assertGithubGateContract(contract, executor);
-  if (typeof text !== 'string') throw new GithubActionsGateError('workflow text must be a string');
+  let workflow;
+  try { workflow = parseWorkflowYaml(text); }
+  catch (error) {
+    throw new GithubActionsGateError(`GITHUB_WORKFLOW_YAML_INVALID: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   const issues = [];
-  const events = eventNames(text);
-  if (!events.has(contract.trigger)) issues.push('missing trigger: ' + contract.trigger);
-  if (executor === 'github_ci' && events.has('pull_request_target')) {
+  const events = workflowEvents(workflow);
+  if (!events.includes(contract.trigger)) issues.push('missing trigger: ' + contract.trigger);
+  if (executor === 'github_ci' && events.includes('pull_request_target')) {
     issues.push('pull_request_target is forbidden for candidate CI');
   }
-  if (!/^permissions\s*:/m.test(text)) issues.push('explicit root permissions are required');
-  if (/^\s*permissions\s*:\s*write-all\s*$/mi.test(text)) issues.push('permissions: write-all is forbidden');
-  if (/^\s*secrets\s*:\s*inherit\s*$/mi.test(text)) issues.push('secrets: inherit is forbidden in pipeline GitHub gates');
-  if (/^\s*continue-on-error\s*:\s*true\s*$/mi.test(text)) issues.push('continue-on-error: true is forbidden in authoritative gates');
-  for (const issue of actionPinIssues(text)) issues.push(issue);
 
-  if (executor === 'github_ci' && /\$\{\{\s*secrets\./.test(text)) {
+  if (executor === 'github_ci') {
+    issues.push(...permissionIssues(workflow.permissions, 'root'));
+    for (const [jobId, jobValue] of Object.entries(object(workflow.jobs) ?? {})) {
+      const job = object(jobValue);
+      if (job?.permissions !== undefined) issues.push(...permissionIssues(job.permissions, `job ${jobId}`));
+    }
+  } else if (workflow.permissions === undefined) {
+    issues.push('explicit root permissions are required');
+  }
+
+  if (containsSecretsInherit(workflow)) issues.push('secrets: inherit is forbidden in pipeline GitHub gates');
+  if (containsContinueOnError(workflow)) issues.push('continue-on-error: true is forbidden in authoritative gates');
+  for (const issue of actionPinIssues(workflow)) issues.push(issue);
+
+  if (executor === 'github_ci' && containsSecretReference(workflow)) {
     issues.push('candidate CI must not reference repository/environment secrets');
   }
-  if (executor === 'github_ci' && contract.trigger === 'push' &&
-      context.candidateBranch && !pushAcceptsBranch(text, context.candidateBranch)) {
-    issues.push('push trigger does not include candidate branch: ' + context.candidateBranch);
-  }
-  if (contract.artifact && (!/actions\/upload-artifact@/i.test(text) || !text.includes(contract.artifact))) {
-    issues.push('declared artifact is not uploaded: ' + contract.artifact);
+
+  if (executor === 'github_ci' && contract.trigger === 'push' && context.candidateBranch) {
+    const push = object(object(workflow.on)?.push);
+    if (push && (push.paths !== undefined || push['paths-ignore'] !== undefined)) {
+      issues.push('authoritative candidate push CI must not use paths/paths-ignore filters');
+    }
+    if (!pushAcceptsBranch(workflow, context.candidateBranch)) {
+      issues.push('push trigger does not include candidate branch: ' + context.candidateBranch);
+    }
   }
 
-  const terminal = jobBlock(text, contract.terminal_job);
+  const terminal = workflowJob(workflow, contract.terminal_job);
   if (!terminal) issues.push('terminal job not found: ' + contract.terminal_job);
   const terminalJobName = jobDisplayName(terminal, contract.terminal_job);
 
+  const requiredJobNames = [];
+  for (const jobId of contract.required_jobs ?? []) {
+    const job = workflowJob(workflow, jobId);
+    if (!job) {
+      issues.push('required job not found: ' + jobId);
+      continue;
+    }
+    requiredJobNames.push(jobDisplayName(job, jobId));
+  }
+
+  if (contract.artifact) {
+    const upload = actionSteps(workflow, 'actions/upload-artifact@').some(({ step }) => {
+      const withArgs = object(step.with);
+      return String(withArgs?.name ?? '') === contract.artifact;
+    });
+    if (!upload) issues.push('declared artifact is not uploaded: ' + contract.artifact);
+  }
+
   if (executor === 'github_dev') {
-    const inputs = workflowDispatchInputNames(text);
-    for (const required of ['candidate_sha', 'ci_run_id', 'ci_artifact', 'pipeline_run_id']) {
+    const inputs = workflowDispatchInputs(workflow);
+    const requiredInputs = ['candidate_sha', 'ci_run_id', 'ci_artifact', 'ci_artifact_id', 'ci_artifact_digest', 'pipeline_run_id'];
+    if (contract.target_id) requiredInputs.push('deployment_target_id');
+    for (const required of requiredInputs) {
       if (!inputs.has(required)) issues.push('missing workflow_dispatch input: ' + required);
     }
-    if (!/inputs\.ci_run_id/.test(text) || !/inputs\.ci_artifact/.test(text)) {
-      issues.push('DEV must consume source CI run/artifact inputs');
+    const consumedInputs = ['ci_run_id', 'ci_artifact', 'ci_artifact_id', 'ci_artifact_digest'];
+    if (contract.target_id) consumedInputs.push('deployment_target_id');
+    for (const required of consumedInputs) {
+      if (!referencesInput(workflow, required)) issues.push('DEV must consume workflow input: ' + required);
     }
-    if (!/(actions\/download-artifact|gh\s+run\s+download)/.test(text)) {
-      issues.push('DEV must download the source CI artifact');
+    const downloadSteps = actionSteps(workflow, 'actions/download-artifact@');
+    const sourceDownload = downloadSteps.some(({ step }) => {
+      const withArgs = object(step.with);
+      const artifactIds = String(withArgs?.['artifact-ids'] ?? '');
+      const runId = String(withArgs?.['run-id'] ?? '');
+      const token = String(withArgs?.['github-token'] ?? '');
+      return artifactIds.includes('inputs.ci_artifact_id') &&
+        runId.includes('inputs.ci_run_id') &&
+        (token.includes('github.token') || token.includes('secrets.GITHUB_TOKEN'));
+    });
+    if (!sourceDownload) {
+      issues.push('DEV download-artifact must use inputs.ci_artifact_id + inputs.ci_run_id + github-token');
     }
-    if (!/actions\/upload-artifact/.test(text) || !text.includes(contract.artifact) || !text.includes(contract.evidence_file)) {
-      issues.push('DEV must upload the declared evidence artifact/file');
-    }
+    const devUpload = actionSteps(workflow, 'actions/upload-artifact@').some(({ step }) => {
+      const withArgs = object(step.with);
+      return String(withArgs?.name ?? '') === contract.artifact &&
+        String(withArgs?.path ?? '').includes(contract.evidence_file);
+    });
+    if (!devUpload) issues.push('DEV must upload the declared evidence artifact/file');
 
     if (contract.mode === 'stateful') {
-      const runName = rootValue(text, 'run-name') ?? '';
-      if (!/inputs\.pipeline_run_id/.test(runName) || !/inputs\.candidate_sha/.test(runName)) {
+      const runName = String(workflow['run-name'] ?? '');
+      if (!runName.includes('inputs.pipeline_run_id') || !runName.includes('inputs.candidate_sha')) {
         issues.push('stateful DEV run-name must include inputs.pipeline_run_id and inputs.candidate_sha');
       }
       const environment = jobEnvironment(terminal);
       if (environment !== contract.environment) issues.push('terminal job environment must equal ' + contract.environment);
-      if (/actions\/checkout[\s\S]{0,800}ref:\s*\$\{\{\s*inputs\.candidate_sha\s*\}\}/m.test(text)) {
-        issues.push('stateful DEV must not checkout candidate source');
+      const concurrency = statefulConcurrency(workflow);
+      if (!concurrency || concurrency.group !== contract.concurrency_group || concurrency.cancelInProgress !== false) {
+        issues.push('stateful DEV concurrency must use frozen group with cancel-in-progress: false');
       }
-    } else if (/\$\{\{\s*secrets\./.test(text)) {
+      const candidateCheckout = actionSteps(workflow, 'actions/checkout@').some(({ step }) =>
+        String(object(step.with)?.ref ?? '').includes('inputs.candidate_sha'));
+      if (candidateCheckout) issues.push('stateful DEV must not checkout candidate source');
+    } else if (containsSecretReference(workflow)) {
       issues.push('disposable DEV must not reference repository/environment secrets');
     }
   }
@@ -366,6 +364,7 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
     trigger: contract.trigger,
     terminal_job: contract.terminal_job,
     terminal_job_name: terminalJobName,
+    required_job_names: requiredJobNames,
     events: [...events].sort(),
     issues,
   };
@@ -378,13 +377,16 @@ export function classifyMissingWorkflow(contract, executor = 'github_ci') {
     workflow: contract.workflow,
     trigger: contract.trigger,
     terminal_job: contract.terminal_job,
+    required_jobs: contract.required_jobs ?? [],
     issues: ['workflow file is missing'],
   };
 }
 
-export function selectWorkflowRun(runs, { candidateSha, branch, event }) {
+export function selectWorkflowRun(runs, { candidateSha, branch, event, excludeIds = [] }) {
   if (!Array.isArray(runs)) throw new GithubActionsGateError('workflow runs must be an array');
+  const excluded = new Set(excludeIds.map((value) => Number(value)));
   const matches = runs.filter((run) =>
+    !excluded.has(Number(run?.id)) &&
     String(run?.head_sha ?? '').toLowerCase() === String(candidateSha).toLowerCase() &&
     (!branch || run?.head_branch === branch) &&
     (!event || run?.event === event));
@@ -410,15 +412,44 @@ export function selectStatefulWorkflowRun(runs, { trustedRef, event = 'workflow_
   return matches[0];
 }
 
-export function validateDevEvidence(data, { candidateSha, ciRunId }) {
+export function validateDevEvidence(data, { candidateSha, ciRunId, ciArtifactId, ciArtifactDigest, targetId }) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_INVALID');
   if (data.status !== 'PASS') throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_FAILED');
   if (String(data.candidate_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_CANDIDATE_MISMATCH');
   if (String(data.installed_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_INSTALLED_SHA_MISMATCH');
   if (Number(data.ci_run_id) !== Number(ciRunId)) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_CI_RUN_MISMATCH');
-  return { status: 'PASS', candidate_sha: data.candidate_sha, installed_sha: data.installed_sha, ci_run_id: Number(data.ci_run_id), smoke_result: data.smoke_result ?? null };
+  if (Number(data.ci_artifact_id) !== Number(ciArtifactId)) {
+    throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_ID_MISMATCH');
+  }
+  if (String(data.ci_artifact_digest ?? '').toLowerCase() !== String(ciArtifactDigest ?? '').toLowerCase()) {
+    throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_DIGEST_MISMATCH');
+  }
+  if (targetId !== undefined && data.target_id !== targetId) {
+    throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_TARGET_ID_MISMATCH');
+  }
+  return {
+    status: 'PASS',
+    candidate_sha: data.candidate_sha,
+    installed_sha: data.installed_sha,
+    ci_run_id: Number(data.ci_run_id),
+    ci_artifact_id: Number(data.ci_artifact_id),
+    ci_artifact_digest: data.ci_artifact_digest,
+    ...(targetId !== undefined ? { target_id: data.target_id } : {}),
+    smoke_result: data.smoke_result ?? null,
+  };
 }
-export function validateWorkflowResult({ run, jobs, artifacts, contract, candidateSha, terminalJobName, executor, sourceCiRunId }) {
+
+export function validateWorkflowResult({
+  run,
+  jobs,
+  artifacts,
+  contract,
+  candidateSha,
+  terminalJobName,
+  requiredJobNames = [],
+  executor,
+  sourceCiRunId,
+}) {
   assertGithubGateContract(contract, executor);
   if (!run) throw new GithubActionsGateError('GITHUB_RUN_NOT_FOUND');
   if (executor === 'github_dev' && contract.mode === 'stateful') {
@@ -430,16 +461,24 @@ export function validateWorkflowResult({ run, jobs, artifacts, contract, candida
   if (run.conclusion !== 'success') throw new GithubActionsGateError(`GITHUB_RUN_FAILED: ${String(run.conclusion)}`);
 
   const expectedJobName = terminalJobName || contract.terminal_job;
-  const job = (jobs ?? []).find((item) => item?.name === expectedJobName);
-  if (!job) throw new GithubActionsGateError(`GITHUB_TERMINAL_JOB_MISSING: ${expectedJobName}`);
-  if (job.status !== 'completed' || job.conclusion !== 'success') {
-    throw new GithubActionsGateError(`GITHUB_TERMINAL_JOB_FAILED: ${expectedJobName} status=${String(job.status)} conclusion=${String(job.conclusion)}`);
+  const required = [...new Set([expectedJobName, ...requiredJobNames])];
+  const jobIds = {};
+  for (const name of required) {
+    const job = (jobs ?? []).find((item) => item?.name === name);
+    if (!job) throw new GithubActionsGateError(`GITHUB_REQUIRED_JOB_MISSING: ${name}`);
+    if (job.status !== 'completed' || job.conclusion !== 'success') {
+      throw new GithubActionsGateError(`GITHUB_REQUIRED_JOB_FAILED: ${name} status=${String(job.status)} conclusion=${String(job.conclusion)}`);
+    }
+    jobIds[name] = job.id;
   }
 
   let artifact;
   if (contract.artifact) {
     artifact = (artifacts ?? []).find((item) => item?.name === contract.artifact && item?.expired !== true);
     if (!artifact) throw new GithubActionsGateError(`GITHUB_ARTIFACT_MISSING: ${contract.artifact}`);
+    if (!SHA256_DIGEST.test(String(artifact.digest ?? ''))) {
+      throw new GithubActionsGateError(`GITHUB_ARTIFACT_DIGEST_MISSING: ${contract.artifact}`);
+    }
   }
 
   return {
@@ -453,8 +492,14 @@ export function validateWorkflowResult({ run, jobs, artifacts, contract, candida
     conclusion: run.conclusion,
     terminal_job: contract.terminal_job,
     terminal_job_name: expectedJobName,
-    terminal_job_id: job.id,
-    ...(contract.artifact ? { artifact: contract.artifact, artifact_id: artifact.id } : {}),
+    terminal_job_id: jobIds[expectedJobName],
+    required_job_names: requiredJobNames,
+    required_job_ids: jobIds,
+    ...(contract.artifact ? {
+      artifact: contract.artifact,
+      artifact_id: artifact.id,
+      artifact_digest: artifact.digest,
+    } : {}),
     ...(sourceCiRunId ? { source_ci_run_id: sourceCiRunId } : {}),
   };
 }
