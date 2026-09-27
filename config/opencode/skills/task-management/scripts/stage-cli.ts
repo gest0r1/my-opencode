@@ -210,6 +210,7 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
     const candidate = await readJsonEvidence(evidencePath, 'candidate');
     const runtime = state.pipelines?.[pipeline.id]?.stages?.[stage];
     if (candidate.status !== 'PASS' ||
+        candidate.run_id !== runId ||
         candidate.branch !== manifest.git_setup?.branch ||
         String(candidate.candidate_sha).toLowerCase() !== String(candidate.remote_sha).toLowerCase() ||
         !runtime?.started_at || !candidate.published_at ||
