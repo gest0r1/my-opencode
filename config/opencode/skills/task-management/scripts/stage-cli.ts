@@ -2,7 +2,7 @@
 // reject non-executable machine gates BEFORE init creates any state or approve mutates it.
 export * from './stage-cli-core.ts';
 import { readFile } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runCli } from './stage-cli-core.ts';
 import { preflightFile } from './manifest-preflight.mjs';
@@ -10,6 +10,100 @@ import { preflightFile } from './manifest-preflight.mjs';
 function stateRootFromArgs(args: string[]): string {
   const index = args.indexOf('--state-root');
   return index < 0 ? '.tmp/pipelines' : (args[index + 1] ?? '.tmp/pipelines');
+}
+
+function optionFromArgs(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  return index < 0 ? undefined : args[index + 1];
+}
+
+async function readJsonEvidence(path: string, label: string): Promise<any> {
+  let raw: string;
+  try { raw = await readFile(path, 'utf8'); }
+  catch { throw new Error(`EVIDENCE_MISSING: ${label}: ${path}`); }
+  try { return JSON.parse(raw); }
+  catch { throw new Error(`EVIDENCE_INVALID_JSON: ${label}: ${path}`); }
+}
+
+async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
+  if (args[0] !== 'complete') return args;
+  const runId = args[1];
+  const stage = args[2];
+  if (!runId || !stage) return args;
+
+  const stateRoot = resolve(stateRootFromArgs(args));
+  const state = JSON.parse(await readFile(join(stateRoot, runId, 'state.json'), 'utf8'));
+  if (!state.manifest_file) return args;
+  const manifestFile = resolve(state.manifest_file);
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  if (manifest.schema_version !== 2) return args;
+
+  const requestedPipeline = optionFromArgs(args, '--pipeline');
+  const pipeline = requestedPipeline
+    ? manifest.pipelines?.find((item: any) => item.id === requestedPipeline)
+    : manifest.pipelines?.length === 1 ? manifest.pipelines[0] : undefined;
+  if (!pipeline) throw new Error('pipeline_id is required to enforce completion evidence');
+  const executor = pipeline.executors?.[stage];
+  if (!executor) throw new Error(`EXECUTOR_MISSING: ${pipeline.id}/${stage}`);
+
+  const artifactRoot = dirname(manifestFile);
+  let evidencePath: string | undefined;
+
+  if (executor === 'local_gate') {
+    evidencePath = join(stateRoot, runId, 'gates', `${pipeline.id}-${stage}.json`);
+    const evidence = await readJsonEvidence(evidencePath, `${pipeline.id}/${stage}`);
+    if (evidence.status !== 'PASS' || evidence.run_id !== runId ||
+        evidence.pipeline_id !== pipeline.id || evidence.gate !== stage) {
+      throw new Error(`EVIDENCE_INVALID: local_gate ${pipeline.id}/${stage}`);
+    }
+    if (evidence.candidate_sha) {
+      const candidate = await readJsonEvidence(join(artifactRoot, 'candidate.json'), 'candidate');
+      if (candidate.status !== 'PASS' ||
+          String(candidate.candidate_sha).toLowerCase() !== String(evidence.candidate_sha).toLowerCase()) {
+        throw new Error(`EVIDENCE_STALE_SHA: local_gate ${pipeline.id}/${stage}`);
+      }
+    }
+  } else if (executor === 'github_ci' || executor === 'github_dev') {
+    evidencePath = join(artifactRoot, 'github', `${pipeline.id}-${stage}.json`);
+    const evidence = await readJsonEvidence(evidencePath, `${pipeline.id}/${stage}`);
+    const contract = pipeline.github_gates?.[stage];
+    const candidate = await readJsonEvidence(join(artifactRoot, 'candidate.json'), 'candidate');
+    if (candidate.status !== 'PASS' ||
+        String(candidate.candidate_sha).toLowerCase() !== String(candidate.remote_sha).toLowerCase()) {
+      throw new Error('EVIDENCE_INVALID: candidate SHA is not published');
+    }
+    if (evidence.status !== 'PASS' || evidence.run_id !== runId ||
+        evidence.pipeline_id !== pipeline.id || evidence.stage !== stage ||
+        evidence.executor !== executor || evidence.workflow !== contract?.workflow ||
+        evidence.terminal_job !== contract?.terminal_job ||
+        String(evidence.candidate_sha).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
+        String(evidence.head_sha).toLowerCase() !== String(candidate.candidate_sha).toLowerCase()) {
+      throw new Error(`EVIDENCE_INVALID_OR_STALE: ${executor} ${pipeline.id}/${stage}`);
+    }
+    if (executor === 'github_dev') {
+      const sourceStage = contract?.source_ci_stage;
+      if (!sourceStage) throw new Error(`EVIDENCE_INVALID: github_dev source_ci_stage missing`);
+      const source = await readJsonEvidence(
+        join(artifactRoot, 'github', `${pipeline.id}-${sourceStage}.json`),
+        `${pipeline.id}/${sourceStage}`,
+      );
+      if (source.status !== 'PASS' ||
+          String(source.candidate_sha).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
+          Number(evidence.source_ci_run_id) !== Number(source.workflow_run_id)) {
+        throw new Error(`EVIDENCE_INVALID_OR_STALE: github_dev source CI mismatch`);
+      }
+    }
+  } else if (executor === 'git_publish') {
+    evidencePath = join(artifactRoot, 'candidate.json');
+    const candidate = await readJsonEvidence(evidencePath, 'candidate');
+    if (candidate.status !== 'PASS' ||
+        String(candidate.candidate_sha).toLowerCase() !== String(candidate.remote_sha).toLowerCase()) {
+      throw new Error('EVIDENCE_INVALID: git_publish candidate is not verified');
+    }
+  }
+
+  if (evidencePath && !args.includes('--evidence')) return [...args, '--evidence', evidencePath];
+  return args;
 }
 
 async function main(args: string[]): Promise<void> {
@@ -34,7 +128,7 @@ async function main(args: string[]): Promise<void> {
     if (!state.manifest_file) throw new Error('approved manifest path is missing');
     await preflightFile(state.manifest_file, { environment: true });
   }
-  await runCli(args);
+  await runCli(await enforceCompletionEvidence(args));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
