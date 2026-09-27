@@ -680,10 +680,33 @@ export function validateManifestV2Policy(manifest, options = {}) {
   if (usesOpenCodeHost) {
     if (!projectPolicy) throw new ManifestV2PolicyError('OPENCODE_HOST_PROJECT_POLICY_REQUIRED');
     const policy = JSON.parse(readFileSync(resolve(cwd, projectPolicy.path), 'utf8'));
-    if (policy.deployment_target?.kind !== 'opencode_host') {
+    const target = policy.deployment_target;
+    if (target?.kind !== 'opencode_host') {
       throw new ManifestV2PolicyError('OPENCODE_HOST_DEPLOYMENT_TARGET_REQUIRED');
     }
-    readFrozenArtifact(root, manifest.deployment_target_check, 'deployment_target_check');
+    const targetFile = readFrozenArtifact(root, manifest.deployment_target_check, 'deployment_target_check');
+    let targetEvidence;
+    try { targetEvidence = JSON.parse(readFileSync(targetFile, 'utf8')); }
+    catch { throw new ManifestV2PolicyError('OPENCODE_HOST_TARGET_EVIDENCE_INVALID_JSON'); }
+    if (targetEvidence.status !== 'READY' ||
+        targetEvidence.run_id !== manifest.run_id ||
+        targetEvidence.kind !== 'opencode_host' ||
+        targetEvidence.environment !== target.environment ||
+        targetEvidence.trusted_ref !== target.trusted_ref ||
+        typeof targetEvidence.workflow_run_id !== 'number' ||
+        !targetEvidence.probe_job) {
+      throw new ManifestV2PolicyError('OPENCODE_HOST_TARGET_EVIDENCE_MISMATCH');
+    }
+    for (const pipeline of manifest.pipelines ?? []) {
+      if (pipeline.testing_strategy?.mode !== 'opencode_host' && pipeline.testing_strategy?.mode !== 'hybrid') continue;
+      const stage = pipeline.testing_strategy.opencode_host_stage;
+      const gate = stage ? pipeline.github_gates?.[stage] : undefined;
+      if (!gate || gate.mode !== 'stateful' ||
+          gate.environment !== target.environment ||
+          gate.trusted_ref !== target.trusted_ref) {
+        throw new ManifestV2PolicyError(`OPENCODE_HOST_GATE_TARGET_MISMATCH: ${pipeline.id}`);
+      }
+    }
   }
   return { checked_artifacts: true, project_policy: projectPolicy };
 }
