@@ -126,9 +126,12 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
   }
   const invocations = [];
   for (const pipeline of manifest.pipelines) {
-    const machineStages = (pipeline.stages ?? []).filter((stage) => typeof stage === 'string' && MACHINE_STAGE.test(stage));
+    const stages = (pipeline.stages ?? []).filter((stage) => typeof stage === 'string');
+    const machineStages = manifest.schema_version === 2
+      ? stages.filter((stage) => pipeline.executors?.[stage] === 'local_gate')
+      : stages.filter((stage) => MACHINE_STAGE.test(stage));
     if (machineStages.length && (!pipeline.profile || typeof pipeline.profile !== 'string')) {
-      throw new ManifestPreflightError(`pipeline has no gate profile: ${pipeline.id} (machine stages: ${machineStages.join(', ')})`);
+      throw new ManifestPreflightError(`pipeline has no gate profile: ${pipeline.id} (local machine stages: ${machineStages.join(', ')})`);
     }
     if (pipeline.profile !== undefined) {
       const gates = profiles[pipeline.profile];
