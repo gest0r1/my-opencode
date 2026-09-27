@@ -230,6 +230,12 @@ test('schema v2 supports disposable DEV only from a prior CI artifact', async ()
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
   fx.manifest.pipelines[0].executors.dev = 'github_dev';
   fx.manifest.pipelines[0].deployable = true;
+  fx.manifest.pipelines[0].decision_ids.push('decision-testing-strategy');
+  fx.manifest.pipelines[0].testing_strategy = {
+    mode: 'github',
+    owner_decision_id: 'decision-testing-strategy',
+    github_validation_stage: 'tests',
+  };
   fx.manifest.pipelines[0].deployment_validation = {
     stage: 'tests',
     fresh_job: 'fresh_install',
@@ -273,6 +279,12 @@ test('schema v2 protects stateful DEV behind trusted default-branch workflow', a
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
   fx.manifest.pipelines[0].executors.dev = 'github_dev';
   fx.manifest.pipelines[0].deployable = true;
+  fx.manifest.pipelines[0].decision_ids.push('decision-testing-strategy');
+  fx.manifest.pipelines[0].testing_strategy = {
+    mode: 'github',
+    owner_decision_id: 'decision-testing-strategy',
+    github_validation_stage: 'tests',
+  };
   fx.manifest.pipelines[0].deployment_validation = {
     stage: 'tests',
     fresh_job: 'fresh_install',
@@ -323,6 +335,12 @@ test('schema v2 keeps new stateful DEV workflow deferred until it becomes truste
   fx.manifest.pipelines[0].executors.publish = 'git_publish';
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
   fx.manifest.pipelines[0].deployable = true;
+  fx.manifest.pipelines[0].decision_ids.push('decision-testing-strategy');
+  fx.manifest.pipelines[0].testing_strategy = {
+    mode: 'github',
+    owner_decision_id: 'decision-testing-strategy',
+    github_validation_stage: 'tests',
+  };
   fx.manifest.pipelines[0].deployment_validation = {
     stage: 'tests',
     fresh_job: 'fresh_install',
@@ -418,6 +436,12 @@ test('schema v2 freezes authoritative GitHub Issue snapshot hash', async () => {
 test('schema v2 requires fresh and upgrade jobs for deployable pipelines', async () => {
   const fx = await fixture('v2-deployable-validation');
   fx.manifest.pipelines[0].deployable = true;
+  fx.manifest.pipelines[0].decision_ids.push('decision-testing-strategy');
+  fx.manifest.pipelines[0].testing_strategy = {
+    mode: 'github',
+    owner_decision_id: 'decision-testing-strategy',
+    github_validation_stage: 'tests',
+  };
   fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests');
   fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
   fx.manifest.pipelines[0].executors.publish = 'git_publish';
@@ -454,18 +478,70 @@ test('schema v2 requires fresh and upgrade jobs for deployable pipelines', async
   );
 });
 
-test('external SSH deployment target requires frozen PLAN-time probe evidence', async () => {
-  const fx = await fixture('v2-external-target');
+test('OpenCode-host deployment requires trusted probe evidence and owner-selected hybrid strategy', async () => {
+  const fx = await fixture('v2-opencode-host-target');
+  const pipeline = fx.manifest.pipelines[0];
+  pipeline.stages = ['implementation', 'git-verify', 'publish', 'tests', 'dev', 'owner-acceptance'];
+  pipeline.executors = {
+    implementation: 'agent',
+    'git-verify': 'git_verify',
+    publish: 'git_publish',
+    tests: 'github_ci',
+    dev: 'github_dev',
+    'owner-acceptance': 'owner_acceptance',
+  };
+  pipeline.deployable = true;
+  pipeline.decision_ids.push('decision-testing-strategy');
+  pipeline.deployment_validation = {
+    stage: 'tests',
+    fresh_job: 'fresh_install',
+    upgrade_job: 'upgrade_install',
+  };
+  pipeline.testing_strategy = {
+    mode: 'hybrid',
+    owner_decision_id: 'decision-testing-strategy',
+    github_validation_stage: 'tests',
+    opencode_host_stage: 'dev',
+    post_deploy_test: 'automated_then_user',
+    owner_acceptance_stage: 'owner-acceptance',
+  };
+  pipeline.github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      required_jobs: ['fresh_install', 'upgrade_install'],
+      trigger: 'push',
+      artifact: 'candidate-build',
+    },
+    dev: {
+      workflow: '.github/workflows/dev.yml',
+      terminal_job: 'pipeline_dev',
+      trigger: 'workflow_dispatch',
+      mode: 'stateful',
+      environment: 'development',
+      trusted_ref: 'main',
+      concurrency_group: 'development',
+      source_ci_stage: 'tests',
+      artifact: 'dev-evidence',
+      evidence_file: 'dev-evidence.json',
+    },
+  };
+
   await mkdir(path.join(fx.root, '.opencode'), { recursive: true });
   const policyText = JSON.stringify({
     schema_version: 1,
     protected_paths: [],
     required_gates: [],
     deployment_target: {
-      kind: 'external_ssh',
-      host: 'dev.example.test',
-      user: 'deploy',
-      port: 22,
+      kind: 'opencode_host',
+      transport: 'github_ssh',
+      environment: 'development',
+      probe_workflow: '.github/workflows/deployment-target-probe.yml',
+      probe_job: 'probe_target',
+      trusted_ref: 'main',
+      required_environment_secrets: ['DEPLOY_HOST', 'DEPLOY_USER', 'DEPLOY_SSH_KEY', 'DEPLOY_KNOWN_HOSTS'],
+      runner_labels: [],
+      probe_timeout_seconds: 180,
     },
   }, null, 2);
   await writeFile(path.join(fx.root, '.opencode', 'pipeline-policy.json'), policyText);
@@ -484,10 +560,12 @@ test('external SSH deployment target requires frozen PLAN-time probe evidence', 
     JSON.stringify({
       status: 'READY',
       run_id: fx.manifest.run_id,
-      kind: 'external_ssh',
-      host: 'dev.example.test',
-      user: 'deploy',
-      port: 22,
+      kind: 'opencode_host',
+      transport: 'github_ssh',
+      environment: 'development',
+      trusted_ref: 'main',
+      workflow_run_id: 10,
+      probe_job: 'probe_target',
     }, null, 2),
   );
   assert.equal(
@@ -696,6 +774,12 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     dev: 'github_dev',
   };
   fx.manifest.pipelines[0].deployable = true;
+  fx.manifest.pipelines[0].decision_ids.push('decision-testing-strategy');
+  fx.manifest.pipelines[0].testing_strategy = {
+    mode: 'github',
+    owner_decision_id: 'decision-testing-strategy',
+    github_validation_stage: 'tests',
+  };
   fx.manifest.pipelines[0].deployment_validation = {
     stage: 'tests',
     fresh_job: 'fresh_install',
