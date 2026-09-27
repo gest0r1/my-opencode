@@ -26,6 +26,10 @@ on:
       - 'config/opencode/skills/task-management/**'
       - '.github/workflows/pipeline-contracts.yml'
 
+concurrency:
+  group: pipeline-contracts-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
