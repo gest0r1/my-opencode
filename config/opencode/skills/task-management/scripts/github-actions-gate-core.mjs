@@ -12,6 +12,7 @@ const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const SAFE_JSON_FILE = /^[A-Za-z0-9._-]+\.json$/;
 const JOB_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/i;
+const TARGET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const READ_ONLY_PERMISSION = new Set(['read', 'none']);
 
 function object(value) {
@@ -229,6 +230,10 @@ export function assertGithubGateContract(contract, executor = 'github_ci') {
       if (typeof contract.concurrency_group !== 'string' || !contract.concurrency_group.trim()) {
         throw new GithubActionsGateError('GITHUB_DEV_CONCURRENCY_GROUP_REQUIRED');
       }
+      if (contract.target_id !== undefined &&
+          (typeof contract.target_id !== 'string' || !TARGET_ID.test(contract.target_id))) {
+        throw new GithubActionsGateError('GITHUB_DEV_TARGET_ID_INVALID');
+      }
     } else if (contract.trusted_ref !== undefined || contract.environment !== undefined ||
                contract.concurrency_group !== undefined) {
       throw new GithubActionsGateError('GITHUB_DISPOSABLE_DEV_MUST_NOT_USE_TRUSTED_ENVIRONMENT');
@@ -304,10 +309,14 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
 
   if (executor === 'github_dev') {
     const inputs = workflowDispatchInputs(workflow);
-    for (const required of ['candidate_sha', 'ci_run_id', 'ci_artifact', 'ci_artifact_digest', 'pipeline_run_id']) {
+    const requiredInputs = ['candidate_sha', 'ci_run_id', 'ci_artifact', 'ci_artifact_digest', 'pipeline_run_id'];
+    if (contract.target_id) requiredInputs.push('deployment_target_id');
+    for (const required of requiredInputs) {
       if (!inputs.has(required)) issues.push('missing workflow_dispatch input: ' + required);
     }
-    for (const required of ['ci_run_id', 'ci_artifact', 'ci_artifact_digest']) {
+    const consumedInputs = ['ci_run_id', 'ci_artifact', 'ci_artifact_digest'];
+    if (contract.target_id) consumedInputs.push('deployment_target_id');
+    for (const required of consumedInputs) {
       if (!referencesInput(workflow, required)) issues.push('DEV must consume workflow input: ' + required);
     }
     const downloadSteps = actionSteps(workflow, 'actions/download-artifact@');
@@ -403,7 +412,7 @@ export function selectStatefulWorkflowRun(runs, { trustedRef, event = 'workflow_
   return matches[0];
 }
 
-export function validateDevEvidence(data, { candidateSha, ciRunId, ciArtifactDigest }) {
+export function validateDevEvidence(data, { candidateSha, ciRunId, ciArtifactDigest, targetId }) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_INVALID');
   if (data.status !== 'PASS') throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_FAILED');
   if (String(data.candidate_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_CANDIDATE_MISMATCH');
@@ -412,12 +421,16 @@ export function validateDevEvidence(data, { candidateSha, ciRunId, ciArtifactDig
   if (String(data.ci_artifact_digest ?? '').toLowerCase() !== String(ciArtifactDigest ?? '').toLowerCase()) {
     throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_DIGEST_MISMATCH');
   }
+  if (targetId !== undefined && data.target_id !== targetId) {
+    throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_TARGET_ID_MISMATCH');
+  }
   return {
     status: 'PASS',
     candidate_sha: data.candidate_sha,
     installed_sha: data.installed_sha,
     ci_run_id: Number(data.ci_run_id),
     ci_artifact_digest: data.ci_artifact_digest,
+    ...(targetId !== undefined ? { target_id: data.target_id } : {}),
     smoke_result: data.smoke_result ?? null,
   };
 }
