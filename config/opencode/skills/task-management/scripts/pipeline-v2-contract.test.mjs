@@ -192,6 +192,79 @@ test('schema v2 freezes CI bootstrap work item and workflow scope', async () => 
   );
 });
 
+test('schema v2 protects stateful DEV behind trusted default-branch workflow', async () => {
+  const fx = await fixture('v2-stateful-dev');
+  fx.manifest.pipelines[0].stages.push('tests', 'dev');
+  fx.manifest.pipelines[0].executors.tests = 'github_ci';
+  fx.manifest.pipelines[0].executors.dev = 'github_dev';
+  fx.manifest.pipelines[0].github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'push',
+      artifact: 'candidate-build',
+    },
+    dev: {
+      workflow: '.github/workflows/dev.yml',
+      terminal_job: 'pipeline_dev',
+      trigger: 'workflow_dispatch',
+      mode: 'stateful',
+      environment: 'development',
+      trusted_ref: 'main',
+      source_ci_stage: 'tests',
+      artifact: 'dev-evidence',
+      evidence_file: 'dev-evidence.json',
+    },
+  };
+
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+
+  fx.manifest.allowed_change_paths.push('.github/workflows/dev.yml');
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /GITHUB_STATEFUL_DEV_WORKFLOW_MUTABLE/,
+  );
+});
+
+test('schema v2 forbids bootstrapping privileged stateful DEV in candidate code', async () => {
+  const fx = await fixture('v2-stateful-bootstrap');
+  const bootstrap = await fx.frozen('work-items/wi-dev.json', '{"id":"wi-dev"}\n');
+  fx.manifest.work_items.push({ id: 'wi-dev', pipeline_id: 'app', ...bootstrap });
+  fx.manifest.pipelines[0].work_items.push('wi-dev');
+  fx.manifest.pipelines[0].stages.push('tests', 'dev');
+  fx.manifest.pipelines[0].executors.tests = 'github_ci';
+  fx.manifest.pipelines[0].executors.dev = 'github_dev';
+  fx.manifest.allowed_change_paths.push('.github/workflows/**');
+  fx.manifest.pipelines[0].github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'push',
+      artifact: 'candidate-build',
+    },
+    dev: {
+      workflow: '.github/workflows/dev.yml',
+      terminal_job: 'pipeline_dev',
+      trigger: 'workflow_dispatch',
+      mode: 'stateful',
+      environment: 'development',
+      trusted_ref: 'main',
+      source_ci_stage: 'tests',
+      artifact: 'dev-evidence',
+      evidence_file: 'dev-evidence.json',
+      bootstrap_required: true,
+      bootstrap_work_item_id: 'wi-dev',
+    },
+  };
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /(GITHUB_BOOTSTRAP_REQUIRES_PUSH|GITHUB_STATEFUL_DEV_CANNOT_BOOTSTRAP_IN_CANDIDATE)/,
+  );
+});
+
 test('schema v2 serializes declared conflict groups through the DAG', async () => {
   const fx = await fixture('v2-conflict');
   const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
