@@ -365,9 +365,10 @@ async function sourceCiEvidence(runRoot: string, pipelineId: string, contract: G
   const evidence = JSON.parse(await readFile(path, 'utf8'));
   if (evidence.status !== 'PASS' ||
       String(evidence.candidate_sha).toLowerCase() !== candidateSha.toLowerCase() ||
+      !Number.isInteger(Number(evidence.artifact_id)) ||
       typeof evidence.artifact_digest !== 'string' ||
       !/^sha256:[0-9a-f]{64}$/i.test(evidence.artifact_digest)) {
-    throw new CliError('source CI evidence is missing, failed, digestless or belongs to another candidate SHA');
+    throw new CliError('source CI evidence is missing, failed, artifact-id/digestless or belongs to another candidate SHA');
   }
   return evidence;
 }
