@@ -23,7 +23,10 @@
       "terminal_job": "pipeline_dev",
       "trigger": "workflow_dispatch",
       "mode": "stateful",
-      "environment": "development"
+      "environment": "development",
+      "trusted_ref": "main",
+      "artifact": "dev-evidence",
+      "evidence_file": "dev-evidence.json"
     }
   }
 }
