@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { lstat, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -14,7 +15,8 @@ type GitSetup = {
   checkout_paths?: string[];
   must_absent?: string[];
 };
-type Manifest = { run_id?: string; git_setup?: GitSetup; allowed_change_paths?: string[]; freshness_sensitive_paths?: string[]; };
+type PreservedBaseline = { head_sha: string; changed_paths: string[]; diff_sha256: string; };
+type Manifest = { run_id?: string; git_setup?: GitSetup; allowed_change_paths?: string[]; freshness_sensitive_paths?: string[]; preserved_baseline?: PreservedBaseline; };
 type GitRuntime = { planning_base_sha: string; run_base_sha: string; merged_head_sha: string; upstream_changed_files: string[]; refreshed_at: string; };
 class GateError extends Error {}
 
@@ -119,14 +121,74 @@ async function changedFiles(baseSha:string,cwd:string):Promise<string[]>{
   ]);
   return [...new Set(outputs.flatMap((out) => out.split('\n').filter(Boolean)))].sort();
 }
+
+async function diffSha256(baseSha:string,headSha:string,cwd:string):Promise<string>{
+  const diff=await git(['diff','--raw','--full-index','--no-renames',baseSha,headSha,'--'],cwd);
+  return createHash('sha256').update(diff).digest('hex');
+}
+
+async function baselineSnapshot(baseSha:string,cwd:string):Promise<PreservedBaseline>{
+  if(!SHA.test(baseSha))throw new GateError('baseline base SHA must be 40-hex');
+  const info=await inspect(cwd);
+  if(!info.linked_worktree)throw new GateError('baseline requires an owner-created linked worktree');
+  if(!info.clean)throw new GateError('baseline requires a clean tracked checkout');
+  const headSha=String(info.head);
+  if(!await gitSucceeds(['merge-base','--is-ancestor',baseSha,headSha],cwd)) {
+    throw new GateError('baseline head does not contain the requested base SHA');
+  }
+  const changed=(await git(['diff','--name-only',baseSha,headSha],cwd)).split('\n').filter(Boolean).sort();
+  if(changed.length===0)throw new GateError('baseline has no existing branch changes to preserve');
+  for(const path of changed){
+    if(!safePath(path))throw new GateError(`unsafe baseline path: ${path}`);
+    if(sensitive(path))throw new GateError(`sensitive path cannot be preserved as baseline: ${path}`);
+  }
+  return {head_sha:headSha,changed_paths:changed,diff_sha256:await diffSha256(baseSha,headSha,cwd)};
+}
+
+async function validatePreservedBaseline(manifest:Manifest,cwd:string):Promise<Set<string>>{
+  const baseline=manifest.preserved_baseline;
+  if(!baseline)return new Set();
+  if(!manifest.git_setup)throw new GateError('preserved baseline requires git_setup');
+  if(!SHA.test(baseline.head_sha)||!/^[0-9a-f]{64}$/i.test(baseline.diff_sha256)||
+      !Array.isArray(baseline.changed_paths)||baseline.changed_paths.length===0) {
+    throw new GateError('preserved_baseline is invalid');
+  }
+  if(!await gitSucceeds(['merge-base','--is-ancestor',manifest.git_setup.base_sha,baseline.head_sha],cwd)) {
+    throw new GateError('preserved baseline does not contain planning base');
+  }
+  if(!await gitSucceeds(['merge-base','--is-ancestor',baseline.head_sha,'HEAD'],cwd)) {
+    throw new GateError('current HEAD no longer contains preserved baseline');
+  }
+  const actual=(await git(['diff','--name-only',manifest.git_setup.base_sha,baseline.head_sha],cwd))
+    .split('\n').filter(Boolean).sort();
+  const frozen=[...baseline.changed_paths].sort();
+  if(JSON.stringify(actual)!==JSON.stringify(frozen)) {
+    throw new GateError('preserved baseline changed-path set mismatch');
+  }
+  for(const path of actual){
+    if(!safePath(path)||sensitive(path))throw new GateError(`invalid preserved baseline path: ${path}`);
+  }
+  const digest=await diffSha256(manifest.git_setup.base_sha,baseline.head_sha,cwd);
+  if(digest.toLowerCase()!==baseline.diff_sha256.toLowerCase()) {
+    throw new GateError('preserved baseline diff SHA-256 mismatch');
+  }
+  return new Set(actual);
+}
 async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<string[]>{
   assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
   await assertIdentity(manifest.git_setup,cwd,manifestPath);
+  const preserved=await validatePreservedBaseline(manifest,cwd);
   const runtime=await readRuntime(manifestPath,manifest.git_setup);
   const changed=await changedFiles(runtime?.run_base_sha??manifest.git_setup.base_sha,cwd);
   const scope = manifest.allowed_change_paths ?? [];
+  const writableChanged:string[]=[];
   for (const path of changed) {
     if (sensitive(path)) throw new GateError(`sensitive path changed: ${path}`);
+    if (preserved.has(path) && manifest.preserved_baseline &&
+        await gitSucceeds(['diff','--quiet',manifest.preserved_baseline.head_sha,'--',path],cwd)) {
+      continue;
+    }
+    writableChanged.push(path);
     if (!scope.some((allowed) => matches(path, allowed))) {
       throw new GateError(`changed path is outside approved scope: ${path}`);
     }
@@ -138,6 +200,11 @@ async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<
     branch: manifest.git_setup.branch,
     head_sha: headSha,
     changed_files: changed,
+    writable_changed_files: writableChanged,
+    ...(manifest.preserved_baseline ? {
+      preserved_baseline_head_sha: manifest.preserved_baseline.head_sha,
+      preserved_baseline_paths: manifest.preserved_baseline.changed_paths,
+    } : {}),
     verified_at: new Date().toISOString(),
   };
   await writeJsonAtomic(join(dirname(resolve(manifestPath)), 'git-verify.json'), evidence);
@@ -146,11 +213,11 @@ async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<
 async function updateRunBaseState(manifestPath:string,runBaseSha:string):Promise<void>{const file=join(dirname(resolve(manifestPath)),'state.json');try{const state=JSON.parse(await readFile(file,'utf8')) as Record<string,unknown>;state.run_base_sha=runBaseSha;await writeJsonAtomic(file,state);}catch{}}
 async function freshness(manifest:Manifest,manifestPath:string,cwd:string):Promise<Record<string,unknown>>{
   assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
-  const info=await inspect(cwd);if(!info.linked_worktree||info.branch!==manifest.git_setup.branch)throw new GateError('freshness requires the approved owner-created linked worktree');if(!info.clean)throw new GateError('freshness requires a clean tracked checkout');
+  const info=await inspect(cwd);if(!info.linked_worktree||info.branch!==manifest.git_setup.branch)throw new GateError('freshness requires the approved owner-created linked worktree');if(!info.clean)throw new GateError('freshness requires a clean tracked checkout');await validatePreservedBaseline(manifest,cwd);
   if(!await gitSucceeds(['merge-base','--is-ancestor',manifest.git_setup.base_sha,'HEAD'],cwd))throw new GateError('current branch no longer contains planning base');
   await git(['fetch','origin','main:refs/remotes/origin/main'],cwd);const remoteMain=await git(['rev-parse','refs/remotes/origin/main'],cwd);const previousRuntime=await readRuntime(manifestPath,manifest.git_setup);const previousBase=previousRuntime?.run_base_sha??manifest.git_setup.base_sha;
   if(!await gitSucceeds(['merge-base','--is-ancestor',previousBase,remoteMain],cwd))throw new GateError('STALE_PLAN: origin/main history diverged from approved/effective base');
-  const upstreamChanged=(await git(['diff','--name-only',previousBase,remoteMain],cwd)).split('\n').filter(Boolean).sort();const scopes=[...(manifest.allowed_change_paths??[]),...(manifest.freshness_sensitive_paths??[])];const relevant=upstreamChanged.filter(file=>freshnessGlobal(file)||scopes.some(scope=>matches(file,scope)));if(relevant.length)throw new GateError(`STALE_PLAN: origin/main changed plan-relevant paths: ${relevant.join(', ')}`);
+  const upstreamChanged=(await git(['diff','--name-only',previousBase,remoteMain],cwd)).split('\n').filter(Boolean).sort();const scopes=[...(manifest.allowed_change_paths??[]),...(manifest.freshness_sensitive_paths??[]),...(manifest.preserved_baseline?.changed_paths??[])];const relevant=upstreamChanged.filter(file=>freshnessGlobal(file)||scopes.some(scope=>matches(file,scope)));if(relevant.length)throw new GateError(`STALE_PLAN: origin/main changed plan-relevant paths: ${relevant.join(', ')}`);
   if(!await gitSucceeds(['merge-base','--is-ancestor',remoteMain,'HEAD'],cwd)){try{await git(['merge','--no-edit','refs/remotes/origin/main'],cwd);}catch(error){await gitSucceeds(['merge','--abort'],cwd);throw new GateError(`STALE_PLAN: safe main merge conflicted: ${error instanceof Error?error.message:String(error)}`);}}
   const mergedHead=await git(['rev-parse','HEAD'],cwd);const runtime:GitRuntime={planning_base_sha:manifest.git_setup.base_sha,run_base_sha:remoteMain,merged_head_sha:mergedHead,upstream_changed_files:upstreamChanged,refreshed_at:new Date().toISOString()};await writeJsonAtomic(runtimeEvidencePath(manifestPath),runtime);await updateRunBaseState(manifestPath,remoteMain);return runtime;
 }
@@ -187,8 +254,12 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await inspect(cwd) }));
     return;
   }
+  if (command === 'baseline' && manifestPath) {
+    console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await baselineSnapshot(manifestPath,cwd) }));
+    return;
+  }
   if (!manifestPath || !['freshness', 'adopt', 'verify', 'publish'].includes(command ?? '')) {
-    throw new GateError('usage: git-worktree-cli.ts inspect | freshness|adopt|verify|publish <manifest.json>; setup is disabled');
+    throw new GateError('usage: git-worktree-cli.ts inspect | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json>; setup is disabled');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
   assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
@@ -196,6 +267,7 @@ async function main(): Promise<void> {
   if(command==='freshness')details=await freshness(manifest,manifestPath,cwd);
   if (command === 'adopt') {
     await assertIdentity(manifest.git_setup, cwd, manifestPath);
+    await validatePreservedBaseline(manifest, cwd);
     if (await git(['status', '--porcelain', '--untracked-files=all'], cwd)) {
       throw new GateError('adopt requires clean checkout; save tracked preparation before approval');
     }

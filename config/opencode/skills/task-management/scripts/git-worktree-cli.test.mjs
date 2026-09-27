@@ -134,3 +134,44 @@ test('unrelated origin/main change is merged and becomes effective run base', as
   const f=await fixture();t.after(()=>rm(f.root,{recursive:true,force:true}));const original=await readFile(f.manifestPath,'utf8');await mkdir(path.join(f.main,'notes'),{recursive:true});await writeFile(path.join(f.main,'notes/unrelated.txt'),'safe upstream\n');exec(f.main,'git',['add','notes/unrelated.txt']);exec(f.main,'git',['commit','-m','unrelated upstream']);exec(f.main,'git',['push','origin','main']);const newMain=exec(f.main,'git',['rev-parse','HEAD']);
   const result=gate(f.b,['freshness',f.manifestPath]);assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).run_base_sha,newMain);assert.equal(await readFile(f.manifestPath,'utf8'),original);assert.equal(JSON.parse(await readFile(path.join(f.artifactRoot,'git-runtime.json'))).run_base_sha,newMain);const verify=gate(f.b,['verify',f.manifestPath]);assert.equal(verify.status,0,verify.stderr);
 });
+
+
+test('preserved baseline keeps existing branch work without granting new write scope', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+
+  await writeFile(path.join(f.b, 'legacy.txt'), 'existing implementation\n');
+  exec(f.b, 'git', ['add', 'legacy.txt']);
+  exec(f.b, 'git', ['commit', '-m', 'existing implementation']);
+
+  const snapshotResult = gate(f.b, ['baseline', f.base]);
+  assert.equal(snapshotResult.status, 0, snapshotResult.stderr);
+  const snapshot = JSON.parse(snapshotResult.stdout);
+  assert.equal(snapshot.status, 'PASS');
+  assert.deepEqual(snapshot.changed_paths, ['legacy.txt']);
+  assert.match(snapshot.diff_sha256, /^[0-9a-f]{64}$/);
+
+  f.manifest.preserved_baseline = {
+    head_sha: snapshot.head_sha,
+    changed_paths: snapshot.changed_paths,
+    diff_sha256: snapshot.diff_sha256,
+  };
+  await writeFile(f.manifestPath, JSON.stringify(f.manifest, null, 2));
+
+  let result = gate(f.b, ['adopt', f.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+
+  await writeFile(path.join(f.b, 'src/new.txt'), 'new V2 work\n');
+  result = gate(f.b, ['verify', f.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  const verify = JSON.parse(result.stdout);
+  assert.deepEqual(verify.changed_files, ['legacy.txt', 'src/new.txt']);
+  const evidence = JSON.parse(await readFile(path.join(f.artifactRoot, 'git-verify.json'), 'utf8'));
+  assert.deepEqual(evidence.writable_changed_files, ['src/new.txt']);
+  assert.deepEqual(evidence.preserved_baseline_paths, ['legacy.txt']);
+
+  await writeFile(path.join(f.b, 'legacy.txt'), 'mutated by new run\n');
+  result = gate(f.b, ['verify', f.manifestPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /outside approved scope.*legacy\.txt/);
+});

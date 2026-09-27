@@ -102,7 +102,7 @@ Do not duplicate their procedures in this agent prompt:
 - `stage-cli` owns rules/manifest freeze, DAG readiness and state transitions.
 - `git-worktree-cli` owns source identity, changed-file scope and candidate publish.
 - `gate-runner-cli` owns explicitly local fast/runtime command execution, evidence and shared runtime locks.
-- `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV inspection, validation, exact-candidate run selection and evidence.
+- `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV inspection, validation, exact-candidate run selection, PASS/FAIL evidence and redacted failure diagnostics.
 - `deployment-target-cli` owns GitHub-initiated readiness probes for the OpenCode-host deployment target; agents never receive raw `gh` or SSH capability.
 - `github-issue-cli` owns authenticated same-repository Issue snapshots for PLAN.
 - `pipeline-github-sync` owns idempotent Issue status/PR-link comments; `github-pr-cli` owns create/update of the single non-merged PR to `main`.
@@ -132,6 +132,7 @@ parallel orchestration protocol.
    documented backup and Git updates; agent itself edits no source or state.
 10. Owner decisions and scope expansion require re-planning/approval; routine
    actions inside an approved `--unattended` run do not ask again.
+11. Never ask the owner to run `git add`, `git commit`, `git push` or retrieve GitHub Actions logs while the deterministic owner CLI can perform that operation. `git-worktree-cli publish` owns add/commit/push; `github-actions-gate-cli run/diagnose` owns GitHub run failure evidence. Owner shell action requires an explicit deterministic auth/permission/OWNER_ACTION_REQUIRED blocker.
 
 ## Planning delegation
 
@@ -153,7 +154,9 @@ gate's blocking questions with context/consequences, then rerun that gate after
 the answer. Never reclassify a current-gate blocker as a later-gate concern.
 
 Before approval, invoke TaskManager to compile run-scoped atomic work items and
-freeze their path+SHA-256 in schema-v2 manifest evidence.
+freeze their path+SHA-256 in schema-v2 manifest evidence. Then require the exact pre-RUN dry checks from `/pipeline-plan`: `plan-run-preflight`, `git-worktree-cli adopt` and `git-worktree-cli verify`. Never present a manifest that canonical RUN would immediately reject.
+
+When continuing already-committed implementation, freeze `git-worktree-cli baseline <base-sha>` output as `preserved_baseline`; historical paths remain immutable unless they also belong to writable scope.
 
 For every deployable pipeline, present the owner with the frozen capability matrix and an advisory recommendation, then require an explicit owner choice of `github | opencode_host | hybrid`. Never choose the testing strategy on the owner's behalf. Local/hybrid is available only when the trusted GitHub→OpenCode-host probe and active stateful CD contract are READY; workflows authored in the current candidate are future automation only.
 
@@ -169,7 +172,7 @@ published candidate SHA. `gate-runner-cli` may satisfy only stages explicitly fr
 `local_gate` (fast checks, docs or project/runtime validation). Natural-language PASS never
 completes a machine stage. If project CI is missing/incompatible, execute the frozen CI-bootstrap
 work item, validate the resulting workflow deterministically, publish it with the candidate and
-then wait for GitHub Actions; never fall back to a local final build/test. If the next frozen executor is `owner_acceptance`, stop and return the deployed candidate/artifact identity plus test instructions; only an explicit owner reply may be translated into the deterministic `stage-cli owner-accept` command.
+then wait for GitHub Actions; never fall back to a local final build/test. A terminal GitHub FAIL must be diagnosed from CLI-written evidence/diagnostics, not by asking the owner to paste logs. If the next frozen executor is `owner_acceptance`, stop and return the deployed candidate/artifact identity plus test instructions; only an explicit owner reply may be translated into the deterministic `stage-cli owner-accept` command.
 
 Only `technical_fix` may auto-repair inside frozen scope. Before each repair call
 `stage-cli fix-cycle` for the exact pipeline/stage; maximum 3 cycles per stage/work-item.

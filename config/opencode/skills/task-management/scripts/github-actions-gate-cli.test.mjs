@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildGithubFailureEvidence,
   classifyMissingWorkflow,
   inspectWorkflowText,
   selectStatefulWorkflowRun,
+  sanitizeGithubFailedLog,
   selectWorkflowRun,
   validateDevEvidence,
   validateWorkflowResult,
@@ -373,4 +375,46 @@ test('downloaded DEV evidence proves the installed candidate SHA', () => {
     ciArtifactId: 90,
     ciArtifactDigest: DIGEST,
   }), /INSTALLED_SHA_MISMATCH/);
+});
+
+
+test('failed GitHub runs retain exact job diagnostics and redact secret-like log values', () => {
+  const evidence = buildGithubFailureEvidence({
+    run: {
+      id: 77,
+      run_attempt: 2,
+      head_sha: 'a'.repeat(40),
+      head_branch: 'feature/x',
+      event: 'push',
+      conclusion: 'failure',
+    },
+    jobs: [{
+      id: 101,
+      name: 'build',
+      status: 'completed',
+      conclusion: 'failure',
+      steps: [
+        { number: 1, name: 'Checkout', status: 'completed', conclusion: 'success' },
+        { number: 2, name: 'Build all workspaces', status: 'completed', conclusion: 'failure' },
+      ],
+    }],
+    artifacts: [{ id: 202, name: 'candidate-build', expired: false, digest: DIGEST }],
+    candidateSha: 'a'.repeat(40),
+    contract,
+    validationError: 'GITHUB_RUN_FAILED: failure',
+    failedLog: 'TOKEN=supersecret\nnormal diagnostic\nAuthorization: bearer-value',
+  });
+  assert.equal(evidence.status, 'FAIL');
+  assert.equal(evidence.workflow_run_id, 77);
+  assert.equal(evidence.run_attempt, 2);
+  assert.deepEqual(evidence.jobs[0].failed_steps.map((step) => step.name), ['Build all workspaces']);
+  assert.match(evidence.failed_log_excerpt, /TOKEN=\[REDACTED\]/i);
+  assert.match(evidence.failed_log_excerpt, /Authorization: \[REDACTED\]/i);
+  assert.doesNotMatch(evidence.failed_log_excerpt, /supersecret|bearer-value/);
+});
+
+test('failed GitHub log diagnostics are bounded', () => {
+  const sanitized = sanitizeGithubFailedLog('x'.repeat(150_000), 10_000);
+  assert.ok(Buffer.byteLength(sanitized, 'utf8') <= 10_100);
+  assert.match(sanitized, /^\[TRUNCATED\]/);
 });

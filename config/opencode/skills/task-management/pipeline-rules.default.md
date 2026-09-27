@@ -33,7 +33,7 @@ fail-closed.
 
 ## Planning and scope
 
-- New design-freeze PLANs use manifest schema v2. Schema v1 is legacy-read compatibility only.
+- New design-freeze PLANs use manifest schema v2. Schema v1 is legacy-read compatibility only. Before owner approval, `stage-cli plan-run-preflight` plus deterministic Git adopt/verify must prove that canonical RUN would accept the manifest; `stage-cli init` never creates new v1 state.
 - PLAN has no implicit backlog-file source. `/pipeline-plan` requires explicit text/file/`#N` input or GitHub Issue refs attached by the current OpenChamber session; missing source is an error.
 - GitHub Issue refs are restricted to the current worktree repository. OpenChamber supplies identifiers only; PLAN re-fetches authoritative Issue content/state from GitHub.
 - Each Issue story has one stable mutable planning file; review evidence is append-only.
@@ -90,7 +90,7 @@ fail-closed.
 ## Gates and evidence
 
 - Schema-v2 execution mode is explicit per stage through `executors[stage_id]`; RUN never infers the executor from the stage name. Deployable pipelines also freeze an owner-selected `testing_strategy.mode=github|opencode_host|hybrid`; the model may recommend a mode but cannot choose it.
-- Authoritative repository test/build/typecheck/lint validation completes only from deterministic `github-actions-gate-cli` evidence for the exact published candidate SHA, frozen workflow and terminal job. Candidate CI uses explicit read-only GitHub permissions, SHA-pinned actions, no secrets and no `paths`/`paths-ignore` push filters. Every frozen `required_jobs[]` job and the terminal job must complete successfully. Natural-language PASS or a local command cannot satisfy `github_ci`.
+- Authoritative repository test/build/typecheck/lint validation completes only from deterministic `github-actions-gate-cli` evidence for the exact published candidate SHA, frozen workflow and terminal job. Terminal GitHub FAIL also produces canonical, redacted diagnostic evidence; OpenStage must use that evidence/`diagnose` instead of asking the owner to paste CI logs while GitHub authentication is available. Candidate CI uses explicit read-only GitHub permissions, SHA-pinned actions, no secrets and no `paths`/`paths-ignore` push filters. Every frozen `required_jobs[]` job and the terminal job must complete successfully. Natural-language PASS or a local command cannot satisfy `github_ci`.
 - `gate-runner-cli` is authoritative only for stages explicitly frozen as `local_gate` (for example fast/precheck/docs or project/runtime checks). `stage-cli complete` verifies the canonical machine evidence before transitioning a `local_gate`, `github_ci`, `github_dev` or `git_publish` stage.
 - Candidate CI uses explicit read-only permissions, no candidate secrets and no path filters that could skip the authoritative candidate push. Missing or incompatible project GitHub CI is planned implementation work: PLAN freezes a bootstrap/adaptation work item and workflow scope, RUN implements and validates that candidate-safe workflow in the target project, then the candidate is published and tested by GitHub. There is no local fallback for authoritative CI. Existing `github_dev` may be disposable or trusted stateful. Both consume the exact source-CI artifact **and its SHA-256 digest**. Stateful DEV additionally requires a verified GitHub Environment/trusted ref and frozen non-cancelling concurrency group. If stateful DEV automation is missing, PLAN may freeze it under `future_github_gates`: RUN authors it now but cannot execute it until it is merged into the trusted ref; current-run fresh+upgrade runtime validation remains in candidate CI.
 - Repository package-manager identity is authoritative for local JS gates. A pnpm project must use pnpm/corepack-pnpm local gates; missing pnpm blocks instead of falling back to npm or dependency-installing `npx --yes`.
@@ -108,6 +108,7 @@ approved base/source -> candidate SHA -> installed candidate/artifact -> evidenc
 ```
 
 - Every v2 pipeline explicitly declares `deployable: true|false`. A deployable pipeline freezes `deployment_validation` with distinct fresh-install and upgrade/repeat-install required jobs; both must PASS against the same candidate artifact/SHA. Runtime validation tests the approved candidate artifact/SHA, not an uncommitted local development tree.
+- `git-worktree-cli publish` owns staging, candidate commit creation, non-force push and remote SHA verification; RUN must not ask the owner to perform those Git operations when the CLI is available.
 - Planned source-mutating agent/documentation stages precede candidate publication. A source-changing fix after candidate publication produces a new candidate SHA. All prior GitHub CI/artifact/DEV/runtime evidence is stale and affected gates must run again for the new SHA.
 
 ## Runtime and rollback
@@ -125,6 +126,7 @@ approved base/source -> candidate SHA -> installed candidate/artifact -> evidenc
 - Only `technical_fix` may be repaired automatically inside frozen scope.
 - Before every automatic repair, RUN records the attempt through deterministic `stage-cli fix-cycle`; maximum automatic technical-fix cycles are **3 per stage/work-item**. The fourth call fails closed.
 - `replan` and security/scope/secret/destructive findings block immediately and never consume a fix cycle.
+- Lifecycle terms are distinct: pre-init planning revision stays on the same run-id; `technical_fix` stays on the same approved run; a frozen-manifest correction after init uses deterministic `stage-cli supersede` with reason-coded lineage and copies no runtime/machine evidence; architecture/scope/main-drift replan creates a new reason-coded run.
 
 ## Status semantics
 

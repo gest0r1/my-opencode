@@ -187,3 +187,23 @@ test('pipeline contracts pin three technical-fix cycles and literal ready planni
   assert.match(rules, /maximum automatic technical-fix cycles are \*\*3 per stage\/work-item\*\*/i);
   assert.match(plan, /gate advances only on literal `status: ready`/i);
 });
+
+
+test('PLAN proves v2 run viability and baseline scope before owner approval', async () => {
+  const plan = await text('config/opencode/command/pipeline-plan.md');
+  assert.match(plan, /stage-cli\.ts plan-run-preflight/);
+  assert.match(plan, /git-worktree-cli\.ts adopt/);
+  assert.match(plan, /git-worktree-cli\.ts verify/);
+  assert.match(plan, /git-worktree-cli\.ts baseline <planning-base-sha>/);
+  assert.match(plan, /preserved_baseline/);
+});
+
+test('RUN uses deterministic publication and CI diagnostics before owner shell intervention', async () => {
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  assert.match(run, /publish.*owns staging.*candidate commit.*non-force push/is);
+  assert.match(run, /github-actions-gate-cli\.ts diagnose/);
+  assert.match(run, /Never ask the owner to paste CI logs/i);
+  assert.match(orchestrator, /Never ask the owner to run `git add`, `git commit`, `git push`/);
+  assert.match(orchestrator, /terminal GitHub FAIL.*CLI-written evidence\/diagnostics/i);
+});

@@ -20,9 +20,14 @@ merges it to `main` manually.
 ## Manifest v2 and planning gates
 
 New design-freeze plans use manifest schema v2. V1 remains readable only for
-historical runs. Canonical RUN begins with `stage-cli run-preflight`; a V1 state
-returns `LEGACY_V1_REPLAN_REQUIRED`. Keep its state/evidence for audit, then run
-a fresh `/pipeline-plan`, approve the new V2 manifest and continue only under V2.
+historical runs and `stage-cli init` no longer creates new V1 state. Before owner
+approval PLAN must run `stage-cli plan-run-preflight`, `git-worktree-cli adopt`
+and `git-worktree-cli verify`; schema/scope errors therefore fail before approval.
+Canonical RUN still begins with `stage-cli run-preflight`; an old V1 state returns
+`LEGACY_V1_REPLAN_REQUIRED`. Keep V1 state/evidence for audit and freeze any
+already-committed implementation through `git-worktree-cli baseline <base-sha>`
+as `preserved_baseline`, so historical source can remain without becoming writable
+scope in the V2 run.
 
 Before owner approval, every triggered planning gate must be recorded literally
 as `ready` with frozen artifact path + SHA-256. `needs_revision` cannot be
@@ -38,7 +43,9 @@ The v2 manifest also freezes:
 - per-pipeline decision/research/contract IDs;
 - source/migration/fixture conflict metadata;
 - explicit stage executors and GitHub gate contracts;
-- optional repository policy SHA-256.
+- optional repository policy SHA-256;
+- optional `preserved_baseline` exact HEAD/path/diff identity for existing implementation;
+- optional reason-coded `lineage` for supersede/replan history.
 
 Planning/review evidence is append-only. Stable Issue story files are the
 exception: owner corrections update the same `stories/issue-N.md` file.
@@ -156,17 +163,19 @@ implementation/review
   -> acceptance/handoff
 ```
 
-`git-worktree-cli publish` commits approved scoped changes, performs a non-force push of the selected worktree branch, verifies the remote SHA, and writes:
+`git-worktree-cli publish` **owns the complete candidate publication operation**: it stages approved changes, creates the candidate commit when needed, performs a non-force push of the selected worktree branch, verifies the remote SHA, and writes. OpenStage must not ask the owner to manually add/commit/push during RUN:
 
 ```text
 .tmp/pipelines/<run-id>/candidate.json
 ```
 
-For `github_ci`/`github_dev`, `github-actions-gate-cli` structurally validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch and frozen event/workflow. Candidate CI must be read-only, secret-free and path-filter-free; every frozen required job plus the terminal job must complete successfully. Required artifacts are bound by GitHub artifact ID and `sha256:` digest. DEV evidence additionally points to the exact source CI run, repeats the same source artifact ID/digest, and for OpenCode-host CD repeats the frozen logical `target_id`. Evidence is written under:
+For `github_ci`/`github_dev`, `github-actions-gate-cli` structurally validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch and frozen event/workflow. Candidate CI must be read-only, secret-free and path-filter-free; every frozen required job plus the terminal job must complete successfully. Required artifacts are bound by GitHub artifact ID and `sha256:` digest. DEV evidence additionally points to the exact source CI run, repeats the same source artifact ID/digest, and for OpenCode-host CD repeats the frozen logical `target_id`. PASS **and terminal FAIL** evidence is written under:
 
 ```text
 .tmp/pipelines/<run-id>/github/<pipeline>-<stage>.json
 ```
+
+On FAIL the evidence retains exact run/attempt identity, job and failed-step conclusions, artifacts and a bounded redacted failed-log excerpt. `github-actions-gate-cli diagnose` can refresh a separate diagnostics file without giving OpenStage raw `gh` permission.
 
 `stage-cli complete` re-validates canonical machine evidence before allowing a `local_gate`, `git_verify`, `git_publish`, `github_ci` or `github_dev` stage to complete. A model statement that a check passed is insufficient.
 
@@ -267,3 +276,15 @@ The lifecycle fails closed when any of these is true:
 Retrying after a transient GitHub failure is safe: status and PR-link comments
 are idempotent, and PR creation reuses the existing branch PR instead of opening
 a duplicate.
+
+
+## Run lineage and supersede
+
+Use different mechanisms for different changes:
+
+- planning revision before init → same run-id;
+- technical fix during RUN → same run-id, maximum three cycles;
+- frozen V2 manifest correction after init → `stage-cli supersede <old> <new> --reason <code>`;
+- architecture/scope/main-drift replan → new run with reason-coded `lineage.change_class=replan`.
+
+Supersede copies only planning/source/work-item artifacts. Runtime state, locks, candidate and machine evidence are never reused. The old state records `superseded_by` and `supersede_reason`, so every run-id has a deterministic ancestry instead of unexplained v2b/v2c/v2d generations.
