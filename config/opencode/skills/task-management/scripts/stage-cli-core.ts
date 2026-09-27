@@ -893,6 +893,9 @@ async function updateState(
   const unlock = await acquireLock(stateRoot, runId);
   try {
     const state = await validateState(stateRoot, runId);
+    if (state.superseded_by) {
+      throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
+    }
     const before = new Map(Object.values(state.pipelines).map((pipeline) => [pipeline.id, pipeline.status]));
     updater(state);
     recalculateRunStatus(state);
@@ -1355,6 +1358,9 @@ export async function runCli(args: string[]): Promise<void> {
   }
   if (command === 'run-preflight') {
     const state = await validateState(options.stateRoot, runId);
+    if (state.superseded_by) {
+      throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
+    }
     if (!state.manifest_file) throw new StageCliError('Frozen manifest is missing');
     const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8')) as PipelineManifest;
     if (manifest.schema_version !== 2) {
@@ -1365,7 +1371,11 @@ export async function runCli(args: string[]): Promise<void> {
     return;
   }
   if (command === 'next') {
-    printRunnable(await validateState(options.stateRoot, runId), options.json);
+    const state = await validateState(options.stateRoot, runId);
+    if (state.superseded_by) {
+      throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
+    }
+    printRunnable(state, options.json);
     return;
   }
   if (command === 'approve') {
