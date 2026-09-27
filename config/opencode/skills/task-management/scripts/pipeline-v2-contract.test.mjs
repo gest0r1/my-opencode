@@ -552,7 +552,7 @@ test('OpenCode-host deployment requires trusted probe evidence and owner-selecte
 
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
-    /deployment_target_check/,
+    /OPENCODE_HOST_TARGET_CHECK_REQUIRED|deployment_target_check/,
   );
 
   fx.manifest.deployment_target_check = await fx.frozen(
