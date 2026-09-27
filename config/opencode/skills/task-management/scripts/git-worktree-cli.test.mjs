@@ -82,6 +82,7 @@ test('owner-created linked worktree is adopted read-only; setup and primary chec
   result = gate(f.b, ['publish', f.manifestPath]);
   assert.equal(result.status, 0, result.stderr);
   const published = JSON.parse(result.stdout);
+  assert.equal(published.run_id, 'run-b');
   assert.equal(published.candidate_sha, published.remote_sha);
   assert.equal(exec(f.b, 'git', ['branch', '--show-current']), 'feature/B');
   assert.equal(JSON.parse(await readFile(path.join(f.artifactRoot, 'candidate.json'))).candidate_sha,
