@@ -1128,6 +1128,7 @@ function usage(): string {
     '  stage-cli approve <run-id> [--state-root <path>]',
     '  stage-cli status <run-id> [--json] [--state-root <path>]',
     '  stage-cli validate <run-id> [--json] [--state-root <path>]',
+    '  stage-cli run-preflight <run-id> [--json] [--state-root <path>]',
     '  stage-cli next <run-id> [--json] [--state-root <path>]',
     '  stage-cli start <run-id> <stage> [--pipeline <id>]',
     '  stage-cli complete <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
@@ -1191,15 +1192,19 @@ export async function runCli(args: string[]): Promise<void> {
     else console.log(`Valid: ${runId} status=${state.status}`);
     return;
   }
-  if (command === 'next') {
+  if (command === 'run-preflight') {
     const state = await validateState(options.stateRoot, runId);
-    if (state.manifest_file) {
-      const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8')) as PipelineManifest;
-      if (manifest.schema_version === 1) {
-        throw new StageCliError('LEGACY_V1_REPLAN_REQUIRED: schema v1 is audit/read-only for canonical RUN; create and approve a new schema v2 plan');
-      }
+    if (!state.manifest_file) throw new StageCliError('Frozen manifest is missing');
+    const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8')) as PipelineManifest;
+    if (manifest.schema_version !== 2) {
+      throw new StageCliError('LEGACY_V1_REPLAN_REQUIRED: schema v1 is audit/read-only for canonical RUN; create and approve a new schema v2 plan');
     }
-    printRunnable(state, options.json);
+    if (options.json) console.log(JSON.stringify({ status: 'PASS', run_id: runId, schema_version: 2 }, null, 2));
+    else console.log(`PASS run_id=${runId} schema_version=2`);
+    return;
+  }
+  if (command === 'next') {
+    printRunnable(await validateState(options.stateRoot, runId), options.json);
     return;
   }
   if (command === 'approve') {
