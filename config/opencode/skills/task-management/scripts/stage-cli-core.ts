@@ -1192,7 +1192,14 @@ export async function runCli(args: string[]): Promise<void> {
     return;
   }
   if (command === 'next') {
-    printRunnable(await validateState(options.stateRoot, runId), options.json);
+    const state = await validateState(options.stateRoot, runId);
+    if (state.manifest_file) {
+      const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8')) as PipelineManifest;
+      if (manifest.schema_version === 1) {
+        throw new StageCliError('LEGACY_V1_REPLAN_REQUIRED: schema v1 is audit/read-only for canonical RUN; create and approve a new schema v2 plan');
+      }
+    }
+    printRunnable(state, options.json);
     return;
   }
   if (command === 'approve') {
