@@ -107,6 +107,7 @@ test('OpenStage exposes only deterministic GitHub lifecycle commands', async () 
   for (const required of [
     /github-issue-cli\.ts\*": allow/,
     /github-pr-cli\.ts\*": allow/,
+    /github-actions-gate-cli\.ts\*": allow/,
     /pipeline-github-sync\.mjs\*": allow/,
   ]) {
     assert.match(yaml, required);
