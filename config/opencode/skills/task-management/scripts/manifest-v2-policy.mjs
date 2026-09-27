@@ -691,10 +691,11 @@ export function validateManifestV2Policy(manifest, options = {}) {
     if (targetEvidence.status !== 'READY' ||
         targetEvidence.run_id !== manifest.run_id ||
         targetEvidence.kind !== 'opencode_host' ||
+        targetEvidence.transport !== target.transport ||
         targetEvidence.environment !== target.environment ||
         targetEvidence.trusted_ref !== target.trusted_ref ||
-        typeof targetEvidence.workflow_run_id !== 'number' ||
-        !targetEvidence.probe_job) {
+        !Number.isInteger(Number(targetEvidence.workflow_run_id)) ||
+        targetEvidence.probe_job !== target.probe_job) {
       throw new ManifestV2PolicyError('OPENCODE_HOST_TARGET_EVIDENCE_MISMATCH');
     }
     for (const pipeline of manifest.pipelines ?? []) {
