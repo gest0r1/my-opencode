@@ -218,7 +218,7 @@ test('disposable DEV workflow consumes exact CI artifact without secrets', () =>
     '          name: ${{ inputs.ci_artifact }}',
     '          run-id: ${{ inputs.ci_run_id }}',
     '          github-token: ${{ github.token }}',
-    '      - run: echo inputs.ci_run_id inputs.ci_artifact inputs.ci_artifact_digest',
+    '      - run: echo inputs.ci_run_id inputs.ci_artifact inputs.ci_artifact_id inputs.ci_artifact_digest',
     '      - run: printf "{\\\"status\\\":\\\"PASS\\\"}" > dev-evidence.json',
     '      - uses: actions/upload-artifact@3333333333333333333333333333333333333333',
     '        with:',
@@ -263,6 +263,8 @@ on:
         required: true
       ci_artifact:
         required: true
+      ci_artifact_id:
+        required: true
       ci_artifact_digest:
         required: true
       pipeline_run_id:
@@ -278,9 +280,9 @@ jobs:
       - uses: actions/download-artifact@2222222222222222222222222222222222222222
         with:
           run-id: \${{ inputs.ci_run_id }}
-          name: \${{ inputs.ci_artifact }}
+          artifact-ids: \${{ inputs.ci_artifact_id }}
           github-token: \${{ github.token }}
-      - run: echo '\${{ inputs.ci_run_id }} \${{ inputs.ci_artifact }} \${{ inputs.ci_artifact_digest }}'
+      - run: echo '\${{ inputs.ci_run_id }} \${{ inputs.ci_artifact }} \${{ inputs.ci_artifact_id }} \${{ inputs.ci_artifact_digest }}'
       - run: printf '{"status":"PASS"}' > dev-evidence.json
       - uses: actions/upload-artifact@3333333333333333333333333333333333333333
         with:
@@ -344,11 +346,13 @@ test('downloaded DEV evidence proves the installed candidate SHA', () => {
     candidate_sha: 'e'.repeat(40),
     installed_sha: 'e'.repeat(40),
     ci_run_id: 50,
+    ci_artifact_id: 90,
     ci_artifact_digest: DIGEST,
     smoke_result: 'PASS',
   }, {
     candidateSha: 'e'.repeat(40),
     ciRunId: 50,
+    ciArtifactId: 90,
     ciArtifactDigest: DIGEST,
   });
   assert.equal(evidence.status, 'PASS');
@@ -359,10 +363,12 @@ test('downloaded DEV evidence proves the installed candidate SHA', () => {
     candidate_sha: 'e'.repeat(40),
     installed_sha: 'd'.repeat(40),
     ci_run_id: 50,
+    ci_artifact_id: 90,
     ci_artifact_digest: DIGEST,
   }, {
     candidateSha: 'e'.repeat(40),
     ciRunId: 50,
+    ciArtifactId: 90,
     ciArtifactDigest: DIGEST,
   }), /INSTALLED_SHA_MISMATCH/);
 });
