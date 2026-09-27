@@ -229,6 +229,7 @@ export async function inspectProjectPolicy(
     schema_version: 1,
     protected_paths: Array.isArray(policy.protected_paths) ? policy.protected_paths : [],
     required_gates: Array.isArray(policy.required_gates) ? policy.required_gates : [],
+    github_actions: policy.github_actions && typeof policy.github_actions === 'object' ? policy.github_actions : undefined,
   };
 }
 
