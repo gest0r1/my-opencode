@@ -58,7 +58,7 @@ Dispatch strictly by the frozen `executors[stage_id]`; never infer executor from
 - `git_verify`: use only `git-worktree-cli verify <manifest>`.
 - `git_publish`: Git verify, then `git-worktree-cli publish <manifest>`. `stage-cli complete` requires PASS `candidate.json` with `candidate_sha == remote_sha`.
 - `github_ci`: first run `github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id>`, then after candidate publication call `github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id>`. It accepts only the frozen workflow/event/branch and the exact published SHA, successful terminal job and required artifact. `stage-cli complete` independently verifies that evidence.
-- `github_dev`: call the same deterministic `validate` then `run`. DEV evidence must refer to the exact current candidate and the exact PASS run of its frozen `source_ci_stage`. Stateful DEV additionally uses the frozen GitHub Environment contract.
+- `github_dev`: call the same deterministic `validate` then `run`. DEV evidence must refer to the exact current candidate and the exact PASS run of its frozen `source_ci_stage`. For stateful DEV, the CLI dispatches the workflow from frozen `trusted_ref` (normally `main`), passes only `candidate_sha`, source `ci_run_id`, source artifact name and pipeline correlation ID, then validates downloaded DEV evidence including `installed_sha == candidate_sha`. Candidate code may not mutate that trusted workflow.
 - Docs are changed by DocWriter only when represented by a frozen agent work item/scope; deterministic docs checks, if any, are explicit `local_gate` or `github_ci` stages.
 
 ### Missing or incompatible project workflow
