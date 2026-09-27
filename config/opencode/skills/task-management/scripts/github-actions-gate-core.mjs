@@ -120,6 +120,7 @@ function permissionIssues(value, label) {
   if (!permissions) return [`${label} permissions must be explicit`];
   if (permissions['*']) {
     if (permissions['*'] === 'read-all') return [];
+    if (permissions['*'] === 'write-all') return [`${label} permissions: write-all is forbidden`];
     return [`${label} permissions must be read-all or an explicit read-only map`];
   }
   const issues = [];
