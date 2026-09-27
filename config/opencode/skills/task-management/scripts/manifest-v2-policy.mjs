@@ -7,6 +7,10 @@ export class ManifestV2PolicyError extends Error {}
 const SHA256 = /^[0-9a-f]{64}$/i;
 const JS_MANAGERS = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun', 'corepack']);
 const JS_DIRECT_TOOLS = new Set(['tsc', 'vitest', 'jest']);
+const STAGE_EXECUTORS = new Set(['agent', 'review', 'local_gate', 'git_verify', 'git_publish', 'github_ci', 'github_dev']);
+const AUTHORITATIVE_CI_STAGE = /(?:^|[-_])(test|tests|pytest|unit|integration|e2e|build|typecheck|type-check|lint)(?:$|[-_])/i;
+const EXPLICIT_LOCAL_FAST_STAGE = /(?:^|[-_])(fast|local|precheck|pre-check|docs?|validate)(?:$|[-_])/i;
+const GITHUB_JOB_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 function sha256(content) {
   return createHash('sha256').update(content).digest('hex');
@@ -315,6 +319,89 @@ export function validatePackageManagerContract(invocations, { cwd = process.cwd(
   return { package_manager: manager };
 }
 
+
+function validateGithubExecutionContract(manifest) {
+  const workItems = new Map((manifest.work_items ?? []).map((item) => [item.id, item]));
+  for (const pipeline of manifest.pipelines ?? []) {
+    if (!pipeline.executors || typeof pipeline.executors !== 'object' || Array.isArray(pipeline.executors)) {
+      throw new ManifestV2PolicyError(`schema v2 pipeline requires executors: ${pipeline.id}`);
+    }
+    const stageSet = new Set(pipeline.stages ?? []);
+    const executorKeys = Object.keys(pipeline.executors);
+    if (executorKeys.length !== stageSet.size || executorKeys.some((stage) => !stageSet.has(stage))) {
+      throw new ManifestV2PolicyError(`EXECUTOR_STAGE_MISMATCH: executors must map every stage exactly once: ${pipeline.id}`);
+    }
+
+    for (const stage of pipeline.stages ?? []) {
+      const executor = pipeline.executors[stage];
+      if (!STAGE_EXECUTORS.has(executor)) {
+        throw new ManifestV2PolicyError(`INVALID_STAGE_EXECUTOR: ${pipeline.id}/${stage}=${String(executor)}`);
+      }
+      if (AUTHORITATIVE_CI_STAGE.test(stage) && !EXPLICIT_LOCAL_FAST_STAGE.test(stage) && executor !== 'github_ci') {
+        throw new ManifestV2PolicyError(`AUTHORITATIVE_CI_REQUIRED: ${pipeline.id}/${stage} must use github_ci`);
+      }
+
+      const gate = pipeline.github_gates?.[stage];
+      if (executor === 'github_ci' || executor === 'github_dev') {
+        if (!gate || typeof gate !== 'object' || Array.isArray(gate)) {
+          throw new ManifestV2PolicyError(`GITHUB_GATE_MISSING: ${pipeline.id}/${stage}`);
+        }
+        if (!safeRelativePath(gate.workflow) || !gate.workflow.startsWith('.github/workflows/') ||
+            !/\.ya?ml$/i.test(gate.workflow)) {
+          throw new ManifestV2PolicyError(`GITHUB_WORKFLOW_INVALID: ${pipeline.id}/${stage}`);
+        }
+        if (!GITHUB_JOB_ID.test(String(gate.terminal_job ?? ''))) {
+          throw new ManifestV2PolicyError(`GITHUB_TERMINAL_JOB_INVALID: ${pipeline.id}/${stage}`);
+        }
+        if (!['push', 'workflow_dispatch'].includes(gate.trigger)) {
+          throw new ManifestV2PolicyError(`GITHUB_TRIGGER_INVALID: ${pipeline.id}/${stage}`);
+        }
+        if (gate.timeout_seconds !== undefined &&
+            (!Number.isInteger(gate.timeout_seconds) || gate.timeout_seconds < 30 || gate.timeout_seconds > 7200)) {
+          throw new ManifestV2PolicyError(`GITHUB_TIMEOUT_INVALID: ${pipeline.id}/${stage}`);
+        }
+
+        if (gate.bootstrap_required === true) {
+          if (typeof gate.bootstrap_work_item_id !== 'string' || !gate.bootstrap_work_item_id) {
+            throw new ManifestV2PolicyError(`GITHUB_BOOTSTRAP_WORK_ITEM_MISSING: ${pipeline.id}/${stage}`);
+          }
+          const item = workItems.get(gate.bootstrap_work_item_id);
+          if (!item || item.pipeline_id !== pipeline.id || !(pipeline.work_items ?? []).includes(item.id)) {
+            throw new ManifestV2PolicyError(`GITHUB_BOOTSTRAP_WORK_ITEM_INVALID: ${pipeline.id}/${stage}`);
+          }
+          if (!(manifest.allowed_change_paths ?? []).some((scope) => scopeContains(scope, gate.workflow))) {
+            throw new ManifestV2PolicyError(`GITHUB_BOOTSTRAP_SCOPE_MISSING: ${gate.workflow} is outside allowed_change_paths`);
+          }
+          if (gate.trigger !== 'push') {
+            throw new ManifestV2PolicyError(`GITHUB_BOOTSTRAP_REQUIRES_PUSH: ${pipeline.id}/${stage}`);
+          }
+        }
+
+        if (executor === 'github_dev') {
+          if (!['disposable', 'stateful'].includes(gate.mode)) {
+            throw new ManifestV2PolicyError(`GITHUB_DEV_MODE_INVALID: ${pipeline.id}/${stage}`);
+          }
+          if (typeof gate.source_ci_stage !== 'string' || pipeline.executors[gate.source_ci_stage] !== 'github_ci') {
+            throw new ManifestV2PolicyError(`GITHUB_DEV_SOURCE_CI_INVALID: ${pipeline.id}/${stage}`);
+          }
+          if (pipeline.stages.indexOf(gate.source_ci_stage) >= pipeline.stages.indexOf(stage)) {
+            throw new ManifestV2PolicyError(`GITHUB_DEV_SOURCE_CI_ORDER_INVALID: ${pipeline.id}/${stage}`);
+          }
+          if (gate.mode === 'stateful' && (typeof gate.environment !== 'string' || !gate.environment.trim())) {
+            throw new ManifestV2PolicyError(`GITHUB_DEV_ENVIRONMENT_REQUIRED: ${pipeline.id}/${stage}`);
+          }
+        }
+      } else if (gate !== undefined) {
+        throw new ManifestV2PolicyError(`GITHUB_GATE_WITH_NON_GITHUB_EXECUTOR: ${pipeline.id}/${stage}`);
+      }
+    }
+
+    for (const stage of Object.keys(pipeline.github_gates ?? {})) {
+      if (!stageSet.has(stage)) throw new ManifestV2PolicyError(`GITHUB_GATE_UNKNOWN_STAGE: ${pipeline.id}/${stage}`);
+    }
+  }
+}
+
 export function validateManifestV2Policy(manifest, options = {}) {
   if (manifest?.schema_version !== 2) return { checked_artifacts: 0, project_policy: undefined };
   if (manifest.planning_mode !== 'design-freeze') {
@@ -324,6 +411,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
   const root = runRoot(manifest, cwd, options.manifestPath);
   validatePlanningReadiness(manifest, root);
   validateWorkItems(manifest, root);
+  validateGithubExecutionContract(manifest);
   validateSourceSnapshot(manifest, root);
   assertConflictSerialization(manifest);
   const projectPolicy = validateProjectPolicy(manifest, cwd);
