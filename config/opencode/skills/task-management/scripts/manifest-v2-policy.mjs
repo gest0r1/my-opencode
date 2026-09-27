@@ -258,6 +258,16 @@ function validateProjectPolicy(manifest, cwd) {
       if (gate.trigger !== undefined && !['push', 'workflow_dispatch'].includes(gate.trigger)) {
         throw new ManifestV2PolicyError(`project_policy.github_actions.${kind}.trigger is invalid`);
       }
+      if (kind === 'dev' && gate.mode === 'stateful') {
+        if (gate.trigger !== 'workflow_dispatch' ||
+            typeof gate.environment !== 'string' || !gate.environment.trim() ||
+            typeof gate.trusted_ref !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(gate.trusted_ref) ||
+            gate.trusted_ref.includes('..') || gate.trusted_ref.endsWith('/') ||
+            typeof gate.artifact !== 'string' || !gate.artifact.trim() ||
+            typeof gate.evidence_file !== 'string' || !/^[A-Za-z0-9._-]+\.json$/.test(gate.evidence_file)) {
+          throw new ManifestV2PolicyError('project_policy.github_actions.dev stateful contract is incomplete');
+        }
+      }
     }
   }
 
