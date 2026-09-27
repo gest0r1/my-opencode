@@ -7,7 +7,7 @@ export class ManifestV2PolicyError extends Error {}
 const SHA256 = /^[0-9a-f]{64}$/i;
 const JS_MANAGERS = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun', 'corepack']);
 const JS_DIRECT_TOOLS = new Set(['tsc', 'vitest', 'jest']);
-const STAGE_EXECUTORS = new Set(['agent', 'review', 'local_gate', 'git_verify', 'git_publish', 'github_ci', 'github_dev']);
+const STAGE_EXECUTORS = new Set(['agent', 'review', 'local_gate', 'git_verify', 'git_publish', 'github_ci', 'github_dev', 'owner_acceptance']);
 const AUTHORITATIVE_CI_STAGE = /(?:^|[-_])(test|tests|pytest|unit|integration|e2e|build|typecheck|type-check|lint)(?:$|[-_])/i;
 const EXPLICIT_LOCAL_FAST_STAGE = /(?:^|[-_])(fast|local|precheck|pre-check|docs?|validate)(?:$|[-_])/i;
 const GITHUB_JOB_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -509,6 +509,9 @@ function validateGithubExecutionContract(manifest) {
       }
     }
 
+    if (typeof pipeline.deployable !== 'boolean') {
+      throw new ManifestV2PolicyError(`DEPLOYABLE_CLASSIFICATION_REQUIRED: ${pipeline.id}`);
+    }
     if (pipeline.deployable) {
       const validation = pipeline.deployment_validation;
       if (!validation || typeof validation !== 'object' ||
@@ -518,16 +521,86 @@ function validateGithubExecutionContract(manifest) {
           validation.fresh_job === validation.upgrade_job) {
         throw new ManifestV2PolicyError(`DEPLOYMENT_VALIDATION_REQUIRED: ${pipeline.id}`);
       }
-      const executor = pipeline.executors[validation.stage];
-      if (executor !== 'github_ci' && executor !== 'github_dev') {
+      const validationExecutor = pipeline.executors[validation.stage];
+      if (validationExecutor !== 'github_ci' && validationExecutor !== 'github_dev') {
         throw new ManifestV2PolicyError(`DEPLOYMENT_VALIDATION_REQUIRES_GITHUB_GATE: ${pipeline.id}/${validation.stage}`);
       }
       const requiredJobs = new Set(pipeline.github_gates?.[validation.stage]?.required_jobs ?? []);
       if (!requiredJobs.has(validation.fresh_job) || !requiredJobs.has(validation.upgrade_job)) {
         throw new ManifestV2PolicyError(`DEPLOYMENT_VALIDATION_JOBS_MISSING: ${pipeline.id}/${validation.stage}`);
       }
-    } else if (pipeline.deployment_validation !== undefined) {
-      throw new ManifestV2PolicyError(`DEPLOYMENT_VALIDATION_WITH_NON_DEPLOYABLE_PIPELINE: ${pipeline.id}`);
+
+      const strategy = pipeline.testing_strategy;
+      if (!strategy || typeof strategy !== 'object' ||
+          !['github', 'opencode_host', 'hybrid'].includes(strategy.mode) ||
+          typeof strategy.owner_decision_id !== 'string' || !strategy.owner_decision_id.trim() ||
+          !(pipeline.decision_ids ?? []).includes(strategy.owner_decision_id)) {
+        throw new ManifestV2PolicyError(`DEPLOYMENT_TESTING_STRATEGY_REQUIRED: ${pipeline.id}`);
+      }
+
+      const stageIndex = (name) => typeof name === 'string' ? stages.indexOf(name) : -1;
+      const activeLocalContract = strategy.opencode_host_stage
+        ? pipeline.github_gates?.[strategy.opencode_host_stage]
+        : undefined;
+      const requireLocal = strategy.mode === 'opencode_host' || strategy.mode === 'hybrid';
+
+      if (strategy.mode === 'github') {
+        if (strategy.github_validation_stage !== validation.stage ||
+            validationExecutor !== 'github_ci' ||
+            strategy.opencode_host_stage !== undefined ||
+            strategy.post_deploy_test !== undefined ||
+            strategy.owner_acceptance_stage !== undefined) {
+          throw new ManifestV2PolicyError(`GITHUB_ONLY_TEST_STRATEGY_INVALID: ${pipeline.id}`);
+        }
+      }
+
+      if (strategy.mode === 'opencode_host') {
+        if (strategy.github_validation_stage !== undefined ||
+            strategy.opencode_host_stage !== validation.stage ||
+            validationExecutor !== 'github_dev' ||
+            activeLocalContract?.mode !== 'stateful' ||
+            !['automated', 'user', 'automated_then_user'].includes(strategy.post_deploy_test)) {
+          throw new ManifestV2PolicyError(`OPENCODE_HOST_TEST_STRATEGY_INVALID: ${pipeline.id}`);
+        }
+      }
+
+      if (strategy.mode === 'hybrid') {
+        if (strategy.github_validation_stage !== validation.stage ||
+            validationExecutor !== 'github_ci' ||
+            typeof strategy.opencode_host_stage !== 'string' ||
+            pipeline.executors[strategy.opencode_host_stage] !== 'github_dev' ||
+            activeLocalContract?.mode !== 'stateful' ||
+            !['user', 'automated_then_user'].includes(strategy.post_deploy_test) ||
+            stageIndex(strategy.github_validation_stage) >= stageIndex(strategy.opencode_host_stage)) {
+          throw new ManifestV2PolicyError(`HYBRID_TEST_STRATEGY_INVALID: ${pipeline.id}`);
+        }
+      }
+
+      if (requireLocal) {
+        if (!manifest.deployment_target_check) {
+          throw new ManifestV2PolicyError(`OPENCODE_HOST_TARGET_CHECK_REQUIRED: ${pipeline.id}`);
+        }
+        if (!strategy.opencode_host_stage || !activeLocalContract ||
+            activeLocalContract.mode !== 'stateful' ||
+            typeof activeLocalContract.environment !== 'string' ||
+            typeof activeLocalContract.trusted_ref !== 'string') {
+          throw new ManifestV2PolicyError(`OPENCODE_HOST_GITHUB_DEV_REQUIRED: ${pipeline.id}`);
+        }
+
+        const wantsOwner = strategy.post_deploy_test === 'user' || strategy.post_deploy_test === 'automated_then_user';
+        if (wantsOwner) {
+          const acceptance = strategy.owner_acceptance_stage;
+          if (typeof acceptance !== 'string' || !stageSet.has(acceptance) ||
+              pipeline.executors[acceptance] !== 'owner_acceptance' ||
+              stageIndex(acceptance) <= stageIndex(strategy.opencode_host_stage)) {
+            throw new ManifestV2PolicyError(`OWNER_ACCEPTANCE_STAGE_REQUIRED: ${pipeline.id}`);
+          }
+        } else if (strategy.owner_acceptance_stage !== undefined) {
+          throw new ManifestV2PolicyError(`OWNER_ACCEPTANCE_STAGE_UNEXPECTED: ${pipeline.id}`);
+        }
+      }
+    } else if (pipeline.deployment_validation !== undefined || pipeline.testing_strategy !== undefined) {
+      throw new ManifestV2PolicyError(`DEPLOYMENT_CONTRACT_WITH_NON_DEPLOYABLE_PIPELINE: ${pipeline.id}`);
     }
 
     for (const [name, gate] of Object.entries(pipeline.future_github_gates ?? {})) {
@@ -578,11 +651,15 @@ export function validateManifestV2Policy(manifest, options = {}) {
   validateSourceSnapshot(manifest, root);
   assertConflictSerialization(manifest);
   const projectPolicy = validateProjectPolicy(manifest, cwd);
-  if (projectPolicy) {
+  const usesOpenCodeHost = (manifest.pipelines ?? []).some((pipeline) =>
+    pipeline.testing_strategy?.mode === 'opencode_host' || pipeline.testing_strategy?.mode === 'hybrid');
+  if (usesOpenCodeHost) {
+    if (!projectPolicy) throw new ManifestV2PolicyError('OPENCODE_HOST_PROJECT_POLICY_REQUIRED');
     const policy = JSON.parse(readFileSync(resolve(cwd, projectPolicy.path), 'utf8'));
-    if (policy.deployment_target?.kind === 'external_ssh') {
-      readFrozenArtifact(root, manifest.deployment_target_check, 'deployment_target_check');
+    if (policy.deployment_target?.kind !== 'opencode_host') {
+      throw new ManifestV2PolicyError('OPENCODE_HOST_DEPLOYMENT_TARGET_REQUIRED');
     }
+    readFrozenArtifact(root, manifest.deployment_target_check, 'deployment_target_check');
   }
   return { checked_artifacts: true, project_policy: projectPolicy };
 }
