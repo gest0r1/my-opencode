@@ -167,6 +167,27 @@ export interface GitSetup {
   must_absent?: string[];
 }
 
+export interface PreservedBaseline {
+  head_sha: string;
+  changed_paths: string[];
+  diff_sha256: string;
+}
+
+export type PipelineSupersedeReason =
+  | 'V1_TO_V2_MIGRATION'
+  | 'MANIFEST_CONTRACT_CORRECTION'
+  | 'BASELINE_SCOPE_MISMATCH'
+  | 'PLANNING_EVIDENCE_CORRECTION'
+  | 'OWNER_SCOPE_CHANGE'
+  | 'ARCHITECTURE_REPLAN'
+  | 'MAIN_DRIFT_REPLAN';
+
+export interface PipelineLineage {
+  change_class: 'supersede' | 'replan';
+  supersedes: string;
+  reason_code: PipelineSupersedeReason;
+}
+
 export interface PipelineManifest {
   schema_version: number;
   run_id: string;
@@ -188,6 +209,8 @@ export interface PipelineManifest {
   work_items?: FrozenWorkItem[];
   project_policy?: ProjectPolicyRef;
   deployment_target_check?: FrozenArtifact;
+  preserved_baseline?: PreservedBaseline;
+  lineage?: PipelineLineage;
 }
 
 export interface StageEvidence {
@@ -244,6 +267,8 @@ export interface PipelineState {
   source_snapshot_sha256?: string;
   planning_base_sha?: string;
   run_base_sha?: string;
+  superseded_by?: string;
+  supersede_reason?: PipelineSupersedeReason;
   issue_results?: PipelineIssueResult[];
   github_outbox?: PipelineGithubOutboxEvent[];
   pipelines: Record<string, PipelineRuntime>;
