@@ -109,12 +109,13 @@ async function loadRun(runId: string, stateRoot: string): Promise<{
   runRoot: string;
   manifestFile: string;
 }> {
-  const runRoot = resolve(stateRoot, runId);
-  const state = JSON.parse(await readFile(join(runRoot, 'state.json'), 'utf8')) as State;
+  const stateDirectory = resolve(stateRoot, runId);
+  const state = JSON.parse(await readFile(join(stateDirectory, 'state.json'), 'utf8')) as State;
   if (state.run_id !== runId || !state.manifest_file) throw new CliError('run state has no frozen manifest');
   const manifestFile = resolve(state.manifest_file);
   const manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as Manifest;
   if (manifest.run_id !== runId) throw new CliError('manifest run_id mismatch');
+  const runRoot = dirname(manifestFile);
   return { state, manifest, runRoot, manifestFile };
 }
 
@@ -317,7 +318,8 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
 }
 
 async function showCommand(runId: string, pipelineId: string, stage: string, stateRoot: string): Promise<void> {
-  const file = join(resolve(stateRoot), runId, 'github', `${pipelineId}-${stage}.json`);
+  const { runRoot } = await loadRun(runId, stateRoot);
+  const file = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
   console.log(await readFile(file, 'utf8'));
 }
 
