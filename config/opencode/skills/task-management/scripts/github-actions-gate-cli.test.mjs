@@ -3,7 +3,9 @@ import test from 'node:test';
 import {
   classifyMissingWorkflow,
   inspectWorkflowText,
+  selectStatefulWorkflowRun,
   selectWorkflowRun,
+  validateDevEvidence,
   validateWorkflowResult,
 } from './github-actions-gate-core.mjs';
 
@@ -119,26 +121,91 @@ test('successful run from another SHA cannot satisfy the gate', () => {
   }), /GITHUB_RUN_SHA_MISMATCH/);
 });
 
-test('DEV evidence retains exact source CI run identity', () => {
+test('stateful DEV workflow is trusted-ref dispatch and consumes CI artifact', () => {
   const dev = {
     workflow: '.github/workflows/dev.yml',
     terminal_job: 'pipeline_dev',
     trigger: 'workflow_dispatch',
     mode: 'stateful',
     environment: 'development',
+    trusted_ref: 'main',
     source_ci_stage: 'tests',
+    artifact: 'dev-evidence',
+    evidence_file: 'dev-evidence.json',
+  };
+  const result = inspectWorkflowText(`
+name: DEV
+run-name: pipeline-dev-${{ inputs.pipeline_run_id }}-${{ inputs.candidate_sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        required: true
+      ci_run_id:
+        required: true
+      ci_artifact:
+        required: true
+      pipeline_run_id:
+        required: true
+permissions:
+  actions: read
+  contents: read
+jobs:
+  pipeline_dev:
+    environment: development
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.ci_run_id }}
+          name: ${{ inputs.ci_artifact }}
+      - run: echo '${{ inputs.ci_run_id }} ${{ inputs.ci_artifact }}'
+      - run: printf '{"status":"PASS"}' > dev-evidence.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dev-evidence
+          path: dev-evidence.json
+`, dev, 'github_dev');
+  assert.equal(result.status, 'READY');
+});
+
+test('stateful DEV run selection uses trusted ref and correlation instead of candidate head SHA', () => {
+  const selected = selectStatefulWorkflowRun([
+    { id: 1, head_branch: 'main', event: 'workflow_dispatch', display_title: 'pipeline-dev-old-aaaaaaaaaaaa' },
+    { id: 2, head_branch: 'feature/x', event: 'workflow_dispatch', display_title: 'pipeline-dev-run-1-cccccccccccc' },
+    { id: 3, head_branch: 'main', event: 'workflow_dispatch', display_title: 'pipeline-dev-run-1-cccccccccccc' },
+  ], {
+    trustedRef: 'main',
+    correlation: 'run-1',
+    candidateSha: 'c'.repeat(40),
+    excludeIds: [1],
+  });
+  assert.equal(selected.id, 3);
+});
+
+test('stateful DEV result binds trusted workflow and exact source CI run', () => {
+  const dev = {
+    workflow: '.github/workflows/dev.yml',
+    terminal_job: 'pipeline_dev',
+    trigger: 'workflow_dispatch',
+    mode: 'stateful',
+    environment: 'development',
+    trusted_ref: 'main',
+    source_ci_stage: 'tests',
+    artifact: 'dev-evidence',
+    evidence_file: 'dev-evidence.json',
   };
   const result = validateWorkflowResult({
     run: {
       id: 80,
-      head_sha: 'e'.repeat(40),
-      head_branch: 'feature/x',
+      head_sha: 'f'.repeat(40),
+      head_branch: 'main',
       event: 'workflow_dispatch',
       status: 'completed',
       conclusion: 'success',
     },
     jobs: [{ id: 81, name: 'pipeline_dev', status: 'completed', conclusion: 'success' }],
-    artifacts: [],
+    artifacts: [{ id: 82, name: 'dev-evidence', expired: false }],
     contract: dev,
     candidateSha: 'e'.repeat(40),
     terminalJobName: 'pipeline_dev',
@@ -146,4 +213,30 @@ test('DEV evidence retains exact source CI run identity', () => {
     sourceCiRunId: 50,
   });
   assert.equal(result.source_ci_run_id, 50);
+  assert.equal(result.head_branch, 'main');
+});
+
+test('downloaded DEV evidence proves the installed candidate SHA', () => {
+  const evidence = validateDevEvidence({
+    status: 'PASS',
+    candidate_sha: 'e'.repeat(40),
+    installed_sha: 'e'.repeat(40),
+    ci_run_id: 50,
+    smoke_result: 'PASS',
+  }, {
+    candidateSha: 'e'.repeat(40),
+    ciRunId: 50,
+  });
+  assert.equal(evidence.status, 'PASS');
+  assert.equal(evidence.installed_sha, 'e'.repeat(40));
+
+  assert.throws(() => validateDevEvidence({
+    status: 'PASS',
+    candidate_sha: 'e'.repeat(40),
+    installed_sha: 'd'.repeat(40),
+    ci_run_id: 50,
+  }, {
+    candidateSha: 'e'.repeat(40),
+    ciRunId: 50,
+  }), /INSTALLED_SHA_MISMATCH/);
 });
