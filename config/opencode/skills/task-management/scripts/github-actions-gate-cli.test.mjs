@@ -35,6 +35,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo ok
+      - uses: actions/upload-artifact@1111111111111111111111111111111111111111
+        with:
+          name: candidate-build
+          path: package.json
 `, contract, 'github_ci');
   assert.equal(result.status, 'READY');
   assert.equal(result.terminal_job_name, 'pipeline_ci');
@@ -56,6 +60,40 @@ jobs:
   assert.equal(result.status, 'INCOMPATIBLE');
   assert.ok(result.issues.some((item) => item.includes('pull_request_target')));
   assert.ok(result.issues.some((item) => item.includes('write-all')));
+});
+
+test('candidate workflow must accept the frozen branch and use pinned actions without secrets', () => {
+  const branchContract = { ...contract, artifact: undefined };
+  const wrongBranch = inspectWorkflowText(`
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  pipeline_ci:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
+`, branchContract, 'github_ci', { candidateBranch: 'feature/task' });
+  assert.equal(wrongBranch.status, 'INCOMPATIBLE');
+  assert.ok(wrongBranch.issues.some((item) => item.includes('candidate branch')));
+
+  const unsafe = inspectWorkflowText(`
+on:
+  push:
+permissions:
+  contents: read
+jobs:
+  pipeline_ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "\${{ secrets.TEST_TOKEN }}"
+`, branchContract, 'github_ci', { candidateBranch: 'feature/task' });
+  assert.equal(unsafe.status, 'INCOMPATIBLE');
+  assert.ok(unsafe.issues.some((item) => item.includes('commit-SHA pinned')));
+  assert.ok(unsafe.issues.some((item) => item.includes('must not reference')));
 });
 
 test('missing workflow is an explicit bootstrap state rather than local fallback', () => {
@@ -155,13 +193,13 @@ jobs:
     environment: development
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@2222222222222222222222222222222222222222
         with:
           run-id: \${{ inputs.ci_run_id }}
           name: \${{ inputs.ci_artifact }}
       - run: echo '\${{ inputs.ci_run_id }} \${{ inputs.ci_artifact }}'
       - run: printf '{"status":"PASS"}' > dev-evidence.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@3333333333333333333333333333333333333333
         with:
           name: dev-evidence
           path: dev-evidence.json
