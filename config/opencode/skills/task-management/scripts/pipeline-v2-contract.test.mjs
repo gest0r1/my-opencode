@@ -1104,6 +1104,13 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
   result = invoke(['start', fx.manifest.run_id, 'dev', '--pipeline', 'app']);
   assert.equal(result.status, 0, result.stderr);
   result = invoke(['complete', fx.manifest.run_id, 'dev', '--pipeline', 'app']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /EVIDENCE_INVALID_OR_STALE/);
+
+  const devEvidence = JSON.parse(await readFile(path.join(fx.runRoot, 'github', 'app-dev.json'), 'utf8'));
+  devEvidence.smoke_result = 'PASS';
+  await writeFile(path.join(fx.runRoot, 'github', 'app-dev.json'), JSON.stringify(devEvidence, null, 2));
+  result = invoke(['complete', fx.manifest.run_id, 'dev', '--pipeline', 'app']);
   assert.equal(result.status, 0, result.stderr);
 
   result = invoke(['start', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app']);
