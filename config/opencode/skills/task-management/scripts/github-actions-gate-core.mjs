@@ -286,31 +286,6 @@ function pushAcceptsBranch(text, branch) {
   return (branches.length === 0 || branches.some(matches)) && !ignore.some(matches);
 }
 
-function rootValue(text, key) {
-  const match = text.match(new RegExp('^' + key + '\\s*:\\s*(.+?)\\s*$', 'm'));
-  return match?.[1] ? unquote(match[1]) : undefined;
-}
-
-function jobDisplayName(block, jobId) {
-  if (!block) return jobId;
-  for (const line of block.slice(1)) {
-    if (indentation(line) <= 2 && line.trim()) break;
-    const match = line.match(/^\s{4}name\s*:\s*(.+?)\s*$/);
-    if (match?.[1]) return unquote(match[1]);
-  }
-  return jobId;
-}
-
-function jobEnvironment(block) {
-  if (!block) return undefined;
-  for (const line of block.slice(1)) {
-    if (indentation(line) <= 2 && line.trim()) break;
-    const match = line.match(/^\s{4}environment\s*:\s*(.+?)\s*$/);
-    if (match?.[1]) return unquote(match[1]);
-  }
-  return undefined;
-}
-
 export function inspectWorkflowText(text, contract, executor = 'github_ci', context = {}) {
   assertGithubGateContract(contract, executor);
   if (typeof text !== 'string') throw new GithubActionsGateError('workflow text must be a string');
