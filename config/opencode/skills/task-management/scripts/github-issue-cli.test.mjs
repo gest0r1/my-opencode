@@ -84,6 +84,7 @@ test('fetch writes normalized authoritative snapshot and deduplicates issue numb
   assert.equal(output.status, 'PASS');
   assert.equal(output.repository, 'gest0r1/sevami');
   assert.deepEqual(output.issue_numbers, [5, 9]);
+  assert.match(output.snapshot_sha256, /^[0-9a-f]{64}$/);
 
   const snapshot = JSON.parse(
     await readFile(path.join(root, '.tmp', 'pipelines', 'run-1', 'sources', 'github-issues.json'), 'utf8'),
@@ -123,4 +124,32 @@ echo "ssh://git@example.invalid/owner/repo.git"
   const result = run(root, bin, ['fetch', 'run-origin', '5']);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /origin must point to github\.com/);
+});
+
+
+test('show reads the authoritative snapshot without mutating it and preserves long body text', async () => {
+  const { root, bin } = await fixture();
+  let result = run(root, bin, ['fetch', 'run-show', '5']);
+  assert.equal(result.status, 0, result.stderr);
+  const snapshotPath = path.join(root, '.tmp', 'pipelines', 'run-show', 'sources', 'github-issues.json');
+  const before = await readFile(snapshotPath, 'utf8');
+
+  result = run(root, bin, ['show', 'run-show', '5']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /# Issue #5 — Issue five/);
+  assert.match(result.stdout, /body five/);
+  assert.match(result.stdout, /requirement note/);
+  assert.match(result.stdout, /sha256: [0-9a-f]{64}/);
+
+  const after = await readFile(snapshotPath, 'utf8');
+  assert.equal(after, before);
+});
+
+test('show fails closed for an issue absent from the frozen snapshot', async () => {
+  const { root, bin } = await fixture();
+  const fetched = run(root, bin, ['fetch', 'run-show-missing', '5']);
+  assert.equal(fetched.status, 0, fetched.stderr);
+  const result = run(root, bin, ['show', 'run-show-missing', '9']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not present in the authoritative snapshot/);
 });

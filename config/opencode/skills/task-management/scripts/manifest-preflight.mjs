@@ -3,12 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { gatePolicyError, isFrozenUvPytest, tokenizeGateCommand as tokenizeGateCommandPolicy } from './gate-command-policy.mjs';
+import { validateManifestV2Policy, validatePackageManagerContract } from './manifest-v2-policy.mjs';
 
 export class ManifestPreflightError extends Error {}
 
 // Only stages executed by gate-runner require profiles. Implementation, human review,
 // Git scope verification and candidate publication use their own deterministic tools.
-const MACHINE_STAGE = /(?:^|[-_])(test|tests|pytest|build|lint|typecheck|type-check|runtime|deploy|release|smoke|install|unit|e2e|scan|gates?)(?:$|[-_])/i;
+const MACHINE_STAGE = /(?:^|[-_])(test|tests|pytest|build|lint|typecheck|type-check|runtime|deploy|release|smoke|install|unit|e2e|scan|gates?|docs?|validate)(?:$|[-_])/i;
 const RUNTIME_GATE = /(runtime|deploy|release|smoke|install)/i;
 const SAFE_SHA = /^[0-9a-f]{40}$/i;
 
@@ -115,7 +116,7 @@ function checkPython(tokens, cwd) {
 }
 
 
-export function validateGateManifest(manifest, { environment = false, cwd = process.cwd() } = {}) {
+export function validateGateManifest(manifest, { environment = false, cwd = process.cwd(), manifestPath } = {}) {
   if (!manifest || typeof manifest !== 'object' || !Array.isArray(manifest.pipelines)) {
     throw new ManifestPreflightError('manifest.pipelines must be an array');
   }
@@ -159,10 +160,18 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
       }
     }
   }
+  const used = new Set(manifest.pipelines.map((pipeline) => pipeline.profile).filter(Boolean));
+  const usedInvocations = invocations.filter(({ profile }) => used.has(profile));
+  if (manifest.schema_version === 2) {
+    try {
+      validateManifestV2Policy(manifest, { cwd, manifestPath });
+      validatePackageManagerContract(usedInvocations, { cwd, environment, executableOnPath });
+    } catch (error) {
+      throw new ManifestPreflightError(error instanceof Error ? error.message : String(error));
+    }
+  }
   if (environment) {
-    const used = new Set(manifest.pipelines.map((pipeline) => pipeline.profile).filter(Boolean));
-    for (const { profile, gate, tokens } of invocations) {
-      if (!used.has(profile)) continue;
+    for (const { profile, gate, tokens } of usedInvocations) {
       if (!executableOnPath(tokens[0])) {
         throw new ManifestPreflightError(`EXECUTABLE_NOT_FOUND: ${tokens[0]} for ${profile}/${gate} is absent from runner PATH`);
       }
@@ -175,5 +184,5 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
 
 export async function preflightFile(path, options = {}) {
   const raw = await readFile(path, 'utf8');
-  return validateGateManifest(JSON.parse(raw), options);
+  return validateGateManifest(JSON.parse(raw), { ...options, manifestPath: path });
 }

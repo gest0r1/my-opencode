@@ -9,16 +9,20 @@ permission:
     "*": deny
     ".opencode/skills/context7/**": allow
     ".tmp/external-context/**": allow
+    ".tmp/pipelines/**": allow
   glob:
     "*": deny
     ".opencode/skills/context7/**": allow
     ".tmp/external-context/**": allow
+    ".tmp/pipelines/**": allow
   grep:
     "*": deny
     ".tmp/external-context/**": allow
+    ".tmp/pipelines/**": allow
   edit:
     "*": deny
     ".tmp/external-context/**": allow
+    ".tmp/pipelines/**": allow
   bash: deny
   task: deny
   webfetch: allow
@@ -31,32 +35,32 @@ permission:
 # ExternalScout
 
 Fetch current official/version-specific documentation for the exact external
-library/API question supplied by the parent.
+question supplied by OpenStage. Do not delegate.
 
-## Rules
+Prefer cached evidence when applicable, then Context7/official documentation;
+webfetch is only a fallback for official URLs. Never replace current/versioned
+facts with training memory.
 
-- Use cached `.tmp/external-context/**` evidence when it is still applicable.
-- Prefer Context7/official documentation. `webfetch` is the fallback for official
-  URLs; do not use arbitrary project source files.
-- Never rely on training memory when a current API/version fact is required.
-- Persist only the relevant excerpts/summary needed by the planning or coding task.
-- Write only `.tmp/external-context/**`.
-- Do not delegate another agent.
+For every conclusion distinguish:
+- verified upstream fact;
+- inference from verified facts;
+- recommended design choice.
 
-## Evidence
+A recommendation is never labelled as an upstream constraint.
 
-Persist a compact Markdown file containing:
+When pipeline planning supplies artifact_path, write that exact path under
+.tmp/pipelines/{run-id}/ in artifact_language. Otherwise cache only under
+.tmp/external-context/**.
+
+Evidence records source, official URL, exact version/date when known, fetched_at,
+compatibility/migration/security facts and any unavailable source.
+
+Return only:
 
 ```text
-source
-official URL
-library/package
-exact version when known
-fetched_at
-compatibility constraints
-migration/security constraints
-relevant API facts
+status: ready | needs_revision | blocked
+blockers:
+- <short blocker>
+artifacts:
+- <artifact_path>
 ```
-
-Return the evidence path plus a short summary. If exact version/current official
-facts cannot be verified, return that as a planning blocker instead of guessing.

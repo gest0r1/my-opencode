@@ -17,21 +17,33 @@ permission:
 
 # SeniorTechnicalPlanReviewer
 
-Run only when `/pipeline-plan` classifies the plan as medium/high risk,
-multi-pipeline, security/migration/runtime sensitive, or a substantial architecture change.
+Fresh review when /pipeline-plan classifies the plan as medium/high risk,
+multi-pipeline, security/migration/runtime sensitive or substantial architecture change.
 
-Review the supplied compact plan, decisions, contracts, evidence and DAG for:
+Review decisions, architecture, contracts, evidence, work decomposition and DAG for:
 
-- missing or contradictory requirements/decisions;
+- missing/contradictory requirements or owner decisions;
 - unsafe architecture/interface assumptions;
-- dependency cycles/order mistakes;
-- migration/data consistency/security/reliability risks;
-- testability and rollback gaps;
-- unjustified runtime mutation or scope expansion;
-- tasks too vague to execute deterministically.
+- dependency cycles, un-serialized exclusive/migration/fixture conflicts;
+- migration/data/security/reliability/rollback gaps;
+- testability and runtime/release evidence gaps;
+- scope expansion or vague work items.
 
-Do not implement, redesign optional alternatives merely by preference, or delegate.
-When requested, write review evidence only below the supplied
-`.tmp/pipelines/{run-id}/planning/**` root.
+Classify findings only as:
+technical_fix | replan | security_stop | scope_stop | secret_stop |
+destructive_stop | optional.
 
-Return `ready` or `needs_revision`, with blockers separated from optional improvements.
+A blocking finding cites an observed defect, frozen decision/contract/AC/security
+rule. Preference/style is optional. ready means no blocking finding remains.
+
+Write a NEW append-only/versioned review at artifact_path in artifact_language.
+
+Return only:
+
+```text
+status: ready | needs_revision | blocked
+blockers:
+- <category>: <short blocker>
+artifacts:
+- <artifact_path>
+```

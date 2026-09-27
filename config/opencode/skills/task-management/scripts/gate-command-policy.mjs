@@ -58,7 +58,11 @@ export function gatePolicyError(tokens, gate) {
   if ((exe === 'python' || exe === 'python3') && args[0] === '-m' && args[1] === 'pytest') return;
   if (exe === 'tsc' || exe === 'mypy') return;
   if (exe === 'npx' && (args[0] === '--yes' ? ['tsc', 'vitest', 'jest'].includes(args[1] ?? '') : ['tsc', 'vitest', 'jest'].includes(args[0] ?? ''))) return;
-  if (exe === 'npm' && (args[0] === 'test' || (args[0] === 'run' && ['test', 'build', 'typecheck', 'lint'].includes(args[1] ?? '')))) return;
+  if (exe === 'npm' && (
+    args[0] === 'test' ||
+    (args[0] === 'run' && ['test', 'build', 'typecheck', 'lint'].includes(args[1] ?? '')) ||
+    (args[0] === 'exec' && ['tsc', 'vitest', 'jest'].includes(args.find((arg) => ['tsc', 'vitest', 'jest'].includes(arg)) ?? ''))
+  )) return;
   if (exe === 'pnpm' && (args[0] === 'test' || (args[0] === 'run' && ['test', 'build', 'typecheck', 'lint'].includes(args[1] ?? '')) || (args[0] === 'exec' && ['tsc', 'vitest'].includes(args[1] ?? '')))) return;
   if (exe === 'corepack' && args[0] === 'pnpm') return gatePolicyError(['pnpm', ...args.slice(1)], gate);
   if (exe === 'yarn' && ['test', 'build', 'lint'].includes(args[0] ?? '')) return;

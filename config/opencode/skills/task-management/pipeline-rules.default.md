@@ -1,6 +1,6 @@
 ---
 document_type: pipeline_rules
-rules_version: 1
+rules_version: 2
 rules_scope: opencode_default
 edit_policy: distribution_only
 ---
@@ -33,20 +33,30 @@ fail-closed.
 
 ## Planning and scope
 
+- New design-freeze PLANs use manifest schema v2. Schema v1 is legacy-read compatibility only.
 - PLAN has no implicit backlog-file source. `/pipeline-plan` requires explicit text/file/`#N` input or GitHub Issue refs attached by the current OpenChamber session; missing source is an error.
 - GitHub Issue refs are restricted to the current worktree repository. OpenChamber supplies identifiers only; PLAN re-fetches authoritative Issue content/state from GitHub.
 - Each Issue story has one stable mutable planning file; review evidence is append-only.
 - PLAN does not modify implementation source, Git history, runtime or secrets.
 - Decisions requiring owner judgement are explicit before design-freeze approval.
 - Open decisions prohibit initialization of an approved design-freeze run.
+- Every triggered planning gate is frozen as path+SHA-256 evidence and must be `ready`; `needs_revision` never becomes PASS by orchestrator interpretation.
+- A planning gate may self-revise at most 3 cycles when no owner judgement is needed. Owner questions are asked only for the current blocking gate; after an answer the same gate is rerun fresh.
+- Reviews are append-only. Stable Issue story files may be revised, but review evidence is never overwritten or translated in place.
+- Planning/review agents write their own authorized artifacts and return a uniform status/blockers/artifacts envelope. A parent may not reconstruct missing child evidence from chat text.
 - Approved implementation scope is expressed by the frozen manifest, including
   minimal `allowed_change_paths` when source changes are expected.
 - Scope expansion requires re-planning and owner approval.
+- Atomic work items are compiled before approval and frozen by ID/path/SHA-256. RUN may execute only those frozen work items.
+- If `.opencode/pipeline-policy.json` exists, its SHA-256 is frozen. Protected paths and triggered project gates are enforced by preflight.
 
 ## DAG and parallelism
 
 - PLAN compiles prerequisites and ordinary source/migration/fixture conflicts
   into an acyclic dependency DAG.
+- Shared `exclusive_paths`, `migration_paths`, `fixture_paths` or `conflict_group`
+  require dependency serialization; a v2 manifest that declares such a conflict
+  without ordering is invalid.
 - A pipeline/stage is runnable only when its declared prerequisites are complete.
 - Independent runnable work may execute in parallel.
 - Do not add runtime conflict detectors for constraints already representable as
@@ -79,8 +89,11 @@ fail-closed.
 
 ## Gates and evidence
 
-- Machine build/test/install/runtime validation completes only from deterministic
+- Machine build/test/install/runtime/docs validation completes only from deterministic
   gate-runner results and evidence, not natural-language PASS.
+- Repository package-manager identity is authoritative for JS gates. A pnpm project
+  must use pnpm/corepack-pnpm gates; missing pnpm blocks instead of falling back to
+  npm or dependency-installing `npx --yes`.
 - Qualitative review gates may be model-driven but blockers must cite an observed
   defect or approved requirement/contract/security rule.
 - Required gate that cannot execute or be verified fails closed.
@@ -108,6 +121,20 @@ approved base/source -> candidate SHA -> installed candidate/artifact -> evidenc
   with reason.
 - Deployment/runtime failure cannot be converted to PASS by LLM judgement.
 
+## Review findings and fix cycles
+
+- Review findings are `technical_fix | replan | security_stop | scope_stop | secret_stop | destructive_stop | optional`.
+- Only `technical_fix` may be repaired automatically inside frozen scope.
+- Before every automatic repair, RUN records the attempt through deterministic `stage-cli fix-cycle`; maximum automatic technical-fix cycles are **3 per stage/work-item**. The fourth call fails closed.
+- `replan` and security/scope/secret/destructive findings block immediately and never consume a fix cycle.
+
+## Status semantics
+
+- `ready` means the frozen functional milestone `ready_after_stage` has passed.
+- `release_ready` means the frozen release milestone `release_ready_after_stage` has passed.
+- `completed` means every frozen stage, including required docs/finalization, has terminal successful evidence.
+- Pipelines may continue executing later frozen stages after reaching `ready` or `release_ready`.
+
 ## Approval
 
 - Owner approval is required only where PLAN/manifest requires an owner decision
@@ -122,6 +149,15 @@ approved base/source -> candidate SHA -> installed candidate/artifact -> evidenc
 - GitHub Issue sourced runs persist each actual pipeline-status transition to a durable outbox and synchronize idempotent Issue comments.
 - Failed delivery stays pending and must be drained before publish/PR handoff.
 - PR handoff records the exact PR number and uses close keywords for completed Issues; the owner merges the PR.
+
+## Planning evidence integrity
+
+- For schema v2, `planning_readiness.design_freeze=true`, non-empty `required_gates[]`,
+  ready gate records, required planning artifacts, work-item hashes and (for Issue runs)
+  `source_snapshot_sha256` are mandatory before init.
+- Stage validation fails if a frozen Issue snapshot or project policy changes after init.
+- GitHub Issue snapshots are immutable evidence. Use the deterministic `github-issue-cli show`
+  reader; never temporarily rewrite the snapshot for readability.
 
 ## Completion
 

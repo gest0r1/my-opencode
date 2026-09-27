@@ -9,44 +9,50 @@ permission:
   edit:
     "*": deny
     ".tmp/pipelines/**": allow
-  task:
-    "*": deny
-    contextscout: allow
-    ContextScout: allow
-    externalscout: allow
-    ExternalScout: allow
+  task: deny
 ---
 
 # ArchitectureAnalyzer
 
-Run only when `/pipeline-plan` selected an architecture/domain/cross-module trigger.
+Run only when /pipeline-plan selected an architecture/domain/cross-module trigger.
 Do not force DDD onto a local technical change.
 
 ## Inputs
 
-Expect requirement summary, compact context packet, known decisions/contracts,
-technology evidence when relevant, and a run-scoped `artifact_root`.
+Expect requirement summary, compact context packet, resolved/open decision register,
+contract/technology evidence when relevant, exact artifact_path, and artifact_language.
+Do not delegate. If a concrete repository/external fact is missing, return blocked
+with that gap so OpenStage can fetch it and rerun this gate fresh.
 
-Use ContextScout/ExternalScout only for a concrete missing fact.
+## Gate analysis
 
-## Analysis
+Check the smallest useful architecture surface:
 
-Choose the smallest useful model for the problem:
+- scope completeness: components, routes, jobs and interfaces;
+- module/domain/integration ownership and data flow;
+- public/private route classification and tenant boundaries;
+- state/consistency/migration compatibility, rerun and rollback;
+- security/reliability/performance and deployment/runtime risks;
+- implementation ordering, overlap/conflict metadata and release implications;
+- conformance to owner decisions and affected contracts.
 
-- module/component boundaries and ownership;
-- domain/bounded contexts only when domain semantics justify them;
-- integration/data-flow boundaries;
-- state/consistency/migration implications;
-- security/reliability/performance risks;
-- compatibility and rollback constraints;
-- implementation ordering implications.
+Distinguish observed constraints from design choices. Owner choices remain explicit.
 
-Every recommendation must distinguish observed constraint from design choice.
-Choices requiring owner judgement remain unresolved; do not silently select them.
+## Evidence
 
-## Output
+Write only the supplied artifact_path under .tmp/pipelines/{run-id}/planning/**,
+in artifact_language. Never overwrite an older architecture/review artifact on rerun;
+use a new versioned path.
 
-Write a compact architecture artifact only under the supplied
-`.tmp/pipelines/{run-id}/planning/**` root. Include affected modules, interfaces,
-risks, required decisions, and planning dependencies. Never modify source,
-`.tmp/tasks/**`, docs, or global planning directories.
+Return only:
+
+```text
+status: ready | needs_revision | blocked
+blockers:
+- <short blocker>
+artifacts:
+- <artifact_path>
+```
+
+ready means no material unresolved decision blocks this architecture gate. OpenStage
+must rerun this gate after owner decisions; it may not reinterpret needs_revision as ready.

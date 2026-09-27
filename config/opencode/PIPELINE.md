@@ -17,6 +17,56 @@ A successful RUN creates or updates the delivery PR automatically. There is no
 separate owner command to create the PR. The owner reviews the resulting PR and
 merges it to `main` manually.
 
+## Manifest v2 and planning gates
+
+New design-freeze plans use manifest schema v2. V1 remains readable only for
+historical runs.
+
+Before owner approval, every triggered planning gate must be recorded literally
+as `ready` with frozen artifact path + SHA-256. `needs_revision` cannot be
+reinterpreted by OpenStage as a pass. A gate may revise/rerun itself up to three
+times when no owner judgement is required; otherwise only the current gate's
+blocking questions are presented to the owner.
+
+The v2 manifest also freezes:
+
+- authoritative GitHub Issue snapshot SHA-256;
+- required planning artifacts and reviews;
+- atomic TaskManager work items by ID/path/SHA-256;
+- per-pipeline decision/research/contract IDs;
+- source/migration/fixture conflict metadata;
+- optional repository policy SHA-256.
+
+Planning/review evidence is append-only. Stable Issue story files are the
+exception: owner corrections update the same `stories/issue-N.md` file.
+
+## Optional repository policy
+
+Universal procedure belongs to the distribution rules, commands and deterministic
+tools. Repository-specific invariants may live in:
+
+```text
+.opencode/pipeline-policy.json
+```
+
+A schema example is distributed at
+`skills/task-management/pipeline-policy.example.json`.
+
+Current schema supports:
+
+- `protected_paths[]`: scopes that may not enter `allowed_change_paths`;
+- `required_gates[]`: a gate stage plus `when_paths[]`; if frozen change
+  scope intersects those paths, the manifest must include that stage.
+
+When the policy exists, PLAN freezes its path+SHA-256. Preflight and later state
+validation fail if it changes.
+
+## Package-manager integrity
+
+JS gates use the package manager declared by `package.json#packageManager` or
+the repository lockfile. A pnpm repository does not fall back to npm or
+dependency-installing `npx --yes`; missing pnpm is an environment blocker.
+
 ## 1. PLAN reads authoritative Issues
 
 GitHub Issue references are identifiers, not requirement content. PLAN resolves
@@ -37,7 +87,15 @@ The reader:
   run identifiers;
 - deduplicates Issue numbers;
 - writes the authoritative snapshot atomically to
-  `.tmp/pipelines/<run-id>/sources/github-issues.json`.
+  `.tmp/pipelines/<run-id>/sources/github-issues.json`;
+- returns the snapshot SHA-256, which schema v2 freezes.
+
+Read full bodies/comments without modifying the snapshot via:
+
+```text
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts \\
+  show <run-id> [issue-number...]
+```
 
 Anonymous GitHub HTML/API requests, `webfetch`, `curl`, and
 `github_handoff_probe` are not Issue-reading substitutes. Git transport
