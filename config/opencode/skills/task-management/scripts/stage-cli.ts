@@ -1,7 +1,7 @@
 // Stable CLI entry point. Keep core stage/DAG/state implementation untouched and
 // reject non-executable machine gates BEFORE init creates any state or approve mutates it.
 export * from './stage-cli-core.ts';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -123,6 +123,50 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
   }
 }
 
+async function ownerAcceptance(args: string[]): Promise<boolean> {
+  if (args[0] !== 'owner-accept') return false;
+  const runId = args[1];
+  const stage = args[2];
+  const pipelineId = optionFromArgs(args, '--pipeline');
+  const result = optionFromArgs(args, '--result');
+  const message = optionFromArgs(args, '--message');
+  if (!runId || !stage || !pipelineId || !['pass', 'fail'].includes(result ?? '')) {
+    throw new Error('usage: stage-cli owner-accept <run-id> <stage> --pipeline <id> --result pass|fail [--message <text>]');
+  }
+
+  const stateRoot = resolve(stateRootFromArgs(args));
+  const state = JSON.parse(await readFile(join(stateRoot, runId, 'state.json'), 'utf8'));
+  if (!state.manifest_file) throw new Error('Frozen manifest is missing');
+  const manifestFile = resolve(state.manifest_file);
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  const pipeline = manifest.pipelines?.find((item: any) => item.id === pipelineId);
+  if (!pipeline || pipeline.executors?.[stage] !== 'owner_acceptance') {
+    throw new Error(`OWNER_ACCEPTANCE_STAGE_REQUIRED: ${pipelineId}/${stage}`);
+  }
+  if (state.pipelines?.[pipelineId]?.stages?.[stage]?.status !== 'in_progress') {
+    throw new Error(`OWNER_ACCEPTANCE_NOT_IN_PROGRESS: ${pipelineId}/${stage}`);
+  }
+
+  await enforcePublishedEvidenceCurrent(['complete', runId, stage, '--pipeline', pipelineId, '--state-root', stateRoot]);
+  const evidencePath = join(dirname(manifestFile), 'owner', `${pipelineId}-${stage}.json`);
+  await mkdir(dirname(evidencePath), { recursive: true });
+  const evidence = {
+    status: result === 'pass' ? 'PASS' : 'FAIL',
+    gate: 'owner_acceptance',
+    run_id: runId,
+    pipeline_id: pipelineId,
+    stage,
+    message: message ?? null,
+    recorded_at: new Date().toISOString(),
+  };
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
+
+  const common = [runId, stage, '--pipeline', pipelineId, '--state-root', stateRoot, '--evidence', evidencePath];
+  if (result === 'pass') await runCli(['complete', ...common, ...(message ? ['--message', message] : [])]);
+  else await runCli(['fail', ...common, ...(message ? ['--message', message] : [])]);
+  return true;
+}
+
 async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
   if (args[0] !== 'complete') return args;
   const runId = args[1];
@@ -147,7 +191,9 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
   const artifactRoot = dirname(manifestFile);
   let evidencePath: string | undefined;
 
-  if (executor === 'local_gate') {
+  if (executor === 'owner_acceptance') {
+    throw new Error(`OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT: ${pipeline.id}/${stage}`);
+  } else if (executor === 'local_gate') {
     evidencePath = join(stateRoot, runId, 'gates', `${pipeline.id}-${stage}.json`);
     const evidence = await readJsonEvidence(evidencePath, `${pipeline.id}/${stage}`);
     if (evidence.status !== 'PASS' || evidence.run_id !== runId ||
@@ -233,6 +279,10 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
 
 async function main(args: string[]): Promise<void> {
   const [command, identifier] = args;
+  if (command === 'owner-accept') {
+    await ownerAcceptance(args);
+    return;
+  }
   if (command === 'preflight') {
     if (!identifier || args.some((arg, index) => index > 1 && arg !== '--environment')) {
       throw new Error('usage: stage-cli preflight <manifest.json> [--environment]');
