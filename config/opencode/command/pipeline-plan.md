@@ -155,20 +155,38 @@ For `local_gate`, `gate-runner-cli` still runs from project root with `shell:fal
 
 Respect the repository package manager for local JS gates. If `package.json#packageManager` or a lockfile declares pnpm/npm/yarn/bun, local JS gates must use that manager. Missing tooling is an environment BLOCK, never a fallback to another manager or dependency-installing `npx --yes`. For a project containing both `pyproject.toml` and `uv.lock`, local pytest gates use `uv run --frozen ...`.
 
-Before presenting owner approval run:
+Before presenting owner approval run the **same executable contract that RUN will depend on**, while no state exists yet:
 
 ```text
-stage-cli.ts preflight .tmp/pipelines/{run-id}/manifest.json --environment
+stage-cli.ts plan-run-preflight .tmp/pipelines/{run-id}/manifest.json --environment
 git-worktree-cli.ts adopt .tmp/pipelines/{run-id}/manifest.json
+git-worktree-cli.ts verify .tmp/pipelines/{run-id}/manifest.json
 ```
 
-Both must PASS. V2 preflight verifies planning evidence hashes, source snapshot, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Never change the frozen manifest after init.
+All three must PASS. `plan-run-preflight` rejects schema v1 before the owner can approve it. `verify` must prove that the complete current branch diff is either the frozen preserved baseline or inside writable `allowed_change_paths`; do not defer a baseline/scope mismatch until RUN. V2 preflight verifies planning evidence hashes, source snapshot, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Before `init`, deterministic manifest corrections remain the same draft/run-id and are simply revalidated; after `init`, never mutate that manifest.
 
-## Preservation and refresh
+## Preservation, migration, supersede and refresh
 
 Canonical results stay under `.tmp/pipelines/{run-id}/`. Deterministic tools own `state.json`, locks, candidate and machine evidence. Never manually edit approved manifest/state.
 
-After another worktree merges relevant main changes, owner invokes `/pipeline-refresh`. Preserve historical evidence, create a NEW run_id/manifest, review affected design/scope/gates and obtain new approval. Never copy old state/locks/candidate into the new run.
+When PLAN intentionally continues existing committed implementation from an older/legacy run, first call:
+
+```text
+git-worktree-cli.ts baseline <planning-base-sha>
+```
+
+Freeze its exact `head_sha`, sorted `changed_paths[]` and `diff_sha256` as `preserved_baseline`. Those files are allowed to remain exactly as they were at the preserved HEAD, but that does **not** grant the new RUN permission to edit them. Any post-baseline change to such a path must still match `allowed_change_paths`. This is the canonical V1→V2/existing-implementation migration contract.
+
+Distinguish lifecycle changes:
+- planning `needs_revision`: same run-id/draft, up to 3 autonomous cycles;
+- `technical_fix`: same approved run, max 3 cycles;
+- deterministic manifest correction **before init**: same draft/run-id;
+- frozen-manifest correction after init: create a lineage-preserving draft through `stage-cli supersede <old> <new> --reason <code>`;
+- architecture/scope/main-drift replan: new run with `lineage.change_class=replan` and a reason code.
+
+`stage-cli supersede` copies planning/source/work-item artifacts only; it never copies state, locks, candidate, GitHub/gate/owner evidence. Do not hand-copy pipeline directories.
+
+After another worktree merges relevant main changes, owner invokes `/pipeline-refresh`. Preserve historical evidence, create a NEW run_id/manifest with reason-coded lineage, review affected design/scope/gates and obtain new approval. Never copy old state/locks/candidate into the new run.
 
 ## Owner approval — mandatory stop
 
@@ -177,7 +195,9 @@ Present the current gate history/readiness, exact branch/main SHA, manifest, DAG
 Only AFTER a separate explicit owner message approving this exact v2 manifest/run ID, with every owner decision resolved and every required planning gate `ready`, run:
 
 ```text
-stage-cli.ts preflight .tmp/pipelines/{run-id}/manifest.json --environment
+stage-cli.ts plan-run-preflight .tmp/pipelines/{run-id}/manifest.json --environment
+git-worktree-cli.ts adopt .tmp/pipelines/{run-id}/manifest.json
+git-worktree-cli.ts verify .tmp/pipelines/{run-id}/manifest.json
 stage-cli.ts init .tmp/pipelines/{run-id}/manifest.json
 stage-cli.ts approve {run-id}
 node /root/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs sync {run-id}
