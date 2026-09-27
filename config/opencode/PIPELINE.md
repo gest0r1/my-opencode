@@ -133,13 +133,14 @@ RUN follows the frozen DAG and executor contract. The canonical release path is:
 
 ```text
 implementation/review
+  -> source documentation/finalization
   -> optional local fast gates
   -> Git scope verify
   -> publish exact candidate SHA
   -> GitHub Actions CI for that SHA
   -> immutable artifact/evidence
   -> DEV/runtime validation of the same SHA/artifact
-  -> acceptance/finalization
+  -> acceptance/handoff
 ```
 
 `git-worktree-cli publish` commits approved scoped changes, performs a non-force push of the selected worktree branch, verifies the remote SHA, and writes:
