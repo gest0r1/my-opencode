@@ -711,6 +711,106 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
   assert.equal(JSON.parse(result.stdout).pipelines.app.status, 'completed');
 });
 
+test('technical fix after publish reopens verify and publish before GitHub CI', async () => {
+  const fx = await fixture('v2-fix-invalidates-published-chain');
+  fx.manifest.pipelines[0].stages = ['implementation', 'git-verify', 'publish', 'tests'];
+  fx.manifest.pipelines[0].executors = {
+    implementation: 'agent',
+    'git-verify': 'git_verify',
+    publish: 'git_publish',
+    tests: 'github_ci',
+  };
+  fx.manifest.pipelines[0].github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'push',
+    },
+  };
+  delete fx.manifest.pipelines[0].ready_after_stage;
+  delete fx.manifest.pipelines[0].release_ready_after_stage;
+  fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/test' };
+  await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
+
+  const stateRoot = path.join(fx.root, '.tmp', 'fix-invalidation-state');
+  const invoke = (args) => run(fx.root, [...args, '--state-root', stateRoot]);
+  let result = invoke(['init', fx.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  result = invoke(['approve', fx.manifest.run_id]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = invoke(['start', fx.manifest.run_id, 'implementation', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+  result = invoke(['complete', fx.manifest.run_id, 'implementation', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = invoke(['start', fx.manifest.run_id, 'git-verify', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+  await writeFile(path.join(fx.runRoot, 'git-verify.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: fx.manifest.run_id,
+    branch: 'feature/test',
+    head_sha: 'b'.repeat(40),
+    changed_files: ['src/app.ts'],
+    verified_at: new Date(Date.now() + 1000).toISOString(),
+  }, null, 2));
+  result = invoke(['complete', fx.manifest.run_id, 'git-verify', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = invoke(['start', fx.manifest.run_id, 'publish', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+  await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
+    status: 'PASS',
+    branch: 'feature/test',
+    candidate_sha: 'c'.repeat(40),
+    remote_sha: 'c'.repeat(40),
+    published_at: new Date(Date.now() + 1000).toISOString(),
+  }, null, 2));
+  result = invoke(['complete', fx.manifest.run_id, 'publish', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = invoke(['start', fx.manifest.run_id, 'tests', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+  result = invoke(['fail', fx.manifest.run_id, 'tests', '--pipeline', 'app']);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = invoke(['fix-cycle', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout);
+  assert.equal(state.pipelines.app.stages['git-verify'].status, 'pending');
+  assert.equal(state.pipelines.app.stages.publish.status, 'pending');
+  assert.equal(state.pipelines.app.stages.tests.status, 'pending');
+  assert.equal(state.pipelines.app.stages.tests.technical_fix_cycles, 1);
+
+  result = invoke(['next', fx.manifest.run_id, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout).runnable, [{ pipeline_id: 'app', stage: 'git-verify' }]);
+});
+
+test('canonical RUN preflight blocks legacy v1 while status remains readable', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'pipeline-v1-readonly-'));
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifestPath = path.join(root, 'manifest.json');
+  const manifest = {
+    schema_version: 1,
+    run_id: 'legacy-v1',
+    rules_file: 'docs/pipeline-rules.md',
+    rules_version: 2,
+    pipelines: [{ id: 'app', stages: ['implementation'] }],
+    gate_profiles: {},
+  };
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+
+  let result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['status', manifest.run_id, '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(root, ['run-preflight', manifest.run_id, '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /LEGACY_V1_REPLAN_REQUIRED/);
+});
+
 test('technical fix counter permits exactly three cycles and blocks the fourth', async () => {
   const fx = await fixture('v2-fix-cycle-limit');
   const stateRoot = path.join(fx.root, '.tmp', 'fix-cycle-state');
