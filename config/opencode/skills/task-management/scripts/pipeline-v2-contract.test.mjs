@@ -68,6 +68,7 @@ async function fixture(runId = 'v2-run') {
     allowed_change_paths: ['src/**'],
     pipelines: [{
       id: 'app',
+      deployable: false,
       stages: ['implementation', 'functional-review', 'candidate-review', 'finalize'],
       executors: {
         implementation: 'agent',
