@@ -195,7 +195,45 @@ function eventBranchRules(text, event) {
   }
   const readList = (key) => {
     for (let i = 0; i < block.length; i += 1) {
-      const inline = block[i].match(new RegExp('^\\s{4}' + key + '\\s*:\\s*\\[(.*)\\]\\s*
+      const inlinePattern = new RegExp('^\\s{4}' + key + '\\s*:\\s*\\[(.*)\\]\\s*$');
+      const inline = block[i].match(inlinePattern);
+      if (inline) return inline[1].split(',').map((v) => unquote(v)).filter(Boolean);
+      if (new RegExp('^\\s{4}' + key + '\\s*:\\s*$').test(block[i])) {
+        const values = [];
+        for (let j = i + 1; j < block.length; j += 1) {
+          const item = block[j].match(/^\s{6}-\s*(.+?)\s*$/);
+          if (!item) break;
+          values.push(unquote(item[1]));
+        }
+        return values;
+      }
+    }
+    return [];
+  };
+  return { branches: readList('branches'), ignore: readList('branches-ignore') };
+}
+
+function globMatches(value, pattern) {
+  let source = '';
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i];
+    if (ch === '*' && pattern[i + 1] === '*') { source += '.*'; i += 1; continue; }
+    if (ch === '*') { source += '[^/]*'; continue; }
+    if (ch === '?') { source += '[^/]'; continue; }
+    source += ch.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+  }
+  return new RegExp('^' + source + '$').test(value);
+}
+
+function pushAcceptsBranch(text, branch) {
+  if (!branch) return true;
+  const rules = eventBranchRules(text, 'push');
+  if (rules.ignore.some((pattern) => globMatches(branch, pattern))) return false;
+  if (!rules.branches.length) return true;
+  return rules.branches.some((pattern) => globMatches(branch, pattern));
+}
+
+export function inspectWorkflowText(text, contract, executor = 'github_ci', context = {}) {
   assertGithubGateContract(contract, executor);
   if (typeof text !== 'string') throw new GithubActionsGateError('workflow text must be a string');
 
@@ -205,28 +243,16 @@ function eventBranchRules(text, event) {
   if (executor === 'github_ci' && events.has('pull_request_target')) {
     issues.push('pull_request_target is forbidden for candidate CI');
   }
-  if (!/^permissions\s*:/m.test(text)) {
-    issues.push('explicit root permissions are required');
-  }
-  if (/^\s*permissions\s*:\s*write-all\s*$/mi.test(text)) {
-    issues.push('permissions: write-all is forbidden');
-  }
-  if (/^\s*secrets\s*:\s*inherit\s*$/mi.test(text)) {
-    issues.push('secrets: inherit is forbidden in pipeline GitHub gates');
-  }
-  if (/^\s*continue-on-error\s*:\s*true\s*$/mi.test(text)) {
-    issues.push('continue-on-error: true is forbidden in authoritative gates');
-  }
+  if (!/^permissions\s*:/m.test(text)) issues.push('explicit root permissions are required');
+  if (/^\s*permissions\s*:\s*write-all\s*$/mi.test(text)) issues.push('permissions: write-all is forbidden');
+  if (/^\s*secrets\s*:\s*inherit\s*$/mi.test(text)) issues.push('secrets: inherit is forbidden in pipeline GitHub gates');
+  if (/^\s*continue-on-error\s*:\s*true\s*$/mi.test(text)) issues.push('continue-on-error: true is forbidden in authoritative gates');
   for (const issue of actionPinIssues(text)) issues.push(issue);
-  if (executor === 'github_ci' && /\$\{\{\s*secrets\./.test(text)) {
-    issues.push('candidate CI must not reference repository/environment secrets');
-  }
-  if (executor === 'github_ci' && contract.trigger === 'push' &&
-      context.candidateBranch && !pushAcceptsBranch(text, context.candidateBranch)) {
+  if (executor === 'github_ci' && /\$\{\{\s*secrets\./.test(text)) issues.push('candidate CI must not reference repository/environment secrets');
+  if (executor === 'github_ci' && contract.trigger === 'push' && context.candidateBranch && !pushAcceptsBranch(text, context.candidateBranch)) {
     issues.push(`push trigger does not include candidate branch: ${context.candidateBranch}`);
   }
-  if (contract.artifact &&
-      (!/actions\/upload-artifact@/i.test(text) || !text.includes(contract.artifact))) {
+  if (contract.artifact && (!/actions\/upload-artifact@/i.test(text) || !text.includes(contract.artifact))) {
     issues.push(`declared artifact is not uploaded: ${contract.artifact}`);
   }
 
@@ -259,7 +285,6 @@ function eventBranchRules(text, event) {
     issues,
   };
 }
-
 export function classifyMissingWorkflow(contract, executor = 'github_ci') {
   assertGithubGateContract(contract, executor);
   return {
