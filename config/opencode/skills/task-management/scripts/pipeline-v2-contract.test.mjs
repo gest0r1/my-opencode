@@ -229,10 +229,13 @@ test('schema v2 supports disposable DEV only from a prior CI artifact', async ()
   fx.manifest.pipelines[0].executors.publish = 'git_publish';
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
   fx.manifest.pipelines[0].executors.dev = 'github_dev';
+  fx.manifest.pipelines[0].deployable = true;
+  fx.manifest.pipelines[0].deployment_validation = { stage: 'tests', fresh_job: 'fresh_install', upgrade_job: 'upgrade_install' };
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
       terminal_job: 'pipeline_ci',
+      required_jobs: ['fresh_install', 'upgrade_install'],
       trigger: 'push',
       artifact: 'candidate-build',
     },
@@ -279,6 +282,7 @@ test('schema v2 protects stateful DEV behind trusted default-branch workflow', a
       mode: 'stateful',
       environment: 'development',
       trusted_ref: 'main',
+      concurrency_group: 'development',
       source_ci_stage: 'tests',
       artifact: 'dev-evidence',
       evidence_file: 'dev-evidence.json',
@@ -322,6 +326,7 @@ test('schema v2 forbids bootstrapping privileged stateful DEV in candidate code'
       mode: 'stateful',
       environment: 'development',
       trusted_ref: 'main',
+      concurrency_group: 'development',
       source_ci_stage: 'tests',
       artifact: 'dev-evidence',
       evidence_file: 'dev-evidence.json',
@@ -342,6 +347,7 @@ test('schema v2 serializes declared conflict groups through the DAG', async () =
   fx.manifest.pipelines[0].conflict_group = 'admin';
   fx.manifest.pipelines.push({
     id: 'b',
+    deployable: false,
     stages: ['implementation'],
     executors: { implementation: 'agent' },
     work_items: ['wi-2'],
@@ -581,6 +587,8 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     tests: 'github_ci',
     dev: 'github_dev',
   };
+  fx.manifest.pipelines[0].deployable = true;
+  fx.manifest.pipelines[0].deployment_validation = { stage: 'tests', fresh_job: 'fresh_install', upgrade_job: 'upgrade_install' };
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
@@ -595,6 +603,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
       mode: 'stateful',
       environment: 'development',
       trusted_ref: 'main',
+      concurrency_group: 'development',
       source_ci_stage: 'tests',
       artifact: 'dev-evidence',
       evidence_file: 'dev-evidence.json',
@@ -657,6 +666,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     head_sha: candidateSha,
     terminal_job: 'pipeline_ci',
     artifact: 'candidate-build',
+    artifact_digest: 'sha256:' + 'a'.repeat(64),
   }, null, 2));
 
   result = run(fx.root, ['start', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
@@ -702,6 +712,7 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     terminal_job: 'pipeline_dev',
     trusted_ref: 'main',
     dev_evidence_validated: true,
+    ci_artifact_digest: 'sha256:' + 'a'.repeat(64),
     installed_sha: 'd'.repeat(40),
   }, null, 2));
   result = run(fx.root, ['complete', fx.manifest.run_id, 'dev', '--pipeline', 'app', '--state-root', stateRoot]);
