@@ -31,7 +31,7 @@ Never split, rewrite, normalize or temporarily edit the authoritative snapshot. 
 1. `git-worktree-cli.ts inspect`: require owner-created linked worktree, non-default branch, valid local main and clean tracked checkout. Verify `.tmp/pipelines/` is ignored; tracked pipeline state BLOCKS.
 2. Record exact worktree directory, branch, HEAD and local main SHA in `git_setup.base_sha`; require main ancestor of HEAD. `stage-cli.ts rules docs/pipeline-rules.md --json` must PASS. PLAN never mutates Git.
 3. Inspect repository policy only through `stage-cli.ts policy --json`. If `.opencode/pipeline-policy.json` exists, freeze the returned path+SHA-256 in `project_policy`; v2 preflight enforces protected paths and triggered project gates.
-4. If project policy declares `deployment_target.kind=external_ssh`, run `deployment-target-cli.ts inspect {run-id} --policy .opencode/pipeline-policy.json`. It must prove the target host is reachable with non-interactive `BatchMode` authentication and strict host-key checking. Freeze its returned `planning/deployment-target.json` path+SHA-256 as `deployment_target_check`. A missing `ssh`, unreachable host, unknown host key or failed authentication BLOCKS PLAN. Agents never receive raw SSH permission.
+4. If project policy declares `deployment_target.kind=opencode_host`, run `deployment-target-cli.ts inspect {run-id} --policy .opencode/pipeline-policy.json` as a **capability probe**. It dispatches the trusted GitHub probe workflow, validates the protected Environment/trusted ref, verifies required Environment secret names without reading values, and requires the configured probe job to PASS. On READY freeze `planning/deployment-target.json` path+SHA-256 as `deployment_target_check`. Probe failure does not by itself kill PLAN: it makes `opencode_host` and `hybrid` unavailable for this run and must be shown to the owner. Agents never receive raw `gh`/SSH credentials or SSH permission.
 5. `git_setup` contains `base_sha` and `branch`, optional `must_absent`, but no `source_sha` or `checkout_paths`.
 
 ## Planning gate protocol
@@ -86,7 +86,19 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
 4. Collect ALL unresolved owner decisions in `decision-register.md`. Each decision records its owning planning gate and status. Never omit a decision to make validation pass or self-authorize it.
 5. Compile prerequisites and conflicts into a DAG. Freeze `exclusive_paths`, `migration_paths`, `fixture_paths` and/or `conflict_group` where relevant. Pipelines sharing such conflict metadata must be serialized by dependencies. Runtime locks are only for genuinely shared external mutable targets.
 6. Create binary acceptance criteria and minimal `allowed_change_paths` including source, tests, docs and approved helper scripts. Protect `.git`, secrets and environment files.
-7. Classify every pipeline explicitly as `deployable: true|false`. A deployable pipeline must freeze `deployment_validation` with one GitHub stage plus two distinct required job IDs: `fresh_job` and `upgrade_job`. Those jobs must perform a clean install and an update/repeat install respectively against the same candidate artifact/SHA. Preserve release flow: implementation/review → source documentation/finalization → optional local fast gates → Git scope verify → publish candidate SHA → authoritative GitHub CI on that exact SHA → immutable artifact/evidence → fresh + upgrade validation → optional trusted DEV/runtime validation → acceptance/handoff. Any source-mutating `agent` stage must precede `git_publish`; after publication only non-source review/acceptance/handoff stages are planned.
+7. Classify every pipeline explicitly as `deployable: true|false`. For each deployable pipeline, first build a **testing capability matrix** from project architecture plus deterministic probes:
+   - **GitHub**: can fresh install, upgrade/repeat install and useful runtime/E2E checks execute on GitHub-hosted/disposable infrastructure without access to the OpenCode host?
+   - **OpenCode host**: is a trusted stateful GitHub CD workflow already present, and did `deployment-target-cli inspect` prove that GitHub can reach/authenticate to the machine where OpenCode runs?
+   - **Deferred local CD**: if trusted CD/probe automation is missing, can this run safely author it only as future trusted automation for use after merge?
+
+   Then present exactly three owner choices with an advisory recommendation:
+   1. `github` — deployment/runtime testing stays in GitHub disposable infrastructure;
+   2. `opencode_host` — GitHub deploys the exact CI artifact to the machine where OpenCode runs, then tests there automatically, hands it to the owner for testing, or both;
+   3. `hybrid` — all feasible automated checks run in GitHub first, then GitHub deploys the same artifact to the OpenCode host, followed by explicit owner testing (optionally after automated local smoke).
+
+   The LLM may recommend a mode and explain what is/isn't testable in GitHub, but **must not choose it**. Record the owner's choice as a resolved decision ID and freeze `testing_strategy` with `mode`, `owner_decision_id`, stage references and local `post_deploy_test=automated|user|automated_then_user`. `opencode_host`/`hybrid` are selectable only when the target probe is READY and an active trusted `github_dev` workflow already exists. If that automation is being bootstrapped in this run, local modes are unavailable now; the owner may choose `github` for this run and bootstrap future CD, or stop and complete the trust/bootstrap cycle first.
+
+   Every deployable pipeline must also freeze `deployment_validation` with one GitHub-executed validation stage plus two distinct required job IDs: `fresh_job` and `upgrade_job`. For `github`/`hybrid`, these belong to the GitHub validation stage. For `opencode_host`, they belong to the stateful OpenCode-host CD stage. Both jobs use the same candidate artifact/SHA. If owner testing is selected, append an `owner_acceptance` stage after successful local CD; generic `complete` cannot satisfy it.
 8. For every required authoritative CI/DEV gate, freeze a concrete GitHub Actions contract. Prefer `.opencode/pipeline-policy.json#github_actions` when present. Otherwise inspect existing compatible project workflows. Candidate CI must have explicit read-only permissions, no repository/environment secrets, no `paths`/`paths-ignore` trigger filters, SHA-pinned actions, an exact terminal job, `required_jobs[]`, and an immutable artifact when deployment/runtime consumes one. If authoritative CI is missing/incompatible, use canonical bootstrap default `.github/workflows/pipeline-ci.yml` + `pipeline_ci`; runtime/E2E needed during that first bootstrap includes the mandatory fresh+upgrade jobs in candidate CI. Existing disposable/stateful DEV consumes the exact source-CI artifact **and its SHA-256 digest**. Stateful DEV additionally freezes `trusted_ref`, protected `environment`, and a non-cancelling `concurrency_group`; `github-actions-gate-cli inspect/validate` must verify the Environment exists and accepts the trusted ref. If stateful DEV workflow is missing, PLAN creates a separate frozen work item and `future_github_gates` contract for that workflow. RUN may author it now, but it is deliberately absent from the current stage DAG and cannot execute until it is merged into the trusted ref; current-run runtime validation remains in candidate CI. A later PLAN can promote that now-trusted workflow into active `github_dev`. `BLOCKED` stops PLAN. Missing/incompatible GitHub Actions is normal planned work, never permission to substitute local final tests/builds.
 9. Before manifest freeze call TaskManager. It writes atomic work items under `.tmp/pipelines/{run-id}/work-items/**`; freeze every work-item ID, path and SHA-256 in the manifest. Each pipeline maps its own work-item IDs and defines `decision_ids`, `research_ids`, `contract_ids`. A candidate CI bootstrap/adaptation work item and any deferred future stateful DEV workflow work item must be mapped to the same pipeline and their exact workflow paths must be inside `allowed_change_paths`; prefer narrow paths over `.github/workflows/**`. An **active** trusted stateful DEV workflow must remain outside candidate change scope. A `future_github_gates` workflow is allowed in change scope only because it cannot execute in the current run.
 10. Canonical planning artifacts are `decision-register.md`, `technology-evidence.md`, `contract-inventory.md`, `test-strategy.md`, `accepted-risks.md` and the work-item index. Obtain hashes only through:
@@ -103,14 +115,14 @@ New PLANs MUST use `schema_version: 2`, `planning_mode: "design-freeze"` and:
 
 - frozen rules version;
 - `git_setup`, `allowed_change_paths`, `freshness_sensitive_paths`;
-- pipelines/DAG, explicit `deployable`, optional mandatory `deployment_validation` for deployable pipelines, explicit `executors[stage_id]`, active `github_gates[stage_id]`, deferred `future_github_gates`, local-only `gate_profiles`, conflict metadata and work-item mappings;
+- pipelines/DAG, explicit `deployable`, mandatory `deployment_validation` + owner-selected `testing_strategy` for deployable pipelines, explicit `executors[stage_id]` including `owner_acceptance`, active `github_gates[stage_id]`, deferred `future_github_gates`, local-only `gate_profiles`, conflict metadata and work-item mappings;
 - `planning_readiness.design_freeze: true`;
 - `planning_readiness.required_gates[]` and a `ready` evidence record for every required gate;
 - path+SHA-256 for every gate artifact/review and required planning artifact;
 - `open_decisions: []` before init;
 - frozen `work_items[]` with path+SHA-256;
 - optional frozen `project_policy` reference when repository policy exists;
-- frozen `deployment_target_check` evidence when policy declares an external SSH CD target.
+- frozen `deployment_target_check` evidence only when the selected testing strategy uses the OpenCode host (`opencode_host|hybrid`).
 
 GitHub Issue mode additionally freezes `repository`, `source_issues[]`, `planning_base_sha`, per-pipeline `issue_numbers[]` and `source_snapshot_sha256`.
 
@@ -118,7 +130,7 @@ Schema v1 is legacy-read compatibility only; never create a new v1 PLAN.
 
 ## Mandatory execution-gate contract
 
-Every schema-v2 stage has exactly one explicit executor: `agent | review | local_gate | git_verify | git_publish | github_ci | github_dev`. Never infer execution mode from the stage name during RUN.
+Every schema-v2 stage has exactly one explicit executor: `agent | review | local_gate | git_verify | git_publish | github_ci | github_dev | owner_acceptance`. Never infer execution mode from the stage name during RUN.
 
 Authoritative repository test/build/typecheck/lint stages use `github_ci`. A local stage whose name explicitly identifies it as fast/local/precheck may use `local_gate`, but its PASS cannot replace the authoritative GitHub CI stage. When GitHub CI is required and unavailable, PLAN must bootstrap/adapt the project workflow rather than fall back to local execution.
 
