@@ -125,6 +125,21 @@ test('schema v2 requires an explicit executor for every stage', async () => {
   );
 });
 
+test('schema v2 rejects planned source mutation after candidate publication', async () => {
+  const fx = await fixture('v2-source-after-publish');
+  fx.manifest.pipelines[0].stages = ['implementation', 'git-verify', 'publish', 'late-docs'];
+  fx.manifest.pipelines[0].executors = {
+    implementation: 'agent',
+    'git-verify': 'git_verify',
+    publish: 'git_publish',
+    'late-docs': 'agent',
+  };
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /SOURCE_STAGE_AFTER_PUBLISH/,
+  );
+});
+
 test('schema v2 rejects pnpm workspace gates that fall back to npm or npx --yes', async () => {
   const fx = await fixture('v2-pnpm');
   fx.manifest.pipelines[0].stages.push('fast-tests');
