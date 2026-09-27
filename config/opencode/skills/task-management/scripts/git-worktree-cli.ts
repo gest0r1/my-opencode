@@ -123,7 +123,7 @@ async function changedFiles(baseSha:string,cwd:string):Promise<string[]>{
 }
 
 async function diffSha256(baseSha:string,headSha:string,cwd:string):Promise<string>{
-  const diff=await git(['diff','--binary','--full-index','--no-ext-diff',baseSha,headSha,'--'],cwd);
+  const diff=await git(['diff','--raw','--full-index','--no-renames',baseSha,headSha,'--'],cwd);
   return createHash('sha256').update(diff).digest('hex');
 }
 
