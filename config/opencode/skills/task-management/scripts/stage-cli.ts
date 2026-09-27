@@ -110,6 +110,7 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
         ['automated', 'automated_then_user'].includes(String(pipeline.testing_strategy?.post_deploy_test ?? ''));
       const devCommon = evidence.dev_evidence_validated === true &&
         (!requiresAutomatedPostDeploy || evidence.smoke_result === 'PASS') &&
+        (!contract?.target_id || evidence.target_id === contract.target_id) &&
         String(evidence.installed_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
         source?.status === 'PASS' &&
         String(source?.candidate_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
@@ -250,6 +251,7 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
     const executorSpecificValid = executor === 'github_dev'
       ? evidence.dev_evidence_validated === true &&
         (!requiresAutomatedPostDeploy || evidence.smoke_result === 'PASS') &&
+        (!contract?.target_id || evidence.target_id === contract.target_id) &&
         String(evidence.installed_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
         (contract?.mode === 'stateful'
           ? evidence.trusted_ref === contract?.trusted_ref &&
