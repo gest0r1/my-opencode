@@ -142,7 +142,7 @@ For every `github_ci`/`github_dev` stage freeze `github_gates[stage_id]` with:
 - terminal job ID and every authoritative `required_jobs[]` job ID;
 - trigger (`push` for first-time/bootstrap candidate workflows, `workflow_dispatch` only for an already trusted workflow);
 - expected artifact when the contract produces one; runtime evidence binds its GitHub artifact ID and `sha256:` digest;
-- DEV `mode` (`disposable|stateful`), `source_ci_stage`, DEV evidence artifact/file and `ci_artifact_digest`; stateful additionally freezes environment, trusted workflow ref and `concurrency_group` with `cancel-in-progress: false`;
+- DEV `mode` (`disposable|stateful`), `source_ci_stage`, DEV evidence artifact/file plus `ci_artifact_id`/`ci_artifact_digest`; OpenCode-host stateful gates also freeze `target_id`; stateful additionally freezes environment, trusted workflow ref and `concurrency_group` with `cancel-in-progress: false`;
 - `bootstrap_required` + frozen `bootstrap_work_item_id` for candidate CI adaptation, or inside `future_github_gates` for a stateful DEV workflow that is authored now but becomes executable only after merge to the trusted ref.
 
 Before freeze inspect the proposed project workflow:
