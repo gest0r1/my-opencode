@@ -51,6 +51,7 @@
       "DEPLOY_KNOWN_HOSTS"
     ],
     "runner_labels": [],
-    "probe_timeout_seconds": 180
+    "probe_timeout_seconds": 180,
+    "target_id": "opencode-development-host"
   }
 }
