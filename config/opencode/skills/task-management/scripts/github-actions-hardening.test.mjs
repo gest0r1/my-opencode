@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   inspectWorkflowText,
+  selectWorkflowRun,
   validateWorkflowResult,
 } from './github-actions-gate-core.mjs';
 import { parseWorkflowYaml } from './github-workflow-yaml.mjs';
@@ -66,6 +67,19 @@ jobs:
 `, base, 'github_ci', { candidateBranch: 'feature/task' });
   assert.equal(filtered.status, 'INCOMPATIBLE');
   assert.ok(filtered.issues.some((item) => item.includes('paths/paths-ignore')));
+});
+
+test('workflow_dispatch selection excludes runs that existed before dispatch', () => {
+  const { id } = selectWorkflowRun([
+    { id: 1, head_sha: 'a'.repeat(40), head_branch: 'main', event: 'workflow_dispatch', run_attempt: 1 },
+    { id: 2, head_sha: 'a'.repeat(40), head_branch: 'main', event: 'workflow_dispatch', run_attempt: 1 },
+  ], {
+    candidateSha: 'a'.repeat(40),
+    branch: 'main',
+    event: 'workflow_dispatch',
+    excludeIds: [1],
+  });
+  assert.equal(id, 2);
 });
 
 test('required jobs are resolved structurally and skipped jobs fail closed', () => {
