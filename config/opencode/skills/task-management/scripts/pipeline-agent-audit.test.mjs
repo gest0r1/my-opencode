@@ -102,6 +102,18 @@ test('DevOps agent cannot directly mutate runtime infrastructure', async () => {
 });
 
 
+test('implementation agents can author workflow files but cannot run raw GitHub or SSH lifecycle commands', async () => {
+  for (const file of [
+    'config/opencode/agent/subagents/code/coder-agent.md',
+    'config/opencode/agent/subagents/development/devops-specialist.md',
+  ]) {
+    const yaml = frontmatter(await text(file));
+    assert.match(yaml, /edit:\s*\n\s+["']?\*["']?:\s*allow/, file);
+    assert.match(yaml, /bash:\s*\n\s+["']?\*["']?:\s*deny/, file);
+    assert.doesNotMatch(yaml, /["'](?:gh|ssh)\s+\*["']:\s*allow/i, file);
+  }
+});
+
 test('OpenStage exposes only deterministic GitHub lifecycle commands', async () => {
   const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
   for (const required of [
