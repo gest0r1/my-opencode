@@ -270,7 +270,12 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
     const environment = jobEnvironment(terminal);
     if (environment !== contract.environment) issues.push(`terminal job environment must equal ${contract.environment}`);
     if (!/inputs\.ci_run_id/.test(text) || !/inputs\.ci_artifact/.test(text)) issues.push('stateful DEV must consume source CI run/artifact inputs');
-    if (!/(actions\/download-artifact|gh\s+run\s+download)/.test(text)) issues.push('stateful DEV must download the source CI artifact');
+    const actionDownload = /actions\/download-artifact@/i.test(text) &&
+      /run-id\s*:\s*\$\{\{\s*inputs\.ci_run_id\s*\}\}/.test(text) &&
+      /name\s*:\s*\$\{\{\s*inputs\.ci_artifact\s*\}\}/.test(text) &&
+      /github-token\s*:\s*\$\{\{\s*github\.token\s*\}\}/.test(text);
+    const ghDownload = /gh\s+run\s+download[\s\S]{0,500}\$\{\{\s*inputs\.ci_run_id\s*\}\}[\s\S]{0,500}--name[\s\S]{0,120}\$\{\{\s*inputs\.ci_artifact\s*\}\}/m.test(text);
+    if (!actionDownload && !ghDownload) issues.push('stateful DEV must download the exact source CI run/artifact');
     if (!/actions\/upload-artifact/.test(text) || !text.includes(contract.artifact) || !text.includes(contract.evidence_file)) issues.push('stateful DEV must upload the declared DEV evidence artifact/file');
     if (/actions\/checkout[\s\S]{0,500}ref:\s*\$\{\{\s*inputs\.candidate_sha\s*\}\}/m.test(text)) issues.push('stateful DEV must not checkout candidate source');
   }
