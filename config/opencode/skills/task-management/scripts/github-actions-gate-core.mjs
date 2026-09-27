@@ -309,8 +309,18 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
     for (const required of ['ci_run_id', 'ci_artifact', 'ci_artifact_digest']) {
       if (!referencesInput(workflow, required)) issues.push('DEV must consume workflow input: ' + required);
     }
-    if (actionSteps(workflow, 'actions/download-artifact@').length === 0 && !referencesInput(workflow, 'ci_run_id')) {
-      issues.push('DEV must download the source CI artifact');
+    const downloadSteps = actionSteps(workflow, 'actions/download-artifact@');
+    const sourceDownload = downloadSteps.some(({ step }) => {
+      const withArgs = object(step.with);
+      const name = String(withArgs?.name ?? '');
+      const runId = String(withArgs?.['run-id'] ?? '');
+      const token = String(withArgs?.['github-token'] ?? '');
+      return name.includes('inputs.ci_artifact') &&
+        runId.includes('inputs.ci_run_id') &&
+        (token.includes('github.token') || token.includes('secrets.GITHUB_TOKEN'));
+    });
+    if (!sourceDownload) {
+      issues.push('DEV download-artifact must use inputs.ci_artifact + inputs.ci_run_id + github-token');
     }
     const devUpload = actionSteps(workflow, 'actions/upload-artifact@').some(({ step }) => {
       const withArgs = object(step.with);
