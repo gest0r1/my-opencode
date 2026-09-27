@@ -1007,6 +1007,48 @@ export async function recordTechnicalFixCycle(
     }
     runtime.technical_fix_cycles = next;
     runtime.message = `technical_fix cycle ${next}/3`;
+
+    // If this fix happens after a candidate was already published, the source-changing
+    // repair must force a fresh verify -> publish -> GitHub CI/DEV chain. We invalidate
+    // state transitions, not historical evidence files; stale files remain audit history
+    // and completion guards reject them until replaced by evidence for the new candidate.
+    if (state.manifest_file) {
+      let manifest: PipelineManifest | undefined;
+      try {
+        manifest = JSON.parse(require('node:fs').readFileSync(state.manifest_file, 'utf8')) as PipelineManifest;
+      } catch {}
+      const spec = manifest?.pipelines?.find((item) => item.id === pipeline.id);
+      const stageIndex = pipeline.stage_order.indexOf(stage);
+      const completedPublishIndex = spec
+        ? pipeline.stage_order.findIndex((name, index) =>
+            index < stageIndex &&
+            spec.executors?.[name] === 'git_publish' &&
+            pipeline.stages[name]?.status === 'completed')
+        : -1;
+      if (spec && completedPublishIndex >= 0) {
+        let resetIndex = completedPublishIndex;
+        for (let index = completedPublishIndex - 1; index >= 0; index -= 1) {
+          const name = pipeline.stage_order[index];
+          if (spec.executors?.[name] === 'git_verify') {
+            resetIndex = index;
+            break;
+          }
+          if (spec.executors?.[name] === 'agent') break;
+        }
+        for (const name of pipeline.stage_order.slice(resetIndex)) {
+          const item = pipeline.stages[name];
+          if (!item) continue;
+          item.status = 'pending';
+          item.started_at = undefined;
+          item.completed_at = undefined;
+          item.evidence = undefined;
+          if (name !== stage) item.message = undefined;
+          addHistory(state, pipeline.id, name, 'pending', `invalidated by technical_fix cycle ${next}/3 for ${stage}`);
+        }
+        pipeline.status = 'approved';
+        pipeline.current_stage = undefined;
+      }
+    }
   });
 }
 
