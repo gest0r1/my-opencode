@@ -130,6 +130,16 @@ test('planning agents do not delegate nested subagents', async () => {
   }
 });
 
+test('OpenStage cannot edit deterministic pipeline state or machine evidence', async () => {
+  const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
+  for (const path of [
+    'state\\.json', 'candidate\\.json', 'git-verify\\.json', 'git-runtime\\.json',
+    'github/\\*\\*', 'gates/\\*\\*', 'sources/github-issues\\.json',
+  ]) {
+    assert.match(yaml, new RegExp('\\.tmp/pipelines/\\*\\*/' + path + '"?:\\s*deny'));
+  }
+});
+
 test('canonical RUN requires deterministic v2 run-preflight before next', async () => {
   const run = await text('config/opencode/command/pipeline-run.md');
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
