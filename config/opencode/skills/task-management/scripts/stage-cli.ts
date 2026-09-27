@@ -99,6 +99,16 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
         throw new Error(`EVIDENCE_INVALID_OR_STALE: github_dev source CI mismatch`);
       }
     }
+  } else if (executor === 'git_verify') {
+    evidencePath = join(artifactRoot, 'git-verify.json');
+    const evidence = await readJsonEvidence(evidencePath, 'git_verify');
+    const runtime = state.pipelines?.[pipeline.id]?.stages?.[stage];
+    if (evidence.status !== 'PASS' || evidence.run_id !== runId ||
+        evidence.branch !== manifest.git_setup?.branch ||
+        !runtime?.started_at || !evidence.verified_at ||
+        Date.parse(evidence.verified_at) < Date.parse(runtime.started_at)) {
+      throw new Error(`EVIDENCE_INVALID_OR_STALE: git_verify ${pipeline.id}/${stage}`);
+    }
   } else if (executor === 'git_publish') {
     evidencePath = join(artifactRoot, 'candidate.json');
     const candidate = await readJsonEvidence(evidencePath, 'candidate');
