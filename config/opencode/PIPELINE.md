@@ -136,7 +136,7 @@ Every deployable pipeline freezes an explicit owner decision:
 
 - `github`: fresh install, upgrade/repeat install and useful runtime/E2E validation run only in GitHub/disposable infrastructure.
 - `opencode_host`: GitHub Actions deploys the exact CI artifact to the machine where OpenCode runs, then validates there automatically, hands it to the owner, or both.
-- `hybrid`: GitHub-side automated validation completes first, then the same artifact/digest is deployed by trusted GitHub CD to the OpenCode host and the owner performs the final test.
+- `hybrid`: GitHub-side automated validation completes first, then the same artifact ID/digest is deployed by trusted GitHub CD to the OpenCode host and the owner performs the final test.
 
 PLAN builds a capability matrix and may recommend one option, but the owner chooses it. The OpenCode-host capability probe is itself trusted automation: it is dispatched from the trusted ref with a correlation ID, uses explicit read-only GitHub permissions and the protected Environment, and must run the frozen probe job. `github_ssh` probes must use strict non-interactive SSH and all required Environment secret names; `self_hosted_runner` probes must execute on the frozen self-hosted runner labels. Local/hybrid requires a READY trusted GitHub→OpenCode-host probe and an already-trusted stateful CD workflow. If those workflows are being introduced in the current candidate, they may be authored as future automation but cannot be consumed as privileged CD until merged to the trusted ref.
 
