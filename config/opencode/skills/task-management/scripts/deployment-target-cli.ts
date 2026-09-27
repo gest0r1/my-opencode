@@ -10,6 +10,7 @@ const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const SAFE_WORKFLOW = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/i;
 const JOB_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const TARGET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 class DeploymentTargetError extends Error {}
 
@@ -71,6 +72,9 @@ function validateTarget(target: any): any {
   }
   if (!['github_ssh', 'self_hosted_runner'].includes(target.transport)) {
     throw new DeploymentTargetError('OPENCODE_HOST_TRANSPORT_INVALID');
+  }
+  if (typeof target.target_id !== 'string' || !TARGET_ID.test(target.target_id)) {
+    throw new DeploymentTargetError('OPENCODE_HOST_TARGET_ID_INVALID');
   }
   if (typeof target.environment !== 'string' || !target.environment.trim()) {
     throw new DeploymentTargetError('OPENCODE_HOST_ENVIRONMENT_REQUIRED');
@@ -388,6 +392,7 @@ async function evaluate(runId: string, policyPath: string): Promise<Record<strin
     checked_at: new Date().toISOString(),
     kind: 'opencode_host',
     transport: target.transport,
+    target_id: target.target_id,
     environment: target.environment,
     trusted_ref: target.trusted_ref,
     runner_labels: target.runner_labels,
