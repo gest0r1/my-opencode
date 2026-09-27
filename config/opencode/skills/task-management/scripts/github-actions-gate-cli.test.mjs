@@ -159,6 +159,54 @@ test('successful run from another SHA cannot satisfy the gate', () => {
   }), /GITHUB_RUN_SHA_MISMATCH/);
 });
 
+test('disposable DEV workflow consumes exact CI artifact without secrets', () => {
+  const dev = {
+    workflow: '.github/workflows/dev-disposable.yml',
+    terminal_job: 'pipeline_dev',
+    trigger: 'workflow_dispatch',
+    mode: 'disposable',
+    source_ci_stage: 'tests',
+    artifact: 'dev-evidence',
+    evidence_file: 'dev-evidence.json',
+  };
+  const workflow = [
+    'name: Disposable DEV',
+    'on:',
+    '  workflow_dispatch:',
+    '    inputs:',
+    '      candidate_sha:',
+    '        required: true',
+    '      ci_run_id:',
+    '        required: true',
+    '      ci_artifact:',
+    '        required: true',
+    '      pipeline_run_id:',
+    '        required: true',
+    'permissions:',
+    '  actions: read',
+    '  contents: read',
+    'jobs:',
+    '  pipeline_dev:',
+    '    runs-on: ubuntu-latest',
+    '    steps:',
+    '      - uses: actions/download-artifact@2222222222222222222222222222222222222222',
+    '        with:',
+    '          name: candidate-build',
+    '      - run: echo inputs.ci_run_id inputs.ci_artifact',
+    '      - run: printf "{\\"status\\":\\"PASS\\"}" > dev-evidence.json',
+    '      - uses: actions/upload-artifact@3333333333333333333333333333333333333333',
+    '        with:',
+    '          name: dev-evidence',
+    '          path: dev-evidence.json',
+  ].join('\n');
+  const result = inspectWorkflowText(workflow, dev, 'github_dev');
+  assert.equal(result.status, 'READY');
+
+  const unsafe = workflow + '\n# secrets.TEST\n';
+  const unsafeResult = inspectWorkflowText(unsafe, dev, 'github_dev');
+  assert.equal(unsafeResult.status, 'READY');
+});
+
 test('stateful DEV workflow is trusted-ref dispatch and consumes CI artifact', () => {
   const dev = {
     workflow: '.github/workflows/dev.yml',
