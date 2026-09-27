@@ -20,7 +20,7 @@ Unknown modes/arguments BLOCK.
 
 ## Authority
 
-`stage-cli` owns frozen manifest/rules/planning evidence, DAG, executor contracts and state. `git-worktree-cli` owns identity/scope/non-force publication. `gate-runner-cli` owns only stages explicitly frozen as `local_gate`. `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV validation, exact-candidate run selection and evidence. Model output never overrides deterministic FAIL/BLOCKED or owner decisions. OpenStage is the only orchestrator; never delegate orchestration to BatchExecutor or another child.
+`stage-cli` owns frozen manifest/rules/planning evidence, DAG, executor contracts and state. `git-worktree-cli` owns identity/scope/non-force publication. `gate-runner-cli` owns only stages explicitly frozen as `local_gate`. `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV validation, exact-candidate run selection, required-job status, artifact digest and Environment evidence. `deployment-target-cli` owns reachability/authentication checks for external CD targets. Model output never overrides deterministic FAIL/BLOCKED or owner decisions. OpenStage is the only orchestrator; never delegate orchestration to BatchExecutor or another child.
 
 ## Preflight
 
@@ -28,7 +28,8 @@ Unknown modes/arguments BLOCK.
 2. Invoke `stage-cli preflight <manifest.json> --environment` before dispatch. Schema v2 rechecks planning evidence, source snapshot, work-items, conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract for `local_gate` only.
 3. `git-worktree-cli freshness <manifest>`: fetch `origin/main`. Relevant drift in allowed/freshness/global dependency/pipeline config is `STALE_PLAN` → BLOCK for `/pipeline-refresh` + new approval. Unrelated drift may be deterministically merged and recorded as effective run base. Merge conflicts are never agent-resolved scope expansion.
 4. `git-worktree-cli adopt <manifest>`; then `verify <manifest>`.
-5. Owner ensures no other RUN is active. Runtime locks remain secondary safety for external mutable targets.
+5. If frozen policy uses `deployment_target.kind=external_ssh`, call `deployment-target-cli.ts check <run-id> --policy <frozen-policy-path>` before any deployment-sensitive stage. It must still return `READY`; loss of reachability/authentication is BLOCKED, never an agent-repairable shell workaround.
+6. Owner ensures no other RUN is active. Runtime locks remain secondary safety for external mutable targets.
 
 ## Scheduler and frozen work
 
@@ -56,8 +57,8 @@ Dispatch strictly by the frozen `executors[stage_id]`; never infer executor from
 - `local_gate`: call `gate-runner-cli.ts <run-id> <pipeline-id> <stage-id>`. Only its PASS evidence can satisfy the stage; `stage-cli complete` verifies the canonical evidence file.
 - `git_verify`: after `stage-cli start`, use only `git-worktree-cli verify <manifest>`. It writes canonical `git-verify.json`; `stage-cli complete` rejects missing or pre-stage/stale verify evidence.
 - `git_publish`: Git verify, then `git-worktree-cli publish <manifest>`. `stage-cli complete` requires PASS `candidate.json` with `candidate_sha == remote_sha`.
-- `github_ci`: first run `github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id>`, then after candidate publication call `github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id>`. It accepts only the frozen workflow/event/branch and the exact published SHA, successful terminal job and required artifact. `stage-cli complete` independently verifies that evidence.
-- `github_dev`: call deterministic `validate` then `run`. Both modes consume the exact artifact from the PASS `source_ci_stage` and must return evidence with `installed_sha == candidate_sha`. `disposable` dispatches an existing secret-free workflow on the candidate ref; `stateful` dispatches an existing workflow from frozen `trusted_ref` (normally `main`) and protected environment. Neither mode may be bootstrapped and then consumed as a separate DEV workflow in the same candidate run; missing DEV automation is implemented as disposable runtime/E2E inside candidate `github_ci`.
+- `github_ci`: first run `github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id>`, then after candidate publication call `github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id>`. Validation structurally checks the workflow, read-only permissions, candidate-safe trigger, pinned actions and `required_jobs[]`. Runtime accepts only the frozen workflow/event/branch and exact published SHA; every required job plus terminal job must be `completed/success`. A required artifact must expose a GitHub `sha256:` digest, which is frozen in evidence. `stage-cli complete` independently verifies SHA/artifact/digest evidence.
+- `github_dev`: call deterministic `validate` then `run`. Both modes consume the exact artifact **and `artifact_digest`** from the PASS `source_ci_stage`, pass both to the workflow, and require returned DEV evidence with the same digest and `installed_sha == candidate_sha`. `disposable` dispatches an existing secret-free workflow on the candidate ref. `stateful` dispatches an existing workflow from frozen `trusted_ref`, verifies the GitHub Environment/branch policy, and requires the frozen non-cancelling `concurrency_group`. A stateful workflow listed only in `future_github_gates` is source authored in this run but is not runnable now; after merge a later PLAN may activate it. For deployable pipelines, fresh-install and upgrade/repeat-install required jobs must both pass before delivery.
 - Source documentation is changed by DocWriter only when represented by a frozen `agent` work item/scope and must complete before `git_publish`. Deterministic docs checks, if any, are explicit `local_gate` or `github_ci` stages. Post-publish finalization may update pipeline/PR metadata only; any repository source change after publication requires a new candidate SHA and rerun of affected GitHub/runtime gates.
 
 ### Missing or incompatible project workflow
@@ -69,6 +70,8 @@ A frozen GitHub gate marked `bootstrap_required` means RUN must implement the ma
 3. if validation is not PASS, repair only inside the same frozen work item/scope using the normal technical-fix counter;
 4. publish the candidate branch;
 5. for first-time workflows use the frozen `push` trigger and wait for that exact candidate SHA.
+
+If CI is missing/incompatible, implement its frozen bootstrap/adaptation work item and validate it before publish. If stateful DEV is missing, implement its frozen `future_github_gates` work item as source only; do **not** add a current-run `github_dev` stage for it. The current candidate must instead complete frozen fresh+upgrade validation in unprivileged CI. After owner merge makes that workflow trusted, a later PLAN can inspect Environment/target authorization and promote it to active `github_dev`.
 
 Never replace a missing, incompatible or failed authoritative GitHub workflow with local npm/pnpm/pytest/build commands. If the frozen bootstrap/adaptation scope cannot produce a valid workflow, BLOCK/replan.
 
@@ -131,6 +134,6 @@ Planning/reviews are always fresh. Invalid reuse starts a fresh child, never ano
 
 ## Stops
 
-BLOCK on stale main/base, wrong worktree, changed planning evidence/source snapshot/project policy/work item, scope violation, unresolved owner decision, manifest/rules mismatch, GitHub gate without a valid frozen contract, missing workflow without its frozen bootstrap/adaptation work item, GitHub run/evidence from the wrong SHA/workflow/job/artifact, local-gate package-manager/environment failure, secret/security/destructive condition, conflict that requires a DAG change, runtime failure needing design change, or a fourth technical-fix cycle.
+BLOCK on stale main/base, wrong worktree, changed planning evidence/source snapshot/project policy/work item, failed external CD reachability/authentication recheck, scope violation, unresolved owner decision, manifest/rules mismatch, GitHub gate without a valid frozen contract, missing workflow without its frozen bootstrap/adaptation work item, GitHub Environment/trusted-ref/concurrency mismatch, required GitHub job skipped/failed/missing, missing or mismatched artifact digest, GitHub run/evidence from the wrong SHA/workflow/job/artifact, local-gate package-manager/environment failure, secret/security/destructive condition, conflict that requires a DAG change, runtime failure needing design change, or a fourth technical-fix cycle.
 
 If queue is empty, report the actual terminal state; never bypass prerequisites or rewrite frozen evidence. Include run/pipeline status, branch, source/candidate SHA, work-item IDs, machine evidence, runtime result, technical-fix cycle counts and blocker dossier. Never delete historical runs.
