@@ -349,7 +349,22 @@ function validateGithubExecutionContract(manifest) {
       throw new ManifestV2PolicyError(`EXECUTOR_STAGE_MISMATCH: executors must map every stage exactly once: ${pipeline.id}`);
     }
 
-    for (const stage of pipeline.stages ?? []) {
+    const stages = pipeline.stages ?? [];
+    const firstPublishIndex = stages.findIndex((stage) => pipeline.executors[stage] === 'git_publish');
+    if (firstPublishIndex >= 0) {
+      const verifyBeforePublish = stages.slice(0, firstPublishIndex)
+        .some((stage) => pipeline.executors[stage] === 'git_verify');
+      if (!verifyBeforePublish) {
+        throw new ManifestV2PolicyError(`GIT_PUBLISH_REQUIRES_VERIFY: ${pipeline.id}`);
+      }
+      for (const later of stages.slice(firstPublishIndex + 1)) {
+        if (pipeline.executors[later] === 'agent') {
+          throw new ManifestV2PolicyError(`SOURCE_STAGE_AFTER_PUBLISH: ${pipeline.id}/${later}`);
+        }
+      }
+    }
+
+    for (const stage of stages) {
       const executor = pipeline.executors[stage];
       if (!STAGE_EXECUTORS.has(executor)) {
         throw new ManifestV2PolicyError(`INVALID_STAGE_EXECUTOR: ${pipeline.id}/${stage}=${String(executor)}`);
@@ -360,6 +375,12 @@ function validateGithubExecutionContract(manifest) {
 
       const gate = pipeline.github_gates?.[stage];
       if (executor === 'github_ci' || executor === 'github_dev') {
+        if (executor === 'github_ci') {
+          const index = stages.indexOf(stage);
+          if (!stages.slice(0, index).some((name) => pipeline.executors[name] === 'git_publish')) {
+            throw new ManifestV2PolicyError(`GITHUB_CI_REQUIRES_PUBLISHED_CANDIDATE: ${pipeline.id}/${stage}`);
+          }
+        }
         if (!gate || typeof gate !== 'object' || Array.isArray(gate)) {
           throw new ManifestV2PolicyError(`GITHUB_GATE_MISSING: ${pipeline.id}/${stage}`);
         }
