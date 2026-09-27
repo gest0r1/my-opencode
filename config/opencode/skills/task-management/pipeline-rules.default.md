@@ -108,7 +108,7 @@ approved base/source -> candidate SHA -> installed candidate/artifact -> evidenc
 ```
 
 - Runtime validation tests the approved candidate artifact/SHA, not an uncommitted local development tree, when the manifest requires candidate installation.
-- A source-changing fix after candidate publication produces a new candidate SHA. All prior GitHub CI/artifact/DEV/runtime evidence is stale and affected gates must run again for the new SHA.
+- Planned source-mutating agent/documentation stages precede candidate publication. A source-changing fix after candidate publication produces a new candidate SHA. All prior GitHub CI/artifact/DEV/runtime evidence is stale and affected gates must run again for the new SHA.
 
 ## Runtime and rollback
 
