@@ -60,7 +60,7 @@ Current schema supports:
 - `protected_paths[]`: scopes that may not enter `allowed_change_paths`;
 - `required_gates[]`: a gate stage plus `when_paths[]`; if frozen change scope intersects those paths, the manifest must include that stage;
 - optional `github_actions.ci/dev` defaults for workflow path, terminal/required jobs, trigger, artifact, DEV environment/mode/trusted ref/concurrency;
-- optional `deployment_target`: `github_environment` or an externally reachable `external_ssh` target whose PLAN-time authentication is probed deterministically.
+- optional `deployment_target.kind=opencode_host`: GitHub-driven CD target describing either `github_ssh` or `self_hosted_runner`, protected Environment, trusted ref, deterministic probe workflow/job, required Environment secret names and optional runner labels. PLAN validates the GitHub→OpenCode-host path without exposing secret values.
 
 When the policy exists, PLAN freezes its path+SHA-256. Preflight and later state
 validation fail if it changes.
