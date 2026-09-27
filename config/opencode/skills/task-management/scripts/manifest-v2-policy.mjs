@@ -385,6 +385,9 @@ function validateGithubExecutionContract(manifest) {
     }
 
     const stages = pipeline.stages ?? [];
+    if (stages.some((stage) => pipeline.executors[stage] === 'github_dev') && pipeline.deployable !== true) {
+      throw new ManifestV2PolicyError(`GITHUB_DEV_REQUIRES_DEPLOYABLE_PIPELINE: ${pipeline.id}`);
+    }
     const firstPublishIndex = stages.findIndex((stage) => pipeline.executors[stage] === 'git_publish');
     if (firstPublishIndex >= 0) {
       const verifyBeforePublish = stages.slice(0, firstPublishIndex)
