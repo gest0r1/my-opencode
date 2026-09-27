@@ -116,6 +116,15 @@ test('schema v2 rejects changed planning evidence by SHA-256', async () => {
   );
 });
 
+test('schema v2 requires an explicit executor for every stage', async () => {
+  const fx = await fixture('v2-executor-coverage');
+  delete fx.manifest.pipelines[0].executors.finalize;
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /EXECUTOR_STAGE_MISMATCH/,
+  );
+});
+
 test('schema v2 rejects pnpm workspace gates that fall back to npm or npx --yes', async () => {
   const fx = await fixture('v2-pnpm');
   fx.manifest.pipelines[0].stages.push('fast-tests');
@@ -476,6 +485,107 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   }, null, 2));
 
   result = run(fx.root, ['complete', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).pipelines.app.status, 'completed');
+});
+
+test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI', async () => {
+  const fx = await fixture('v2-stateful-dev-evidence');
+  fx.manifest.pipelines[0].stages = ['implementation', 'tests', 'dev'];
+  fx.manifest.pipelines[0].executors = {
+    implementation: 'agent',
+    tests: 'github_ci',
+    dev: 'github_dev',
+  };
+  fx.manifest.pipelines[0].github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'push',
+      artifact: 'candidate-build',
+    },
+    dev: {
+      workflow: '.github/workflows/dev.yml',
+      terminal_job: 'pipeline_dev',
+      trigger: 'workflow_dispatch',
+      mode: 'stateful',
+      environment: 'development',
+      trusted_ref: 'main',
+      source_ci_stage: 'tests',
+      artifact: 'dev-evidence',
+      evidence_file: 'dev-evidence.json',
+    },
+  };
+  delete fx.manifest.pipelines[0].ready_after_stage;
+  delete fx.manifest.pipelines[0].release_ready_after_stage;
+  await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
+
+  const stateRoot = path.join(fx.root, '.tmp', 'stateful-dev-state');
+  let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['approve', fx.manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(fx.root, ['start', fx.manifest.run_id, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  const candidateSha = 'e'.repeat(40);
+  await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
+    status: 'PASS',
+    branch: 'feature/test',
+    candidate_sha: candidateSha,
+    remote_sha: candidateSha,
+  }, null, 2));
+  await mkdir(path.join(fx.runRoot, 'github'), { recursive: true });
+  await writeFile(path.join(fx.runRoot, 'github', 'app-tests.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: fx.manifest.run_id,
+    pipeline_id: 'app',
+    stage: 'tests',
+    executor: 'github_ci',
+    workflow: '.github/workflows/ci.yml',
+    workflow_run_id: 50,
+    run_attempt: 1,
+    candidate_sha: candidateSha,
+    head_sha: candidateSha,
+    terminal_job: 'pipeline_ci',
+    artifact: 'candidate-build',
+  }, null, 2));
+
+  result = run(fx.root, ['start', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(fx.root, ['start', fx.manifest.run_id, 'dev', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  await writeFile(path.join(fx.runRoot, 'github', 'app-dev.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: fx.manifest.run_id,
+    pipeline_id: 'app',
+    stage: 'dev',
+    executor: 'github_dev',
+    workflow: '.github/workflows/dev.yml',
+    workflow_run_id: 60,
+    source_ci_run_id: 50,
+    candidate_sha: candidateSha,
+    head_sha: 'f'.repeat(40),
+    head_branch: 'main',
+    terminal_job: 'pipeline_dev',
+    trusted_ref: 'main',
+    dev_evidence_validated: true,
+    installed_sha: 'd'.repeat(40),
+  }, null, 2));
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'dev', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /EVIDENCE_INVALID_OR_STALE/);
+
+  const valid = JSON.parse(await readFile(path.join(fx.runRoot, 'github', 'app-dev.json'), 'utf8'));
+  valid.installed_sha = candidateSha;
+  await writeFile(path.join(fx.runRoot, 'github', 'app-dev.json'), JSON.stringify(valid, null, 2));
+  result = run(fx.root, ['complete', fx.manifest.run_id, 'dev', '--pipeline', 'app', '--state-root', stateRoot, '--json']);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).pipelines.app.status, 'completed');
 });
