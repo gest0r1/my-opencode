@@ -27,6 +27,7 @@ type GateContract = {
   source_ci_stage?: string;
   trusted_ref?: string;
   concurrency_group?: string;
+  target_id?: string;
   evidence_file?: string;
   bootstrap_required?: boolean;
   bootstrap_work_item_id?: string;
@@ -259,6 +260,7 @@ async function inspectCommand(args: string[]): Promise<void> {
     ...(option(args, '--environment') ? { environment: option(args, '--environment') } : {}),
     ...(option(args, '--trusted-ref') ? { trusted_ref: option(args, '--trusted-ref') } : {}),
     ...(option(args, '--concurrency-group') ? { concurrency_group: option(args, '--concurrency-group') } : {}),
+    ...(option(args, '--target-id') ? { target_id: option(args, '--target-id') } : {}),
     ...(option(args, '--evidence-file') ? { evidence_file: option(args, '--evidence-file') } : {}),
   };
   try {
@@ -421,6 +423,7 @@ async function waitForRun(
       '-f', `ci_artifact=${sourceContract.artifact}`,
       '-f', `ci_artifact_digest=${sourceCi.artifact_digest}`,
       '-f', `pipeline_run_id=${runId}`,
+      ...(contract.target_id ? ['-f', `deployment_target_id=${contract.target_id}`] : []),
     ]);
     while (Date.now() < deadline) {
       const selected = selectStatefulWorkflowRun(
@@ -459,6 +462,7 @@ async function waitForRun(
         '-f', 'ci_artifact=' + sourceContract.artifact,
         '-f', 'ci_artifact_digest=' + sourceCi.artifact_digest,
         '-f', 'pipeline_run_id=' + runId,
+        ...(contract.target_id ? ['-f', 'deployment_target_id=' + contract.target_id] : []),
       );
     }
     command('gh', dispatchArgs);
@@ -504,6 +508,7 @@ async function verifyDevEvidence(
         candidateSha,
         ciRunId: sourceCiRunId,
         ciArtifactDigest: sourceCiArtifactDigest,
+        targetId: contract.target_id,
       });
     } catch (error) {
       throw new CliError(error instanceof Error ? error.message : String(error));
@@ -585,6 +590,7 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
       dev_evidence_validated: true,
       installed_sha: devEvidence.installed_sha,
       ci_artifact_digest: devEvidence.ci_artifact_digest,
+      ...(devEvidence.target_id ? { target_id: devEvidence.target_id } : {}),
       smoke_result: devEvidence.smoke_result,
     } : {}),
     recorded_at: new Date().toISOString(),
@@ -604,7 +610,7 @@ async function showCommand(runId: string, pipelineId: string, stage: string, sta
 function usage(): string {
   return [
     'usage:',
-    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--concurrency-group <group>] [--evidence-file <file>]',
+    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--concurrency-group <group>] [--target-id <id>] [--evidence-file <file>]',
     '  github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts validate-future <run-id> <pipeline-id> <gate-name> [--state-root <path>]',
     '  github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
