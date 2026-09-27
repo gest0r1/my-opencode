@@ -31,18 +31,31 @@ export function assertGithubGateContract(contract, executor = 'github_ci') {
     throw new GithubActionsGateError('GITHUB_TIMEOUT_INVALID');
   }
   if (executor === 'github_dev') {
-    if (contract.mode !== 'stateful') {
-      throw new GithubActionsGateError('GITHUB_DEV_EXECUTOR_REQUIRES_STATEFUL_MODE');
+    if (!['disposable', 'stateful'].includes(contract.mode)) {
+      throw new GithubActionsGateError('GITHUB_DEV_MODE_INVALID');
     }
     if (typeof contract.source_ci_stage !== 'string' || !contract.source_ci_stage) {
       throw new GithubActionsGateError('GITHUB_DEV_SOURCE_CI_INVALID');
     }
+    if (contract.trigger !== 'workflow_dispatch') {
+      throw new GithubActionsGateError('GITHUB_DEV_REQUIRES_DISPATCH');
+    }
+    if (typeof contract.artifact !== 'string' || !contract.artifact.trim()) {
+      throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_REQUIRED');
+    }
+    if (typeof contract.evidence_file !== 'string' || !SAFE_JSON_FILE.test(contract.evidence_file)) {
+      throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_FILE_INVALID');
+    }
     if (contract.mode === 'stateful') {
-      if (contract.trigger !== 'workflow_dispatch') throw new GithubActionsGateError('GITHUB_STATEFUL_DEV_REQUIRES_DISPATCH');
-      if (typeof contract.environment !== 'string' || !contract.environment.trim()) throw new GithubActionsGateError('GITHUB_DEV_ENVIRONMENT_REQUIRED');
-      if (typeof contract.trusted_ref !== 'string' || !SAFE_REF.test(contract.trusted_ref) || contract.trusted_ref.includes('..') || contract.trusted_ref.endsWith('/')) throw new GithubActionsGateError('GITHUB_DEV_TRUSTED_REF_INVALID');
-      if (typeof contract.artifact !== 'string' || !contract.artifact.trim()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_REQUIRED');
-      if (typeof contract.evidence_file !== 'string' || !SAFE_JSON_FILE.test(contract.evidence_file)) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_FILE_INVALID');
+      if (typeof contract.environment !== 'string' || !contract.environment.trim()) {
+        throw new GithubActionsGateError('GITHUB_DEV_ENVIRONMENT_REQUIRED');
+      }
+      if (typeof contract.trusted_ref !== 'string' || !SAFE_REF.test(contract.trusted_ref) ||
+          contract.trusted_ref.includes('..') || contract.trusted_ref.endsWith('/')) {
+        throw new GithubActionsGateError('GITHUB_DEV_TRUSTED_REF_INVALID');
+      }
+    } else if (contract.trusted_ref !== undefined || contract.environment !== undefined) {
+      throw new GithubActionsGateError('GITHUB_DISPOSABLE_DEV_MUST_NOT_USE_TRUSTED_ENVIRONMENT');
     }
   }
   return contract;
@@ -317,28 +330,33 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
   if (!terminal) issues.push('terminal job not found: ' + contract.terminal_job);
   const terminalJobName = jobDisplayName(terminal, contract.terminal_job);
 
-  if (executor === 'github_dev' && contract.mode === 'stateful') {
+  if (executor === 'github_dev') {
     const inputs = workflowDispatchInputNames(text);
     for (const required of ['candidate_sha', 'ci_run_id', 'ci_artifact', 'pipeline_run_id']) {
       if (!inputs.has(required)) issues.push('missing workflow_dispatch input: ' + required);
     }
-    const runName = rootValue(text, 'run-name') ?? '';
-    if (!/inputs\.pipeline_run_id/.test(runName) || !/inputs\.candidate_sha/.test(runName)) {
-      issues.push('stateful DEV run-name must include inputs.pipeline_run_id and inputs.candidate_sha');
-    }
-    const environment = jobEnvironment(terminal);
-    if (environment !== contract.environment) issues.push('terminal job environment must equal ' + contract.environment);
     if (!/inputs\.ci_run_id/.test(text) || !/inputs\.ci_artifact/.test(text)) {
-      issues.push('stateful DEV must consume source CI run/artifact inputs');
+      issues.push('DEV must consume source CI run/artifact inputs');
     }
     if (!/(actions\/download-artifact|gh\s+run\s+download)/.test(text)) {
-      issues.push('stateful DEV must download the source CI artifact');
+      issues.push('DEV must download the source CI artifact');
     }
     if (!/actions\/upload-artifact/.test(text) || !text.includes(contract.artifact) || !text.includes(contract.evidence_file)) {
-      issues.push('stateful DEV must upload the declared DEV evidence artifact/file');
+      issues.push('DEV must upload the declared evidence artifact/file');
     }
-    if (/actions\/checkout[\s\S]{0,800}ref:\s*\$\{\{\s*inputs\.candidate_sha\s*\}\}/m.test(text)) {
-      issues.push('stateful DEV must not checkout candidate source');
+
+    if (contract.mode === 'stateful') {
+      const runName = rootValue(text, 'run-name') ?? '';
+      if (!/inputs\.pipeline_run_id/.test(runName) || !/inputs\.candidate_sha/.test(runName)) {
+        issues.push('stateful DEV run-name must include inputs.pipeline_run_id and inputs.candidate_sha');
+      }
+      const environment = jobEnvironment(terminal);
+      if (environment !== contract.environment) issues.push('terminal job environment must equal ' + contract.environment);
+      if (/actions\/checkout[\s\S]{0,800}ref:\s*\$\{\{\s*inputs\.candidate_sha\s*\}\}/m.test(text)) {
+        issues.push('stateful DEV must not checkout candidate source');
+      }
+    } else if (/\$\{\{\s*secrets\./.test(text)) {
+      issues.push('disposable DEV must not reference repository/environment secrets');
     }
   }
 
