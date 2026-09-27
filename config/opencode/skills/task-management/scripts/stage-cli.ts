@@ -77,13 +77,15 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
       evidence.executor === executor && evidence.workflow === contract?.workflow &&
       evidence.terminal_job === contract?.terminal_job &&
       String(evidence.candidate_sha).toLowerCase() === String(candidate.candidate_sha).toLowerCase();
-    const statefulValid = executor === 'github_dev' && contract?.mode === 'stateful'
+    const executorSpecificValid = executor === 'github_dev'
       ? evidence.dev_evidence_validated === true &&
-        evidence.trusted_ref === contract?.trusted_ref &&
-        String(evidence.head_branch ?? '').toLowerCase() === String(contract?.trusted_ref ?? '').toLowerCase() &&
-        String(evidence.installed_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase()
-      : String(evidence.head_sha).toLowerCase() === String(candidate.candidate_sha).toLowerCase();
-    if (!commonValid || !statefulValid) {
+        String(evidence.installed_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
+        (contract?.mode === 'stateful'
+          ? evidence.trusted_ref === contract?.trusted_ref &&
+            String(evidence.head_branch ?? '').toLowerCase() === String(contract?.trusted_ref ?? '').toLowerCase()
+          : String(evidence.head_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase())
+      : String(evidence.head_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase();
+    if (!commonValid || !executorSpecificValid) {
       throw new Error(`EVIDENCE_INVALID_OR_STALE: ${executor} ${pipeline.id}/${stage}`);
     }
     if (executor === 'github_dev') {
