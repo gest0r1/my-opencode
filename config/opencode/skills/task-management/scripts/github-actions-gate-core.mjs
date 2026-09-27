@@ -309,12 +309,12 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
 
   if (executor === 'github_dev') {
     const inputs = workflowDispatchInputs(workflow);
-    const requiredInputs = ['candidate_sha', 'ci_run_id', 'ci_artifact', 'ci_artifact_digest', 'pipeline_run_id'];
+    const requiredInputs = ['candidate_sha', 'ci_run_id', 'ci_artifact', 'ci_artifact_id', 'ci_artifact_digest', 'pipeline_run_id'];
     if (contract.target_id) requiredInputs.push('deployment_target_id');
     for (const required of requiredInputs) {
       if (!inputs.has(required)) issues.push('missing workflow_dispatch input: ' + required);
     }
-    const consumedInputs = ['ci_run_id', 'ci_artifact', 'ci_artifact_digest'];
+    const consumedInputs = ['ci_run_id', 'ci_artifact', 'ci_artifact_id', 'ci_artifact_digest'];
     if (contract.target_id) consumedInputs.push('deployment_target_id');
     for (const required of consumedInputs) {
       if (!referencesInput(workflow, required)) issues.push('DEV must consume workflow input: ' + required);
@@ -322,15 +322,15 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
     const downloadSteps = actionSteps(workflow, 'actions/download-artifact@');
     const sourceDownload = downloadSteps.some(({ step }) => {
       const withArgs = object(step.with);
-      const name = String(withArgs?.name ?? '');
+      const artifactIds = String(withArgs?.['artifact-ids'] ?? '');
       const runId = String(withArgs?.['run-id'] ?? '');
       const token = String(withArgs?.['github-token'] ?? '');
-      return name.includes('inputs.ci_artifact') &&
+      return artifactIds.includes('inputs.ci_artifact_id') &&
         runId.includes('inputs.ci_run_id') &&
         (token.includes('github.token') || token.includes('secrets.GITHUB_TOKEN'));
     });
     if (!sourceDownload) {
-      issues.push('DEV download-artifact must use inputs.ci_artifact + inputs.ci_run_id + github-token');
+      issues.push('DEV download-artifact must use inputs.ci_artifact_id + inputs.ci_run_id + github-token');
     }
     const devUpload = actionSteps(workflow, 'actions/upload-artifact@').some(({ step }) => {
       const withArgs = object(step.with);
@@ -412,12 +412,15 @@ export function selectStatefulWorkflowRun(runs, { trustedRef, event = 'workflow_
   return matches[0];
 }
 
-export function validateDevEvidence(data, { candidateSha, ciRunId, ciArtifactDigest, targetId }) {
+export function validateDevEvidence(data, { candidateSha, ciRunId, ciArtifactId, ciArtifactDigest, targetId }) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_INVALID');
   if (data.status !== 'PASS') throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_FAILED');
   if (String(data.candidate_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_CANDIDATE_MISMATCH');
   if (String(data.installed_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_INSTALLED_SHA_MISMATCH');
   if (Number(data.ci_run_id) !== Number(ciRunId)) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_CI_RUN_MISMATCH');
+  if (Number(data.ci_artifact_id) !== Number(ciArtifactId)) {
+    throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_ID_MISMATCH');
+  }
   if (String(data.ci_artifact_digest ?? '').toLowerCase() !== String(ciArtifactDigest ?? '').toLowerCase()) {
     throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_DIGEST_MISMATCH');
   }
@@ -429,6 +432,7 @@ export function validateDevEvidence(data, { candidateSha, ciRunId, ciArtifactDig
     candidate_sha: data.candidate_sha,
     installed_sha: data.installed_sha,
     ci_run_id: Number(data.ci_run_id),
+    ci_artifact_id: Number(data.ci_artifact_id),
     ci_artifact_digest: data.ci_artifact_digest,
     ...(targetId !== undefined ? { target_id: data.target_id } : {}),
     smoke_result: data.smoke_result ?? null,
