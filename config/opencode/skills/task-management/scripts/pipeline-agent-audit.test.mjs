@@ -149,6 +149,7 @@ test('OpenStage cannot edit deterministic pipeline state or machine evidence', a
   for (const path of [
     'state\\.json', 'candidate\\.json', 'git-verify\\.json', 'git-runtime\\.json',
     'github/\\*\\*', 'gates/\\*\\*', 'owner/\\*\\*', 'sources/github-issues\\.json',
+    'planning/deployment-target\\.json',
   ]) {
     assert.match(yaml, new RegExp('\\.tmp/pipelines/\\*\\*/' + path + '"?:\\s*deny'));
   }
