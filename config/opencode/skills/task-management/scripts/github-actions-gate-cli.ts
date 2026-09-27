@@ -22,7 +22,7 @@ type GateContract = {
   trigger: 'push' | 'workflow_dispatch';
   artifact?: string;
   environment?: string;
-  mode?: 'stateful';
+  mode?: 'disposable' | 'stateful';
   source_ci_stage?: string;
   trusted_ref?: string;
   evidence_file?: string;
@@ -358,7 +358,7 @@ async function verifyDevEvidence(
   candidateSha: string,
   sourceCiRunId: number,
 ): Promise<any> {
-  if (!contract.artifact || !contract.evidence_file) throw new CliError('stateful DEV evidence contract is missing');
+  if (!contract.artifact || !contract.evidence_file) throw new CliError('DEV evidence contract is missing');
   const directory = await mkdtemp(join(tmpdir(), 'pipeline-dev-evidence-'));
   try {
     command('gh', [
@@ -452,7 +452,7 @@ async function showCommand(runId: string, pipelineId: string, stage: string, sta
 function usage(): string {
   return [
     'usage:',
-    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--executor github_ci|github_dev] [--mode stateful] [--environment <name>] [--trusted-ref <ref>] [--evidence-file <file>]',
+    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--evidence-file <file>]',
     '  github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts show <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
