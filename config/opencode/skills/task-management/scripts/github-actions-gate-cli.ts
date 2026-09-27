@@ -317,12 +317,23 @@ async function waitForRun(
   }
 
   if (contract.trigger === 'workflow_dispatch') {
-    command('gh', [
+    const dispatchArgs = [
       'workflow', 'run', workflowId(contract.workflow),
       '--repo', repo,
       '--ref', candidate.branch,
-      '-f', `candidate_sha=${candidate.candidate_sha}`,
-    ]);
+      '-f', 'candidate_sha=' + candidate.candidate_sha,
+    ];
+    if (contract.mode === 'disposable') {
+      if (!sourceCi || !contract.source_ci_stage) throw new CliError('disposable DEV source CI evidence is missing');
+      const sourceContract = pipeline.github_gates?.[contract.source_ci_stage];
+      if (!sourceContract?.artifact) throw new CliError('disposable DEV source CI artifact contract is missing');
+      dispatchArgs.push(
+        '-f', 'ci_run_id=' + sourceCi.workflow_run_id,
+        '-f', 'ci_artifact=' + sourceContract.artifact,
+        '-f', 'pipeline_run_id=' + runId,
+      );
+    }
+    command('gh', dispatchArgs);
   }
 
   while (Date.now() < deadline) {
@@ -340,7 +351,7 @@ async function waitForRun(
   throw new CliError(`GITHUB_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate.candidate_sha}`);
 }
 
-async function verifyStatefulDevEvidence(
+async function verifyDevEvidence(
   repo: string,
   run: any,
   contract: GateContract,
@@ -400,8 +411,8 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
     throw new CliError(error instanceof Error ? error.message : String(error));
   }
 
-  const devEvidence = executor === 'github_dev' && contract.mode === 'stateful'
-    ? await verifyStatefulDevEvidence(
+  const devEvidence = executor === 'github_dev'
+    ? await verifyDevEvidence(
         repo,
         run,
         contract,
