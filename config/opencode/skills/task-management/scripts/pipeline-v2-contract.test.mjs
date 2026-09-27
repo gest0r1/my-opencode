@@ -1230,7 +1230,7 @@ test('technical fix after publish reopens verify and publish before GitHub CI', 
   assert.deepEqual(JSON.parse(result.stdout).runnable, [{ pipeline_id: 'app', stage: 'git-verify' }]);
 });
 
-test('canonical RUN preflight blocks legacy v1 while status remains readable', async () => {
+test('new init and pre-approval checks reject v1 while historical v1 status remains readable', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'pipeline-v1-readonly-'));
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const manifestPath = path.join(root, 'manifest.json');
@@ -1242,13 +1242,49 @@ test('canonical RUN preflight blocks legacy v1 while status remains readable', a
     pipelines: [{ id: 'app', stages: ['implementation'] }],
     gate_profiles: {},
   };
-  await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  const manifestText = JSON.stringify(manifest, null, 2);
+  await writeFile(manifestPath, manifestText);
 
-  let result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
-  assert.equal(result.status, 0, result.stderr);
+  let result = run(root, ['plan-run-preflight', manifestPath, '--environment']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /NEW_PLAN_SCHEMA_V2_REQUIRED/);
+
+  result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /NEW_PLAN_SCHEMA_V2_REQUIRED/);
+
+  const rulesPath = path.join(HERE, '..', 'pipeline-rules.default.md');
+  const rulesText = await readFile(rulesPath, 'utf8');
+  const rulesVersion = Number(rulesText.match(/rules_version:\s*(\d+)/)?.[1]);
+  const legacyRoot = path.join(stateRoot, manifest.run_id);
+  await mkdir(legacyRoot, { recursive: true });
+  await writeFile(path.join(legacyRoot, 'state.json'), JSON.stringify({
+    schema_version: 1,
+    run_id: manifest.run_id,
+    manifest_file: manifestPath,
+    manifest_sha256: sha(manifestText),
+    rules_file: rulesPath,
+    rules_source: 'opencode_default',
+    rules_version: rulesVersion,
+    rules_sha256: sha(rulesText),
+    status: 'approved',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    active_stages: [],
+    pipelines: {
+      app: {
+        id: 'app',
+        status: 'approved',
+        stages: { implementation: { status: 'pending' } },
+        stage_order: ['implementation'],
+        depends_on: [],
+      },
+    },
+    history: [],
+  }, null, 2));
+
   result = run(root, ['status', manifest.run_id, '--state-root', stateRoot, '--json']);
   assert.equal(result.status, 0, result.stderr);
-
   result = run(root, ['run-preflight', manifest.run_id, '--state-root', stateRoot]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /LEGACY_V1_REPLAN_REQUIRED/);
@@ -1281,4 +1317,55 @@ test('technical fix counter permits exactly three cycles and blocks the fourth',
   ]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /TECHNICAL_FIX_LIMIT_EXCEEDED/);
+});
+
+
+test('stage-cli supersede creates a fresh draft with lineage but never copies runtime state or machine evidence', async () => {
+  const fx = await fixture('v2-supersede-old');
+  let result = run(fx.root, ['init', fx.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['approve', fx.manifest.run_id]);
+  assert.equal(result.status, 0, result.stderr);
+
+  await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({ status: 'PASS', candidate_sha: 'a'.repeat(40) }));
+  await mkdir(path.join(fx.runRoot, 'github'), { recursive: true });
+  await writeFile(path.join(fx.runRoot, 'github', 'app-tests.json'), '{"status":"FAIL"}\n');
+  await mkdir(path.join(fx.runRoot, 'gates'), { recursive: true });
+  await writeFile(path.join(fx.runRoot, 'gates', 'app-fast.json'), '{"status":"PASS"}\n');
+
+  const nextRun = 'v2-supersede-new';
+  result = run(fx.root, [
+    'supersede', fx.manifest.run_id, nextRun,
+    '--reason', 'BASELINE_SCOPE_MISMATCH',
+    '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.status, 'PASS');
+  assert.equal(output.old_run_id, fx.manifest.run_id);
+  assert.equal(output.new_run_id, nextRun);
+  assert.equal(output.state_copied, false);
+  assert.equal(output.machine_evidence_copied, false);
+
+  const nextRoot = path.join(fx.root, '.tmp', 'pipelines', nextRun);
+  const nextManifestPath = path.join(nextRoot, 'manifest.json');
+  const nextManifest = JSON.parse(await readFile(nextManifestPath, 'utf8'));
+  assert.equal(nextManifest.run_id, nextRun);
+  assert.deepEqual(nextManifest.lineage, {
+    change_class: 'supersede',
+    supersedes: fx.manifest.run_id,
+    reason_code: 'BASELINE_SCOPE_MISMATCH',
+  });
+  assert.equal(await readFile(path.join(nextRoot, 'planning', 'architecture-1.md'), 'utf8'), '# architecture\n');
+  await assert.rejects(readFile(path.join(nextRoot, 'state.json'), 'utf8'));
+  await assert.rejects(readFile(path.join(nextRoot, 'candidate.json'), 'utf8'));
+  await assert.rejects(readFile(path.join(nextRoot, 'github', 'app-tests.json'), 'utf8'));
+  await assert.rejects(readFile(path.join(nextRoot, 'gates', 'app-fast.json'), 'utf8'));
+
+  const oldState = JSON.parse(await readFile(path.join(fx.runRoot, 'state.json'), 'utf8'));
+  assert.equal(oldState.superseded_by, nextRun);
+  assert.equal(oldState.supersede_reason, 'BASELINE_SCOPE_MISMATCH');
+
+  result = run(fx.root, ['plan-run-preflight', nextManifestPath, '--environment']);
+  assert.equal(result.status, 0, result.stderr);
 });
