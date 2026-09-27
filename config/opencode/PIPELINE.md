@@ -59,14 +59,15 @@ Current schema supports:
 
 - `protected_paths[]`: scopes that may not enter `allowed_change_paths`;
 - `required_gates[]`: a gate stage plus `when_paths[]`; if frozen change scope intersects those paths, the manifest must include that stage;
-- optional `github_actions.ci/dev` defaults for workflow path, terminal job, trigger, artifact and DEV environment/mode.
+- optional `github_actions.ci/dev` defaults for workflow path, terminal/required jobs, trigger, artifact, DEV environment/mode/trusted ref/concurrency;
+- optional `deployment_target`: `github_environment` or an externally reachable `external_ssh` target whose PLAN-time authentication is probed deterministically.
 
 When the policy exists, PLAN freezes its path+SHA-256. Preflight and later state
 validation fail if it changes.
 
 ## Executor and package-manager integrity
 
-Every schema-v2 stage has an explicit executor. Authoritative test/build/typecheck/lint stages use `github_ci`; only explicitly local fast/precheck/docs/runtime stages use `local_gate`. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate, not a reason to replace GitHub CI.
+Every schema-v2 pipeline explicitly declares `deployable: true|false`, and every stage has an explicit executor. A deployable pipeline freezes distinct fresh-install and upgrade/repeat-install required jobs. Authoritative test/build/typecheck/lint stages use `github_ci`; only explicitly local fast/precheck/docs/runtime stages use `local_gate`. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate, not a reason to replace GitHub CI.
 
 ## 1. PLAN reads authoritative Issues
 
@@ -151,7 +152,7 @@ implementation/review
 .tmp/pipelines/<run-id>/candidate.json
 ```
 
-For `github_ci`/`github_dev`, `github-actions-gate-cli` validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch, frozen event/workflow, successful terminal job and required artifact. DEV evidence additionally points to the exact source CI run. Evidence is written under:
+For `github_ci`/`github_dev`, `github-actions-gate-cli` structurally validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch and frozen event/workflow. Candidate CI must be read-only, secret-free and path-filter-free; every frozen required job plus the terminal job must complete successfully. Required artifacts are bound by GitHub artifact ID and `sha256:` digest. DEV evidence additionally points to the exact source CI run and repeats the same source artifact digest. Evidence is written under:
 
 ```text
 .tmp/pipelines/<run-id>/github/<pipeline>-<stage>.json
@@ -159,7 +160,7 @@ For `github_ci`/`github_dev`, `github-actions-gate-cli` validates the frozen pro
 
 `stage-cli complete` re-validates canonical machine evidence before allowing a `local_gate`, `git_verify`, `git_publish`, `github_ci` or `github_dev` stage to complete. A model statement that a check passed is insufficient.
 
-If a target project has no compatible GitHub CI workflow, PLAN freezes a bootstrap/adaptation work item and workflow scope. RUN implements that candidate-safe CI workflow in the target project, validates it before publication, publishes it with the candidate branch and waits for GitHub Actions on that exact SHA. First-time CI workflows use a `push` trigger; there is no local final-build/test fallback. Runtime/E2E may run inside candidate CI or through an existing `github_dev` workflow. Disposable `github_dev` is secret-free and runs on the candidate ref; stateful `github_dev` runs from a frozen trusted ref/environment outside candidate change scope. Both consume the exact source-CI artifact and must return `installed_sha` evidence. A missing separate DEV workflow is not bootstrapped and consumed in the same run; required disposable validation is folded into candidate CI.
+If a target project has no compatible GitHub CI workflow, PLAN freezes a bootstrap/adaptation work item and workflow scope. RUN implements that candidate-safe CI workflow in the target project, validates it before publication, publishes it with the candidate branch and waits for GitHub Actions on that exact SHA. First-time CI workflows use a `push` trigger; there is no local final-build/test fallback. For deployable pipelines the candidate CI must include both fresh-install and upgrade/repeat-install required jobs. Existing disposable `github_dev` is secret-free and runs on the candidate ref. Existing stateful `github_dev` runs from a verified Environment/trusted ref with frozen non-cancelling concurrency. If stateful DEV is missing, PLAN may freeze it under `future_github_gates`; RUN authors that workflow now but cannot execute it until owner merge makes the workflow trusted. A later PLAN can promote it to active `github_dev`.
 
 Any source-changing fix after publication creates a new candidate SHA. `stage-cli fix-cycle` invalidates the completed chain from the preceding `git_verify` through publish/CI/DEV, making `git_verify` runnable again while preserving old evidence as audit history. The repaired source must then pass verify → publish → GitHub CI → DEV again; CI/artifact/DEV evidence belonging to the previous SHA cannot complete the reopened stages.
 
@@ -233,7 +234,7 @@ comment-only write permission. The deterministic tools therefore enforce the
 narrower policy in code: they read Issues and post comments, but do not expose an
 Issue state-change/close command.
 
-The pipeline engine has no generic secrets-management or PR-merge operation. Stateful DEV deployment credentials remain inside the target repository's protected GitHub Environment/workflow; the orchestrator only invokes the frozen deterministic gate contract.
+The pipeline engine has no generic secrets-management or PR-merge operation. Stateful DEV deployment credentials remain inside the target repository's protected GitHub Environment/workflow. If the actual CD target is an external SSH machine, PLAN proves non-interactive reachability/authentication through `deployment-target-cli inspect` and RUN rechecks it before deployment; OpenStage and subagents never receive raw SSH capability.
 
 ## Failure behavior
 
@@ -246,7 +247,9 @@ The lifecycle fails closed when any of these is true:
 - GitHub comment outbox delivery remains pending;
 - candidate evidence is missing or its remote SHA does not match;
 - a required project workflow is missing without an approved bootstrap/adaptation work item;
-- GitHub Actions evidence references a different SHA, branch, workflow, terminal job, artifact or source CI run;
+- GitHub Actions evidence references a different SHA, branch, workflow, required/terminal job, artifact ID/digest or source CI run;
+- stateful DEV Environment/trusted-ref/concurrency validation fails;
+- an external CD target loses deterministic reachability/authentication;
 - more than one open PR exists for the same candidate branch and `main`;
 - the existing PR contains a malformed pipeline-managed body block.
 
