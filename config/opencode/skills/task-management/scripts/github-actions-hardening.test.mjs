@@ -205,6 +205,8 @@ jobs:
       - uses: actions/download-artifact@2222222222222222222222222222222222222222
         with:
           name: inputs.ci_artifact
+          run-id: inputs.ci_run_id
+          github-token: github.token
       - run: echo inputs.ci_run_id inputs.ci_artifact_digest
       - uses: actions/upload-artifact@3333333333333333333333333333333333333333
         with:
