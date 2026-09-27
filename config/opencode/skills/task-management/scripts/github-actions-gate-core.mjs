@@ -181,56 +181,134 @@ function actionPinIssues(text) {
   return issues;
 }
 
-function eventBranchRules(text, event) {
-  const lines = text.split(/\r?\n/);
-  let eventStart = -1;
-  for (let i = 0; i < lines.length; i += 1) {
-    if (new RegExp('^\\s{2}' + event + '\\s*:').test(lines[i])) { eventStart = i; break; }
-  }
-  if (eventStart < 0) return { branches: [], ignore: [] };
-  const block = [];
-  for (let i = eventStart + 1; i < lines.length; i += 1) {
-    if (lines[i].trim() && indentation(lines[i]) <= 2) break;
-    block.push(lines[i]);
-  }
-  const readList = (key) => {
-    for (let i = 0; i < block.length; i += 1) {
-      const inlinePattern = new RegExp('^\\s{4}' + key + '\\s*:\\s*\\[(.*)\\]\\s*$');
-      const inline = block[i].match(inlinePattern);
-      if (inline) return inline[1].split(',').map((v) => unquote(v)).filter(Boolean);
-      if (new RegExp('^\\s{4}' + key + '\\s*:\\s*$').test(block[i])) {
-        const values = [];
-        for (let j = i + 1; j < block.length; j += 1) {
-          const item = block[j].match(/^\s{6}-\s*(.+?)\s*$/);
-          if (!item) break;
-          values.push(unquote(item[1]));
-        }
-        return values;
-      }
+function readYamlList(block, indent, key) {
+  if (!block) return [];
+  const inlineMatcher = new RegExp('^\\s{' + indent + '}' + key + '\\s*:\\s*\\[(.*)\\]\\s*$');
+  const keyMatcher = new RegExp('^\\s{' + indent + '}' + key + '\\s*:\\s*$');
+
+  for (let index = 0; index < block.length; index += 1) {
+    const inline = block[index].match(inlineMatcher);
+    if (inline?.[1] !== undefined) {
+      return inline[1].split(',').map(unquote).filter(Boolean);
     }
-    return [];
-  };
-  return { branches: readList('branches'), ignore: readList('branches-ignore') };
+    if (!keyMatcher.test(block[index])) continue;
+
+    const values = [];
+    for (let nestedIndex = index + 1; nestedIndex < block.length; nestedIndex += 1) {
+      const nested = block[nestedIndex];
+      if (!nested.trim() || nested.trim().startsWith('#')) continue;
+      if (indentation(nested) <= indent) break;
+      const item = nested.match(new RegExp('^\\s{' + (indent + 2) + '}-\\s*(.+?)\\s*$'));
+      if (item?.[1]) values.push(unquote(item[1]));
+    }
+    return values;
+  }
+  return [];
 }
 
-function globMatches(value, pattern) {
-  let source = '';
-  for (let i = 0; i < pattern.length; i += 1) {
-    const ch = pattern[i];
-    if (ch === '*' && pattern[i + 1] === '*') { source += '.*'; i += 1; continue; }
-    if (ch === '*') { source += '[^/]*'; continue; }
-    if (ch === '?') { source += '[^/]'; continue; }
-    source += ch.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+function topLevelBlock(text, key) {
+  const lines = text.split(/\r?\n/);
+  let start = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (new RegExp('^' + key + '\\s*:\\s*(?:#.*)?$').test(lines[index])) {
+      start = index;
+      break;
+    }
   }
-  return new RegExp('^' + source + '$').test(value);
+  if (start < 0) return undefined;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (lines[index].trim() && indentation(lines[index]) === 0) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start, end);
+}
+
+function nestedBlock(parent, indent, key) {
+  if (!parent) return undefined;
+  const matcher = new RegExp('^\\s{' + indent + '}' + key + '\\s*:');
+  let start = -1;
+  for (let index = 1; index < parent.length; index += 1) {
+    if (matcher.test(parent[index])) {
+      start = index;
+      break;
+    }
+  }
+  if (start < 0) return undefined;
+  let end = parent.length;
+  for (let index = start + 1; index < parent.length; index += 1) {
+    const line = parent[index];
+    if (!line.trim() || line.trim().startsWith('#')) continue;
+    if (indentation(line) <= indent) {
+      end = index;
+      break;
+    }
+  }
+  return parent.slice(start, end);
+}
+
+function eventBlock(text, event) {
+  return nestedBlock(topLevelBlock(text, 'on'), 2, event);
+}
+
+function globToRegExp(pattern) {
+  let output = '^';
+  const special = /[\\^$.*+?()[\]{}|]/;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*') {
+      if (pattern[index + 1] === '*') {
+        output += '.*';
+        index += 1;
+      } else {
+        output += '[^/]*';
+      }
+    } else if (char === '?') {
+      output += '[^/]';
+    } else {
+      output += special.test(char) ? '\\' + char : char;
+    }
+  }
+  return new RegExp(output + '$');
 }
 
 function pushAcceptsBranch(text, branch) {
-  if (!branch) return true;
-  const rules = eventBranchRules(text, 'push');
-  if (rules.ignore.some((pattern) => globMatches(branch, pattern))) return false;
-  if (!rules.branches.length) return true;
-  return rules.branches.some((pattern) => globMatches(branch, pattern));
+  const block = eventBlock(text, 'push');
+  if (!block) return false;
+  const branches = readYamlList(block, 4, 'branches');
+  const ignore = readYamlList(block, 4, 'branches-ignore');
+  const matches = (pattern) => {
+    try { return globToRegExp(pattern).test(branch); }
+    catch { return false; }
+  };
+  return (branches.length === 0 || branches.some(matches)) && !ignore.some(matches);
+}
+
+function rootValue(text, key) {
+  const match = text.match(new RegExp('^' + key + '\\s*:\\s*(.+?)\\s*$', 'm'));
+  return match?.[1] ? unquote(match[1]) : undefined;
+}
+
+function jobDisplayName(block, jobId) {
+  if (!block) return jobId;
+  for (const line of block.slice(1)) {
+    if (indentation(line) <= 2 && line.trim()) break;
+    const match = line.match(/^\s{4}name\s*:\s*(.+?)\s*$/);
+    if (match?.[1]) return unquote(match[1]);
+  }
+  return jobId;
+}
+
+function jobEnvironment(block) {
+  if (!block) return undefined;
+  for (const line of block.slice(1)) {
+    if (indentation(line) <= 2 && line.trim()) break;
+    const match = line.match(/^\s{4}environment\s*:\s*(.+?)\s*$/);
+    if (match?.[1]) return unquote(match[1]);
+  }
+  return undefined;
 }
 
 export function inspectWorkflowText(text, contract, executor = 'github_ci', context = {}) {
@@ -239,7 +317,7 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
 
   const issues = [];
   const events = eventNames(text);
-  if (!events.has(contract.trigger)) issues.push(`missing trigger: ${contract.trigger}`);
+  if (!events.has(contract.trigger)) issues.push('missing trigger: ' + contract.trigger);
   if (executor === 'github_ci' && events.has('pull_request_target')) {
     issues.push('pull_request_target is forbidden for candidate CI');
   }
@@ -248,36 +326,45 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
   if (/^\s*secrets\s*:\s*inherit\s*$/mi.test(text)) issues.push('secrets: inherit is forbidden in pipeline GitHub gates');
   if (/^\s*continue-on-error\s*:\s*true\s*$/mi.test(text)) issues.push('continue-on-error: true is forbidden in authoritative gates');
   for (const issue of actionPinIssues(text)) issues.push(issue);
-  if (executor === 'github_ci' && /\$\{\{\s*secrets\./.test(text)) issues.push('candidate CI must not reference repository/environment secrets');
-  if (executor === 'github_ci' && contract.trigger === 'push' && context.candidateBranch && !pushAcceptsBranch(text, context.candidateBranch)) {
-    issues.push(`push trigger does not include candidate branch: ${context.candidateBranch}`);
+
+  if (executor === 'github_ci' && /\$\{\{\s*secrets\./.test(text)) {
+    issues.push('candidate CI must not reference repository/environment secrets');
+  }
+  if (executor === 'github_ci' && contract.trigger === 'push' &&
+      context.candidateBranch && !pushAcceptsBranch(text, context.candidateBranch)) {
+    issues.push('push trigger does not include candidate branch: ' + context.candidateBranch);
   }
   if (contract.artifact && (!/actions\/upload-artifact@/i.test(text) || !text.includes(contract.artifact))) {
-    issues.push(`declared artifact is not uploaded: ${contract.artifact}`);
+    issues.push('declared artifact is not uploaded: ' + contract.artifact);
   }
 
   const terminal = jobBlock(text, contract.terminal_job);
-  if (!terminal) issues.push(`terminal job not found: ${contract.terminal_job}`);
+  if (!terminal) issues.push('terminal job not found: ' + contract.terminal_job);
   const terminalJobName = jobDisplayName(terminal, contract.terminal_job);
 
   if (executor === 'github_dev' && contract.mode === 'stateful') {
     const inputs = workflowDispatchInputNames(text);
     for (const required of ['candidate_sha', 'ci_run_id', 'ci_artifact', 'pipeline_run_id']) {
-      if (!inputs.has(required)) issues.push(`missing workflow_dispatch input: ${required}`);
+      if (!inputs.has(required)) issues.push('missing workflow_dispatch input: ' + required);
     }
     const runName = rootValue(text, 'run-name') ?? '';
-    if (!/inputs\.pipeline_run_id/.test(runName) || !/inputs\.candidate_sha/.test(runName)) issues.push('stateful DEV run-name must include inputs.pipeline_run_id and inputs.candidate_sha');
+    if (!/inputs\.pipeline_run_id/.test(runName) || !/inputs\.candidate_sha/.test(runName)) {
+      issues.push('stateful DEV run-name must include inputs.pipeline_run_id and inputs.candidate_sha');
+    }
     const environment = jobEnvironment(terminal);
-    if (environment !== contract.environment) issues.push(`terminal job environment must equal ${contract.environment}`);
-    if (!/inputs\.ci_run_id/.test(text) || !/inputs\.ci_artifact/.test(text)) issues.push('stateful DEV must consume source CI run/artifact inputs');
-    const actionDownload = /actions\/download-artifact@/i.test(text) &&
-      /run-id\s*:\s*\$\{\{\s*inputs\.ci_run_id\s*\}\}/.test(text) &&
-      /name\s*:\s*\$\{\{\s*inputs\.ci_artifact\s*\}\}/.test(text) &&
-      /github-token\s*:\s*\$\{\{\s*github\.token\s*\}\}/.test(text);
-    const ghDownload = /gh\s+run\s+download[\s\S]{0,500}\$\{\{\s*inputs\.ci_run_id\s*\}\}[\s\S]{0,500}--name[\s\S]{0,120}\$\{\{\s*inputs\.ci_artifact\s*\}\}/m.test(text);
-    if (!actionDownload && !ghDownload) issues.push('stateful DEV must download the exact source CI run/artifact');
-    if (!/actions\/upload-artifact/.test(text) || !text.includes(contract.artifact) || !text.includes(contract.evidence_file)) issues.push('stateful DEV must upload the declared DEV evidence artifact/file');
-    if (/actions\/checkout[\s\S]{0,500}ref:\s*\$\{\{\s*inputs\.candidate_sha\s*\}\}/m.test(text)) issues.push('stateful DEV must not checkout candidate source');
+    if (environment !== contract.environment) issues.push('terminal job environment must equal ' + contract.environment);
+    if (!/inputs\.ci_run_id/.test(text) || !/inputs\.ci_artifact/.test(text)) {
+      issues.push('stateful DEV must consume source CI run/artifact inputs');
+    }
+    if (!/(actions\/download-artifact|gh\s+run\s+download)/.test(text)) {
+      issues.push('stateful DEV must download the source CI artifact');
+    }
+    if (!/actions\/upload-artifact/.test(text) || !text.includes(contract.artifact) || !text.includes(contract.evidence_file)) {
+      issues.push('stateful DEV must upload the declared DEV evidence artifact/file');
+    }
+    if (/actions\/checkout[\s\S]{0,800}ref:\s*\$\{\{\s*inputs\.candidate_sha\s*\}\}/m.test(text)) {
+      issues.push('stateful DEV must not checkout candidate source');
+    }
   }
 
   return {
@@ -285,11 +372,12 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
     workflow: contract.workflow,
     trigger: contract.trigger,
     terminal_job: contract.terminal_job,
-    terminal_job_name: terminalJobName ?? contract.terminal_job,
+    terminal_job_name: terminalJobName,
     events: [...events].sort(),
     issues,
   };
 }
+
 export function classifyMissingWorkflow(contract, executor = 'github_ci') {
   assertGithubGateContract(contract, executor);
   return {
