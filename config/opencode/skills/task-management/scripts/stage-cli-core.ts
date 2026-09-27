@@ -231,6 +231,7 @@ export async function inspectProjectPolicy(
     protected_paths: Array.isArray(policy.protected_paths) ? policy.protected_paths : [],
     required_gates: Array.isArray(policy.required_gates) ? policy.required_gates : [],
     github_actions: policy.github_actions && typeof policy.github_actions === 'object' ? policy.github_actions : undefined,
+    deployment_target: policy.deployment_target && typeof policy.deployment_target === 'object' ? policy.deployment_target : undefined,
   };
 }
 
@@ -1175,6 +1176,7 @@ function usage(): string {
     '  stage-cli next <run-id> [--json] [--state-root <path>]',
     '  stage-cli start <run-id> <stage> [--pipeline <id>]',
     '  stage-cli complete <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
+    '  stage-cli owner-accept <run-id> <stage> --pipeline <id> --result pass|fail [--message <text>]',
     '  stage-cli fail|block <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
     '  stage-cli resume <run-id> <stage> [--pipeline <id>]',
     '  stage-cli fix-cycle <run-id> <stage> [--pipeline <id>] [--json]',

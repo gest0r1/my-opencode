@@ -102,17 +102,31 @@ test('DevOps agent cannot directly mutate runtime infrastructure', async () => {
 });
 
 
+test('implementation agents can author workflow files but cannot run raw GitHub or SSH lifecycle commands', async () => {
+  for (const file of [
+    'config/opencode/agent/subagents/code/coder-agent.md',
+    'config/opencode/agent/subagents/development/devops-specialist.md',
+  ]) {
+    const yaml = frontmatter(await text(file));
+    assert.match(yaml, /edit:\s*\n\s+["']?\*["']?:\s*allow/, file);
+    assert.match(yaml, /bash:\s*\n\s+["']?\*["']?:\s*deny/, file);
+    assert.doesNotMatch(yaml, /["'](?:gh|ssh)\s+\*["']:\s*allow/i, file);
+  }
+});
+
 test('OpenStage exposes only deterministic GitHub lifecycle commands', async () => {
   const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
   for (const required of [
     /github-issue-cli\.ts\*": allow/,
     /github-pr-cli\.ts\*": allow/,
     /github-actions-gate-cli\.ts\*": allow/,
+    /deployment-target-cli\.ts\*": allow/,
     /pipeline-github-sync\.mjs\*": allow/,
   ]) {
     assert.match(yaml, required);
   }
   assert.doesNotMatch(yaml, /["']gh\s+\*["']:\s*allow/i);
+  assert.doesNotMatch(yaml, /["']ssh\s+\*["']:\s*allow/i);
   assert.doesNotMatch(yaml, /gh\s+pr\s+merge/i);
 });
 
@@ -134,10 +148,22 @@ test('OpenStage cannot edit deterministic pipeline state or machine evidence', a
   const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
   for (const path of [
     'state\\.json', 'candidate\\.json', 'git-verify\\.json', 'git-runtime\\.json',
-    'github/\\*\\*', 'gates/\\*\\*', 'sources/github-issues\\.json',
+    'github/\\*\\*', 'gates/\\*\\*', 'owner/\\*\\*', 'sources/github-issues\\.json',
+    'planning/deployment-target\\.json',
   ]) {
     assert.match(yaml, new RegExp('\\.tmp/pipelines/\\*\\*/' + path + '"?:\\s*deny'));
   }
+});
+
+test('deployment testing mode is an explicit owner choice and OpenStage has no raw SSH/GitHub shell', async () => {
+  const plan = await text('config/opencode/command/pipeline-plan.md');
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
+  assert.match(plan, /must not choose it/i);
+  assert.match(plan, /github.*opencode_host.*hybrid/s);
+  assert.match(run, /stage-cli owner-accept/);
+  assert.doesNotMatch(yaml, /["']ssh\s+\*["']:\s*allow/i);
+  assert.doesNotMatch(yaml, /["']gh\s+\*["']:\s*allow/i);
 });
 
 test('canonical RUN requires deterministic v2 run-preflight before next', async () => {

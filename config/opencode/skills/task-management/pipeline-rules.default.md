@@ -89,15 +89,15 @@ fail-closed.
 
 ## Gates and evidence
 
-- Schema-v2 execution mode is explicit per stage through `executors[stage_id]`; RUN never infers the executor from the stage name.
-- Authoritative repository test/build/typecheck/lint validation completes only from deterministic `github-actions-gate-cli` evidence for the exact published candidate SHA, frozen workflow and terminal job. Natural-language PASS or a local command cannot satisfy `github_ci`.
+- Schema-v2 execution mode is explicit per stage through `executors[stage_id]`; RUN never infers the executor from the stage name. Deployable pipelines also freeze an owner-selected `testing_strategy.mode=github|opencode_host|hybrid`; the model may recommend a mode but cannot choose it.
+- Authoritative repository test/build/typecheck/lint validation completes only from deterministic `github-actions-gate-cli` evidence for the exact published candidate SHA, frozen workflow and terminal job. Candidate CI uses explicit read-only GitHub permissions, SHA-pinned actions, no secrets and no `paths`/`paths-ignore` push filters. Every frozen `required_jobs[]` job and the terminal job must complete successfully. Natural-language PASS or a local command cannot satisfy `github_ci`.
 - `gate-runner-cli` is authoritative only for stages explicitly frozen as `local_gate` (for example fast/precheck/docs or project/runtime checks). `stage-cli complete` verifies the canonical machine evidence before transitioning a `local_gate`, `github_ci`, `github_dev` or `git_publish` stage.
-- Missing or incompatible project GitHub CI is planned implementation work: PLAN freezes a bootstrap/adaptation work item and workflow scope, RUN implements and validates that candidate-safe workflow in the target project, then the candidate is published and tested by GitHub. There is no local fallback for authoritative CI. `github_dev` may be disposable or stateful, but it must already exist: disposable DEV is secret-free on the candidate ref; stateful DEV is frozen on a trusted ref/environment outside candidate change scope. Both consume the exact source-CI artifact. If separate DEV automation is missing, required disposable runtime/E2E is folded into candidate CI rather than bootstrapped and consumed as a new DEV workflow in the same run.
+- Candidate CI uses explicit read-only permissions, no candidate secrets and no path filters that could skip the authoritative candidate push. Missing or incompatible project GitHub CI is planned implementation work: PLAN freezes a bootstrap/adaptation work item and workflow scope, RUN implements and validates that candidate-safe workflow in the target project, then the candidate is published and tested by GitHub. There is no local fallback for authoritative CI. Existing `github_dev` may be disposable or trusted stateful. Both consume the exact source-CI artifact **and its SHA-256 digest**. Stateful DEV additionally requires a verified GitHub Environment/trusted ref and frozen non-cancelling concurrency group. If stateful DEV automation is missing, PLAN may freeze it under `future_github_gates`: RUN authors it now but cannot execute it until it is merged into the trusted ref; current-run fresh+upgrade runtime validation remains in candidate CI.
 - Repository package-manager identity is authoritative for local JS gates. A pnpm project must use pnpm/corepack-pnpm local gates; missing pnpm blocks instead of falling back to npm or dependency-installing `npx --yes`.
 - Qualitative review gates may be model-driven but blockers must cite an observed
   defect or approved requirement/contract/security rule.
 - Required gate that cannot execute or be verified fails closed.
-- Evidence identifies run/pipeline/gate, observed result and immutable candidate identity when relevant. GitHub evidence additionally binds workflow, run ID/attempt, event, head SHA, terminal job and required artifact; DEV evidence binds its source CI run.
+- Evidence identifies run/pipeline/gate, observed result and immutable candidate identity when relevant. GitHub evidence additionally binds workflow, run ID/attempt, event, head SHA, terminal/required jobs, artifact ID and `sha256:` digest; DEV evidence binds its source CI run and the same source artifact digest.
 
 ## Candidate provenance and runtime validation
 
@@ -107,7 +107,7 @@ fail-closed.
 approved base/source -> candidate SHA -> installed candidate/artifact -> evidence
 ```
 
-- Runtime validation tests the approved candidate artifact/SHA, not an uncommitted local development tree, when the manifest requires candidate installation.
+- Every v2 pipeline explicitly declares `deployable: true|false`. A deployable pipeline freezes `deployment_validation` with distinct fresh-install and upgrade/repeat-install required jobs; both must PASS against the same candidate artifact/SHA. Runtime validation tests the approved candidate artifact/SHA, not an uncommitted local development tree.
 - Planned source-mutating agent/documentation stages precede candidate publication. A source-changing fix after candidate publication produces a new candidate SHA. All prior GitHub CI/artifact/DEV/runtime evidence is stale and affected gates must run again for the new SHA.
 
 ## Runtime and rollback
@@ -116,6 +116,7 @@ approved base/source -> candidate SHA -> installed candidate/artifact -> evidenc
   deterministic runtime lock or equivalent external serialization.
 - Release-affecting work defines rollback or explicitly records `not_applicable`
   with reason.
+- If project policy declares an external SSH CD target, PLAN must freeze a deterministic `deployment-target-cli inspect` reachability/authentication result and RUN must recheck it before deployment. Agents never receive raw SSH permission.
 - Deployment/runtime failure cannot be converted to PASS by LLM judgement.
 
 ## Review findings and fix cycles

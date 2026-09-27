@@ -16,7 +16,13 @@
       "workflow": ".github/workflows/ci.yml",
       "terminal_job": "pipeline_ci",
       "trigger": "push",
-      "artifact": "candidate-build"
+      "artifact": "candidate-build",
+      "required_jobs": [
+        "lint",
+        "test",
+        "typecheck",
+        "build"
+      ]
     },
     "dev": {
       "workflow": ".github/workflows/dev.yml",
@@ -27,7 +33,25 @@
       "trusted_ref": "main",
       "artifact": "dev-evidence",
       "evidence_file": "dev-evidence.json",
-      "source_ci_stage": "ci"
+      "source_ci_stage": "ci",
+      "concurrency_group": "development"
     }
+  },
+  "deployment_target": {
+    "kind": "opencode_host",
+    "transport": "github_ssh",
+    "environment": "development",
+    "probe_workflow": ".github/workflows/deployment-target-probe.yml",
+    "probe_job": "probe_target",
+    "trusted_ref": "main",
+    "required_environment_secrets": [
+      "DEPLOY_HOST",
+      "DEPLOY_USER",
+      "DEPLOY_SSH_KEY",
+      "DEPLOY_KNOWN_HOSTS"
+    ],
+    "runner_labels": [],
+    "probe_timeout_seconds": 180,
+    "target_id": "opencode-development-host"
   }
 }

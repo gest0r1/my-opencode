@@ -1,7 +1,7 @@
 // Stable CLI entry point. Keep core stage/DAG/state implementation untouched and
 // reject non-executable machine gates BEFORE init creates any state or approve mutates it.
 export * from './stage-cli-core.ts';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -93,7 +93,9 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
       if (!common) throw new Error('EVIDENCE_INVALID_OR_STALE: ' + executor + ' ' + pipeline.id + '/' + stage);
 
       if (executor === 'github_ci') {
-        if (String(evidence.head_sha ?? '').toLowerCase() !== String(candidate.candidate_sha).toLowerCase()) {
+        const artifactValid = !contract?.artifact ||
+          (evidence.artifact === contract.artifact && /^sha256:[0-9a-f]{64}$/i.test(String(evidence.artifact_digest ?? '')));
+        if (String(evidence.head_sha ?? '').toLowerCase() !== String(candidate.candidate_sha).toLowerCase() || !artifactValid) {
           throw new Error('EVIDENCE_INVALID_OR_STALE: github_ci ' + pipeline.id + '/' + stage);
         }
         continue;
@@ -103,10 +105,19 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
       const source = sourceStage
         ? await readJsonEvidence(join(artifactRoot, 'github', pipeline.id + '-' + sourceStage + '.json'), pipeline.id + '/' + sourceStage)
         : undefined;
+      const requiresAutomatedPostDeploy =
+        ['opencode_host', 'hybrid'].includes(String(pipeline.testing_strategy?.mode ?? '')) &&
+        ['automated', 'automated_then_user'].includes(String(pipeline.testing_strategy?.post_deploy_test ?? ''));
       const devCommon = evidence.dev_evidence_validated === true &&
+        (!requiresAutomatedPostDeploy || evidence.smoke_result === 'PASS') &&
+        (!contract?.target_id || evidence.target_id === contract.target_id) &&
         String(evidence.installed_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
         source?.status === 'PASS' &&
         String(source?.candidate_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
+        Number.isInteger(Number(source?.artifact_id)) &&
+        Number(evidence.ci_artifact_id) === Number(source?.artifact_id) &&
+        /^sha256:[0-9a-f]{64}$/i.test(String(source?.artifact_digest ?? '')) &&
+        String(evidence.ci_artifact_digest ?? '').toLowerCase() === String(source?.artifact_digest ?? '').toLowerCase() &&
         Number(evidence.source_ci_run_id) === Number(source?.workflow_run_id);
       const devIdentity = contract?.mode === 'stateful'
         ? evidence.trusted_ref === contract?.trusted_ref &&
@@ -117,6 +128,69 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
       }
     }
   }
+}
+
+async function rejectDirectOwnerAcceptanceTransition(args: string[]): Promise<void> {
+  if (!['complete', 'fail', 'block', 'resume'].includes(args[0] ?? '')) return;
+  const runId = args[1];
+  const stage = args[2];
+  const pipelineId = optionFromArgs(args, '--pipeline');
+  if (!runId || !stage || !pipelineId) return;
+
+  const stateRoot = resolve(stateRootFromArgs(args));
+  let state: any;
+  try { state = JSON.parse(await readFile(join(stateRoot, runId, 'state.json'), 'utf8')); }
+  catch { return; }
+  if (!state.manifest_file) return;
+  const manifest = JSON.parse(await readFile(resolve(state.manifest_file), 'utf8'));
+  const pipeline = manifest.pipelines?.find((item: any) => item.id === pipelineId);
+  if (pipeline?.executors?.[stage] === 'owner_acceptance') {
+    throw new Error(`OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT: ${pipelineId}/${stage}`);
+  }
+}
+
+async function ownerAcceptance(args: string[]): Promise<boolean> {
+  if (args[0] !== 'owner-accept') return false;
+  const runId = args[1];
+  const stage = args[2];
+  const pipelineId = optionFromArgs(args, '--pipeline');
+  const result = optionFromArgs(args, '--result');
+  const message = optionFromArgs(args, '--message');
+  if (!runId || !stage || !pipelineId || !['pass', 'fail'].includes(result ?? '')) {
+    throw new Error('usage: stage-cli owner-accept <run-id> <stage> --pipeline <id> --result pass|fail [--message <text>]');
+  }
+
+  const stateRoot = resolve(stateRootFromArgs(args));
+  const state = JSON.parse(await readFile(join(stateRoot, runId, 'state.json'), 'utf8'));
+  if (!state.manifest_file) throw new Error('Frozen manifest is missing');
+  const manifestFile = resolve(state.manifest_file);
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  const pipeline = manifest.pipelines?.find((item: any) => item.id === pipelineId);
+  if (!pipeline || pipeline.executors?.[stage] !== 'owner_acceptance') {
+    throw new Error(`OWNER_ACCEPTANCE_STAGE_REQUIRED: ${pipelineId}/${stage}`);
+  }
+  if (state.pipelines?.[pipelineId]?.stages?.[stage]?.status !== 'in_progress') {
+    throw new Error(`OWNER_ACCEPTANCE_NOT_IN_PROGRESS: ${pipelineId}/${stage}`);
+  }
+
+  await enforcePublishedEvidenceCurrent(['complete', runId, stage, '--pipeline', pipelineId, '--state-root', stateRoot]);
+  const evidencePath = join(dirname(manifestFile), 'owner', `${pipelineId}-${stage}.json`);
+  await mkdir(dirname(evidencePath), { recursive: true });
+  const evidence = {
+    status: result === 'pass' ? 'PASS' : 'FAIL',
+    gate: 'owner_acceptance',
+    run_id: runId,
+    pipeline_id: pipelineId,
+    stage,
+    message: message ?? null,
+    recorded_at: new Date().toISOString(),
+  };
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
+
+  const common = [runId, stage, '--pipeline', pipelineId, '--state-root', stateRoot, '--evidence', evidencePath];
+  if (result === 'pass') await runCli(['complete', ...common, ...(message ? ['--message', message] : [])]);
+  else await runCli(['fail', ...common, ...(message ? ['--message', message] : [])]);
+  return true;
 }
 
 async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
@@ -143,7 +217,9 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
   const artifactRoot = dirname(manifestFile);
   let evidencePath: string | undefined;
 
-  if (executor === 'local_gate') {
+  if (executor === 'owner_acceptance') {
+    throw new Error(`OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT: ${pipeline.id}/${stage}`);
+  } else if (executor === 'local_gate') {
     evidencePath = join(stateRoot, runId, 'gates', `${pipeline.id}-${stage}.json`);
     const evidence = await readJsonEvidence(evidencePath, `${pipeline.id}/${stage}`);
     if (evidence.status !== 'PASS' || evidence.run_id !== runId ||
@@ -171,14 +247,21 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
       evidence.executor === executor && evidence.workflow === contract?.workflow &&
       evidence.terminal_job === contract?.terminal_job &&
       String(evidence.candidate_sha).toLowerCase() === String(candidate.candidate_sha).toLowerCase();
+    const requiresAutomatedPostDeploy =
+      ['opencode_host', 'hybrid'].includes(String(pipeline.testing_strategy?.mode ?? '')) &&
+      ['automated', 'automated_then_user'].includes(String(pipeline.testing_strategy?.post_deploy_test ?? ''));
     const executorSpecificValid = executor === 'github_dev'
       ? evidence.dev_evidence_validated === true &&
+        (!requiresAutomatedPostDeploy || evidence.smoke_result === 'PASS') &&
+        (!contract?.target_id || evidence.target_id === contract.target_id) &&
         String(evidence.installed_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
         (contract?.mode === 'stateful'
           ? evidence.trusted_ref === contract?.trusted_ref &&
             String(evidence.head_branch ?? '').toLowerCase() === String(contract?.trusted_ref ?? '').toLowerCase()
           : String(evidence.head_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase())
-      : String(evidence.head_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase();
+      : String(evidence.head_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
+        (!contract?.artifact ||
+          (evidence.artifact === contract.artifact && /^sha256:[0-9a-f]{64}$/i.test(String(evidence.artifact_digest ?? ''))));
     if (!commonValid || !executorSpecificValid) {
       throw new Error(`EVIDENCE_INVALID_OR_STALE: ${executor} ${pipeline.id}/${stage}`);
     }
@@ -191,6 +274,10 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
       );
       if (source.status !== 'PASS' ||
           String(source.candidate_sha).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
+          !Number.isInteger(Number(source.artifact_id)) ||
+          Number(evidence.ci_artifact_id) !== Number(source.artifact_id) ||
+          !/^sha256:[0-9a-f]{64}$/i.test(String(source.artifact_digest ?? '')) ||
+          String(evidence.ci_artifact_digest ?? '').toLowerCase() !== String(source.artifact_digest ?? '').toLowerCase() ||
           Number(evidence.source_ci_run_id) !== Number(source.workflow_run_id)) {
         throw new Error(`EVIDENCE_INVALID_OR_STALE: github_dev source CI mismatch`);
       }
@@ -225,6 +312,10 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
 
 async function main(args: string[]): Promise<void> {
   const [command, identifier] = args;
+  if (command === 'owner-accept') {
+    await ownerAcceptance(args);
+    return;
+  }
   if (command === 'preflight') {
     if (!identifier || args.some((arg, index) => index > 1 && arg !== '--environment')) {
       throw new Error('usage: stage-cli preflight <manifest.json> [--environment]');
@@ -246,6 +337,7 @@ async function main(args: string[]): Promise<void> {
     await preflightFile(state.manifest_file, { environment: true });
   }
   await enforcePublishedEvidenceCurrent(args);
+  await rejectDirectOwnerAcceptanceTransition(args);
   await runCli(await enforceCompletionEvidence(args));
 }
 

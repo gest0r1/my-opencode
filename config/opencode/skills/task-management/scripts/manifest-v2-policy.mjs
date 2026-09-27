@@ -7,7 +7,7 @@ export class ManifestV2PolicyError extends Error {}
 const SHA256 = /^[0-9a-f]{64}$/i;
 const JS_MANAGERS = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun', 'corepack']);
 const JS_DIRECT_TOOLS = new Set(['tsc', 'vitest', 'jest']);
-const STAGE_EXECUTORS = new Set(['agent', 'review', 'local_gate', 'git_verify', 'git_publish', 'github_ci', 'github_dev']);
+const STAGE_EXECUTORS = new Set(['agent', 'review', 'local_gate', 'git_verify', 'git_publish', 'github_ci', 'github_dev', 'owner_acceptance']);
 const AUTHORITATIVE_CI_STAGE = /(?:^|[-_])(test|tests|pytest|unit|integration|e2e|build|typecheck|type-check|lint)(?:$|[-_])/i;
 const EXPLICIT_LOCAL_FAST_STAGE = /(?:^|[-_])(fast|local|precheck|pre-check|docs?|validate)(?:$|[-_])/i;
 const GITHUB_JOB_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -258,16 +258,56 @@ function validateProjectPolicy(manifest, cwd) {
       if (gate.trigger !== undefined && !['push', 'workflow_dispatch'].includes(gate.trigger)) {
         throw new ManifestV2PolicyError(`project_policy.github_actions.${kind}.trigger is invalid`);
       }
+      if (gate.required_jobs !== undefined &&
+          (!Array.isArray(gate.required_jobs) || gate.required_jobs.length === 0 ||
+           gate.required_jobs.some((job) => typeof job !== 'string' || !GITHUB_JOB_ID.test(job)) ||
+           new Set(gate.required_jobs).size !== gate.required_jobs.length)) {
+        throw new ManifestV2PolicyError(`project_policy.github_actions.${kind}.required_jobs is invalid`);
+      }
       if (kind === 'dev' && gate.mode === 'stateful') {
         if (gate.trigger !== 'workflow_dispatch' ||
             typeof gate.environment !== 'string' || !gate.environment.trim() ||
             typeof gate.trusted_ref !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(gate.trusted_ref) ||
             gate.trusted_ref.includes('..') || gate.trusted_ref.endsWith('/') ||
             typeof gate.artifact !== 'string' || !gate.artifact.trim() ||
+            typeof gate.concurrency_group !== 'string' || !gate.concurrency_group.trim() ||
             typeof gate.evidence_file !== 'string' || !/^[A-Za-z0-9._-]+\.json$/.test(gate.evidence_file)) {
           throw new ManifestV2PolicyError('project_policy.github_actions.dev stateful contract is incomplete');
         }
       }
+    }
+  }
+
+  if (policy.deployment_target !== undefined) {
+    const target = policy.deployment_target;
+    if (!target || typeof target !== 'object' || Array.isArray(target) || target.kind !== 'opencode_host') {
+      throw new ManifestV2PolicyError('project_policy.deployment_target.kind must be opencode_host');
+    }
+    if (!['github_ssh', 'self_hosted_runner'].includes(target.transport) ||
+        typeof target.target_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(target.target_id) ||
+        typeof target.environment !== 'string' || !target.environment.trim() ||
+        !safeRelativePath(target.probe_workflow) || !target.probe_workflow.startsWith('.github/workflows/') ||
+        !/\.ya?ml$/i.test(target.probe_workflow) ||
+        !GITHUB_JOB_ID.test(String(target.probe_job ?? '')) ||
+        typeof target.trusted_ref !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(target.trusted_ref) ||
+        target.trusted_ref.includes('..') || target.trusted_ref.endsWith('/')) {
+      throw new ManifestV2PolicyError('project_policy.deployment_target opencode_host contract is incomplete');
+    }
+    const secrets = target.required_environment_secrets ?? [];
+    if (!Array.isArray(secrets) ||
+        secrets.some((name) => typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) ||
+        new Set(secrets).size !== secrets.length) {
+      throw new ManifestV2PolicyError('project_policy.deployment_target required_environment_secrets is invalid');
+    }
+    if (target.transport === 'github_ssh' && secrets.length === 0) {
+      throw new ManifestV2PolicyError('project_policy.deployment_target github_ssh requires environment secret names');
+    }
+    const labels = target.runner_labels ?? [];
+    if (!Array.isArray(labels) || labels.some((label) => typeof label !== 'string' || !label.trim())) {
+      throw new ManifestV2PolicyError('project_policy.deployment_target runner_labels is invalid');
+    }
+    if (target.transport === 'self_hosted_runner' && labels.length === 0) {
+      throw new ManifestV2PolicyError('project_policy.deployment_target self_hosted_runner requires labels');
     }
   }
 
@@ -353,6 +393,9 @@ function validateGithubExecutionContract(manifest) {
     if (!pipeline.executors || typeof pipeline.executors !== 'object' || Array.isArray(pipeline.executors)) {
       throw new ManifestV2PolicyError(`schema v2 pipeline requires executors: ${pipeline.id}`);
     }
+    if (typeof pipeline.deployable !== 'boolean') {
+      throw new ManifestV2PolicyError(`schema v2 pipeline must declare deployable=true|false: ${pipeline.id}`);
+    }
     const stageSet = new Set(pipeline.stages ?? []);
     const executorKeys = Object.keys(pipeline.executors);
     if (executorKeys.length !== stageSet.size || executorKeys.some((stage) => !stageSet.has(stage))) {
@@ -360,6 +403,9 @@ function validateGithubExecutionContract(manifest) {
     }
 
     const stages = pipeline.stages ?? [];
+    if (stages.some((stage) => pipeline.executors[stage] === 'github_dev') && pipeline.deployable !== true) {
+      throw new ManifestV2PolicyError(`GITHUB_DEV_REQUIRES_DEPLOYABLE_PIPELINE: ${pipeline.id}`);
+    }
     const firstPublishIndex = stages.findIndex((stage) => pipeline.executors[stage] === 'git_publish');
     if (firstPublishIndex >= 0) {
       const verifyBeforePublish = stages.slice(0, firstPublishIndex)
@@ -382,6 +428,9 @@ function validateGithubExecutionContract(manifest) {
       if (AUTHORITATIVE_CI_STAGE.test(stage) && !EXPLICIT_LOCAL_FAST_STAGE.test(stage) && executor !== 'github_ci') {
         throw new ManifestV2PolicyError(`AUTHORITATIVE_CI_REQUIRED: ${pipeline.id}/${stage} must use github_ci`);
       }
+      if (executor === 'owner_acceptance' && pipeline.deployable !== true) {
+        throw new ManifestV2PolicyError(`OWNER_ACCEPTANCE_REQUIRES_DEPLOYABLE_PIPELINE: ${pipeline.id}/${stage}`);
+      }
 
       const gate = pipeline.github_gates?.[stage];
       if (executor === 'github_ci' || executor === 'github_dev') {
@@ -400,6 +449,12 @@ function validateGithubExecutionContract(manifest) {
         }
         if (!GITHUB_JOB_ID.test(String(gate.terminal_job ?? ''))) {
           throw new ManifestV2PolicyError(`GITHUB_TERMINAL_JOB_INVALID: ${pipeline.id}/${stage}`);
+        }
+        if (gate.required_jobs !== undefined &&
+            (!Array.isArray(gate.required_jobs) || gate.required_jobs.length === 0 ||
+             gate.required_jobs.some((job) => typeof job !== 'string' || !GITHUB_JOB_ID.test(job)) ||
+             new Set(gate.required_jobs).size !== gate.required_jobs.length)) {
+          throw new ManifestV2PolicyError(`GITHUB_REQUIRED_JOBS_INVALID: ${pipeline.id}/${stage}`);
         }
         if (!['push', 'workflow_dispatch'].includes(gate.trigger)) {
           throw new ManifestV2PolicyError(`GITHUB_TRIGGER_INVALID: ${pipeline.id}/${stage}`);
@@ -456,6 +511,9 @@ function validateGithubExecutionContract(manifest) {
             if (typeof gate.environment !== 'string' || !gate.environment.trim()) {
               throw new ManifestV2PolicyError('GITHUB_DEV_ENVIRONMENT_REQUIRED: ' + pipeline.id + '/' + stage);
             }
+            if (typeof gate.concurrency_group !== 'string' || !gate.concurrency_group.trim()) {
+              throw new ManifestV2PolicyError('GITHUB_DEV_CONCURRENCY_GROUP_REQUIRED: ' + pipeline.id + '/' + stage);
+            }
             if (typeof gate.trusted_ref !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(gate.trusted_ref) ||
                 gate.trusted_ref.includes('..') || gate.trusted_ref.endsWith('/')) {
               throw new ManifestV2PolicyError('GITHUB_DEV_TRUSTED_REF_INVALID: ' + pipeline.id + '/' + stage);
@@ -463,12 +521,139 @@ function validateGithubExecutionContract(manifest) {
             if ((manifest.allowed_change_paths ?? []).some((scope) => scopesOverlap(scope, gate.workflow))) {
               throw new ManifestV2PolicyError('GITHUB_STATEFUL_DEV_WORKFLOW_MUTABLE: ' + gate.workflow + ' must remain trusted outside candidate change scope');
             }
-          } else if (gate.trusted_ref !== undefined || gate.environment !== undefined) {
+          } else if (gate.trusted_ref !== undefined || gate.environment !== undefined || gate.concurrency_group !== undefined) {
             throw new ManifestV2PolicyError('GITHUB_DISPOSABLE_DEV_MUST_NOT_USE_TRUSTED_ENVIRONMENT: ' + pipeline.id + '/' + stage);
           }
         }
       } else if (gate !== undefined) {
         throw new ManifestV2PolicyError(`GITHUB_GATE_WITH_NON_GITHUB_EXECUTOR: ${pipeline.id}/${stage}`);
+      }
+    }
+
+    if (pipeline.deployable) {
+      const validation = pipeline.deployment_validation;
+      if (!validation || typeof validation !== 'object' ||
+          typeof validation.stage !== 'string' || !stageSet.has(validation.stage) ||
+          !GITHUB_JOB_ID.test(String(validation.fresh_job ?? '')) ||
+          !GITHUB_JOB_ID.test(String(validation.upgrade_job ?? '')) ||
+          validation.fresh_job === validation.upgrade_job) {
+        throw new ManifestV2PolicyError(`DEPLOYMENT_VALIDATION_REQUIRED: ${pipeline.id}`);
+      }
+      const validationExecutor = pipeline.executors[validation.stage];
+      if (validationExecutor !== 'github_ci' && validationExecutor !== 'github_dev') {
+        throw new ManifestV2PolicyError(`DEPLOYMENT_VALIDATION_REQUIRES_GITHUB_GATE: ${pipeline.id}/${validation.stage}`);
+      }
+      const requiredJobs = new Set(pipeline.github_gates?.[validation.stage]?.required_jobs ?? []);
+      if (!requiredJobs.has(validation.fresh_job) || !requiredJobs.has(validation.upgrade_job)) {
+        throw new ManifestV2PolicyError(`DEPLOYMENT_VALIDATION_JOBS_MISSING: ${pipeline.id}/${validation.stage}`);
+      }
+
+      const strategy = pipeline.testing_strategy;
+      if (!strategy || typeof strategy !== 'object' ||
+          !['github', 'opencode_host', 'hybrid'].includes(strategy.mode) ||
+          typeof strategy.owner_decision_id !== 'string' || !strategy.owner_decision_id.trim() ||
+          !(pipeline.decision_ids ?? []).includes(strategy.owner_decision_id)) {
+        throw new ManifestV2PolicyError(`DEPLOYMENT_TESTING_STRATEGY_REQUIRED: ${pipeline.id}`);
+      }
+
+      const stageIndex = (name) => typeof name === 'string' ? stages.indexOf(name) : -1;
+      const activeLocalContract = strategy.opencode_host_stage
+        ? pipeline.github_gates?.[strategy.opencode_host_stage]
+        : undefined;
+      const requireLocal = strategy.mode === 'opencode_host' || strategy.mode === 'hybrid';
+
+      if (strategy.mode === 'github') {
+        if (strategy.github_validation_stage !== validation.stage ||
+            validationExecutor !== 'github_ci' ||
+            strategy.opencode_host_stage !== undefined ||
+            strategy.post_deploy_test !== undefined ||
+            strategy.owner_acceptance_stage !== undefined) {
+          throw new ManifestV2PolicyError(`GITHUB_ONLY_TEST_STRATEGY_INVALID: ${pipeline.id}`);
+        }
+      }
+
+      if (strategy.mode === 'opencode_host') {
+        if (strategy.github_validation_stage !== undefined ||
+            strategy.opencode_host_stage !== validation.stage ||
+            validationExecutor !== 'github_dev' ||
+            activeLocalContract?.mode !== 'stateful' ||
+            !['automated', 'user', 'automated_then_user'].includes(strategy.post_deploy_test)) {
+          throw new ManifestV2PolicyError(`OPENCODE_HOST_TEST_STRATEGY_INVALID: ${pipeline.id}`);
+        }
+      }
+
+      if (strategy.mode === 'hybrid') {
+        if (strategy.github_validation_stage !== validation.stage ||
+            validationExecutor !== 'github_ci' ||
+            typeof strategy.opencode_host_stage !== 'string' ||
+            pipeline.executors[strategy.opencode_host_stage] !== 'github_dev' ||
+            activeLocalContract?.mode !== 'stateful' ||
+            !['user', 'automated_then_user'].includes(strategy.post_deploy_test) ||
+            stageIndex(strategy.github_validation_stage) >= stageIndex(strategy.opencode_host_stage)) {
+          throw new ManifestV2PolicyError(`HYBRID_TEST_STRATEGY_INVALID: ${pipeline.id}`);
+        }
+      }
+
+      const ownerAcceptanceStages = stages.filter((name) => pipeline.executors[name] === 'owner_acceptance');
+      const referencedAcceptance = strategy.owner_acceptance_stage ? [strategy.owner_acceptance_stage] : [];
+      if (ownerAcceptanceStages.length !== referencedAcceptance.length ||
+          ownerAcceptanceStages.some((name) => !referencedAcceptance.includes(name))) {
+        throw new ManifestV2PolicyError(`OWNER_ACCEPTANCE_STAGE_MAPPING_INVALID: ${pipeline.id}`);
+      }
+
+      if (requireLocal) {
+        if (!manifest.deployment_target_check) {
+          throw new ManifestV2PolicyError(`OPENCODE_HOST_TARGET_CHECK_REQUIRED: ${pipeline.id}`);
+        }
+        if (!strategy.opencode_host_stage || !activeLocalContract ||
+            activeLocalContract.mode !== 'stateful' ||
+            typeof activeLocalContract.environment !== 'string' ||
+            typeof activeLocalContract.trusted_ref !== 'string') {
+          throw new ManifestV2PolicyError(`OPENCODE_HOST_GITHUB_DEV_REQUIRED: ${pipeline.id}`);
+        }
+
+        const wantsOwner = strategy.post_deploy_test === 'user' || strategy.post_deploy_test === 'automated_then_user';
+        if (wantsOwner) {
+          const acceptance = strategy.owner_acceptance_stage;
+          if (typeof acceptance !== 'string' || !stageSet.has(acceptance) ||
+              pipeline.executors[acceptance] !== 'owner_acceptance' ||
+              stageIndex(acceptance) <= stageIndex(strategy.opencode_host_stage)) {
+            throw new ManifestV2PolicyError(`OWNER_ACCEPTANCE_STAGE_REQUIRED: ${pipeline.id}`);
+          }
+        } else if (strategy.owner_acceptance_stage !== undefined) {
+          throw new ManifestV2PolicyError(`OWNER_ACCEPTANCE_STAGE_UNEXPECTED: ${pipeline.id}`);
+        }
+      }
+    } else if (pipeline.deployment_validation !== undefined || pipeline.testing_strategy !== undefined) {
+      throw new ManifestV2PolicyError(`DEPLOYMENT_CONTRACT_WITH_NON_DEPLOYABLE_PIPELINE: ${pipeline.id}`);
+    }
+
+    for (const [name, gate] of Object.entries(pipeline.future_github_gates ?? {})) {
+      if (!gate || typeof gate !== 'object' || Array.isArray(gate) ||
+          !safeRelativePath(gate.workflow) || !gate.workflow.startsWith('.github/workflows/') ||
+          !/\.ya?ml$/i.test(gate.workflow) ||
+          !GITHUB_JOB_ID.test(String(gate.terminal_job ?? '')) ||
+          gate.trigger !== 'workflow_dispatch' ||
+          gate.mode !== 'stateful' ||
+          typeof gate.environment !== 'string' || !gate.environment.trim() ||
+          typeof gate.trusted_ref !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(gate.trusted_ref) ||
+          gate.trusted_ref.includes('..') || gate.trusted_ref.endsWith('/') ||
+          typeof gate.concurrency_group !== 'string' || !gate.concurrency_group.trim() ||
+          typeof gate.source_ci_stage !== 'string' || pipeline.executors[gate.source_ci_stage] !== 'github_ci' ||
+          typeof gate.artifact !== 'string' || !gate.artifact.trim() ||
+          typeof gate.evidence_file !== 'string' || !/^[A-Za-z0-9._-]+\.json$/.test(gate.evidence_file) ||
+          gate.bootstrap_required !== true || typeof gate.bootstrap_work_item_id !== 'string') {
+        throw new ManifestV2PolicyError(`FUTURE_GITHUB_DEV_INVALID: ${pipeline.id}/${name}`);
+      }
+      const item = workItems.get(gate.bootstrap_work_item_id);
+      if (!item || item.pipeline_id !== pipeline.id || !(pipeline.work_items ?? []).includes(item.id)) {
+        throw new ManifestV2PolicyError(`FUTURE_GITHUB_DEV_WORK_ITEM_INVALID: ${pipeline.id}/${name}`);
+      }
+      if (!(manifest.allowed_change_paths ?? []).some((scope) => scopeContains(scope, gate.workflow))) {
+        throw new ManifestV2PolicyError(`FUTURE_GITHUB_DEV_SCOPE_MISSING: ${gate.workflow}`);
+      }
+      if (stageSet.has(name)) {
+        throw new ManifestV2PolicyError(`FUTURE_GITHUB_DEV_MUST_NOT_EXECUTE_CURRENT_RUN: ${pipeline.id}/${name}`);
       }
     }
 
@@ -491,5 +676,41 @@ export function validateManifestV2Policy(manifest, options = {}) {
   validateSourceSnapshot(manifest, root);
   assertConflictSerialization(manifest);
   const projectPolicy = validateProjectPolicy(manifest, cwd);
+  const usesOpenCodeHost = (manifest.pipelines ?? []).some((pipeline) =>
+    pipeline.testing_strategy?.mode === 'opencode_host' || pipeline.testing_strategy?.mode === 'hybrid');
+  if (usesOpenCodeHost) {
+    if (!projectPolicy) throw new ManifestV2PolicyError('OPENCODE_HOST_PROJECT_POLICY_REQUIRED');
+    const policy = JSON.parse(readFileSync(resolve(cwd, projectPolicy.path), 'utf8'));
+    const target = policy.deployment_target;
+    if (target?.kind !== 'opencode_host') {
+      throw new ManifestV2PolicyError('OPENCODE_HOST_DEPLOYMENT_TARGET_REQUIRED');
+    }
+    const targetFile = readFrozenArtifact(root, manifest.deployment_target_check, 'deployment_target_check');
+    let targetEvidence;
+    try { targetEvidence = JSON.parse(readFileSync(targetFile, 'utf8')); }
+    catch { throw new ManifestV2PolicyError('OPENCODE_HOST_TARGET_EVIDENCE_INVALID_JSON'); }
+    if (targetEvidence.status !== 'READY' ||
+        targetEvidence.run_id !== manifest.run_id ||
+        targetEvidence.kind !== 'opencode_host' ||
+        targetEvidence.transport !== target.transport ||
+        targetEvidence.target_id !== target.target_id ||
+        targetEvidence.environment !== target.environment ||
+        targetEvidence.trusted_ref !== target.trusted_ref ||
+        !Number.isInteger(Number(targetEvidence.workflow_run_id)) ||
+        targetEvidence.probe_job !== target.probe_job) {
+      throw new ManifestV2PolicyError('OPENCODE_HOST_TARGET_EVIDENCE_MISMATCH');
+    }
+    for (const pipeline of manifest.pipelines ?? []) {
+      if (pipeline.testing_strategy?.mode !== 'opencode_host' && pipeline.testing_strategy?.mode !== 'hybrid') continue;
+      const stage = pipeline.testing_strategy.opencode_host_stage;
+      const gate = stage ? pipeline.github_gates?.[stage] : undefined;
+      if (!gate || gate.mode !== 'stateful' ||
+          gate.target_id !== target.target_id ||
+          gate.environment !== target.environment ||
+          gate.trusted_ref !== target.trusted_ref) {
+        throw new ManifestV2PolicyError(`OPENCODE_HOST_GATE_TARGET_MISMATCH: ${pipeline.id}`);
+      }
+    }
+  }
   return { checked_artifacts: true, project_policy: projectPolicy };
 }
