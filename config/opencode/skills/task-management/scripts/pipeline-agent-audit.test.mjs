@@ -136,10 +136,21 @@ test('OpenStage cannot edit deterministic pipeline state or machine evidence', a
   const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
   for (const path of [
     'state\\.json', 'candidate\\.json', 'git-verify\\.json', 'git-runtime\\.json',
-    'github/\\*\\*', 'gates/\\*\\*', 'sources/github-issues\\.json',
+    'github/\\*\\*', 'gates/\\*\\*', 'owner/\\*\\*', 'sources/github-issues\\.json',
   ]) {
     assert.match(yaml, new RegExp('\\.tmp/pipelines/\\*\\*/' + path + '"?:\\s*deny'));
   }
+});
+
+test('deployment testing mode is an explicit owner choice and OpenStage has no raw SSH/GitHub shell', async () => {
+  const plan = await text('config/opencode/command/pipeline-plan.md');
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
+  assert.match(plan, /must not choose it/i);
+  assert.match(plan, /github.*opencode_host.*hybrid/s);
+  assert.match(run, /stage-cli owner-accept/);
+  assert.doesNotMatch(yaml, /["']ssh\s+\*["']:\s*allow/i);
+  assert.doesNotMatch(yaml, /["']gh\s+\*["']:\s*allow/i);
 });
 
 test('canonical RUN requires deterministic v2 run-preflight before next', async () => {
