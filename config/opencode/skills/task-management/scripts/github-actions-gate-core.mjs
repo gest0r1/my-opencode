@@ -362,9 +362,11 @@ export function classifyMissingWorkflow(contract, executor = 'github_ci') {
   };
 }
 
-export function selectWorkflowRun(runs, { candidateSha, branch, event }) {
+export function selectWorkflowRun(runs, { candidateSha, branch, event, excludeIds = [] }) {
   if (!Array.isArray(runs)) throw new GithubActionsGateError('workflow runs must be an array');
+  const excluded = new Set(excludeIds.map((value) => Number(value)));
   const matches = runs.filter((run) =>
+    !excluded.has(Number(run?.id)) &&
     String(run?.head_sha ?? '').toLowerCase() === String(candidateSha).toLowerCase() &&
     (!branch || run?.head_branch === branch) &&
     (!event || run?.event === event));
