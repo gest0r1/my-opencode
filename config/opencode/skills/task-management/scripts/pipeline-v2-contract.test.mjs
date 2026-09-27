@@ -572,6 +572,17 @@ test('OpenCode-host deployment requires trusted probe evidence and owner-selecte
     validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
     'PASS',
   );
+
+  const targetFile = path.join(fx.runRoot, 'planning', 'deployment-target.json');
+  const mismatched = JSON.parse(await readFile(targetFile, 'utf8'));
+  mismatched.transport = 'self_hosted_runner';
+  const mismatchedText = JSON.stringify(mismatched, null, 2);
+  await writeFile(targetFile, mismatchedText);
+  fx.manifest.deployment_target_check.sha256 = sha(mismatchedText);
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /OPENCODE_HOST_TARGET_EVIDENCE_MISMATCH/,
+  );
 });
 
 test('schema v2 freezes optional project policy and enforces protected paths', async () => {
@@ -1099,6 +1110,10 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
   assert.equal(result.status, 0, result.stderr);
 
   result = invoke(['complete', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT/);
+
+  result = invoke(['fail', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app']);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT/);
 
