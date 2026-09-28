@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildGithubBlockedEvidence,
   buildGithubFailureEvidence,
   classifyMissingWorkflow,
   inspectWorkflowText,
@@ -417,4 +418,51 @@ test('failed GitHub log diagnostics are bounded', () => {
   const sanitized = sanitizeGithubFailedLog('x'.repeat(150_000), 10_000);
   assert.ok(Buffer.byteLength(sanitized, 'utf8') <= 10_100);
   assert.match(sanitized, /^\[TRUNCATED\]/);
+});
+
+
+test('pre-terminal GitHub blockers preserve phase and observed run identity', () => {
+  const evidence = buildGithubBlockedEvidence({
+    candidateSha: 'f'.repeat(40),
+    contract: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'workflow_dispatch',
+      required_jobs: ['lint'],
+    },
+    reason: 'GITHUB_RUN_TIMEOUT',
+    phase: 'wait_timeout',
+    run: {
+      id: 123,
+      run_attempt: 1,
+      head_sha: 'f'.repeat(40),
+      head_branch: 'feature/task',
+      event: 'workflow_dispatch',
+      status: 'in_progress',
+      conclusion: null,
+    },
+  });
+  assert.equal(evidence.status, 'BLOCKED');
+  assert.equal(evidence.failure_phase, 'wait_timeout');
+  assert.equal(evidence.workflow_run_id, 123);
+  assert.equal(evidence.run_status, 'in_progress');
+  assert.equal(evidence.candidate_sha, 'f'.repeat(40));
+  assert.match(evidence.validation_error, /GITHUB_RUN_TIMEOUT/);
+});
+
+test('pre-terminal GitHub blocker is useful even before a workflow run exists', () => {
+  const evidence = buildGithubBlockedEvidence({
+    candidateSha: 'e'.repeat(40),
+    contract: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'workflow_dispatch',
+    },
+    reason: 'dispatch denied',
+    phase: 'dispatch',
+  });
+  assert.equal(evidence.status, 'BLOCKED');
+  assert.equal(evidence.failure_phase, 'dispatch');
+  assert.equal(evidence.workflow_run_id, undefined);
+  assert.equal(evidence.workflow, '.github/workflows/ci.yml');
 });
