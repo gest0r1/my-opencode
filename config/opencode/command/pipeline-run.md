@@ -113,14 +113,14 @@ For a failed qualitative/machine gate classified `technical_fix`:
 
 If `git-worktree-cli verify` discovers an additional path **after** a cycle has already started, do not create another cycle and do not edit manifest/state manually. Run `scope-check` for that concrete offending path; auto-authorize a valid test path or complete the bounded technical-scope review, then rerun verify inside the **same** cycle. A real owner/replan requirement stops the RUN.
 
-The initial automatic budget is **3 technical_fix cycles per stage/work-item**. A cycle is consumed only after scope preflight succeeds. When the current budget is exhausted, stop implementation and return a budget checkpoint to the owner; do not require a full PLAN merely because the counter was exhausted.
+The initial automatic budget is **3 technical_fix cycles per stage/work-item**. A cycle is consumed only after scope preflight succeeds. The owner may increase the budget or request/approve a runtime replan at any point while the stage is active. If the current budget is exhausted before that happens, stop implementation and return a budget checkpoint; do not require a full PLAN merely because the counter was exhausted.
 
 At the checkpoint the owner has three distinct choices:
 
 1. **Continue current approach:** an explicit owner grant such as "ещё 3 цикла" maps to:
    `stage-cli fix-budget-add <run-id> <stage> --pipeline <id> --cycles 3`.
-   The command only works when the current budget is exhausted and records an audited owner grant. Then continue the same RUN/work-item.
-2. **Runtime replan this block:** first run fresh ArchitectureAnalyzer in runtime-replan mode and fresh SeniorTechnicalPlanReviewer. This is local to the current pipeline/stage/work-item and does not rewrite the frozen manifest or restart the whole PLAN. The reviewer writes a versioned `.tmp/pipelines/<run-id>/runtime-replan-<pipeline>-<stage>-<n>.json`.
+   The command records an audited owner grant immediately; it does not wait for exhaustion. Then continue the same RUN/work-item.
+2. **Runtime replan this block:** this may be requested before or after budget exhaustion. First run fresh ArchitectureAnalyzer in runtime-replan mode and fresh SeniorTechnicalPlanReviewer. This is local to the current pipeline/stage/work-item and does not rewrite the frozen manifest or restart the whole PLAN. The reviewer writes a versioned `.tmp/pipelines/<run-id>/runtime-replan-<pipeline>-<stage>-<n>.json`.
    - If owner clarification is needed, record it through `stage-cli runtime-replan-propose ... --evidence <review.json>`; return the questions to the owner and stop. Owner answers may trigger another fresh architecture/review revision.
    - When the local replan is `ready_for_owner_approval`, record the proposal through the same command and **stop for explicit owner approval even under `--unattended`**.
    - Only an explicit owner approval plus cycle grant maps to `stage-cli runtime-replan-approve <run-id> <stage> --pipeline <id> --cycles <N>`. Approval records the exact reviewed evidence and increases the fix budget; it never starts a repair by itself. Run fresh `scope-check` and then `fix-cycle`.
