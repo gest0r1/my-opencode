@@ -115,8 +115,8 @@ parallel orchestration protocol.
 
 1. Deterministic FAIL/BLOCKED outranks model judgement.
 2. PLAN never implements source changes.
-3. RUN never changes frozen manifest/rules.
-4. Before RUN scheduling require `stage-cli validate` + `stage-cli run-preflight`; canonical RUN accepts schema v2 only. If validation returns `DEFAULT_RULES_SNAPSHOT_REQUIRED`, immediately execute deterministic `stage-cli rules-refresh <run-id>`, rerun validation and continue. Never ask the owner to edit `state.json` or a rules hash. `DEFAULT_RULES_VERSION_CHANGED_REPLAN_REQUIRED` blocks for replan. Then use only `stage-cli next` to determine runnable stages.
+3. RUN never changes the frozen manifest and never edits rules. Rules are live external policy controlled outside pipeline commands.
+4. Before RUN scheduling require `stage-cli validate` + `stage-cli run-preflight`; canonical RUN accepts schema v2 only. Validation reads the current rules file for both `project` and `opencode_default`; changed rules version/SHA metadata is adopted automatically and is not a blocker. Missing, unreadable, malformed rules or invalid `edit_policy` block. Never ask the owner to edit `state.json` or a rules hash. Then use only `stage-cli next` to determine runnable stages.
 5. New PLANs use manifest schema v2; v1 is legacy-read only.
 6. Frozen planning evidence, Issue snapshot, project policy and work-item hashes
    are authority. Never rewrite them after init.
@@ -198,7 +198,7 @@ Block/replan on:
 - security/secret/destructive condition;
 - changed file outside `allowed_change_paths`;
 - required owner decision;
-- manifest/rules/source SHA mismatch;
+- changed manifest/source SHA or invalid/unreadable rules;
 - runtime validation failure requiring scope/architecture change.
 
 A reuse fallback alone is not a stop condition; start fresh instead.
