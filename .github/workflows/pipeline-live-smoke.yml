@@ -12,6 +12,7 @@ on:
       - 'config/opencode/skills/task-management/scripts/github-actions-gate-*.ts'
       - 'config/opencode/skills/task-management/scripts/github-workflow-yaml.mjs'
       - '.github/workflows/pipeline-gate-live-fixture.yml'
+      - '.github/workflows/pipeline-gate-live-failure-fixture.yml'
       - '.github/workflows/pipeline-live-smoke.yml'
 
 permissions:
@@ -60,11 +61,17 @@ jobs:
             git_setup: { base_sha: process.env.TARGET_SHA, branch: process.env.TARGET_BRANCH },
             pipelines: [{
               id: 'app',
-              stages: ['tests'],
-              executors: { tests: 'github_ci' },
+              stages: ['tests', 'negative'],
+              executors: { tests: 'github_ci', negative: 'github_ci' },
               github_gates: {
                 tests: {
                   workflow: '.github/workflows/pipeline-gate-live-fixture.yml',
+                  terminal_job: 'pipeline_ci',
+                  trigger: 'workflow_dispatch',
+                  timeout_seconds: 480
+                },
+                negative: {
+                  workflow: '.github/workflows/pipeline-gate-live-failure-fixture.yml',
                   terminal_job: 'pipeline_ci',
                   trigger: 'workflow_dispatch',
                   timeout_seconds: 480
@@ -112,4 +119,47 @@ jobs:
           if (evidence.head_sha !== process.env.TARGET_SHA) throw new Error('run head SHA mismatch');
           if (evidence.workflow !== '.github/workflows/pipeline-gate-live-fixture.yml') throw new Error('workflow mismatch');
           if (!Number.isInteger(Number(evidence.workflow_run_id))) throw new Error('run id missing');
+          NODE
+
+
+      - name: Validate intentional failure fixture
+        run: >
+          npx --yes tsx
+          config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts
+          validate "$LIVE_RUN_ID" app negative --state-root "$LIVE_STATE_ROOT"
+
+      - name: Dispatch intentional failure and require canonical FAIL evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if npx --yes tsx             config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts             run "$LIVE_RUN_ID" app negative --state-root "$LIVE_STATE_ROOT"
+          then
+            echo "negative live fixture unexpectedly passed" >&2
+            exit 1
+          fi
+          test -f "$LIVE_RUN_ROOT/github/app-negative.json"
+          npx --yes tsx             config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts             diagnose "$LIVE_RUN_ID" app negative --state-root "$LIVE_STATE_ROOT"             > "$RUNNER_TEMP/negative-diagnostics-output.json"
+
+      - name: Assert live failure diagnostics and redaction
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node -             "$LIVE_RUN_ROOT/github/app-negative.json"             "$LIVE_RUN_ROOT/github/app-negative-diagnostics.json" <<'NODE'
+          const fs = require('fs');
+          const [evidenceFile, diagnosticsFile] = process.argv.slice(2);
+          const evidence = JSON.parse(fs.readFileSync(evidenceFile, 'utf8'));
+          const diagnostics = JSON.parse(fs.readFileSync(diagnosticsFile, 'utf8'));
+          if (evidence.status !== 'FAIL') throw new Error('negative gate evidence is not FAIL');
+          if (evidence.candidate_sha !== process.env.TARGET_SHA) throw new Error('negative candidate SHA mismatch');
+          if (evidence.workflow !== '.github/workflows/pipeline-gate-live-failure-fixture.yml') throw new Error('negative workflow mismatch');
+          if (!Number.isInteger(Number(evidence.workflow_run_id))) throw new Error('negative run id missing');
+          const jobs = Array.isArray(diagnostics.jobs) ? diagnostics.jobs : [];
+          const failed = jobs.flatMap((job) => job.failed_steps || []);
+          if (!failed.some((step) => step.name === 'Intentional fixture failure')) {
+            throw new Error('failed fixture step missing from diagnostics');
+          }
+          const log = String(diagnostics.failed_log_excerpt || '');
+          if (!log.includes('intentional live negative fixture failure')) throw new Error('failed log excerpt missing');
+          if (log.includes('fixture-secret-value')) throw new Error('secret-like fixture value was not redacted');
+          if (!/TOKEN=\[REDACTED\]/i.test(log)) throw new Error('redaction marker missing');
           NODE
