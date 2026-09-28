@@ -256,3 +256,24 @@ test('pipeline agents cannot edit project or distribution rules', async () => {
   assert.equal(config.agent.CoderAgent.permission.edit['docs/pipeline-rules.md'], 'deny');
   assert.equal(config.agent.CoderAgent.permission.edit['**/pipeline-rules.default.md'], 'deny');
 });
+
+
+test('RUN authorizes bounded runtime scope before consuming technical-fix cycles', async () => {
+  const plan = await text('config/opencode/command/pipeline-plan.md');
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
+  const reviewer = await text('config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md');
+
+  assert.match(plan, /base.*allowed_change_paths/i);
+  assert.match(plan, /Do not attempt to enumerate every future test/i);
+  assert.match(run, /stage-cli scope-check/);
+  assert.match(run, /TECHNICAL_SCOPE_REVIEW_REQUIRED/);
+  assert.match(run, /stage-cli scope-extend/);
+  assert.match(run, /Only after scope preflight PASS call `stage-cli fix-cycle/i);
+  assert.match(run, /inside the \*\*same\*\* cycle/i);
+  assert.match(orchestrator, /scope-check/);
+  assert.match(orchestrator, /scope-extend/);
+  assert.match(rules, /machine-owned effective scope/i);
+  assert.match(reviewer, /runtime-scope-review-<n>\.json/);
+});
