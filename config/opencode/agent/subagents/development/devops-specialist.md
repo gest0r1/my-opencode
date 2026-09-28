@@ -30,6 +30,7 @@ permission:
     "**/*.pem": deny
     "**/*.secret": deny
     "docs/pipeline-rules.md": deny
+    "**/pipeline-rules.default.md": deny
     ".git/**": deny
 ---
 
