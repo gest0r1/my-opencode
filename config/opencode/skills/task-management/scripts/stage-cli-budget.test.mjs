@@ -174,19 +174,25 @@ test('initial budget is 3 and owner can grant +3 after exhaustion', async () => 
   assert.match(runtime.message, /cycle 4\/6/);
 });
 
-test('direct budget grant is rejected before exhaustion', async () => {
+test('owner can increase the fix budget before exhaustion', async () => {
   const fx = await fixture('budget-not-exhausted');
   const result = run(fx.root, [
     'fix-budget-add', fx.runId, 'implementation',
-    '--pipeline', 'app', '--cycles', '3', '--state-root', fx.stateRoot,
+    '--pipeline', 'app', '--cycles', '4', '--state-root', fx.stateRoot, '--json',
   ]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /FIX_BUDGET_NOT_EXHAUSTED/);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout);
+  const runtime = state.pipelines.app.stages.implementation;
+  assert.equal(runtime.technical_fix_cycles ?? 0, 0);
+  assert.equal(runtime.technical_fix_limit, 7);
+  assert.equal(runtime.technical_fix_budget_grants[0].source, 'owner_direct');
+  assert.equal(runtime.technical_fix_budget_grants[0].added_cycles, 4);
+  assert.equal(runtime.technical_fix_budget_grants[0].previous_limit, 3);
+  assert.equal(runtime.technical_fix_budget_grants[0].new_limit, 7);
 });
 
-test('runtime replan clarification does not grant cycles and cannot be approved', async () => {
+test('runtime replan clarification can start before exhaustion but does not grant cycles', async () => {
   const fx = await fixture('runtime-replan-clarification');
-  await exhaustThree(fx);
   const evidence = await writeReview(fx, 'runtime-replan-app-implementation-1.json', {
     ...reviewBase(fx, 'needs_owner_clarification'),
     owner_questions: ['Use approach A or B for this block?'],
@@ -218,15 +224,34 @@ test('runtime replan clarification does not grant cycles and cannot be approved'
   assert.match(result.stderr, /RUNTIME_REPLAN_PENDING/);
 });
 
-test('runtime replan revisions can iterate and final owner approval grants new budget', async () => {
+test('runtime replan approval can add cycles before exhaustion (5/6 -> 5/10)', async () => {
   const fx = await fixture('runtime-replan-approve');
   await exhaustThree(fx);
+
+  let result = run(fx.root, [
+    'fix-budget-add', fx.runId, 'implementation',
+    '--pipeline', 'app', '--cycles', '3', '--state-root', fx.stateRoot, '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  for (let cycle = 4; cycle <= 5; cycle += 1) {
+    result = run(fx.root, [
+      'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
+      '--pipeline', 'app', '--state-root', fx.stateRoot,
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    result = run(fx.root, [
+      'fix-cycle', fx.runId, 'implementation',
+      '--pipeline', 'app', '--state-root', fx.stateRoot, '--json',
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+  }
 
   const first = await writeReview(fx, 'runtime-replan-app-implementation-1.json', {
     ...reviewBase(fx, 'needs_owner_clarification'),
     owner_questions: ['Confirm whether the block may replace the internal helper.'],
   });
-  let result = run(fx.root, [
+  result = run(fx.root, [
     'runtime-replan-propose', fx.runId, 'implementation',
     '--pipeline', 'app', '--evidence', first, '--state-root', fx.stateRoot,
   ]);
@@ -243,7 +268,8 @@ test('runtime replan revisions can iterate and final owner approval grants new b
   assert.equal(result.status, 0, result.stderr);
   let state = JSON.parse(result.stdout);
   let runtime = state.pipelines.app.stages.implementation;
-  assert.equal(runtime.technical_fix_limit, 3);
+  assert.equal(runtime.technical_fix_cycles, 5);
+  assert.equal(runtime.technical_fix_limit, 6);
   assert.equal(runtime.runtime_replans.length, 2);
   assert.equal(runtime.runtime_replans[0].status, 'superseded');
   assert.equal(runtime.runtime_replans[1].status, 'awaiting_owner_approval');
@@ -251,17 +277,18 @@ test('runtime replan revisions can iterate and final owner approval grants new b
 
   result = run(fx.root, [
     'runtime-replan-approve', fx.runId, 'implementation',
-    '--pipeline', 'app', '--cycles', '3', '--state-root', fx.stateRoot, '--json',
+    '--pipeline', 'app', '--cycles', '4', '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
   state = JSON.parse(result.stdout);
   runtime = state.pipelines.app.stages.implementation;
-  assert.equal(runtime.technical_fix_cycles, 3);
-  assert.equal(runtime.technical_fix_limit, 6);
+  assert.equal(runtime.technical_fix_cycles, 5);
+  assert.equal(runtime.technical_fix_limit, 10);
   assert.equal(runtime.runtime_replans[1].status, 'approved');
-  assert.equal(runtime.runtime_replans[1].granted_cycles, 3);
-  assert.equal(runtime.technical_fix_budget_grants[0].source, 'runtime_replan');
-  assert.equal(runtime.technical_fix_budget_grants[0].runtime_replan_revision, 2);
+  assert.equal(runtime.runtime_replans[1].granted_cycles, 4);
+  assert.equal(runtime.technical_fix_budget_grants[0].source, 'owner_direct');
+  assert.equal(runtime.technical_fix_budget_grants[1].source, 'runtime_replan');
+  assert.equal(runtime.technical_fix_budget_grants[1].runtime_replan_revision, 2);
 
   result = run(fx.root, [
     'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
@@ -274,7 +301,8 @@ test('runtime replan revisions can iterate and final owner approval grants new b
   ]);
   assert.equal(result.status, 0, result.stderr);
   state = JSON.parse(result.stdout);
-  assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, 4);
+  assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, 6);
+  assert.equal(state.pipelines.app.stages.implementation.technical_fix_limit, 10);
 });
 
 test('runtime replan cannot cross frozen PLAN boundaries', async () => {

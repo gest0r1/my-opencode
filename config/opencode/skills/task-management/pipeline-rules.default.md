@@ -135,7 +135,7 @@ approved base/source -> candidate SHA -> installed candidate/artifact -> evidenc
 - Review findings are `technical_fix | replan | security_stop | scope_stop | secret_stop | destructive_stop | optional`.
 - Only `technical_fix` may be repaired automatically inside frozen scope.
 - Before every automatic repair, RUN records the attempt through deterministic `stage-cli fix-cycle`; the initial automatic technical-fix budget is **3 per stage/work-item**.
-- Exhausting the current budget is an owner checkpoint, not automatically a full replan. The owner may grant `+N` cycles through deterministic `fix-budget-add`, or request a block-local runtime replan.
+- Exhausting the current budget is an owner checkpoint, not automatically a full replan. The owner may also grant `+N` cycles or request/approve a block-local runtime replan before exhaustion; deterministic owner commands update the current ceiling immediately.
 - A runtime replan stays in the same RUN and current pipeline/stage/work-item. Fresh architecture + senior review may iterate with owner clarification, but implementation remains stopped. The final local plan must reach `awaiting_owner_approval` and receive explicit owner approval through deterministic `runtime-replan-approve --cycles N` before any new fix cycle is allowed.
 - `--unattended` never supplies that approval. A pending runtime replan cannot be bypassed by a direct budget grant.
 - Runtime replan is only for a changed technical approach inside existing requirements/acceptance/contracts/security boundaries. If those boundaries change, use normal full replan/supersede.
