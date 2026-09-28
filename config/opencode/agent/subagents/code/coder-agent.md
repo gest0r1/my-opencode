@@ -17,6 +17,7 @@ permission:
     "**/*.pem": deny
     "**/*.secret": deny
     "node_modules/**": deny
+    "docs/pipeline-rules.md": deny
     ".git/**": deny
   task:
     "*": deny
