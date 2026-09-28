@@ -176,10 +176,12 @@ then wait for GitHub Actions; never fall back to a local final build/test. On Gi
 
 Only `technical_fix` may auto-repair. Before consuming a cycle, identify intended changed paths and call `stage-cli scope-check` for the exact pipeline/stage. Test/support paths under an already-approved component may be machine-authorized automatically. For `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer and, only when their machine-readable review proves a decision-free bounded clarification, call `stage-cli scope-extend`; never edit manifest/state manually. Only then call `stage-cli fix-cycle`. If Git verify discovers another path after the cycle started, resolve that path through the same scope-check/review flow and continue the same cycle.
 
-The initial fix budget is 3 cycles per stage/work-item. The owner may grant more cycles or request/approve a runtime replan before exhaustion. On `TECHNICAL_FIX_LIMIT_EXCEEDED`, implementation stops until the owner chooses:
-- explicit `+N` cycles → call deterministic `stage-cli fix-budget-add`;
-- local runtime replan → run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer in runtime-replan mode, record each version with `stage-cli runtime-replan-propose`, and stop for any clarification or final approval;
+The initial fix budget is 3 cycles per stage/work-item. The owner may grant more cycles or request/approve a runtime replan before exhaustion. An already-started cycle must finish through its frozen downstream review/gates; for executor=`review`, dispatch a fresh CodeReviewer at that manifest-defined review stage. Budget exhaustion matters only when a resulting `technical_fix` would require the **next** `fix-cycle`. At that point stop until the owner chooses:
+- explicit `+N` cycles → call deterministic `stage-cli fix-budget-add` and continue the same technical approach;
+- local runtime replan → only when the owner explicitly requests architecture/runtime replanning, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer in runtime-replan mode, record each version with `stage-cli runtime-replan-propose`, and stop for any clarification or final approval;
 - full replan only when frozen PLAN boundaries really change.
+
+At a budget checkpoint you may present runtime replan as an option, but never select or launch it solely because the counter is exhausted. A plain owner `+N` grant must not trigger architecture review.
 
 Never infer approval from `--unattended` or from the existence of a ready runtime-replan artifact. Only an explicit owner statement approving that local replan may be translated into `stage-cli runtime-replan-approve ... --cycles N`. After approval, run a fresh scope-check before the next fix-cycle. A pending runtime replan cannot be bypassed with a direct budget grant.
 
