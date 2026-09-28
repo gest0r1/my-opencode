@@ -172,7 +172,7 @@ test('project rules changed between pipeline commands are adopted on validate', 
   assert.equal(after.rules_refresh_history[0].new_sha256, after.rules_sha256);
 });
 
-test('OpenCode default rules changed between pipeline commands are adopted on validate', async () => {
+test('legacy default-rules snapshot is replaced by current installed rules on validate', async () => {
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const manifest = await v2Manifest(root, 'default-live-update-run', 2);
@@ -183,14 +183,17 @@ test('OpenCode default rules changed between pipeline commands are adopted on va
   assert.equal(init.status, 0, init.stderr);
   const statePath = path.join(stateRoot, manifest.run_id, 'state.json');
   const state = JSON.parse(await readFile(statePath, 'utf8'));
+  const installedFile = state.rules_file;
+  const installedContent = await readFile(installedFile, 'utf8');
 
-  const liveRules = path.join(root, 'installed-pipeline-rules.default.md');
-  const oldContent = '---\ndocument_type: pipeline_rules\nrules_version: 2\nedit_policy: distribution_only\n---\n\n# old distribution policy\n';
-  const newContent = '---\ndocument_type: pipeline_rules\nrules_version: 3\nedit_policy: distribution_only\n---\n\n# updated distribution policy\n';
-  await writeFile(liveRules, newContent, 'utf8');
-  state.rules_file = liveRules;
-  state.rules_version = 2;
-  state.rules_sha256 = sha(oldContent);
+  const legacySnapshot = path.join(stateRoot, manifest.run_id, 'rules', 'pipeline-rules.default.md');
+  const legacyContent = '---\ndocument_type: pipeline_rules\nrules_version: 999\nedit_policy: distribution_only\n---\n\n# stale snapshot\n';
+  await mkdir(path.dirname(legacySnapshot), { recursive: true });
+  await writeFile(legacySnapshot, legacyContent, 'utf8');
+  state.rules_file = legacySnapshot;
+  state.rules_origin_file = installedFile;
+  state.rules_version = 999;
+  state.rules_sha256 = sha(legacyContent);
   delete state.rules_refresh_history;
   await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
 
@@ -199,9 +202,13 @@ test('OpenCode default rules changed between pipeline commands are adopted on va
 
   const after = JSON.parse(await readFile(statePath, 'utf8'));
   assert.equal(after.rules_source, 'opencode_default');
-  assert.equal(after.rules_version, 3);
-  assert.equal(after.rules_sha256, sha(newContent));
+  assert.equal(after.rules_file, installedFile);
+  assert.equal(after.rules_origin_file, undefined);
+  assert.equal(after.rules_version, 2);
+  assert.equal(after.rules_sha256, sha(installedContent));
   assert.equal(after.rules_refresh_history.length, 1);
+  assert.equal(after.rules_refresh_history[0].previous_file, legacySnapshot);
+  assert.equal(after.rules_refresh_history[0].new_file, installedFile);
 });
 
 test('invalid live rules still block validation', async () => {
