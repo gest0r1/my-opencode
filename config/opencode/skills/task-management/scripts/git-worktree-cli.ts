@@ -217,7 +217,7 @@ async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<
     }
     writableChanged.push(path);
     if (!scope.some((allowed) => matches(path, allowed))) {
-      throw new GateError(`changed path is outside approved scope: ${path}`);
+      throw new GateError(`RUNTIME_SCOPE_CHECK_REQUIRED: changed path is outside effective scope: ${path}; run stage-cli scope-check for the active technical-fix stage; do not edit manifest/state manually`);
     }
   }
   const headSha = await git(['rev-parse', 'HEAD'], cwd);
