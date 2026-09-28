@@ -11,6 +11,7 @@ import {
   inspectWorkflowText,
   selectStatefulWorkflowRun,
   selectWorkflowRun,
+  buildGithubBlockedEvidence,
   buildGithubFailureEvidence,
   validateDevEvidence,
   validateWorkflowResult,
@@ -67,6 +68,22 @@ const SHA = /^[0-9a-f]{40}$/i;
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
 
 class CliError extends Error {}
+
+class GateExecutionError extends CliError {
+  phase: string;
+  run?: any;
+
+  constructor(phase: string, message: string, run?: any) {
+    super(message);
+    this.phase = phase;
+    this.run = run;
+  }
+}
+
+function executionError(phase: string, error: unknown, run?: any): GateExecutionError {
+  if (error instanceof GateExecutionError) return error;
+  return new GateExecutionError(phase, error instanceof Error ? error.message : String(error), run);
+}
 
 function option(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -285,7 +302,7 @@ async function inspectCommand(args: string[]): Promise<void> {
     if (actions.enabled === false) {
       console.log(JSON.stringify({
         status: 'BLOCKED',
-        repository: repo,
+        repository: repo as string,
         workflow,
         terminal_job: terminalJob,
         reason: 'GITHUB_ACTIONS_DISABLED',
@@ -297,7 +314,7 @@ async function inspectCommand(args: string[]): Promise<void> {
     const result = await inspectFile(contract, executor, { candidateBranch });
     console.log(JSON.stringify({
       ...result,
-      repository: repo,
+      repository: repo as string,
       actions_accessible: true,
       candidate_branch: candidateBranch ?? null,
       ...(environment ? { environment_validation: environment } : {}),
@@ -328,7 +345,7 @@ async function validateCommand(runId: string, pipelineId: string, stage: string,
     pipeline_id: pipelineId,
     stage,
     executor,
-    repository: repo,
+    repository: repo as string,
     ...result,
     ...(environment ? { environment_validation: environment } : {}),
   };
@@ -355,7 +372,7 @@ async function validateFutureCommand(
     pipeline_id: pipelineId,
     future_gate: gateName,
     executor: 'github_dev',
-    repository: repo,
+    repository: repo as string,
     ...result,
     ...(environment ? { environment_validation: environment } : {}),
   };
@@ -363,13 +380,13 @@ async function validateFutureCommand(
 
 async function readCandidate(runRoot: string, manifest: Manifest): Promise<Candidate> {
   const candidate = JSON.parse(await readFile(join(runRoot, 'candidate.json'), 'utf8')) as Candidate;
-  if (candidate.status !== 'PASS' || !SHA.test(candidate.candidate_sha) || !SHA.test(candidate.remote_sha)) {
+  if (candidate.status !== 'PASS' || !SHA.test(candidate!.candidate_sha) || !SHA.test(candidate.remote_sha)) {
     throw new CliError('candidate evidence is missing or invalid');
   }
-  if (candidate.candidate_sha.toLowerCase() !== candidate.remote_sha.toLowerCase()) {
+  if (candidate!.candidate_sha.toLowerCase() !== candidate.remote_sha.toLowerCase()) {
     throw new CliError('candidate SHA does not match remote SHA');
   }
-  if (manifest.git_setup?.branch && candidate.branch !== manifest.git_setup.branch) {
+  if (manifest.git_setup?.branch && candidate!.branch !== manifest.git_setup.branch) {
     throw new CliError('candidate branch does not match frozen manifest');
   }
   return candidate;
@@ -425,56 +442,90 @@ async function waitForRun(
   const timeoutMs = (contract.timeout_seconds ?? 900) * 1000;
   const pollMs = Math.max(250, Number(process.env.GITHUB_ACTIONS_GATE_POLL_MS ?? 5000));
   const deadline = Date.now() + timeoutMs;
+  let lastObservedRun: any;
 
   if (contract.mode === 'stateful') {
-    if (!contract.trusted_ref || !contract.source_ci_stage) throw new CliError('stateful DEV trusted/source contract is missing');
+    if (!contract.trusted_ref || !contract.source_ci_stage) {
+      throw new GateExecutionError('pre_dispatch_contract', 'stateful DEV trusted/source contract is missing');
+    }
     const sourceContract = pipeline.github_gates?.[contract.source_ci_stage];
-    if (!sourceContract?.artifact) throw new CliError('stateful DEV source CI artifact contract is missing');
-    const before = listRuns(repo, contract.workflow, contract.trusted_ref).map((item) => Number(item.id));
-    command('gh', [
-      'workflow', 'run', workflowId(contract.workflow),
-      '--repo', repo,
-      '--ref', contract.trusted_ref,
-      '-f', `candidate_sha=${candidate.candidate_sha}`,
-      '-f', `ci_run_id=${sourceCi.workflow_run_id}`,
-      '-f', `ci_artifact=${sourceContract.artifact}`,
-      '-f', `ci_artifact_id=${sourceCi.artifact_id}`,
-      '-f', `ci_artifact_digest=${sourceCi.artifact_digest}`,
-      '-f', `pipeline_run_id=${runId}`,
-      ...(contract.target_id ? ['-f', `deployment_target_id=${contract.target_id}`] : []),
-    ]);
+    if (!sourceContract?.artifact) {
+      throw new GateExecutionError('pre_dispatch_contract', 'stateful DEV source CI artifact contract is missing');
+    }
+
+    let before: number[];
+    try {
+      before = listRuns(repo, contract.workflow, contract.trusted_ref).map((item) => Number(item.id));
+    } catch (error) {
+      throw executionError('run_discovery', error);
+    }
+
+    try {
+      command('gh', [
+        'workflow', 'run', workflowId(contract.workflow),
+        '--repo', repo,
+        '--ref', contract.trusted_ref,
+        '-f', `candidate_sha=${candidate!.candidate_sha}`,
+        '-f', `ci_run_id=${sourceCi.workflow_run_id}`,
+        '-f', `ci_artifact=${sourceContract.artifact}`,
+        '-f', `ci_artifact_id=${sourceCi.artifact_id}`,
+        '-f', `ci_artifact_digest=${sourceCi.artifact_digest}`,
+        '-f', `pipeline_run_id=${runId}`,
+        ...(contract.target_id ? ['-f', `deployment_target_id=${contract.target_id}`] : []),
+      ]);
+    } catch (error) {
+      throw executionError('dispatch', error);
+    }
+
     while (Date.now() < deadline) {
-      const selected = selectStatefulWorkflowRun(
-        listRuns(repo, contract.workflow, contract.trusted_ref),
-        {
-          trustedRef: contract.trusted_ref,
-          correlation: runId,
-          candidateSha: candidate.candidate_sha,
-          excludeIds: before,
-        },
-      );
-      if (selected) {
-        const current = fetchRun(repo, Number(selected.id));
-        if (current.status === 'completed') return current;
+      try {
+        const selected = selectStatefulWorkflowRun(
+          listRuns(repo, contract.workflow, contract.trusted_ref),
+          {
+            trustedRef: contract.trusted_ref,
+            correlation: runId,
+            candidateSha: candidate!.candidate_sha,
+            excludeIds: before,
+          },
+        );
+        if (selected) {
+          lastObservedRun = fetchRun(repo, Number(selected.id));
+          if (lastObservedRun.status === 'completed') return lastObservedRun;
+        }
+      } catch (error) {
+        throw executionError(lastObservedRun ? 'run_fetch' : 'run_discovery', error, lastObservedRun);
       }
       await sleep(pollMs);
     }
-    throw new CliError(`GITHUB_DEV_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate.candidate_sha}`);
+    throw new GateExecutionError(
+      'wait_timeout',
+      `GITHUB_DEV_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate!.candidate_sha}`,
+      lastObservedRun,
+    );
   }
 
   let dispatchExistingIds: number[] = [];
   if (contract.trigger === 'workflow_dispatch') {
-    dispatchExistingIds = listRuns(repo, contract.workflow, candidate.branch).map((item) => Number(item.id));
+    try {
+      dispatchExistingIds = listRuns(repo, contract.workflow, candidate!.branch).map((item) => Number(item.id));
+    } catch (error) {
+      throw executionError('run_discovery', error);
+    }
+
     const dispatchArgs = [
       'workflow', 'run', workflowId(contract.workflow),
       '--repo', repo,
-      '--ref', candidate.branch,
-      '-f', 'candidate_sha=' + candidate.candidate_sha,
+      '--ref', candidate!.branch,
+      '-f', 'candidate_sha=' + candidate!.candidate_sha,
     ];
     if (contract.mode === 'disposable') {
-      if (!sourceCi || !contract.source_ci_stage) throw new CliError('disposable DEV source CI evidence is missing');
+      if (!sourceCi || !contract.source_ci_stage) {
+        throw new GateExecutionError('pre_dispatch_contract', 'disposable DEV source CI evidence is missing');
+      }
       const sourceContract = pipeline.github_gates?.[contract.source_ci_stage];
-      if (!sourceContract?.artifact) throw new CliError('disposable DEV source CI artifact contract is missing');
+      if (!sourceContract?.artifact) {
+        throw new GateExecutionError('pre_dispatch_contract', 'disposable DEV source CI artifact contract is missing');
+      }
       dispatchArgs.push(
         '-f', 'ci_run_id=' + sourceCi.workflow_run_id,
         '-f', 'ci_artifact=' + sourceContract.artifact,
@@ -484,23 +535,35 @@ async function waitForRun(
         ...(contract.target_id ? ['-f', 'deployment_target_id=' + contract.target_id] : []),
       );
     }
-    command('gh', dispatchArgs);
+    try {
+      command('gh', dispatchArgs);
+    } catch (error) {
+      throw executionError('dispatch', error);
+    }
   }
 
   while (Date.now() < deadline) {
-    const selected = selectWorkflowRun(listRuns(repo, contract.workflow, candidate.branch), {
-      candidateSha: candidate.candidate_sha,
-      branch: candidate.branch,
-      event: contract.trigger,
-      excludeIds: dispatchExistingIds,
-    });
-    if (selected) {
-      const current = fetchRun(repo, Number(selected.id));
-      if (current.status === 'completed') return current;
+    try {
+      const selected = selectWorkflowRun(listRuns(repo, contract.workflow, candidate!.branch), {
+        candidateSha: candidate!.candidate_sha,
+        branch: candidate!.branch,
+        event: contract.trigger,
+        excludeIds: dispatchExistingIds,
+      });
+      if (selected) {
+        lastObservedRun = fetchRun(repo, Number(selected.id));
+        if (lastObservedRun.status === 'completed') return lastObservedRun;
+      }
+    } catch (error) {
+      throw executionError(lastObservedRun ? 'run_fetch' : 'run_discovery', error, lastObservedRun);
     }
     await sleep(pollMs);
   }
-  throw new CliError(`GITHUB_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate.candidate_sha}`);
+  throw new GateExecutionError(
+    'wait_timeout',
+    `GITHUB_RUN_TIMEOUT: workflow=${contract.workflow} sha=${candidate!.candidate_sha}`,
+    lastObservedRun,
+  );
 }
 
 async function verifyDevEvidence(
@@ -543,22 +606,100 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
   const { manifest, runRoot } = await loadRun(runId, stateRoot);
   const resolved = resolveGate(manifest, pipelineId, stage);
   const { executor, contract } = resolved;
-  const validation = await inspectFile(contract, executor, { candidateBranch: manifest.git_setup?.branch });
-  if (validation.status !== 'READY') {
-    throw new CliError(`GITHUB_WORKFLOW_NOT_READY: ${validation.status}: ${(validation.issues ?? []).join('; ')}`);
-  }
-
-  const candidate = await readCandidate(runRoot, manifest);
-  const repo = repository(manifest);
-  const environmentValidation = validateEnvironment(repo, contract);
-  const sourceCi = executor === 'github_dev'
-    ? await sourceCiEvidence(runRoot, pipelineId, contract, candidate.candidate_sha)
-    : undefined;
-  const run = await waitForRun(repo, runId, resolved.pipeline, contract, candidate, sourceCi);
-  const jobs = fetchJobs(repo, Number(run.id));
-  const artifacts = fetchArtifacts(repo, Number(run.id));
   const evidenceFile = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
   await mkdir(dirname(evidenceFile), { recursive: true });
+
+  let validation: any;
+  let candidate: Candidate | undefined;
+  let repo: string | undefined;
+  let environmentValidation: Record<string, unknown> | undefined;
+  let sourceCi: any;
+  let run: any;
+
+  try {
+    validation = await inspectFile(contract, executor, { candidateBranch: manifest.git_setup?.branch });
+    if (validation.status !== 'READY') {
+      throw new GateExecutionError(
+        'workflow_validation',
+        `GITHUB_WORKFLOW_NOT_READY: ${validation.status}: ${(validation.issues ?? []).join('; ')}`,
+      );
+    }
+
+    candidate = await readCandidate(runRoot, manifest);
+    repo = repository(manifest);
+    try {
+      environmentValidation = validateEnvironment(repo, contract);
+    } catch (error) {
+      throw executionError('environment_validation', error);
+    }
+    try {
+      sourceCi = executor === 'github_dev'
+        ? await sourceCiEvidence(runRoot, pipelineId, contract, candidate!.candidate_sha)
+        : undefined;
+    } catch (error) {
+      throw executionError('source_ci_evidence', error);
+    }
+    run = await waitForRun(repo, runId, resolved.pipeline, contract, candidate, sourceCi);
+  } catch (error) {
+    const blocked = error instanceof GateExecutionError
+      ? error
+      : executionError(candidate ? 'pre_terminal' : 'candidate_evidence', error);
+    const evidence = {
+      ...buildGithubBlockedEvidence({
+        candidateSha: candidate?.candidate_sha,
+        contract,
+        reason: blocked.message,
+        phase: blocked.phase,
+        run: blocked.run,
+      }),
+      gate: 'github_actions',
+      run_id: runId,
+      pipeline_id: pipelineId,
+      stage,
+      executor,
+      repository: repo ?? manifest.repository ?? null,
+      branch: candidate?.branch ?? manifest.git_setup?.branch ?? null,
+      environment: contract.environment ?? null,
+      ...(environmentValidation ? { environment_validation: environmentValidation } : {}),
+      mode: contract.mode ?? null,
+      trusted_ref: contract.trusted_ref ?? null,
+      recorded_at: new Date().toISOString(),
+    };
+    await writeFile(evidenceFile, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
+    throw new CliError(`${blocked.message}; evidence=${evidenceFile}`);
+  }
+
+  let jobs: any[];
+  let artifacts: any[];
+  try {
+    jobs = fetchJobs(repo as string, Number(run.id));
+    artifacts = fetchArtifacts(repo as string, Number(run.id));
+  } catch (error) {
+    const blocked = executionError('terminal_metadata_fetch', error, run);
+    const evidence = {
+      ...buildGithubBlockedEvidence({
+        candidateSha: candidate?.candidate_sha,
+        contract,
+        reason: blocked.message,
+        phase: blocked.phase,
+        run,
+      }),
+      gate: 'github_actions',
+      run_id: runId,
+      pipeline_id: pipelineId,
+      stage,
+      executor,
+      repository: repo ?? manifest.repository ?? null,
+      branch: candidate?.branch ?? manifest.git_setup?.branch ?? null,
+      environment: contract.environment ?? null,
+      ...(environmentValidation ? { environment_validation: environmentValidation } : {}),
+      mode: contract.mode ?? null,
+      trusted_ref: contract.trusted_ref ?? null,
+      recorded_at: new Date().toISOString(),
+    };
+    await writeFile(evidenceFile, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
+    throw new CliError(`${blocked.message}; evidence=${evidenceFile}`);
+  }
 
   let result;
   let devEvidence;
@@ -568,7 +709,7 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
       jobs,
       artifacts,
       contract,
-      candidateSha: candidate.candidate_sha,
+      candidateSha: candidate!.candidate_sha,
       terminalJobName: validation.terminal_job_name,
       requiredJobNames: validation.required_job_names ?? [],
       executor,
@@ -577,10 +718,10 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
 
     devEvidence = executor === 'github_dev'
       ? await verifyDevEvidence(
-          repo,
+          repo as string,
           run,
           contract,
-          candidate.candidate_sha,
+          candidate!.candidate_sha,
           Number(sourceCi?.workflow_run_id),
           Number(sourceCi?.artifact_id),
           String(sourceCi?.artifact_digest ?? ''),
@@ -602,19 +743,19 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
         run,
         jobs,
         artifacts,
-        candidateSha: candidate.candidate_sha,
+        candidateSha: candidate!.candidate_sha,
         contract,
         validationError: message,
-        failedLog: failedRunLog(repo, Number(run.id)),
+        failedLog: failedRunLog(repo as string, Number(run.id)),
       }),
       gate: 'github_actions',
       run_id: runId,
       pipeline_id: pipelineId,
       stage,
       executor,
-      repository: repo,
+      repository: repo as string,
       workflow: contract.workflow,
-      branch: candidate.branch,
+      branch: candidate!.branch,
       environment: contract.environment ?? null,
       ...(environmentValidation ? { environment_validation: environmentValidation } : {}),
       mode: contract.mode ?? null,
@@ -632,9 +773,9 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
     pipeline_id: pipelineId,
     stage,
     executor,
-    repository: repo,
+    repository: repo as string,
     workflow: contract.workflow,
-    branch: candidate.branch,
+    branch: candidate!.branch,
     environment: contract.environment ?? null,
     ...(environmentValidation ? { environment_validation: environmentValidation } : {}),
     mode: contract.mode ?? null,

@@ -24,7 +24,7 @@ Schema v2 фиксирует явный executor каждой стадии. Фи
 
 Для OpenCode-host CD deterministic probe проверяет trusted workflow, Environment, trusted ref, configured secret names/runner labels и реальный GitHub→host probe. Агенты не получают raw `gh`/SSH credentials.
 
-CI/CD evidence связывает candidate SHA, workflow run/attempt, required jobs, artifact ID/digest, source CI run и, для OpenCode-host, logical `target_id`. Terminal GitHub FAIL тоже сохраняет evidence: failed jobs/steps и ограниченный редактированный log excerpt; OpenStage использует `github-actions-gate-cli diagnose` и не просит владельца вручную выгружать Actions logs, пока deterministic GitHub auth работает. Stateful CD требует protected Environment и non-cancelling concurrency.
+CI/CD evidence связывает candidate SHA, workflow run/attempt, required jobs, artifact ID/digest, source CI run и, для OpenCode-host, logical `target_id`. Terminal GitHub FAIL сохраняет failed jobs/steps и ограниченный редактированный log excerpt. Ошибки до terminal run сохраняются как BLOCKED evidence с `failure_phase` и доступной identity (candidate/workflow/run). OpenStage использует `show`/`diagnose` и не просит владельца вручную выгружать Actions logs, пока deterministic GitHub auth работает. Stateful CD требует protected Environment и non-cancelling concurrency.
 
 Если CI/CD workflow отсутствует, PLAN замораживает bootstrap work item. Candidate-safe CI может быть создан и запущен в текущем run. Новый privileged stateful CD workflow создаётся как `future_github_gates` и становится runnable только после merge в trusted ref.
 
