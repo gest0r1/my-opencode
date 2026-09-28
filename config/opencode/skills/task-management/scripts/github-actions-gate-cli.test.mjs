@@ -379,7 +379,7 @@ test('downloaded DEV evidence proves the installed candidate SHA', () => {
 });
 
 
-test('failed GitHub runs retain exact job diagnostics and redact secret-like log values', () => {
+test('failed GitHub evidence stays compact while retaining exact failed job metadata', () => {
   const evidence = buildGithubFailureEvidence({
     run: {
       id: 77,
@@ -403,18 +403,21 @@ test('failed GitHub runs retain exact job diagnostics and redact secret-like log
     candidateSha: 'a'.repeat(40),
     contract,
     validationError: 'GITHUB_RUN_FAILED: failure',
-    failedLog: 'TOKEN=supersecret\nnormal diagnostic\nAuthorization: bearer-value',
   });
   assert.equal(evidence.status, 'FAIL');
   assert.equal(evidence.workflow_run_id, 77);
   assert.equal(evidence.run_attempt, 2);
   assert.deepEqual(evidence.jobs[0].failed_steps.map((step) => step.name), ['Build all workspaces']);
-  assert.match(evidence.failed_log_excerpt, /TOKEN=\[REDACTED\]/i);
-  assert.match(evidence.failed_log_excerpt, /Authorization: \[REDACTED\]/i);
-  assert.doesNotMatch(evidence.failed_log_excerpt, /supersecret|bearer-value/);
+  assert.equal('failed_log_excerpt' in evidence, false);
 });
 
-test('failed GitHub log diagnostics are bounded', () => {
+test('per-job GitHub log diagnostics are redacted and bounded', () => {
+  const redacted = sanitizeGithubFailedLog('TOKEN=supersecret\nnormal diagnostic\nAuthorization: bearer-value');
+  assert.match(redacted, /TOKEN=\[REDACTED\]/i);
+  assert.match(redacted, /Authorization: \[REDACTED\]/i);
+  assert.doesNotMatch(redacted, /supersecret|bearer-value/);
+
+
   const sanitized = sanitizeGithubFailedLog('x'.repeat(150_000), 10_000);
   assert.ok(Buffer.byteLength(sanitized, 'utf8') <= 10_100);
   assert.match(sanitized, /^\[TRUNCATED\]/);
