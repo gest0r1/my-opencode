@@ -40,11 +40,11 @@ CI/CD evidence связывает candidate SHA, workflow run/attempt, required 
 
 После `init` frozen manifest не правится. Коррекция frozen V2 создаётся командой `stage-cli supersede <old-run> <new-run> --reason <code>`: копируется только planning/source/work-item контекст, но не state/candidate/gate/GitHub evidence. Для каждого нового run сохраняется reason-coded lineage.
 
-## Rules snapshot
+## Live rules
 
-Project `docs/pipeline-rules.md` is project-owned and changing it after init blocks the run. OpenCode's distribution `pipeline-rules.default.md` is not project state: init snapshots its exact content into `.tmp/pipelines/<run-id>/rules/`, and validation reads the snapshot so an OpenCode update cannot stop an existing RUN.
+Project `docs/pipeline-rules.md` and OpenCode's distribution `pipeline-rules.default.md` follow the same rule lifecycle. Pipeline commands and their agents never edit either rules source.
 
-Pre-snapshot legacy states are recovered deterministically with `stage-cli rules-refresh <run-id>`. The command is limited to `opencode_default`, requires the same `rules_version`, writes an audit old/new hash record and needs no owner shell action. Never edit `state.json` manually. A rules-version change requires replan.
+If the owner or distribution changes rules while the pipeline is stopped, the next RUN continuation reads the current file. A changed rules version/SHA updates machine-owned audit metadata and does not block by itself. Missing, unreadable, malformed rules or an invalid `edit_policy` still block. Never edit `state.json` manually.
 
 ## Main freshness
 

@@ -36,7 +36,7 @@ tags:
 9. Покажи `future_github_gates`: они могут быть разработаны в текущем run, но не считаются активными/runnable до merge в trusted ref. Если есть `deployment_target_check`, покажи `kind`, `transport`, Environment, trusted ref, probe workflow/run/job и время последней PLAN-проверки без вывода значений секретов.
 10. Для GitHub Issue run покажи repository/source issues, `planning_base_sha`/`run_base_sha`, `issue_results`, PR number и количество недоставленных событий `github_outbox`.
 11. Если есть `preserved_baseline`, покажи его HEAD и число frozen paths отдельно от writable scope. Если state содержит `superseded_by`/`supersede_reason` или manifest содержит `lineage`, покажи цепочку run-ов и reason code.
-12. Для rules покажи `rules_source`, frozen `rules_file` и hash. Для `opencode_default` новый RUN должен ссылаться на run-local `rules/pipeline-rules.default.md`; если legacy state требует `DEFAULT_RULES_SNAPSHOT_REQUIRED`, покажи это как recoverable deterministic maintenance и используй `stage-cli rules-refresh`, не ручное редактирование state.
+12. Для rules покажи `rules_source`, текущий `rules_file`, `rules_version` и hash из state. Эти поля — audit metadata текущей принятой версии rules; изменение hash/version между pipeline-командами само по себе не является blocker.
 13. Для `github_ci`/`github_dev` со статусом FAIL или BLOCKED покажи canonical evidence. Для FAIL: workflow run/attempt, failed jobs/steps, `validation_error` и diagnostics. Для BLOCKED: `failure_phase`, candidate/workflow identity и observed run ID/status, если run уже найден. Не проси пользователя вручную выгружать Actions logs, если deterministic CLI имеет доступ.
 
 ## Запрещено

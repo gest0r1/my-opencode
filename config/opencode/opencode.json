@@ -159,7 +159,9 @@
           "**/*.key": "deny",
           "**/*.secret": "deny",
           "node_modules/**": "deny",
-          ".git/**": "deny"
+          ".git/**": "deny",
+          "docs/pipeline-rules.md": "deny",
+          "**/pipeline-rules.default.md": "deny"
         }
       }
     },
