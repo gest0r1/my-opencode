@@ -65,6 +65,7 @@ export interface StageCommandOptions {
   environment?: boolean;
   reason?: string;
   scopeClass?: 'test' | 'technical';
+  cycles?: number;
 }
 
 export interface RunnableStage {
@@ -679,7 +680,7 @@ async function readState(stateRoot: string, runId: string): Promise<PipelineStat
 
 function createPipelineRuntime(pipeline: PipelineManifestPipeline): PipelineRuntime {
   const stageRuntime: Record<string, StageRuntime> = {};
-  for (const stage of pipeline.stages) stageRuntime[stage] = { status: 'pending' };
+  for (const stage of pipeline.stages) stageRuntime[stage] = { status: 'pending', technical_fix_limit: 3 };
   return {
     id: pipeline.id,
     status: 'planned',
@@ -1263,6 +1264,232 @@ export async function completeStage(
   });
 }
 
+function technicalFixLimit(runtime: StageRuntime): number {
+  return runtime.technical_fix_limit ?? 3;
+}
+
+function activeRuntimeReplan(runtime: StageRuntime) {
+  return [...(runtime.runtime_replans ?? [])]
+    .reverse()
+    .find((record) =>
+      record.status === 'awaiting_owner_clarification' ||
+      record.status === 'awaiting_owner_approval');
+}
+
+function assertFixBudgetExhausted(runtime: StageRuntime, pipelineId: string, stage: string): void {
+  const used = runtime.technical_fix_cycles ?? 0;
+  const limit = technicalFixLimit(runtime);
+  if (used < limit) {
+    throw new StageCliError(
+      `FIX_BUDGET_NOT_EXHAUSTED: ${pipelineId}/${stage} used=${used} limit=${limit}`,
+    );
+  }
+}
+
+export async function grantTechnicalFixBudget(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  cycles: number,
+  pipelineId?: string,
+): Promise<PipelineState> {
+  if (!Number.isInteger(cycles) || cycles < 1 || cycles > 20) {
+    throw new StageCliError('fix-budget-add cycles must be an integer from 1 to 20');
+  }
+  return updateState(stateRoot, runId, (state) => {
+    const pipeline = getPipeline(state, pipelineId);
+    const runtime = pipeline.stages[stage];
+    if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
+      throw new StageCliError(`Fix budget cannot change while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
+    }
+    assertFixBudgetExhausted(runtime, pipeline.id, stage);
+    const pending = activeRuntimeReplan(runtime);
+    if (pending) {
+      throw new StageCliError(
+        `RUNTIME_REPLAN_PENDING: ${pipeline.id}/${stage} revision=${pending.revision} status=${pending.status}; approve or clarify that replan before granting direct cycles`,
+      );
+    }
+    const previousLimit = technicalFixLimit(runtime);
+    const newLimit = previousLimit + cycles;
+    runtime.technical_fix_limit = newLimit;
+    runtime.technical_fix_budget_grants ??= [];
+    runtime.technical_fix_budget_grants.push({
+      timestamp: now(),
+      source: 'owner_direct',
+      added_cycles: cycles,
+      previous_limit: previousLimit,
+      new_limit: newLimit,
+    });
+    runtime.message = `owner granted +${cycles} technical_fix cycles; budget ${runtime.technical_fix_cycles ?? 0}/${newLimit}`;
+    addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
+  });
+}
+
+type RuntimeReplanReview = {
+  kind?: unknown;
+  status?: unknown;
+  pipeline_id?: unknown;
+  stage?: unknown;
+  summary?: unknown;
+  owner_questions?: unknown;
+  requirements_changed?: unknown;
+  acceptance_criteria_changed?: unknown;
+  external_contract_changed?: unknown;
+  security_boundary_changed?: unknown;
+  destructive_change?: unknown;
+};
+
+function validateRuntimeReplanReview(
+  review: RuntimeReplanReview,
+  pipelineId: string,
+  stage: string,
+): {
+  status: 'awaiting_owner_clarification' | 'awaiting_owner_approval';
+  ownerQuestions: string[];
+  summary?: string;
+} {
+  if (review.kind !== 'runtime_replan') {
+    throw new StageCliError('runtime replan evidence must have kind=runtime_replan');
+  }
+  if (review.pipeline_id !== pipelineId || review.stage !== stage) {
+    throw new StageCliError('runtime replan evidence pipeline/stage does not match the target');
+  }
+  if (
+    review.requirements_changed !== false ||
+    review.acceptance_criteria_changed !== false ||
+    review.external_contract_changed !== false ||
+    review.security_boundary_changed !== false ||
+    review.destructive_change !== false
+  ) {
+    throw new StageCliError(
+      'FULL_REPLAN_REQUIRED: runtime replan crossed requirements/acceptance/external-contract/security/destructive boundary',
+    );
+  }
+  const questions = Array.isArray(review.owner_questions)
+    ? review.owner_questions.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  if (review.status === 'needs_owner_clarification') {
+    if (!questions.length) {
+      throw new StageCliError('runtime replan clarification evidence must contain owner_questions');
+    }
+    return {
+      status: 'awaiting_owner_clarification',
+      ownerQuestions: questions,
+      ...(typeof review.summary === 'string' && review.summary.trim() ? { summary: review.summary.trim() } : {}),
+    };
+  }
+  if (review.status === 'ready_for_owner_approval') {
+    return {
+      status: 'awaiting_owner_approval',
+      ownerQuestions: questions,
+      ...(typeof review.summary === 'string' && review.summary.trim() ? { summary: review.summary.trim() } : {}),
+    };
+  }
+  throw new StageCliError('runtime replan evidence status must be needs_owner_clarification or ready_for_owner_approval');
+}
+
+export async function proposeRuntimeReplan(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  evidencePath: string,
+  pipelineId?: string,
+): Promise<PipelineState> {
+  const root = resolve(stateRoot, runId);
+  const absoluteEvidence = resolve(evidencePath.startsWith('/') ? evidencePath : join(process.cwd(), evidencePath));
+  if (!absoluteEvidence.startsWith(`${root}/`)) {
+    throw new StageCliError('runtime replan evidence must live inside the current run directory');
+  }
+  const evidenceContent = await readFile(absoluteEvidence, 'utf8').catch(() => {
+    throw new StageCliError(`runtime replan evidence not found: ${evidencePath}`);
+  });
+  let review: RuntimeReplanReview;
+  try {
+    review = JSON.parse(evidenceContent) as RuntimeReplanReview;
+  } catch {
+    throw new StageCliError('runtime replan evidence is not valid JSON');
+  }
+
+  return updateState(stateRoot, runId, (state) => {
+    const pipeline = getPipeline(state, pipelineId);
+    const runtime = pipeline.stages[stage];
+    if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
+      throw new StageCliError(`Runtime replan is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
+    }
+    assertFixBudgetExhausted(runtime, pipeline.id, stage);
+    const validated = validateRuntimeReplanReview(review, pipeline.id, stage);
+    runtime.runtime_replans ??= [];
+    const previous = activeRuntimeReplan(runtime);
+    if (previous) {
+      previous.status = 'superseded';
+      previous.superseded_at = now();
+    }
+    const revision = runtime.runtime_replans.reduce((max, item) => Math.max(max, item.revision), 0) + 1;
+    runtime.runtime_replans.push({
+      revision,
+      status: validated.status,
+      proposed_at: now(),
+      evidence_path: absoluteEvidence,
+      evidence_sha256: sha256(evidenceContent),
+      ...(validated.ownerQuestions.length ? { owner_questions: validated.ownerQuestions } : {}),
+      ...(validated.summary ? { summary: validated.summary } : {}),
+    });
+    runtime.message = validated.status === 'awaiting_owner_clarification'
+      ? `runtime_replan revision ${revision} awaiting owner clarification`
+      : `runtime_replan revision ${revision} awaiting owner approval`;
+    addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
+  });
+}
+
+export async function approveRuntimeReplan(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  cycles: number,
+  pipelineId?: string,
+): Promise<PipelineState> {
+  if (!Number.isInteger(cycles) || cycles < 1 || cycles > 20) {
+    throw new StageCliError('runtime-replan-approve cycles must be an integer from 1 to 20');
+  }
+  return updateState(stateRoot, runId, (state) => {
+    const pipeline = getPipeline(state, pipelineId);
+    const runtime = pipeline.stages[stage];
+    if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    assertFixBudgetExhausted(runtime, pipeline.id, stage);
+    const pending = activeRuntimeReplan(runtime);
+    if (!pending) {
+      throw new StageCliError(`RUNTIME_REPLAN_NOT_PENDING: ${pipeline.id}/${stage}`);
+    }
+    if (pending.status === 'awaiting_owner_clarification') {
+      throw new StageCliError(
+        `OWNER_CLARIFICATION_REQUIRED: ${pipeline.id}/${stage} runtime_replan revision=${pending.revision}`,
+      );
+    }
+    if (pending.status !== 'awaiting_owner_approval') {
+      throw new StageCliError(`RUNTIME_REPLAN_NOT_APPROVABLE: revision=${pending.revision} status=${pending.status}`);
+    }
+    const previousLimit = technicalFixLimit(runtime);
+    const newLimit = previousLimit + cycles;
+    pending.status = 'approved';
+    pending.approved_at = now();
+    pending.granted_cycles = cycles;
+    runtime.technical_fix_limit = newLimit;
+    runtime.technical_fix_budget_grants ??= [];
+    runtime.technical_fix_budget_grants.push({
+      timestamp: now(),
+      source: 'runtime_replan',
+      added_cycles: cycles,
+      previous_limit: previousLimit,
+      new_limit: newLimit,
+      runtime_replan_revision: pending.revision,
+    });
+    runtime.message = `owner approved runtime_replan revision ${pending.revision} and granted +${cycles} cycles; budget ${runtime.technical_fix_cycles ?? 0}/${newLimit}`;
+    addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
+  });
+}
+
 export async function recordTechnicalFixCycle(
   stateRoot: string,
   runId: string,
@@ -1282,12 +1509,15 @@ export async function recordTechnicalFixCycle(
     if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
       throw new StageCliError(`Technical fix cycle is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
     }
+    const limit = technicalFixLimit(runtime);
     const next = (runtime.technical_fix_cycles ?? 0) + 1;
-    if (next > 3) {
-      throw new StageCliError(`TECHNICAL_FIX_LIMIT_EXCEEDED: ${pipeline.id}/${stage} already used 3 cycles`);
+    if (next > limit) {
+      throw new StageCliError(
+        `TECHNICAL_FIX_LIMIT_EXCEEDED: ${pipeline.id}/${stage} used=${runtime.technical_fix_cycles ?? 0} limit=${limit}; owner may grant +N cycles or request runtime replan`,
+      );
     }
     runtime.technical_fix_cycles = next;
-    runtime.message = `technical_fix cycle ${next}/3`;
+    runtime.message = `technical_fix cycle ${next}/${limit}`;
     state.scope_preflight = undefined;
 
     // If this fix happens after a candidate was already published, the source-changing
@@ -1325,7 +1555,7 @@ export async function recordTechnicalFixCycle(
           item.completed_at = undefined;
           item.evidence = undefined;
           if (name !== stage) item.message = undefined;
-          addHistory(state, pipeline.id, name, 'pending', `invalidated by technical_fix cycle ${next}/3 for ${stage}`);
+          addHistory(state, pipeline.id, name, 'pending', `invalidated by technical_fix cycle ${next}/${limit} for ${stage}`);
         }
         pipeline.status = 'approved';
         pipeline.current_stage = undefined;
@@ -1470,6 +1700,13 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
     else if (argument === '--evidence') options.evidencePath = args[++index];
     else if (argument === '--environment') options.environment = true;
     else if (argument === '--reason') options.reason = args[++index];
+    else if (argument === '--cycles') {
+      const value = Number(args[++index]);
+      if (!Number.isInteger(value) || value < 1 || value > 20) {
+        throw new StageCliError('--cycles must be an integer from 1 to 20');
+      }
+      options.cycles = value;
+    }
     else if (argument === '--class') {
       const value = args[++index];
       if (value !== 'test' && value !== 'technical') throw new StageCliError('--class must be test or technical');
@@ -1492,9 +1729,14 @@ function printState(state: PipelineState, asJson: boolean): void {
   for (const pipeline of Object.values(state.pipelines)) {
     console.log(`\n${pipeline.id}: ${pipeline.status}`);
     for (const stage of pipeline.stage_order) {
-      const status = pipeline.stages[stage]?.status ?? 'unknown';
+      const runtime = pipeline.stages[stage];
+      const status = runtime?.status ?? 'unknown';
       const marker = status === 'completed' ? '✓' : status === 'in_progress' ? '→' : '○';
-      console.log(`  ${marker} ${stage}: ${status}`);
+      const used = runtime?.technical_fix_cycles ?? 0;
+      const limit = runtime ? technicalFixLimit(runtime) : 3;
+      console.log(`  ${marker} ${stage}: ${status} fix_budget=${used}/${limit}`);
+      const pendingReplan = runtime ? activeRuntimeReplan(runtime) : undefined;
+      if (pendingReplan) console.log(`      runtime_replan=${pendingReplan.revision}:${pendingReplan.status}`);
     }
   }
 }
@@ -1545,6 +1787,9 @@ function usage(): string {
     '  stage-cli scope-check <run-id> <stage> <path>... [--pipeline <id>] [--json]',
     '  stage-cli scope-extend <run-id> <stage> <path>... --class technical --evidence <run-artifact.json> [--pipeline <id>] [--json]',
     '  stage-cli fix-cycle <run-id> <stage> [--pipeline <id>] [--json]',
+    '  stage-cli fix-budget-add <run-id> <stage> --pipeline <id> --cycles <1..20> [--json]',
+    '  stage-cli runtime-replan-propose <run-id> <stage> --pipeline <id> --evidence <review.json> [--json]',
+    '  stage-cli runtime-replan-approve <run-id> <stage> --pipeline <id> --cycles <1..20> [--json]',
     '  stage-cli supersede <old-run-id> <new-run-id> --reason <reason-code> [--state-root <path>] [--json]',
   ].join('\n');
 }
@@ -1686,6 +1931,39 @@ export async function runCli(args: string[]): Promise<void> {
     const stage = positional[2];
     if (!stage) throw new StageCliError('stage is required');
     printState(await recordTechnicalFixCycle(options.stateRoot, runId, stage, options.pipelineId), options.json);
+    return;
+  }
+  if (command === 'fix-budget-add') {
+    const stage = positional[2];
+    if (!stage || !options.pipelineId || !options.cycles) {
+      throw new StageCliError('fix-budget-add requires <stage> --pipeline <id> --cycles <1..20>');
+    }
+    printState(
+      await grantTechnicalFixBudget(options.stateRoot, runId, stage, options.cycles, options.pipelineId),
+      options.json,
+    );
+    return;
+  }
+  if (command === 'runtime-replan-propose') {
+    const stage = positional[2];
+    if (!stage || !options.pipelineId || !options.evidencePath) {
+      throw new StageCliError('runtime-replan-propose requires <stage> --pipeline <id> --evidence <review.json>');
+    }
+    printState(
+      await proposeRuntimeReplan(options.stateRoot, runId, stage, options.evidencePath, options.pipelineId),
+      options.json,
+    );
+    return;
+  }
+  if (command === 'runtime-replan-approve') {
+    const stage = positional[2];
+    if (!stage || !options.pipelineId || !options.cycles) {
+      throw new StageCliError('runtime-replan-approve requires <stage> --pipeline <id> --cycles <1..20>');
+    }
+    printState(
+      await approveRuntimeReplan(options.stateRoot, runId, stage, options.cycles, options.pipelineId),
+      options.json,
+    );
     return;
   }
 
