@@ -77,7 +77,7 @@ test('owner-created linked worktree is adopted read-only; setup and primary chec
   await writeFile(path.join(f.b, 'outside.txt'), 'out of scope\n');
   result = gate(f.b, ['verify', f.manifestPath]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /outside approved scope/);
+  assert.match(result.stderr, /outside effective scope/);
   await rm(path.join(f.b, 'outside.txt'));
   result = gate(f.b, ['publish', f.manifestPath]);
   assert.equal(result.status, 0, result.stderr);
@@ -173,7 +173,7 @@ test('preserved baseline keeps existing branch work without granting new write s
   await writeFile(path.join(f.b, 'legacy.txt'), 'mutated by new run\n');
   result = gate(f.b, ['verify', f.manifestPath]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /outside approved scope.*legacy\.txt/);
+  assert.match(result.stderr, /outside effective scope.*legacy\.txt/);
 });
 
 
