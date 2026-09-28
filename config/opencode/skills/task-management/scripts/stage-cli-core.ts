@@ -1276,16 +1276,6 @@ function activeRuntimeReplan(runtime: StageRuntime) {
       record.status === 'awaiting_owner_approval');
 }
 
-function assertFixBudgetExhausted(runtime: StageRuntime, pipelineId: string, stage: string): void {
-  const used = runtime.technical_fix_cycles ?? 0;
-  const limit = technicalFixLimit(runtime);
-  if (used < limit) {
-    throw new StageCliError(
-      `FIX_BUDGET_NOT_EXHAUSTED: ${pipelineId}/${stage} used=${used} limit=${limit}`,
-    );
-  }
-}
-
 export async function grantTechnicalFixBudget(
   stateRoot: string,
   runId: string,
@@ -1303,7 +1293,6 @@ export async function grantTechnicalFixBudget(
     if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
       throw new StageCliError(`Fix budget cannot change while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
     }
-    assertFixBudgetExhausted(runtime, pipeline.id, stage);
     const pending = activeRuntimeReplan(runtime);
     if (pending) {
       throw new StageCliError(
@@ -1418,7 +1407,6 @@ export async function proposeRuntimeReplan(
     if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
       throw new StageCliError(`Runtime replan is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
     }
-    assertFixBudgetExhausted(runtime, pipeline.id, stage);
     const validated = validateRuntimeReplanReview(review, pipeline.id, stage);
     runtime.runtime_replans ??= [];
     const previous = activeRuntimeReplan(runtime);
@@ -1458,7 +1446,6 @@ export async function approveRuntimeReplan(
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
-    assertFixBudgetExhausted(runtime, pipeline.id, stage);
     const pending = activeRuntimeReplan(runtime);
     if (!pending) {
       throw new StageCliError(`RUNTIME_REPLAN_NOT_PENDING: ${pipeline.id}/${stage}`);
