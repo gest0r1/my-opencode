@@ -20,7 +20,7 @@ Unknown modes/arguments BLOCK.
 
 ## Authority
 
-`stage-cli` owns frozen manifest/rules/planning evidence, DAG, executor contracts, owner-acceptance state and transitions. `git-worktree-cli` owns identity/scope/non-force publication. `gate-runner-cli` owns only stages explicitly frozen as `local_gate`. `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV validation, exact-candidate run selection, required-job status, artifact digest and Environment evidence. `deployment-target-cli` owns GitHub→OpenCode-host reachability/authentication probes. Model output never overrides deterministic FAIL/BLOCKED or owner decisions. OpenStage is the only orchestrator; never delegate orchestration to BatchExecutor or another child.
+`stage-cli` owns frozen manifest/rules/planning evidence, DAG, executor contracts, machine-owned runtime scope extensions, owner-acceptance state and transitions. `git-worktree-cli` owns identity/effective-scope/non-force publication. `gate-runner-cli` owns only stages explicitly frozen as `local_gate`. `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV validation, exact-candidate run selection, required-job status, artifact digest and Environment evidence. `deployment-target-cli` owns GitHub→OpenCode-host reachability/authentication probes. Model output never overrides deterministic FAIL/BLOCKED or owner decisions. OpenStage is the only orchestrator; never delegate orchestration to BatchExecutor or another child.
 
 ## Preflight
 
@@ -35,7 +35,7 @@ Unknown modes/arguments BLOCK.
 
 `stage-cli next <run-id> --json` is the ONLY runnable queue. Do not recompute planning dependencies during RUN.
 
-For implementation stages, dispatch only work-item IDs frozen in the v2 manifest. Resolve the exact frozen path+SHA-256 and pass that work item plus its `decision_ids/research_ids/contract_ids`, context files and `allowed_change_paths` to the worker. Never invent an ad-hoc work item during RUN. A missing/changed work item is BLOCKED/replan.
+For implementation stages, dispatch only work-item IDs frozen in the v2 manifest. Resolve the exact frozen path+SHA-256 and pass that work item plus its `decision_ids/research_ids/contract_ids`, context files and the current effective scope (`manifest.allowed_change_paths` + machine-owned runtime extensions) to the worker. Never invent an ad-hoc work item during RUN. A missing/changed work item is BLOCKED/replan.
 
 Before each stage:
 1. `stage-cli start`;
@@ -91,16 +91,31 @@ Respect the repository package-manager contract for `local_gate`. Missing local 
 
 ## technical_fix loops — maximum 3
 
-For a failed qualitative/machine gate that is classified `technical_fix` and remains inside frozen scope:
+A technical-fix cycle is one source-changing repair attempt that reaches a new candidate/gate result. **Scope discovery/authorization happens before the cycle counter is consumed.**
+
+For a failed qualitative/machine gate classified `technical_fix`:
 
 1. diagnose from canonical evidence; for GitHub failures use `github-actions-gate-cli diagnose` before asking the owner for anything;
-2. BEFORE changing source, call `stage-cli fix-cycle <run-id> <stage> --pipeline <id>`; it must PASS and increments the frozen state counter;
-3. if a `git_publish` stage had already completed before the failed stage, `fix-cycle` deterministically reopens the chain from the preceding `git_verify` through publish/CI/DEV; do not call `resume` on the old failed gate or manually preserve its completed downstream state;
-4. apply one scoped fix using the same frozen work item identity;
-5. query `stage-cli next`; for a post-publish fix the next stage must be the reopened `git_verify`, followed by normal `git_publish` and affected GitHub gates;
-6. for a pre-publish fix, rerun the failed gate and every downstream gate invalidated by the change.
+2. identify the concrete repository paths the repair is expected to touch. Use read-only analysis/review if needed; do not mutate source yet;
+3. call `stage-cli scope-check <run-id> <stage> <path>... --pipeline <id> --json`:
+   - paths already in manifest/effective scope PASS;
+   - concrete test/fixture/mock/snapshot paths under an already-approved `apps/<name>` or `packages/<name>` component are added automatically as machine-owned `test` runtime scope extensions;
+   - an additional ordinary source/config path returns `TECHNICAL_SCOPE_REVIEW_REQUIRED` without consuming a fix cycle;
+   - protected/sensitive/trust-boundary paths return `OWNER_OR_REPLAN_REQUIRED`.
+4. On `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run a **fresh** ArchitectureAnalyzer in runtime-scope-clarification mode, then a fresh SeniorTechnicalPlanReviewer. The reviewer writes a machine-readable `.tmp/pipelines/<run-id>/runtime-scope-review-<n>.json`. If it proves `owner_decision_required=false`, no requirements/acceptance/external-contract/security-boundary/destructive change, call:
+   `stage-cli scope-extend <run-id> <stage> <path>... --class technical --evidence <review.json> --pipeline <id>`.
+   This extends only machine-owned effective scope; **never edit the frozen manifest or its hash**.
+5. Only after scope preflight PASS call `stage-cli fix-cycle <run-id> <stage> --pipeline <id>`. `fix-cycle` rejects calls without the matching scope preflight and increments the counter only now.
+6. if a `git_publish` stage had already completed before the failed stage, `fix-cycle` deterministically reopens the chain from the preceding `git_verify` through publish/CI/DEV; do not call `resume` on the old failed gate or manually preserve its completed downstream state;
+7. apply one repair using the same frozen work-item identity and effective scope;
+8. query `stage-cli next`; for a post-publish fix the next stage must be the reopened `git_verify`, followed by normal `git_publish` and affected GitHub gates;
+9. for a pre-publish fix, rerun the failed gate and every downstream gate invalidated by the change.
 
-Maximum **3 automatic technical_fix cycles per stage/work-item**. Record the cycle number in review/evidence. A fourth required fix is `blocked` and requires owner attention/replan. `replan`, security, secret, destructive or scope findings never consume/enter a technical-fix loop.
+If `git-worktree-cli verify` discovers an additional path **after** a cycle has already started, do not create another cycle and do not edit manifest/state manually. Run `scope-check` for that concrete offending path; auto-authorize a valid test path or complete the bounded technical-scope review, then rerun verify inside the **same** cycle. A real owner/replan requirement stops the RUN.
+
+Maximum **3 automatic technical_fix cycles per stage/work-item**. A cycle is consumed only after scope preflight succeeds. A fourth new repair attempt after a newly published candidate/gate failure is `blocked` and requires owner attention. Security, secret, destructive and owner-decision findings never enter a technical-fix loop.
+
+Do not make CI green by excluding/suppressing a failing tracked test merely because fixing it needs a runtime scope extension. Test removal/exclusion requires evidence that the test no longer represents approved requirements, not convenience.
 
 After any source-changing fix to an already published candidate: Git verify, publish a NEW candidate SHA, then rerun every affected `github_ci`, artifact, `github_dev`/runtime and acceptance gate. Evidence from the previous candidate is stale by construction and `stage-cli complete` must reject it.
 
@@ -150,6 +165,6 @@ Planning/reviews are always fresh. Invalid reuse starts a fresh child, never ano
 
 ## Stops
 
-BLOCK on stale main/base, wrong worktree, changed planning evidence/source snapshot/project policy/work item, failed GitHub→OpenCode-host CD readiness recheck, scope violation, unresolved owner decision, changed manifest, invalid/unreadable rules, GitHub gate without a valid frozen contract, missing workflow without its frozen bootstrap/adaptation work item, GitHub Environment/trusted-ref/concurrency mismatch, required GitHub job skipped/failed/missing, missing or mismatched artifact ID/digest, GitHub run/evidence from the wrong SHA/workflow/job/artifact, local-gate package-manager/environment failure, secret/security/destructive condition, conflict that requires a DAG change, runtime failure needing design change, or a fourth technical-fix cycle.
+BLOCK on stale main/base, wrong worktree, changed planning evidence/source snapshot/project policy/work item, failed GitHub→OpenCode-host CD readiness recheck, unresolved owner decision, changed manifest, invalid/unreadable rules, protected/sensitive runtime-scope request, runtime-scope review that changes requirements/acceptance/external contracts/security boundaries/destructive behavior, GitHub gate without a valid frozen contract, missing workflow without its frozen bootstrap/adaptation work item, GitHub Environment/trusted-ref/concurrency mismatch, required GitHub job skipped/failed/missing, missing or mismatched artifact ID/digest, GitHub run/evidence from the wrong SHA/workflow/job/artifact, local-gate package-manager/environment failure, secret/security/destructive condition, conflict that requires a DAG change, runtime failure needing design change, or a fourth technical-fix cycle.
 
 If queue is empty, report the actual terminal state; never bypass prerequisites or rewrite frozen evidence. Include run/pipeline status, branch, source/candidate SHA, work-item IDs, machine evidence, runtime result, technical-fix cycle counts and blocker dossier. Never delete historical runs.
