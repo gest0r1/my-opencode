@@ -89,7 +89,7 @@ Never replace a missing, incompatible or failed authoritative GitHub workflow wi
 
 Respect the repository package-manager contract for `local_gate`. Missing local tooling is environment BLOCKED; it does not authorize changing package managers.
 
-## technical_fix loops — maximum 3
+## technical_fix loops — initial budget 3
 
 A technical-fix cycle is one source-changing repair attempt that reaches a new candidate/gate result. **Scope discovery/authorization happens before the cycle counter is consumed.**
 
@@ -113,7 +113,20 @@ For a failed qualitative/machine gate classified `technical_fix`:
 
 If `git-worktree-cli verify` discovers an additional path **after** a cycle has already started, do not create another cycle and do not edit manifest/state manually. Run `scope-check` for that concrete offending path; auto-authorize a valid test path or complete the bounded technical-scope review, then rerun verify inside the **same** cycle. A real owner/replan requirement stops the RUN.
 
-Maximum **3 automatic technical_fix cycles per stage/work-item**. A cycle is consumed only after scope preflight succeeds. A fourth new repair attempt after a newly published candidate/gate failure is `blocked` and requires owner attention. Security, secret, destructive and owner-decision findings never enter a technical-fix loop.
+The initial automatic budget is **3 technical_fix cycles per stage/work-item**. A cycle is consumed only after scope preflight succeeds. When the current budget is exhausted, stop implementation and return a budget checkpoint to the owner; do not require a full PLAN merely because the counter was exhausted.
+
+At the checkpoint the owner has three distinct choices:
+
+1. **Continue current approach:** an explicit owner grant such as "ещё 3 цикла" maps to:
+   `stage-cli fix-budget-add <run-id> <stage> --pipeline <id> --cycles 3`.
+   The command only works when the current budget is exhausted and records an audited owner grant. Then continue the same RUN/work-item.
+2. **Runtime replan this block:** first run fresh ArchitectureAnalyzer in runtime-replan mode and fresh SeniorTechnicalPlanReviewer. This is local to the current pipeline/stage/work-item and does not rewrite the frozen manifest or restart the whole PLAN. The reviewer writes a versioned `.tmp/pipelines/<run-id>/runtime-replan-<pipeline>-<stage>-<n>.json`.
+   - If owner clarification is needed, record it through `stage-cli runtime-replan-propose ... --evidence <review.json>`; return the questions to the owner and stop. Owner answers may trigger another fresh architecture/review revision.
+   - When the local replan is `ready_for_owner_approval`, record the proposal through the same command and **stop for explicit owner approval even under `--unattended`**.
+   - Only an explicit owner approval plus cycle grant maps to `stage-cli runtime-replan-approve <run-id> <stage> --pipeline <id> --cycles <N>`. Approval records the exact reviewed evidence and increases the fix budget; it never starts a repair by itself. Run fresh `scope-check` and then `fix-cycle`.
+3. **Full replan:** use the existing reason-coded replan/supersede path only when the local review finds changed requirements, acceptance criteria, external contracts, security/trust boundaries, destructive behavior or another real PLAN-level decision.
+
+A pending runtime replan cannot be bypassed with `fix-budget-add`. Direct cycle grants and approved runtime-replan grants are separate audited budget events. Security, secret, destructive and unresolved owner-decision findings never enter a technical-fix loop.
 
 Do not make CI green by excluding/suppressing a failing tracked test merely because fixing it needs a runtime scope extension. Test removal/exclusion requires evidence that the test no longer represents approved requirements, not convenience.
 
@@ -149,7 +162,7 @@ Use the deterministic CLI that owns the operation. Owner shell intervention is a
 
 ## Owner approval and unattended
 
-`--unattended` skips interaction only inside the already-approved frozen scope. It does not approve decisions, changed scope/base/manifest/evidence, exceptions or merge.
+`--unattended` skips interaction only inside the already-approved frozen scope. It does not approve decisions, changed scope/base/manifest/evidence, exceptions or merge. It also never auto-approves a runtime replan: `awaiting_owner_clarification` and `awaiting_owner_approval` are mandatory owner checkpoints.
 
 Reuse child sessions only for CoderAgent/TestEngineer/BuildAgent technical-fix cycles with exact:
 
@@ -165,6 +178,6 @@ Planning/reviews are always fresh. Invalid reuse starts a fresh child, never ano
 
 ## Stops
 
-BLOCK on stale main/base, wrong worktree, changed planning evidence/source snapshot/project policy/work item, failed GitHub→OpenCode-host CD readiness recheck, unresolved owner decision, changed manifest, invalid/unreadable rules, protected/sensitive runtime-scope request, runtime-scope review that changes requirements/acceptance/external contracts/security boundaries/destructive behavior, GitHub gate without a valid frozen contract, missing workflow without its frozen bootstrap/adaptation work item, GitHub Environment/trusted-ref/concurrency mismatch, required GitHub job skipped/failed/missing, missing or mismatched artifact ID/digest, GitHub run/evidence from the wrong SHA/workflow/job/artifact, local-gate package-manager/environment failure, secret/security/destructive condition, conflict that requires a DAG change, runtime failure needing design change, or a fourth technical-fix cycle.
+BLOCK on stale main/base, wrong worktree, changed planning evidence/source snapshot/project policy/work item, failed GitHub→OpenCode-host CD readiness recheck, unresolved owner decision, changed manifest, invalid/unreadable rules, protected/sensitive runtime-scope request, runtime-scope review that changes requirements/acceptance/external contracts/security boundaries/destructive behavior, GitHub gate without a valid frozen contract, missing workflow without its frozen bootstrap/adaptation work item, GitHub Environment/trusted-ref/concurrency mismatch, required GitHub job skipped/failed/missing, missing or mismatched artifact ID/digest, GitHub run/evidence from the wrong SHA/workflow/job/artifact, local-gate package-manager/environment failure, secret/security/destructive condition, conflict that requires a DAG change, runtime failure needing design change, or an exhausted technical-fix budget awaiting an owner choice.
 
 If queue is empty, report the actual terminal state; never bypass prerequisites or rewrite frozen evidence. Include run/pipeline status, branch, source/candidate SHA, work-item IDs, machine evidence, runtime result, technical-fix cycle counts and blocker dossier. Never delete historical runs.
