@@ -224,9 +224,40 @@ export interface StageEvidence {
   recorded_at: string;
 }
 
+export type RuntimeReplanStatus =
+  | 'awaiting_owner_clarification'
+  | 'awaiting_owner_approval'
+  | 'approved'
+  | 'superseded';
+
+export interface TechnicalFixBudgetGrant {
+  timestamp: string;
+  source: 'owner_direct' | 'runtime_replan';
+  added_cycles: number;
+  previous_limit: number;
+  new_limit: number;
+  runtime_replan_revision?: number;
+}
+
+export interface RuntimeReplanRecord {
+  revision: number;
+  status: RuntimeReplanStatus;
+  proposed_at: string;
+  evidence_path: string;
+  evidence_sha256: string;
+  owner_questions?: string[];
+  summary?: string;
+  approved_at?: string;
+  granted_cycles?: number;
+  superseded_at?: string;
+}
+
 export interface StageRuntime {
   status: StageStatus;
   technical_fix_cycles?: number;
+  technical_fix_limit?: number;
+  technical_fix_budget_grants?: TechnicalFixBudgetGrant[];
+  runtime_replans?: RuntimeReplanRecord[];
   started_at?: string;
   completed_at?: string;
   message?: string;
