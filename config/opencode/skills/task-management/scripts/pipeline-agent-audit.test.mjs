@@ -149,7 +149,7 @@ test('OpenStage cannot edit deterministic pipeline state or machine evidence', a
   for (const path of [
     'state\\.json', 'candidate\\.json', 'git-verify\\.json', 'git-runtime\\.json',
     'github/\\*\\*', 'gates/\\*\\*', 'owner/\\*\\*', 'sources/github-issues\\.json',
-    'planning/deployment-target\\.json',
+    'planning/deployment-target\\.json', 'rules/\\*\\*',
   ]) {
     assert.match(yaml, new RegExp('\\.tmp/pipelines/\\*\\*/' + path + '"?:\\s*deny'));
   }
@@ -223,4 +223,19 @@ test('GitHub gate reliability keeps pre-terminal evidence and real negative live
   assert.match(live, /Assert live failure diagnostics and redaction/);
   assert.match(negative, /Intentional fixture failure/);
   assert.match(contracts, /github-actions-gate-runtime\.test\.mjs/);
+});
+
+
+test('default rules drift is repaired deterministically without owner state edits', async () => {
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
+
+  assert.match(run, /DEFAULT_RULES_SNAPSHOT_REQUIRED/);
+  assert.match(run, /stage-cli rules-refresh/);
+  assert.match(run, /do \*\*not\*\* ask the owner to edit state|Never ask the owner to edit `state\.json`/i);
+  assert.match(orchestrator, /DEFAULT_RULES_SNAPSHOT_REQUIRED/);
+  assert.match(orchestrator, /rules-refresh/);
+  assert.match(rules, /run-local snapshot/i);
+  assert.match(rules, /version change requires replan/i);
 });

@@ -46,6 +46,7 @@ permission:
     ".tmp/pipelines/**/owner/**": deny
     ".tmp/pipelines/**/sources/github-issues.json": deny
     ".tmp/pipelines/**/planning/deployment-target.json": deny
+    ".tmp/pipelines/**/rules/**": deny
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
@@ -115,7 +116,7 @@ parallel orchestration protocol.
 1. Deterministic FAIL/BLOCKED outranks model judgement.
 2. PLAN never implements source changes.
 3. RUN never changes frozen manifest/rules.
-4. Before RUN scheduling require `stage-cli run-preflight`; canonical RUN accepts schema v2 only. Then use only `stage-cli next` to determine runnable stages.
+4. Before RUN scheduling require `stage-cli validate` + `stage-cli run-preflight`; canonical RUN accepts schema v2 only. If validation returns `DEFAULT_RULES_SNAPSHOT_REQUIRED`, immediately execute deterministic `stage-cli rules-refresh <run-id>`, rerun validation and continue. Never ask the owner to edit `state.json` or a rules hash. `DEFAULT_RULES_VERSION_CHANGED_REPLAN_REQUIRED` blocks for replan. Then use only `stage-cli next` to determine runnable stages.
 5. New PLANs use manifest schema v2; v1 is legacy-read only.
 6. Frozen planning evidence, Issue snapshot, project policy and work-item hashes
    are authority. Never rewrite them after init.
