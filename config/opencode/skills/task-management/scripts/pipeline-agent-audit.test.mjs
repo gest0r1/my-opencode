@@ -196,6 +196,29 @@ test('pipeline contracts use an initial three-cycle budget with owner-controlled
 });
 
 
+test('RUN finishes the active fix cycle before budget checkpoint and never auto-selects runtime replan', async () => {
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
+
+  assert.match(run, /already started.*N\/N.*CodeReviewer\/review result/is);
+  assert.match(run, /Budget exhaustion is checked only when.*next.*source-changing repair/is);
+  assert.match(run, /runtime replan.*only on explicit owner intent/is);
+  assert.match(run, /owner says only.*\+N.*fix-budget-add.*do not add architecture review implicitly/is);
+
+  assert.match(orchestrator, /already-started cycle must finish through its frozen downstream review\/gates/i);
+  assert.match(orchestrator, /executor=`review`.*CodeReviewer/i);
+  assert.match(orchestrator, /Budget exhaustion matters only when.*next.*fix-cycle/is);
+  assert.match(orchestrator, /runtime replan.*only when the owner explicitly requests/i);
+  assert.match(orchestrator, /plain owner `\+N` grant must not trigger architecture review/i);
+
+  assert.match(rules, /does not interrupt an already-started repair/i);
+  assert.match(rules, /executor=`review` runs CodeReviewer/i);
+  assert.match(rules, /runtime replan may be offered.*only on explicit owner request/is);
+  assert.match(rules, /plain `\+N` grant means continue the current approach/is);
+});
+
+
 test('PLAN proves v2 run viability and baseline scope before owner approval', async () => {
   const plan = await text('config/opencode/command/pipeline-plan.md');
   assert.match(plan, /stage-cli\.ts plan-run-preflight/);
