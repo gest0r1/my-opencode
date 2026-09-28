@@ -111,7 +111,6 @@ installed_ok() {
 }
 prev_config="$(state_value config_sha)"
 prev_ref="$(state_value openchamber_sha)"
-prev_bundle="$(state_value bundle_source_sha)"
 config_changed=0
 [[ "$CONFIG_SHA" == "$prev_config" ]] || config_changed=1
 binary_changed=0
@@ -168,10 +167,15 @@ if (( binary_changed == 1 )); then
     mv -Tf "$ROOT/.current-new.$$" "$ROOT/current"
   else
     echo "Downloading verified GitHub-built bundle $BUNDLE_SOURCE_SHA for OpenChamber source $REF_SHA"
-    gh release download "$TAG" --repo "$APP_REPO" \
-      --pattern install-linux-integration-bundle.sh --dir "$TMP"
-    gh release download "$BUNDLE_TAG" --repo "$APP_REPO" \
-      --pattern "$ASSET" --dir "$TMP"
+    if [[ "$BUNDLE_TAG" == "$TAG" ]]; then
+      gh release download "$TAG" --repo "$APP_REPO" \
+        --pattern "$ASSET" --pattern install-linux-integration-bundle.sh --dir "$TMP"
+    else
+      gh release download "$TAG" --repo "$APP_REPO" \
+        --pattern install-linux-integration-bundle.sh --dir "$TMP"
+      gh release download "$BUNDLE_TAG" --repo "$APP_REPO" \
+        --pattern "$ASSET" --dir "$TMP"
+    fi
     printf '%s  %s\n' "$DIGEST" "$TMP/$ASSET" | sha256sum -c -
     bash "$TMP/install-linux-integration-bundle.sh" "$TMP/$ASSET" "$MANIFEST" "$ROOT"
   fi
