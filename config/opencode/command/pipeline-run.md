@@ -91,7 +91,7 @@ Respect the repository package-manager contract for `local_gate`. Missing local 
 
 ## technical_fix loops — initial budget 3
 
-A technical-fix cycle is one source-changing repair attempt that reaches a new candidate/gate result. **Scope discovery/authorization happens before the cycle counter is consumed.**
+A technical-fix cycle is one source-changing repair attempt that reaches its next authoritative review/gate result. **Scope discovery/authorization happens before the cycle counter is consumed.** If the frozen DAG contains a stage with executor=`review`, that stage runs a fresh CodeReviewer; the stage name is manifest-defined (typically the post-implementation review stage), not hard-coded. A cycle that has already started is allowed to reach that CodeReviewer/review result even when its counter becomes `N/N`.
 
 For a failed qualitative/machine gate classified `technical_fix`:
 
@@ -113,20 +113,20 @@ For a failed qualitative/machine gate classified `technical_fix`:
 
 If `git-worktree-cli verify` discovers an additional path **after** a cycle has already started, do not create another cycle and do not edit manifest/state manually. Run `scope-check` for that concrete offending path; auto-authorize a valid test path or complete the bounded technical-scope review, then rerun verify inside the **same** cycle. A real owner/replan requirement stops the RUN.
 
-The initial automatic budget is **3 technical_fix cycles per stage/work-item**. A cycle is consumed only after scope preflight succeeds. The owner may increase the budget or request/approve a runtime replan at any point while the stage is active. If the current budget is exhausted before that happens, stop implementation and return a budget checkpoint; do not require a full PLAN merely because the counter was exhausted.
+The initial automatic budget is **3 technical_fix cycles per stage/work-item**. A cycle is consumed only after scope preflight succeeds. The owner may increase the budget or request/approve a runtime replan at any point while the stage is active. Budget exhaustion is checked only when a review/gate result requires starting the **next** source-changing repair. Never interrupt an already-started `N/N` cycle before its frozen review/gates finish. If CodeReviewer (executor=`review`) or another authoritative gate then returns a new `technical_fix` and no budget remains, stop before the next `fix-cycle` and return a budget checkpoint; do not require a full PLAN merely because the counter was exhausted.
 
 At the checkpoint the owner has three distinct choices:
 
 1. **Continue current approach:** an explicit owner grant such as "ещё 3 цикла" maps to:
    `stage-cli fix-budget-add <run-id> <stage> --pipeline <id> --cycles 3`.
    The command records an audited owner grant immediately; it does not wait for exhaustion. Then continue the same RUN/work-item.
-2. **Runtime replan this block:** this may be requested before or after budget exhaustion. First run fresh ArchitectureAnalyzer in runtime-replan mode and fresh SeniorTechnicalPlanReviewer. This is local to the current pipeline/stage/work-item and does not rewrite the frozen manifest or restart the whole PLAN. The reviewer writes a versioned `.tmp/pipelines/<run-id>/runtime-replan-<pipeline>-<stage>-<n>.json`.
+2. **Runtime replan this block:** this may be requested before or after budget exhaustion, but RUN starts it **only on explicit owner intent** (for example "runtime replan", "повторное архитектурное ревью", or equivalent). At an exhaustion checkpoint, RUN may offer runtime replan as an option, but must not dispatch ArchitectureAnalyzer merely because the budget ended. After explicit owner intent, run fresh ArchitectureAnalyzer in runtime-replan mode and fresh SeniorTechnicalPlanReviewer. This is local to the current pipeline/stage/work-item and does not rewrite the frozen manifest or restart the whole PLAN. The reviewer writes a versioned `.tmp/pipelines/<run-id>/runtime-replan-<pipeline>-<stage>-<n>.json`.
    - If owner clarification is needed, record it through `stage-cli runtime-replan-propose ... --evidence <review.json>`; return the questions to the owner and stop. Owner answers may trigger another fresh architecture/review revision.
    - When the local replan is `ready_for_owner_approval`, record the proposal through the same command and **stop for explicit owner approval even under `--unattended`**.
    - Only an explicit owner approval plus cycle grant maps to `stage-cli runtime-replan-approve <run-id> <stage> --pipeline <id> --cycles <N>`. Approval records the exact reviewed evidence and increases the fix budget; it never starts a repair by itself. Run fresh `scope-check` and then `fix-cycle`.
 3. **Full replan:** use the existing reason-coded replan/supersede path only when the local review finds changed requirements, acceptance criteria, external contracts, security/trust boundaries, destructive behavior or another real PLAN-level decision.
 
-A pending runtime replan cannot be bypassed with `fix-budget-add`. Direct cycle grants and approved runtime-replan grants are separate audited budget events. Security, secret, destructive and unresolved owner-decision findings never enter a technical-fix loop.
+A pending runtime replan cannot be bypassed with `fix-budget-add`. Direct cycle grants and approved runtime-replan grants are separate audited budget events. If no runtime replan is pending and the owner says only `+N`/additional fix cycles, map that directly to `fix-budget-add`; do not add architecture review implicitly. Security, secret, destructive and unresolved owner-decision findings never enter a technical-fix loop.
 
 Do not make CI green by excluding/suppressing a failing tracked test merely because fixing it needs a runtime scope extension. Test removal/exclusion requires evidence that the test no longer represents approved requirements, not convenience.
 
