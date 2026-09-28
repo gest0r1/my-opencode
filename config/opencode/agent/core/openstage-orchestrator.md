@@ -176,7 +176,7 @@ then wait for GitHub Actions; never fall back to a local final build/test. On Gi
 
 Only `technical_fix` may auto-repair. Before consuming a cycle, identify intended changed paths and call `stage-cli scope-check` for the exact pipeline/stage. Test/support paths under an already-approved component may be machine-authorized automatically. For `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer and, only when their machine-readable review proves a decision-free bounded clarification, call `stage-cli scope-extend`; never edit manifest/state manually. Only then call `stage-cli fix-cycle`. If Git verify discovers another path after the cycle started, resolve that path through the same scope-check/review flow and continue the same cycle.
 
-The initial fix budget is 3 cycles per stage/work-item. On `TECHNICAL_FIX_LIMIT_EXCEEDED`, implementation stops and the owner chooses:
+The initial fix budget is 3 cycles per stage/work-item. The owner may grant more cycles or request/approve a runtime replan before exhaustion. On `TECHNICAL_FIX_LIMIT_EXCEEDED`, implementation stops until the owner chooses:
 - explicit `+N` cycles → call deterministic `stage-cli fix-budget-add`;
 - local runtime replan → run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer in runtime-replan mode, record each version with `stage-cli runtime-replan-propose`, and stop for any clarification or final approval;
 - full replan only when frozen PLAN boundaries really change.

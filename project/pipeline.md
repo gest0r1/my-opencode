@@ -42,7 +42,7 @@ CI/CD evidence связывает candidate SHA, workflow run/attempt, required 
 
 ## Runtime fix budget
 
-RUN начинает каждый stage с budget 3 technical-fix cycles. Исчерпание budget не означает автоматический полный replan: владелец может дать `+N` циклов текущему подходу или запросить локальный runtime replan только этого pipeline/stage. Runtime replan может проходить несколько раундов уточнений, но новые циклы выдаются только после явного owner approval финального локального плана. Изменение frozen requirements/acceptance/contracts/security boundaries остаётся full replan.
+RUN начинает каждый stage с budget 3 technical-fix cycles. Владелец может увеличить budget или запросить/утвердить локальный runtime replan в любой момент stage; исчерпание лишь делает такую owner-развилку обязательной. Runtime replan может проходить несколько раундов уточнений, но новые циклы выдаются только после явного owner approval финального локального плана. Изменение frozen requirements/acceptance/contracts/security boundaries остаётся full replan.
 
 ## Runtime implementation scope
 
