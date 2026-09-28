@@ -46,6 +46,7 @@ permission:
     ".tmp/pipelines/**/owner/**": deny
     ".tmp/pipelines/**/sources/github-issues.json": deny
     ".tmp/pipelines/**/planning/deployment-target.json": deny
+    ".tmp/pipelines/**/rules/**": deny
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
