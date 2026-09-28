@@ -29,6 +29,7 @@ permission:
     "**/*.key": deny
     "**/*.pem": deny
     "**/*.secret": deny
+    "docs/pipeline-rules.md": deny
     ".git/**": deny
 ---
 
