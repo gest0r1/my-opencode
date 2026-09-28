@@ -25,6 +25,10 @@ def run_installer(env):
 
 
 def main():
+    installer_source = (ROOT_REPO / "install-openchamber.sh").read_text()
+    assert '"$STATE.tmp.$"' not in installer_source
+    assert '"$ROOT/.current-new.$"' not in installer_source
+
     with tempfile.TemporaryDirectory(prefix="opencode-install-test-") as directory:
         tmp = Path(directory)
         home = tmp / "home"
