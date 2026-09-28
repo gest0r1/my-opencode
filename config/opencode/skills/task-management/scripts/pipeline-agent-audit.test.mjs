@@ -207,3 +207,21 @@ test('RUN uses deterministic publication and CI diagnostics before owner shell i
   assert.match(orchestrator, /Never ask the owner to run `git add`, `git commit`, `git push`/);
   assert.match(orchestrator, /terminal GitHub FAIL.*CLI-written evidence\/diagnostics/i);
 });
+
+
+test('GitHub gate reliability keeps pre-terminal evidence and real negative live coverage', async () => {
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
+  const live = await text('.github/workflows/pipeline-live-smoke.yml');
+  const negative = await text('.github/workflows/pipeline-gate-live-failure-fixture.yml');
+  const contracts = await text('.github/workflows/pipeline-contracts.yml');
+
+  assert.match(run, /pre-terminal BLOCKED evidence|before terminal completion/i);
+  assert.match(run, /failure_phase/);
+  assert.match(rules, /canonical BLOCKED evidence/i);
+  assert.match(rules, /failure_phase/);
+  assert.match(live, /Dispatch intentional failure and require canonical FAIL evidence/);
+  assert.match(live, /Assert live failure diagnostics and redaction/);
+  assert.match(negative, /Intentional fixture failure/);
+  assert.match(contracts, /github-actions-gate-runtime\.test\.mjs/);
+});
