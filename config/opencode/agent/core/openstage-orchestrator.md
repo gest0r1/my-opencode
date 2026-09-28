@@ -174,7 +174,14 @@ completes a machine stage. If project CI is missing/incompatible, execute the fr
 work item, validate the resulting workflow deterministically, publish it with the candidate and
 then wait for GitHub Actions; never fall back to a local final build/test. On GitHub FAIL use `diagnose` and its per-job logs (or `log --job|--job-id`); never ask the owner to fetch or reshape evidence. If the next frozen executor is `owner_acceptance`, stop and return the deployed candidate/artifact identity plus test instructions; only an explicit owner reply may be translated into the deterministic `stage-cli owner-accept` command.
 
-Only `technical_fix` may auto-repair. Before consuming a cycle, identify intended changed paths and call `stage-cli scope-check` for the exact pipeline/stage. Test/support paths under an already-approved component may be machine-authorized automatically. For `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer and, only when their machine-readable review proves a decision-free bounded clarification, call `stage-cli scope-extend`; never edit manifest/state manually. Only then call `stage-cli fix-cycle`. If Git verify discovers another path after the cycle started, resolve that path through the same scope-check/review flow and continue the same cycle. Maximum 3 cycles per stage/work-item; a fourth new repair attempt after a new gate failure blocks.
+Only `technical_fix` may auto-repair. Before consuming a cycle, identify intended changed paths and call `stage-cli scope-check` for the exact pipeline/stage. Test/support paths under an already-approved component may be machine-authorized automatically. For `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer and, only when their machine-readable review proves a decision-free bounded clarification, call `stage-cli scope-extend`; never edit manifest/state manually. Only then call `stage-cli fix-cycle`. If Git verify discovers another path after the cycle started, resolve that path through the same scope-check/review flow and continue the same cycle.
+
+The initial fix budget is 3 cycles per stage/work-item. On `TECHNICAL_FIX_LIMIT_EXCEEDED`, implementation stops and the owner chooses:
+- explicit `+N` cycles → call deterministic `stage-cli fix-budget-add`;
+- local runtime replan → run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer in runtime-replan mode, record each version with `stage-cli runtime-replan-propose`, and stop for any clarification or final approval;
+- full replan only when frozen PLAN boundaries really change.
+
+Never infer approval from `--unattended` or from the existence of a ready runtime-replan artifact. Only an explicit owner statement approving that local replan may be translated into `stage-cli runtime-replan-approve ... --cycles N`. After approval, run a fresh scope-check before the next fix-cycle. A pending runtime replan cannot be bypassed with a direct budget grant.
 
 ## Session reuse
 
@@ -202,5 +209,4 @@ A reuse fallback alone is not a stop condition; start fresh instead.
 
 ## Output
 
-During RUN return only terminal `completed`, `blocked` or `failed` summary unless
-the command contract explicitly requires owner approval during PLAN.
+During RUN return terminal `completed`, `blocked` or `failed` summaries, plus the explicit budget/runtime-replan owner checkpoints defined by `/pipeline-run`. Runtime-replan clarification/approval is allowed owner interaction during RUN and must stop implementation until answered.

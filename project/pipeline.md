@@ -40,6 +40,10 @@ CI/CD evidence связывает candidate SHA, workflow run/attempt, required 
 
 После `init` frozen manifest не правится. Коррекция frozen V2 создаётся командой `stage-cli supersede <old-run> <new-run> --reason <code>`: копируется только planning/source/work-item контекст, но не state/candidate/gate/GitHub evidence. Для каждого нового run сохраняется reason-coded lineage.
 
+## Runtime fix budget
+
+RUN начинает каждый stage с budget 3 technical-fix cycles. Исчерпание budget не означает автоматический полный replan: владелец может дать `+N` циклов текущему подходу или запросить локальный runtime replan только этого pipeline/stage. Runtime replan может проходить несколько раундов уточнений, но новые циклы выдаются только после явного owner approval финального локального плана. Изменение frozen requirements/acceptance/contracts/security boundaries остаётся full replan.
+
 ## Runtime implementation scope
 
 The approved manifest freezes product decisions, acceptance criteria and base implementation scope, not an exhaustive list of future test files. RUN can add audited machine-owned test/support paths for already-approved app/package components. Additional production/config paths require decision-free architecture/reviewer evidence; protected/security/trust-boundary changes still require owner/replan. The frozen manifest itself is never rewritten.
