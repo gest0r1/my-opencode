@@ -192,3 +192,49 @@ test('PLAN scope rejects unsupported wildcard syntax before init', async () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /exact repository-relative paths or directory\/\*\*/);
 });
+
+
+test('fix-cycle requires matching scope preflight and consumes it once', async () => {
+  const fx = await fixture('scope-fix-preflight');
+  let result = run(fx.root, [
+    'start', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot,
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(fx.root, [
+    'fix-cycle', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot,
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SCOPE_PREFLIGHT_REQUIRED/);
+
+  result = run(fx.root, [
+    'scope-check', fx.runId, 'implementation', 'packages/db/src/migrate.ts',
+    '--pipeline', 'app', '--state-root', fx.stateRoot,
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(fx.root, [
+    'fix-cycle', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot, '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout);
+  assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, 1);
+  assert.equal(state.scope_preflight, undefined);
+
+  result = run(fx.root, [
+    'fix-cycle', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot,
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SCOPE_PREFLIGHT_REQUIRED/);
+});
+
+test('runtime scope cannot auto-authorize workflow trust-boundary paths', async () => {
+  const fx = await fixture('scope-workflow-protected');
+  const result = run(fx.root, [
+    'scope-check', fx.runId, 'implementation', '.github/workflows/new-ci.yml',
+    '--pipeline', 'app', '--state-root', fx.stateRoot,
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /OWNER_OR_REPLAN_REQUIRED/);
+  assert.match(result.stderr, /protected\/sensitive path/);
+});
