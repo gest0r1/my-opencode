@@ -239,8 +239,9 @@ test('rules drift is adopted from the current file for both rule sources', async
   assert.doesNotMatch(run, /DEFAULT_RULES_SNAPSHOT_REQUIRED|stage-cli rules-refresh/);
 });
 
-test('pipeline source-mutating agents cannot edit project rules', async () => {
+test('pipeline agents cannot edit project or distribution rules', async () => {
   for (const file of [
+    'config/opencode/agent/subagents/core/stage-orchestrator.md',
     'config/opencode/agent/subagents/code/coder-agent.md',
     'config/opencode/agent/subagents/code/test-engineer.md',
     'config/opencode/agent/subagents/core/documentation.md',
@@ -248,8 +249,10 @@ test('pipeline source-mutating agents cannot edit project rules', async () => {
   ]) {
     const yaml = frontmatter(await text(file));
     assert.match(yaml, /["']docs\/pipeline-rules\.md["']:\s*deny/, file);
+    assert.match(yaml, /["']\*\*\/pipeline-rules\.default\.md["']:\s*deny/, file);
   }
 
   const config = JSON.parse(await text('config/opencode/opencode.json'));
   assert.equal(config.agent.CoderAgent.permission.edit['docs/pipeline-rules.md'], 'deny');
+  assert.equal(config.agent.CoderAgent.permission.edit['**/pipeline-rules.default.md'], 'deny');
 });
