@@ -88,7 +88,7 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
 3. Maintain stable Issue story files `stories/issue-N.md`; owner corrections rewrite the same story. Reviews are append-only/versioned.
 4. Collect ALL unresolved owner decisions in `decision-register.md`. Each decision records its owning planning gate and status. Never omit a decision to make validation pass or self-authorize it.
 5. Compile prerequisites and conflicts into a DAG. Freeze `exclusive_paths`, `migration_paths`, `fixture_paths` and/or `conflict_group` where relevant. Pipelines sharing such conflict metadata must be serialized by dependencies. Runtime locks are only for genuinely shared external mutable targets.
-6. Create binary acceptance criteria and minimal `allowed_change_paths` including source, tests, docs and approved helper scripts. Protect `.git`, secrets and environment files.
+6. Create binary acceptance criteria and minimal **base** `allowed_change_paths` for the approved implementation components/config/docs. Do not attempt to enumerate every future test/fixture/mock path: RUN may add concrete test/support paths inside an already-approved `apps/<name>` or `packages/<name>` component as machine-owned runtime scope. Base scope syntax is exact path or `directory/**` only; wildcard forms such as `eslint.config.*` are invalid. Protect `.git`, rules, secrets, workflow trust boundaries and environment files.
 7. Classify every pipeline explicitly as `deployable: true|false`. For each deployable pipeline, first build a **testing capability matrix** from project architecture plus deterministic probes:
    - **GitHub**: can fresh install, upgrade/repeat install and useful runtime/E2E checks execute on GitHub-hosted/disposable infrastructure without access to the OpenCode host?
    - **OpenCode host**: is a trusted stateful GitHub CD workflow already present, and did `deployment-target-cli inspect` prove that GitHub can reach/authenticate to the machine where OpenCode runs?
@@ -117,7 +117,7 @@ Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum`
 New PLANs MUST use `schema_version: 2`, `planning_mode: "design-freeze"` and:
 
 - rules version recorded at approval for initial consistency; RUN later adopts externally changed live rules metadata without rewriting the manifest;
-- `git_setup`, `allowed_change_paths`, `freshness_sensitive_paths`;
+- `git_setup`, base `allowed_change_paths`, `freshness_sensitive_paths`; runtime scope extensions are machine-owned RUN state and are never written back into the manifest;
 - pipelines/DAG, explicit `deployable`, mandatory `deployment_validation` + owner-selected `testing_strategy` for deployable pipelines, explicit `executors[stage_id]` including `owner_acceptance`, active `github_gates[stage_id]`, deferred `future_github_gates`, local-only `gate_profiles`, conflict metadata and work-item mappings;
 - `planning_readiness.design_freeze: true`;
 - `planning_readiness.required_gates[]` and a `ready` evidence record for every required gate;
