@@ -201,7 +201,7 @@ test('RUN finishes the active fix cycle before budget checkpoint and never auto-
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
   const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
 
-  assert.match(run, /already started.*N\/N.*CodeReviewer\/review result/is);
+  assert.match(run, /already started.*CodeReviewer\/review result.*N\/N/is);
   assert.match(run, /Budget exhaustion is checked only when.*next.*source-changing repair/is);
   assert.match(run, /runtime replan.*only on explicit owner intent/is);
   assert.match(run, /owner says only.*\+N.*fix-budget-add.*do not add architecture review implicitly/is);
