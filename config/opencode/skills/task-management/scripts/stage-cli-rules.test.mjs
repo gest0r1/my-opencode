@@ -264,3 +264,28 @@ test('tampering with a run-local default rules snapshot fails closed', async () 
   assert.notEqual(refresh.status, 0);
   assert.match(refresh.stderr, /Frozen default rules snapshot changed/);
 });
+
+
+test('legacy default-rules refresh blocks when rules_version changed', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await v2Manifest(root, 'legacy-version-change', 2);
+  const manifestPath = path.join(root, 'manifest.json');
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+  let result = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+
+  const statePath = path.join(stateRoot, manifest.run_id, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.rules_file = path.join(root, 'legacy-external-default.md');
+  state.rules_version = 999;
+  state.rules_sha256 = '0'.repeat(64);
+  delete state.rules_origin_file;
+  await writeFile(state.rules_file, '---\nrules_version: 999\nedit_policy: distribution_only\n---\n', 'utf8');
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+
+  result = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /DEFAULT_RULES_VERSION_CHANGED_REPLAN_REQUIRED/);
+});
