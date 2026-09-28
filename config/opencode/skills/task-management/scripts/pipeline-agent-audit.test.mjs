@@ -233,7 +233,7 @@ test('default rules drift is repaired deterministically without owner state edit
 
   assert.match(run, /DEFAULT_RULES_SNAPSHOT_REQUIRED/);
   assert.match(run, /stage-cli rules-refresh/);
-  assert.match(run, /Never ask the owner to edit `state\.json`/i);
+  assert.match(run, /do \*\*not\*\* ask the owner to edit state|Never ask the owner to edit `state\.json`/i);
   assert.match(orchestrator, /DEFAULT_RULES_SNAPSHOT_REQUIRED/);
   assert.match(orchestrator, /rules-refresh/);
   assert.match(rules, /run-local snapshot/i);
