@@ -126,9 +126,10 @@ test('invalid existing project rules block instead of falling back', async () =>
   assert.doesNotMatch(result.stdout, /opencode_default/);
 });
 
-test('default rules are recorded as the frozen rules source during init', async () => {
+test('default rules are snapshotted inside the run during init', async () => {
   const root = await tempProject();
-  await mkdir(path.join(root, '.tmp', 'pipelines'), { recursive: true });
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  await mkdir(stateRoot, { recursive: true });
   const manifest = await v2Manifest(root, 'default-rules-run', 2);
   const manifestPath = path.join(root, 'manifest.json');
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -137,7 +138,7 @@ test('default rules are recorded as the frozen rules source during init', async 
     'init',
     manifestPath,
     '--state-root',
-    path.join(root, '.tmp', 'pipelines'),
+    stateRoot,
     '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
@@ -145,6 +146,16 @@ test('default rules are recorded as the frozen rules source during init', async 
   assert.equal(state.rules_source, 'opencode_default');
   assert.equal(state.rules_version, 2);
   assert.match(state.rules_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(
+    state.rules_file,
+    path.join(stateRoot, manifest.run_id, 'rules', 'pipeline-rules.default.md'),
+  );
+  assert.match(state.rules_origin_file, /pipeline-rules\.default\.md$/);
+  const snapshot = await readFile(state.rules_file, 'utf8');
+  assert.equal(sha(snapshot), state.rules_sha256);
+
+  const validate = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(validate.status, 0, validate.stderr);
 });
 
 test('state validation blocks when frozen project rules change', async () => {
@@ -165,4 +176,116 @@ test('state validation blocks when frozen project rules change', async () => {
   const validate = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
   assert.notEqual(validate.status, 0);
   assert.match(validate.stderr, /Rules file changed since pipeline initialization/);
+});
+
+
+test('legacy default-rules state can be deterministically refreshed into a run-local snapshot', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await v2Manifest(root, 'legacy-default-run', 2);
+  const manifestPath = path.join(root, 'manifest.json');
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+  let result = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+
+  const statePath = path.join(stateRoot, manifest.run_id, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  const legacyRules = path.join(root, 'legacy-installed-default.md');
+  const oldContent = '---\ndocument_type: pipeline_rules\nrules_version: 2\nrules_scope: opencode_default\nedit_policy: distribution_only\n---\n\n# old installed rules\n';
+  const changedContent = oldContent.replace('# old installed rules', '# externally updated rules');
+  await writeFile(legacyRules, changedContent, 'utf8');
+  state.rules_file = legacyRules;
+  delete state.rules_origin_file;
+  state.rules_sha256 = sha(oldContent);
+  delete state.rules_refresh_history;
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+
+  result = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /DEFAULT_RULES_SNAPSHOT_REQUIRED/);
+  assert.match(result.stderr, /rules-refresh/);
+
+  result = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const refreshed = JSON.parse(result.stdout);
+  assert.equal(refreshed.rules_source, 'opencode_default');
+  assert.equal(
+    refreshed.rules_file,
+    path.join(stateRoot, manifest.run_id, 'rules', 'pipeline-rules.default.md'),
+  );
+  assert.equal(refreshed.rules_refresh_history.length, 1);
+  assert.equal(refreshed.rules_refresh_history[0].previous_file, legacyRules);
+  assert.equal(refreshed.rules_refresh_history[0].previous_sha256, sha(oldContent));
+  assert.match(refreshed.rules_refresh_history[0].new_sha256, /^[0-9a-f]{64}$/);
+
+  result = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  const second = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot, '--json']);
+  assert.equal(second.status, 0, second.stderr);
+  const secondState = JSON.parse(second.stdout);
+  assert.equal(secondState.rules_refresh_history.length, 1);
+});
+
+test('rules-refresh cannot rewrite project policy rules', async () => {
+  const root = await tempProject();
+  await writeProjectRules(root, '# project rules\n');
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await v2Manifest(root, 'project-refresh-forbidden', 7);
+  const manifestPath = path.join(root, 'manifest.json');
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+  let result = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /RULES_REFRESH_FORBIDDEN/);
+});
+
+test('tampering with a run-local default rules snapshot fails closed', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await v2Manifest(root, 'default-snapshot-tamper', 2);
+  const manifestPath = path.join(root, 'manifest.json');
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+  const init = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
+  assert.equal(init.status, 0, init.stderr);
+  const state = JSON.parse(init.stdout);
+  await writeFile(state.rules_file, (await readFile(state.rules_file, 'utf8')) + '\n# tampered\n');
+
+  const validate = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
+  assert.notEqual(validate.status, 0);
+  assert.match(validate.stderr, /Frozen default rules snapshot changed/);
+
+  const refresh = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot]);
+  assert.notEqual(refresh.status, 0);
+  assert.match(refresh.stderr, /Frozen default rules snapshot changed/);
+});
+
+
+test('legacy default-rules refresh blocks when rules_version changed', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await v2Manifest(root, 'legacy-version-change', 2);
+  const manifestPath = path.join(root, 'manifest.json');
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+  let result = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+
+  const statePath = path.join(stateRoot, manifest.run_id, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.rules_file = path.join(root, 'legacy-external-default.md');
+  state.rules_version = 999;
+  state.rules_sha256 = '0'.repeat(64);
+  delete state.rules_origin_file;
+  await writeFile(state.rules_file, '---\nrules_version: 999\nedit_policy: distribution_only\n---\n', 'utf8');
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+
+  result = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /DEFAULT_RULES_VERSION_CHANGED_REPLAN_REQUIRED/);
 });

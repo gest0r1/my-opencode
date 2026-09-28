@@ -28,8 +28,10 @@ fail-closed.
 - If absent, this distribution policy is used.
 - Invalid existing project rules block; never silently fall back.
 - Agents never create/modify project rules automatically.
-- Effective rules source/version/SHA and approved manifest SHA are frozen at
-  state initialization; later mutation blocks validation.
+- Effective rules source/version/SHA and approved manifest SHA are frozen at state initialization.
+- Project-local `docs/pipeline-rules.md` remains a live frozen source: mutation after init blocks validation.
+- Distribution `pipeline-rules.default.md` is different: `stage-cli init` copies the exact effective content into a machine-owned run-local snapshot and state validation reads only that snapshot. A later OpenCode/distribution update must not invalidate an already initialized RUN.
+- Legacy runs created before run-local default snapshots use deterministic `stage-cli rules-refresh <run-id>` exactly once when needed. Refresh is allowed only for `rules_source=opencode_default` and only when the current distribution keeps the same `rules_version`; it records old/new hashes. A version change requires replan. Agents never edit `state.json` manually.
 
 ## Planning and scope
 

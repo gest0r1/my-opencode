@@ -72,6 +72,17 @@ Current schema supports:
 When the policy exists, PLAN freezes its path+SHA-256. Preflight and later state
 validation fail if it changes.
 
+## Rules freeze
+
+Project rules and distribution rules have different lifetimes:
+
+- repository `docs/pipeline-rules.md` is project-owned and remains live-frozen; changing it after init blocks the RUN;
+- OpenCode distribution `pipeline-rules.default.md` is copied by `stage-cli init` to
+  `.tmp/pipelines/<run-id>/rules/pipeline-rules.default.md`; the RUN validates this machine-owned snapshot and is unaffected by later OpenCode upgrades;
+- a legacy run whose state still references the mutable installed default rules returns `DEFAULT_RULES_SNAPSHOT_REQUIRED`. OpenStage must run `stage-cli rules-refresh <run-id>` and retry validation. This deterministic recovery is allowed only for `opencode_default` with the same `rules_version`; a version change returns `DEFAULT_RULES_VERSION_CHANGED_REPLAN_REQUIRED`.
+
+Never solve rules drift by editing `state.json` or granting the model write permission to machine state.
+
 ## Executor and package-manager integrity
 
 Every schema-v2 pipeline explicitly declares `deployable: true|false`, and every stage has an explicit executor. A deployable pipeline freezes distinct fresh-install and upgrade/repeat-install required jobs. Authoritative test/build/typecheck/lint stages use `github_ci`; only explicitly local fast/precheck/docs/runtime stages use `local_gate`. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate, not a reason to replace GitHub CI.
