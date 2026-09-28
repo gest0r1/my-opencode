@@ -1464,14 +1464,16 @@ export async function runCli(args: string[]): Promise<void> {
     return;
   }
   if (command === 'run-preflight') {
+    const rawState = await readState(options.stateRoot, runId);
+    if (!rawState.manifest_file) throw new StageCliError('Frozen manifest is missing');
+    const rawManifest = JSON.parse(await readFile(rawState.manifest_file, 'utf8')) as PipelineManifest;
+    if (rawManifest.schema_version !== 2) {
+      throw new StageCliError('LEGACY_V1_REPLAN_REQUIRED: schema v1 is audit/read-only for canonical RUN; create and approve a new schema v2 plan');
+    }
+
     const state = await validateState(options.stateRoot, runId);
     if (state.superseded_by) {
       throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
-    }
-    if (!state.manifest_file) throw new StageCliError('Frozen manifest is missing');
-    const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8')) as PipelineManifest;
-    if (manifest.schema_version !== 2) {
-      throw new StageCliError('LEGACY_V1_REPLAN_REQUIRED: schema v1 is audit/read-only for canonical RUN; create and approve a new schema v2 plan');
     }
     if (options.json) console.log(JSON.stringify({ status: 'PASS', run_id: runId, schema_version: 2 }, null, 2));
     else console.log(`PASS run_id=${runId} schema_version=2`);
