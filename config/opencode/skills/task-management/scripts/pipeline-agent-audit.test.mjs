@@ -216,8 +216,7 @@ test('GitHub gate reliability keeps pre-terminal evidence and real negative live
   const negative = await text('.github/workflows/pipeline-gate-live-failure-fixture.yml');
   const contracts = await text('.github/workflows/pipeline-contracts.yml');
 
-  assert.match(run, /pre-terminal BLOCKED evidence|before terminal completion/i);
-  assert.match(run, /failure_phase/);
+  assert.match(run, /FAIL\/BLOCKED.*canonical.*phase/is);
   assert.match(rules, /canonical BLOCKED evidence/i);
   assert.match(rules, /failure_phase/);
   assert.match(live, /Dispatch intentional failure and require canonical FAIL evidence/);
