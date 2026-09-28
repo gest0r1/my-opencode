@@ -60,6 +60,7 @@ jobs:
             config/opencode/skills/task-management/scripts/pipeline-v2-contract.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-rules.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-scope.test.mjs \
+            config/opencode/skills/task-management/scripts/stage-cli-budget.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-dag.test.mjs \
             config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs \
             config/opencode/skills/task-management/scripts/git-worktree-cli.test.mjs \
