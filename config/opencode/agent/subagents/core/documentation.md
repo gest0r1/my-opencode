@@ -10,6 +10,7 @@ permission:
     "*": deny
     "**/*.md": allow
     "docs/pipeline-rules.md": deny
+    "**/pipeline-rules.default.md": deny
     ".tmp/pipelines/**": deny
     ".git/**": deny
   task: deny
