@@ -22,15 +22,14 @@ async function tempProject() {
   return mkdtemp(path.join(os.tmpdir(), 'stage-cli-rules-'));
 }
 
-async function writeProjectRules(root, body = '# project policy\n') {
+async function writeProjectRules(root, body = '# project policy\n', rulesVersion = 7) {
   await mkdir(path.join(root, 'docs'), { recursive: true });
   await writeFile(
     path.join(root, 'docs', 'pipeline-rules.md'),
-    `---\ndocument_type: pipeline_rules\nrules_version: 7\nedit_policy: human_only\n---\n\n${body}`,
+    `---\ndocument_type: pipeline_rules\nrules_version: ${rulesVersion}\nedit_policy: human_only\n---\n\n${body}`,
     'utf8',
   );
 }
-
 
 function sha(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -126,39 +125,26 @@ test('invalid existing project rules block instead of falling back', async () =>
   assert.doesNotMatch(result.stdout, /opencode_default/);
 });
 
-test('default rules are snapshotted inside the run during init', async () => {
+test('default rules stay live instead of being copied into run state', async () => {
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
-  await mkdir(stateRoot, { recursive: true });
   const manifest = await v2Manifest(root, 'default-rules-run', 2);
   const manifestPath = path.join(root, 'manifest.json');
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
-  const result = run(root, [
-    'init',
-    manifestPath,
-    '--state-root',
-    stateRoot,
-    '--json',
-  ]);
+  const result = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(result.stdout);
   assert.equal(state.rules_source, 'opencode_default');
-  assert.equal(state.rules_version, 2);
-  assert.match(state.rules_sha256, /^[0-9a-f]{64}$/);
-  assert.equal(
-    state.rules_file,
-    path.join(stateRoot, manifest.run_id, 'rules', 'pipeline-rules.default.md'),
-  );
-  assert.match(state.rules_origin_file, /pipeline-rules\.default\.md$/);
-  const snapshot = await readFile(state.rules_file, 'utf8');
-  assert.equal(sha(snapshot), state.rules_sha256);
+  assert.match(state.rules_file, /pipeline-rules\.default\.md$/);
+  assert.equal(state.rules_origin_file, undefined);
+  assert.notEqual(state.rules_file, path.join(stateRoot, manifest.run_id, 'rules', 'pipeline-rules.default.md'));
 
   const validate = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
   assert.equal(validate.status, 0, validate.stderr);
 });
 
-test('state validation blocks when frozen project rules change', async () => {
+test('project rules changed between pipeline commands are adopted on validate', async () => {
   const root = await tempProject();
   await writeProjectRules(root, '# original\n');
   const stateRoot = path.join(root, '.tmp', 'pipelines');
@@ -169,123 +155,68 @@ test('state validation blocks when frozen project rules change', async () => {
   const init = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
   assert.equal(init.status, 0, init.stderr);
   const statePath = path.join(stateRoot, manifest.run_id, 'state.json');
-  const state = JSON.parse(await readFile(statePath, 'utf8'));
-  assert.equal(state.rules_source, 'project');
+  const before = JSON.parse(await readFile(statePath, 'utf8'));
 
-  await writeProjectRules(root, '# changed after init\n');
-  const validate = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
-  assert.notEqual(validate.status, 0);
-  assert.match(validate.stderr, /Rules file changed since pipeline initialization/);
+  await writeProjectRules(root, '# owner changed policy while run was stopped\n', 8);
+  const currentContent = await readFile(path.join(root, 'docs', 'pipeline-rules.md'), 'utf8');
+  const validate = run(root, ['validate', manifest.run_id, '--state-root', stateRoot, '--json']);
+  assert.equal(validate.status, 0, validate.stderr);
+
+  const after = JSON.parse(await readFile(statePath, 'utf8'));
+  assert.equal(after.rules_source, 'project');
+  assert.equal(after.rules_version, 8);
+  assert.equal(after.rules_sha256, sha(currentContent));
+  assert.notEqual(after.rules_sha256, before.rules_sha256);
+  assert.equal(after.rules_refresh_history.length, 1);
+  assert.equal(after.rules_refresh_history[0].previous_sha256, before.rules_sha256);
+  assert.equal(after.rules_refresh_history[0].new_sha256, after.rules_sha256);
 });
 
-
-test('legacy default-rules state can be deterministically refreshed into a run-local snapshot', async () => {
+test('OpenCode default rules changed between pipeline commands are adopted on validate', async () => {
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
-  const manifest = await v2Manifest(root, 'legacy-default-run', 2);
-  const manifestPath = path.join(root, 'manifest.json');
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-
-  let result = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
-  assert.equal(result.status, 0, result.stderr);
-
-  const statePath = path.join(stateRoot, manifest.run_id, 'state.json');
-  const state = JSON.parse(await readFile(statePath, 'utf8'));
-  const legacyRules = path.join(root, 'legacy-installed-default.md');
-  const oldContent = '---\ndocument_type: pipeline_rules\nrules_version: 2\nrules_scope: opencode_default\nedit_policy: distribution_only\n---\n\n# old installed rules\n';
-  const changedContent = oldContent.replace('# old installed rules', '# externally updated rules');
-  await writeFile(legacyRules, changedContent, 'utf8');
-  state.rules_file = legacyRules;
-  delete state.rules_origin_file;
-  state.rules_sha256 = sha(oldContent);
-  delete state.rules_refresh_history;
-  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-
-  result = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /DEFAULT_RULES_SNAPSHOT_REQUIRED/);
-  assert.match(result.stderr, /rules-refresh/);
-
-  result = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot, '--json']);
-  assert.equal(result.status, 0, result.stderr);
-  const refreshed = JSON.parse(result.stdout);
-  assert.equal(refreshed.rules_source, 'opencode_default');
-  assert.equal(
-    refreshed.rules_file,
-    path.join(stateRoot, manifest.run_id, 'rules', 'pipeline-rules.default.md'),
-  );
-  assert.equal(refreshed.rules_refresh_history.length, 1);
-  assert.equal(refreshed.rules_refresh_history[0].previous_file, legacyRules);
-  assert.equal(refreshed.rules_refresh_history[0].previous_sha256, sha(oldContent));
-  assert.match(refreshed.rules_refresh_history[0].new_sha256, /^[0-9a-f]{64}$/);
-
-  result = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
-  assert.equal(result.status, 0, result.stderr);
-
-  const second = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot, '--json']);
-  assert.equal(second.status, 0, second.stderr);
-  const secondState = JSON.parse(second.stdout);
-  assert.equal(secondState.rules_refresh_history.length, 1);
-});
-
-test('rules-refresh cannot rewrite project policy rules', async () => {
-  const root = await tempProject();
-  await writeProjectRules(root, '# project rules\n');
-  const stateRoot = path.join(root, '.tmp', 'pipelines');
-  const manifest = await v2Manifest(root, 'project-refresh-forbidden', 7);
-  const manifestPath = path.join(root, 'manifest.json');
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-
-  let result = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
-  assert.equal(result.status, 0, result.stderr);
-
-  result = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /RULES_REFRESH_FORBIDDEN/);
-});
-
-test('tampering with a run-local default rules snapshot fails closed', async () => {
-  const root = await tempProject();
-  const stateRoot = path.join(root, '.tmp', 'pipelines');
-  const manifest = await v2Manifest(root, 'default-snapshot-tamper', 2);
+  const manifest = await v2Manifest(root, 'default-live-update-run', 2);
   const manifestPath = path.join(root, 'manifest.json');
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
   const init = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
   assert.equal(init.status, 0, init.stderr);
-  const state = JSON.parse(init.stdout);
-  await writeFile(state.rules_file, (await readFile(state.rules_file, 'utf8')) + '\n# tampered\n');
+  const statePath = path.join(stateRoot, manifest.run_id, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
 
-  const validate = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
-  assert.notEqual(validate.status, 0);
-  assert.match(validate.stderr, /Frozen default rules snapshot changed/);
+  const liveRules = path.join(root, 'installed-pipeline-rules.default.md');
+  const oldContent = '---\ndocument_type: pipeline_rules\nrules_version: 2\nedit_policy: distribution_only\n---\n\n# old distribution policy\n';
+  const newContent = '---\ndocument_type: pipeline_rules\nrules_version: 3\nedit_policy: distribution_only\n---\n\n# updated distribution policy\n';
+  await writeFile(liveRules, newContent, 'utf8');
+  state.rules_file = liveRules;
+  state.rules_version = 2;
+  state.rules_sha256 = sha(oldContent);
+  delete state.rules_refresh_history;
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
 
-  const refresh = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot]);
-  assert.notEqual(refresh.status, 0);
-  assert.match(refresh.stderr, /Frozen default rules snapshot changed/);
+  const validate = run(root, ['validate', manifest.run_id, '--state-root', stateRoot, '--json']);
+  assert.equal(validate.status, 0, validate.stderr);
+
+  const after = JSON.parse(await readFile(statePath, 'utf8'));
+  assert.equal(after.rules_source, 'opencode_default');
+  assert.equal(after.rules_version, 3);
+  assert.equal(after.rules_sha256, sha(newContent));
+  assert.equal(after.rules_refresh_history.length, 1);
 });
 
-
-test('legacy default-rules refresh blocks when rules_version changed', async () => {
+test('invalid live rules still block validation', async () => {
   const root = await tempProject();
+  await writeProjectRules(root, '# original\n');
   const stateRoot = path.join(root, '.tmp', 'pipelines');
-  const manifest = await v2Manifest(root, 'legacy-version-change', 2);
+  const manifest = await v2Manifest(root, 'invalid-live-rules-run', 7);
   const manifestPath = path.join(root, 'manifest.json');
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
-  let result = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
-  assert.equal(result.status, 0, result.stderr);
+  const init = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
+  assert.equal(init.status, 0, init.stderr);
 
-  const statePath = path.join(stateRoot, manifest.run_id, 'state.json');
-  const state = JSON.parse(await readFile(statePath, 'utf8'));
-  state.rules_file = path.join(root, 'legacy-external-default.md');
-  state.rules_version = 999;
-  state.rules_sha256 = '0'.repeat(64);
-  delete state.rules_origin_file;
-  await writeFile(state.rules_file, '---\nrules_version: 999\nedit_policy: distribution_only\n---\n', 'utf8');
-  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-
-  result = run(root, ['rules-refresh', manifest.run_id, '--state-root', stateRoot]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /DEFAULT_RULES_VERSION_CHANGED_REPLAN_REQUIRED/);
+  await writeFile(path.join(root, 'docs', 'pipeline-rules.md'), '# invalid now\n', 'utf8');
+  const validate = run(root, ['validate', manifest.run_id, '--state-root', stateRoot]);
+  assert.notEqual(validate.status, 0);
+  assert.match(validate.stderr, /Rules file has no YAML frontmatter/);
 });
