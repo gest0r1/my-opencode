@@ -469,6 +469,34 @@ export function sanitizeGithubFailedLog(value, maxBytes = 100_000) {
   return '[TRUNCATED]\n' + output;
 }
 
+export function buildGithubBlockedEvidence({
+  candidateSha,
+  contract,
+  reason,
+  phase,
+  run,
+}) {
+  return {
+    status: 'BLOCKED',
+    failure_phase: String(phase ?? 'unknown'),
+    candidate_sha: candidateSha ?? null,
+    workflow: contract?.workflow ?? null,
+    trigger: contract?.trigger ?? null,
+    terminal_job: contract?.terminal_job ?? null,
+    required_jobs: contract?.required_jobs ?? [],
+    validation_error: String(reason ?? 'GITHUB_GATE_BLOCKED'),
+    ...(run ? {
+      workflow_run_id: Number(run?.id),
+      run_attempt: Number(run?.run_attempt ?? 1),
+      head_sha: run?.head_sha ?? null,
+      head_branch: run?.head_branch ?? null,
+      event: run?.event ?? null,
+      run_status: run?.status ?? null,
+      conclusion: run?.conclusion ?? null,
+    } : {}),
+  };
+}
+
 export function buildGithubFailureEvidence({
   run,
   jobs = [],
