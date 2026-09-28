@@ -700,11 +700,16 @@ export async function initFromManifest(
 export async function validateState(stateRoot: string, runId: string): Promise<PipelineState> {
   const state = await readState(stateRoot, runId);
   const source: RulesSource = state.rules_source ?? 'project';
-  const rules = await loadResolvedRules(state.rules_file, source);
+  const effectiveRulesFile = source === 'opencode_default' ? DEFAULT_RULES_PATH : state.rules_file;
+  const rules = await loadResolvedRules(effectiveRulesFile, source);
 
-  if (rules.metadata.rules_version !== state.rules_version || rules.sha256 !== state.rules_sha256) {
+  if (rules.path !== state.rules_file ||
+      rules.metadata.rules_version !== state.rules_version ||
+      rules.sha256 !== state.rules_sha256) {
     const previousFile = state.rules_file;
     const previousSha = state.rules_sha256;
+    state.rules_file = rules.path;
+    delete state.rules_origin_file;
     state.rules_version = rules.metadata.rules_version;
     state.rules_sha256 = rules.sha256;
     state.rules_refresh_history ??= [];
