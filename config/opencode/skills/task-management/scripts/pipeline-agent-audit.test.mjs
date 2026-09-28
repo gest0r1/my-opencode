@@ -174,17 +174,24 @@ test('canonical RUN requires deterministic v2 run-preflight before next', async 
   assert.match(orchestrator, /stage-cli run-preflight/);
 });
 
-test('pipeline contracts pin three technical-fix cycles and literal ready planning gates', async () => {
+test('pipeline contracts use an initial three-cycle budget with owner-controlled extensions', async () => {
   const plan = await text('config/opencode/command/pipeline-plan.md');
   const run = await text('config/opencode/command/pipeline-run.md');
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
   const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
+  const reviewer = await text('config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md');
 
   assert.match(plan, /up to \*\*3 cycles\*\*/);
-  assert.match(run, /Maximum \*\*3 automatic technical_fix cycles/);
-  assert.match(run, /stage-cli fix-cycle/);
-  assert.match(orchestrator, /up to 3 autonomous revision\/rerun cycles/);
-  assert.match(rules, /maximum automatic technical-fix cycles are \*\*3 per stage\/work-item\*\*/i);
+  assert.match(run, /initial automatic budget is \*\*3 technical_fix cycles/i);
+  assert.match(run, /stage-cli fix-budget-add/);
+  assert.match(run, /stage-cli runtime-replan-propose/);
+  assert.match(run, /stage-cli runtime-replan-approve/);
+  assert.match(run, /explicit owner approval even under `--unattended`/i);
+  assert.match(orchestrator, /initial fix budget is 3 cycles/i);
+  assert.match(orchestrator, /Never infer approval from `--unattended`/i);
+  assert.match(rules, /initial automatic technical-fix budget is \*\*3 per stage\/work-item\*\*/i);
+  assert.match(reviewer, /ready_for_owner_approval/);
+  assert.match(reviewer, /needs_owner_clarification/);
   assert.match(plan, /gate advances only on literal `status: ready`/i);
 });
 
