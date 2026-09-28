@@ -35,6 +35,14 @@ fail-closed.
 
 ## Planning and scope
 
+- PLAN freezes requirements, owner decisions, acceptance criteria and a minimal base implementation scope; it is not required to predict every future test/fixture/mock file.
+- Base scope supports only exact repository-relative paths or `directory/**`; other wildcard syntax is invalid before approval.
+- RUN may maintain machine-owned effective scope in state without mutating the frozen manifest. Concrete test/support paths inside an already-approved `apps/<name>` or `packages/<name>` component may be added automatically.
+- Additional production/config paths require fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer evidence proving a bounded implementation clarification with no owner decision, requirements/acceptance/external-contract/security-boundary/destructive change.
+- Runtime scope never auto-authorizes protected project-policy paths, `.github/workflows/**`, `.opencode/**`, rules, secrets or environment files.
+- Scope preflight happens before `technical_fix` is counted. A path discovered by Git verify after a cycle starts is resolved inside the same cycle; never edit manifest/state manually to bypass scope.
+
+
 - New design-freeze PLANs use manifest schema v2. Schema v1 is legacy-read compatibility only. Before owner approval, `stage-cli plan-run-preflight` plus deterministic Git adopt/verify must prove that canonical RUN would accept the manifest; `stage-cli init` never creates new v1 state.
 - PLAN has no implicit backlog-file source. `/pipeline-plan` requires explicit text/file/`#N` input or GitHub Issue refs attached by the current OpenChamber session; missing source is an error.
 - GitHub Issue refs are restricted to the current worktree repository. OpenChamber supplies identifiers only; PLAN re-fetches authoritative Issue content/state from GitHub.

@@ -1217,6 +1217,8 @@ test('technical fix after publish reopens verify and publish before GitHub CI', 
   result = invoke(['fail', fx.manifest.run_id, 'tests', '--pipeline', 'app']);
   assert.equal(result.status, 0, result.stderr);
 
+  result = invoke(['scope-check', fx.manifest.run_id, 'tests', 'src/app.ts', '--pipeline', 'app', '--json']);
+  assert.equal(result.status, 0, result.stderr);
   result = invoke(['fix-cycle', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--json']);
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(result.stdout);
@@ -1303,6 +1305,11 @@ test('technical fix counter permits exactly three cycles and blocks the fourth',
 
   for (let cycle = 1; cycle <= 3; cycle += 1) {
     result = run(fx.root, [
+      'scope-check', fx.manifest.run_id, 'implementation', 'src/app.ts', '--pipeline', 'app',
+      '--state-root', stateRoot, '--json',
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    result = run(fx.root, [
       'fix-cycle', fx.manifest.run_id, 'implementation', '--pipeline', 'app',
       '--state-root', stateRoot, '--json',
     ]);
@@ -1311,6 +1318,11 @@ test('technical fix counter permits exactly three cycles and blocks the fourth',
     assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, cycle);
   }
 
+  result = run(fx.root, [
+    'scope-check', fx.manifest.run_id, 'implementation', 'src/app.ts', '--pipeline', 'app',
+    '--state-root', stateRoot,
+  ]);
+  assert.equal(result.status, 0, result.stderr);
   result = run(fx.root, [
     'fix-cycle', fx.manifest.run_id, 'implementation', '--pipeline', 'app',
     '--state-root', stateRoot,

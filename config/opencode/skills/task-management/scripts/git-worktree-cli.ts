@@ -17,6 +17,8 @@ type GitSetup = {
 };
 type PreservedBaseline = { head_sha: string; changed_paths: string[]; diff_sha256: string; };
 type Manifest = { run_id?: string; git_setup?: GitSetup; allowed_change_paths?: string[]; freshness_sensitive_paths?: string[]; preserved_baseline?: PreservedBaseline; };
+type RuntimeScopeExtension = { timestamp?: string; scope_class?: 'test'|'technical'; paths?: string[]; reason?: string; evidence_path?: string; evidence_sha256?: string; };
+type PipelineState = { run_id?: string; runtime_scope_extensions?: RuntimeScopeExtension[]; };
 type GitRuntime = { planning_base_sha: string; run_base_sha: string; merged_head_sha: string; upstream_changed_files: string[]; refreshed_at: string; };
 class GateError extends Error {}
 
@@ -50,11 +52,18 @@ function assertSetup(value: unknown): asserts value is GitSetup {
     if (!safePath(path)) throw new GateError(`unsafe must_absent path: ${String(path)}`);
   }
 }
+function validScopePath(path: unknown): path is string {
+  if (typeof path !== 'string' || !path) return false;
+  if (path.endsWith('/**')) {
+    const base = path.slice(0, -3).replace(/\/$/, '');
+    return safePath(base) && !/[?*\[\]{}]/.test(base);
+  }
+  return safePath(path) && !/[?*\[\]{}]/.test(path);
+}
 function assertScope(paths: unknown): asserts paths is string[] | undefined {
   if (paths === undefined) return;
-  if (!Array.isArray(paths) || paths.some((path) =>
-    !safePath(typeof path === 'string' && path.endsWith('/**') ? path.slice(0, -3) : path))) {
-    throw new GateError('allowed_change_paths must contain safe repository-relative paths');
+  if (!Array.isArray(paths) || paths.some((path) => !validScopePath(path))) {
+    throw new GateError('allowed_change_paths supports only exact repository-relative paths or directory/** scopes');
   }
 }
 function matches(path: string, pattern: string): boolean {
@@ -88,6 +97,24 @@ async function inspect(cwd: string): Promise<Record<string, unknown>> {
     directory: cwd };
 }
 function runtimeEvidencePath(manifestPath:string):string{return join(dirname(resolve(manifestPath)),'git-runtime.json');}
+function statePathForManifest(manifestPath:string):string{return join(dirname(resolve(manifestPath)),'state.json');}
+async function runtimeScopeExtensions(manifest:Manifest,manifestPath:string):Promise<RuntimeScopeExtension[]>{
+  let state:PipelineState;
+  try{state=JSON.parse(await readFile(statePathForManifest(manifestPath),'utf8')) as PipelineState;}catch{return [];}
+  if(manifest.run_id&&state.run_id&&state.run_id!==manifest.run_id)throw new GateError('state.json run_id does not match manifest');
+  const extensions=state.runtime_scope_extensions??[];
+  for(const entry of extensions){
+    if(!entry||!['test','technical'].includes(String(entry.scope_class))||!Array.isArray(entry.paths)||entry.paths.length===0||
+      entry.paths.some(path=>!validScopePath(path)||path.endsWith('/**'))){
+      throw new GateError('state runtime_scope_extensions is invalid');
+    }
+  }
+  return extensions;
+}
+async function effectiveScope(manifest:Manifest,manifestPath:string):Promise<{scope:string[];extensions:RuntimeScopeExtension[]}>{
+  const extensions=await runtimeScopeExtensions(manifest,manifestPath);
+  return {scope:[...(manifest.allowed_change_paths??[]),...extensions.flatMap(entry=>entry.paths??[])],extensions};
+}
 async function readRuntime(manifestPath:string,setup:GitSetup):Promise<GitRuntime|undefined>{try{const runtime=JSON.parse(await readFile(runtimeEvidencePath(manifestPath),'utf8')) as GitRuntime;if(runtime.planning_base_sha.toLowerCase()!==setup.base_sha.toLowerCase()||!SHA.test(runtime.run_base_sha))throw new GateError('git-runtime.json does not match approved planning base');return runtime;}catch(error){if(error instanceof GateError)throw error;return undefined;}}
 async function writeJsonAtomic(file:string,value:unknown):Promise<void>{const tmp=`${file}.tmp-${process.pid}`;await writeFile(tmp,`${JSON.stringify(value,null,2)}\n`,'utf8');await rename(tmp,file);}
 async function assertIdentity(setup: GitSetup, cwd: string, manifestPath?:string): Promise<void> {
@@ -180,7 +207,7 @@ async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<
   const preserved=await validatePreservedBaseline(manifest,cwd);
   const runtime=await readRuntime(manifestPath,manifest.git_setup);
   const changed=await changedFiles(runtime?.run_base_sha??manifest.git_setup.base_sha,cwd);
-  const scope = manifest.allowed_change_paths ?? [];
+  const {scope,extensions}=await effectiveScope(manifest,manifestPath);
   const writableChanged:string[]=[];
   for (const path of changed) {
     if (sensitive(path)) throw new GateError(`sensitive path changed: ${path}`);
@@ -190,7 +217,7 @@ async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<
     }
     writableChanged.push(path);
     if (!scope.some((allowed) => matches(path, allowed))) {
-      throw new GateError(`changed path is outside approved scope: ${path}`);
+      throw new GateError(`RUNTIME_SCOPE_CHECK_REQUIRED: changed path is outside effective scope: ${path}; run stage-cli scope-check for the active technical-fix stage; do not edit manifest/state manually`);
     }
   }
   const headSha = await git(['rev-parse', 'HEAD'], cwd);
@@ -201,6 +228,8 @@ async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<
     head_sha: headSha,
     changed_files: changed,
     writable_changed_files: writableChanged,
+    effective_allowed_change_paths: scope,
+    runtime_scope_extensions: extensions,
     ...(manifest.preserved_baseline ? {
       preserved_baseline_head_sha: manifest.preserved_baseline.head_sha,
       preserved_baseline_paths: manifest.preserved_baseline.changed_paths,
@@ -214,10 +243,11 @@ async function updateRunBaseState(manifestPath:string,runBaseSha:string):Promise
 async function freshness(manifest:Manifest,manifestPath:string,cwd:string):Promise<Record<string,unknown>>{
   assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
   const info=await inspect(cwd);if(!info.linked_worktree||info.branch!==manifest.git_setup.branch)throw new GateError('freshness requires the approved owner-created linked worktree');if(!info.clean)throw new GateError('freshness requires a clean tracked checkout');await validatePreservedBaseline(manifest,cwd);
+  const runtimeScope=(await effectiveScope(manifest,manifestPath)).scope;
   if(!await gitSucceeds(['merge-base','--is-ancestor',manifest.git_setup.base_sha,'HEAD'],cwd))throw new GateError('current branch no longer contains planning base');
   await git(['fetch','origin','main:refs/remotes/origin/main'],cwd);const remoteMain=await git(['rev-parse','refs/remotes/origin/main'],cwd);const previousRuntime=await readRuntime(manifestPath,manifest.git_setup);const previousBase=previousRuntime?.run_base_sha??manifest.git_setup.base_sha;
   if(!await gitSucceeds(['merge-base','--is-ancestor',previousBase,remoteMain],cwd))throw new GateError('STALE_PLAN: origin/main history diverged from approved/effective base');
-  const upstreamChanged=(await git(['diff','--name-only',previousBase,remoteMain],cwd)).split('\n').filter(Boolean).sort();const scopes=[...(manifest.allowed_change_paths??[]),...(manifest.freshness_sensitive_paths??[]),...(manifest.preserved_baseline?.changed_paths??[])];const relevant=upstreamChanged.filter(file=>freshnessGlobal(file)||scopes.some(scope=>matches(file,scope)));if(relevant.length)throw new GateError(`STALE_PLAN: origin/main changed plan-relevant paths: ${relevant.join(', ')}`);
+  const upstreamChanged=(await git(['diff','--name-only',previousBase,remoteMain],cwd)).split('\n').filter(Boolean).sort();const scopes=[...runtimeScope,...(manifest.freshness_sensitive_paths??[]),...(manifest.preserved_baseline?.changed_paths??[])];const relevant=upstreamChanged.filter(file=>freshnessGlobal(file)||scopes.some(scope=>matches(file,scope)));if(relevant.length)throw new GateError(`STALE_PLAN: origin/main changed plan-relevant paths: ${relevant.join(', ')}`);
   if(!await gitSucceeds(['merge-base','--is-ancestor',remoteMain,'HEAD'],cwd)){try{await git(['merge','--no-edit','refs/remotes/origin/main'],cwd);}catch(error){await gitSucceeds(['merge','--abort'],cwd);throw new GateError(`STALE_PLAN: safe main merge conflicted: ${error instanceof Error?error.message:String(error)}`);}}
   const mergedHead=await git(['rev-parse','HEAD'],cwd);const runtime:GitRuntime={planning_base_sha:manifest.git_setup.base_sha,run_base_sha:remoteMain,merged_head_sha:mergedHead,upstream_changed_files:upstreamChanged,refreshed_at:new Date().toISOString()};await writeJsonAtomic(runtimeEvidencePath(manifestPath),runtime);await updateRunBaseState(manifestPath,remoteMain);return runtime;
 }

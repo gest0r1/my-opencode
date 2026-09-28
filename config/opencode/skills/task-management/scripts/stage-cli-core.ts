@@ -64,6 +64,7 @@ export interface StageCommandOptions {
   evidencePath?: string;
   environment?: boolean;
   reason?: string;
+  scopeClass?: 'test' | 'technical';
 }
 
 export interface RunnableStage {
@@ -180,11 +181,22 @@ function assertStringArray(value: unknown, field: string): asserts value is stri
   }
 }
 
+function safeScopePath(value: unknown): value is string {
+  if (typeof value !== 'string' || !value) return false;
+  if (value.endsWith('/**')) {
+    const base = value.slice(0, -3).replace(/\/$/, '');
+    return safeRepoPath(base) && !/[?*\[\]{}]/.test(base);
+  }
+  return safeRepoPath(value) && !/[?*\[\]{}]/.test(value);
+}
+
 function assertOptionalPathArray(value: unknown, field: string): void {
   if (value === undefined) return;
   assertStringArray(value, field);
-  if (value.some((item) => !safeRepoPath(item))) {
-    throw new StageCliError(`${field} must contain safe repository-relative paths`);
+  if (value.some((item) => !safeScopePath(item))) {
+    throw new StageCliError(
+      `${field} supports only exact repository-relative paths or directory/** scopes`,
+    );
   }
 }
 
@@ -194,6 +206,88 @@ function pathMatchesScope(path: string, scope: string): boolean {
     return path === prefix || path.startsWith(`${prefix}/`);
   }
   return path === scope;
+}
+
+function effectiveAllowedChangePaths(manifest: PipelineManifest, state: PipelineState): string[] {
+  return [
+    ...(manifest.allowed_change_paths ?? []),
+    ...(state.runtime_scope_extensions ?? []).flatMap((entry) => entry.paths),
+  ];
+}
+
+function componentRoot(path: string): string | undefined {
+  const parts = path.split('/');
+  if ((parts[0] === 'apps' || parts[0] === 'packages') && parts.length >= 2) {
+    return `${parts[0]}/${parts[1]}`;
+  }
+  return undefined;
+}
+
+function isTestSupportPath(path: string): boolean {
+  const parts = path.split('/');
+  const testSegment = parts.some((part) =>
+    ['test', 'tests', '__tests__', 'fixtures', 'fixture', 'mocks', '__mocks__', 'snapshots', '__snapshots__'].includes(part));
+  const testFile = /(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$/i.test(path);
+  return testSegment || testFile;
+}
+
+function canAutoExtendTestScope(path: string, manifest: PipelineManifest, state: PipelineState): boolean {
+  if (!isTestSupportPath(path)) return false;
+  const root = componentRoot(path);
+  if (!root) return false;
+  return effectiveAllowedChangePaths(manifest, state).some((scope) => {
+    const normalized = scope.endsWith('/**') ? scope.slice(0, -3).replace(/\/$/, '') : scope;
+    return normalized === root || normalized.startsWith(`${root}/`);
+  });
+}
+
+function readFrozenManifestFromState(state: PipelineState): PipelineManifest {
+  if (!state.manifest_file) throw new StageCliError('Frozen manifest is missing');
+  try {
+    return JSON.parse(readFileSync(state.manifest_file, 'utf8')) as PipelineManifest;
+  } catch {
+    throw new StageCliError('Frozen manifest is missing or invalid');
+  }
+}
+
+function scopeOutput(state: PipelineState, manifest: PipelineManifest, paths: string[]) {
+  return {
+    status: 'PASS' as const,
+    run_id: state.run_id,
+    requested_paths: paths,
+    effective_allowed_change_paths: effectiveAllowedChangePaths(manifest, state),
+    runtime_scope_extensions: state.runtime_scope_extensions ?? [],
+  };
+}
+
+function runtimeScopeSensitive(path: string): boolean {
+  const name = path.split('/').pop() ?? path;
+  return path === 'docs/pipeline-rules.md' ||
+    path.startsWith('.github/workflows/') ||
+    path.startsWith('.opencode/') ||
+    name === '.env' ||
+    (/^\.env\./.test(name) && name !== '.env.example') ||
+    /\.(key|pem|p12|pfx|secret)$/i.test(name);
+}
+
+function runtimeScopeProtectedByPolicy(manifest: PipelineManifest, path: string): boolean {
+  if (!manifest.project_policy?.path) return false;
+  let policy: any;
+  try {
+    policy = JSON.parse(readFileSync(resolve(manifest.project_policy.path), 'utf8'));
+  } catch {
+    throw new StageCliError('Project policy is missing or invalid while checking runtime scope');
+  }
+  return (policy.protected_paths ?? []).some((scope: string) =>
+    typeof scope === 'string' && pathMatchesScope(path, scope));
+}
+
+function assertRuntimeScopeExtensible(manifest: PipelineManifest, path: string): void {
+  if (runtimeScopeSensitive(path) || runtimeScopeProtectedByPolicy(manifest, path)) {
+    throw new StageCliError(
+      `OWNER_OR_REPLAN_REQUIRED: runtime scope cannot auto-authorize protected/sensitive path: ${path}`,
+    );
+  }
 }
 
 export async function hashRunArtifacts(
@@ -924,6 +1018,153 @@ async function updateState(
   }
 }
 
+export async function checkRuntimeScope(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  paths: string[],
+  pipelineId?: string,
+): Promise<{ status: 'PASS'; run_id: string; requested_paths: string[]; effective_allowed_change_paths: string[]; runtime_scope_extensions: NonNullable<PipelineState['runtime_scope_extensions']> }> {
+  if (!paths.length) throw new StageCliError('scope-check requires at least one repository path');
+  for (const path of paths) {
+    if (!safeRepoPath(path) || /[?*\[\]{}]/.test(path)) {
+      throw new StageCliError(`scope-check requires concrete safe repository paths: ${path}`);
+    }
+  }
+
+  let output: ReturnType<typeof scopeOutput> | undefined;
+  await updateState(stateRoot, runId, (state) => {
+    const pipeline = getPipeline(state, pipelineId);
+    if (!pipeline.stages[stage]) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    const manifest = readFrozenManifestFromState(state);
+    const effective = effectiveAllowedChangePaths(manifest, state);
+    const outside = paths.filter((path) => !effective.some((scope) => pathMatchesScope(path, scope)));
+    for (const path of outside) assertRuntimeScopeExtensible(manifest, path);
+    const autoTests = outside.filter((path) => canAutoExtendTestScope(path, manifest, state));
+    const unresolved = outside.filter((path) => !autoTests.includes(path));
+
+    if (unresolved.length) {
+      throw new StageCliError(
+        `TECHNICAL_SCOPE_REVIEW_REQUIRED: ${unresolved.join(', ')}; do not edit manifest/state and do not consume a technical_fix cycle`,
+      );
+    }
+
+    if (autoTests.length) {
+      state.runtime_scope_extensions ??= [];
+      const newPaths = autoTests.filter((path) =>
+        !state.runtime_scope_extensions!.some((entry) => entry.paths.includes(path)));
+      if (newPaths.length) {
+        state.runtime_scope_extensions.push({
+          timestamp: now(),
+          scope_class: 'test',
+          paths: newPaths,
+          reason: 'automatic test/support scope extension for an already-approved component',
+        });
+      }
+    }
+
+    state.scope_preflight = {
+      timestamp: now(),
+      pipeline_id: pipeline.id,
+      stage,
+      paths: [...paths],
+    };
+    output = scopeOutput(state, manifest, paths);
+  });
+  return output!;
+}
+
+type TechnicalScopeReview = {
+  status?: unknown;
+  scope_class?: unknown;
+  paths?: unknown;
+  architecture_status?: unknown;
+  review_status?: unknown;
+  owner_decision_required?: unknown;
+  requirements_changed?: unknown;
+  acceptance_criteria_changed?: unknown;
+  external_contract_changed?: unknown;
+  security_boundary_changed?: unknown;
+  destructive_change?: unknown;
+};
+
+export async function authorizeTechnicalScope(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  paths: string[],
+  evidencePath: string,
+  pipelineId?: string,
+): Promise<{ status: 'PASS'; run_id: string; requested_paths: string[]; effective_allowed_change_paths: string[]; runtime_scope_extensions: NonNullable<PipelineState['runtime_scope_extensions']> }> {
+  if (!paths.length) throw new StageCliError('scope-extend requires at least one repository path');
+  for (const path of paths) {
+    if (!safeRepoPath(path) || /[?*\[\]{}]/.test(path) || isTestSupportPath(path)) {
+      throw new StageCliError(`technical scope extension requires concrete non-test repository paths: ${path}`);
+    }
+  }
+
+  const root = resolve(stateRoot, runId);
+  const absoluteEvidence = resolve(evidencePath.startsWith('/') ? evidencePath : join(process.cwd(), evidencePath));
+  if (!absoluteEvidence.startsWith(`${root}/`)) {
+    throw new StageCliError('technical scope review evidence must live inside the current run directory');
+  }
+  const evidenceContent = await readFile(absoluteEvidence, 'utf8').catch(() => {
+    throw new StageCliError(`technical scope review evidence not found: ${evidencePath}`);
+  });
+  let review: TechnicalScopeReview;
+  try {
+    review = JSON.parse(evidenceContent) as TechnicalScopeReview;
+  } catch {
+    throw new StageCliError('technical scope review evidence is not valid JSON');
+  }
+  const sortedRequested = [...paths].sort();
+  const sortedReviewed = Array.isArray(review.paths) ? [...review.paths].map(String).sort() : [];
+  const ready =
+    review.status === 'ready' &&
+    review.scope_class === 'technical' &&
+    review.architecture_status === 'ready' &&
+    review.review_status === 'ready' &&
+    review.owner_decision_required === false &&
+    review.requirements_changed === false &&
+    review.acceptance_criteria_changed === false &&
+    review.external_contract_changed === false &&
+    review.security_boundary_changed === false &&
+    review.destructive_change === false &&
+    JSON.stringify(sortedRequested) === JSON.stringify(sortedReviewed);
+  if (!ready) {
+    throw new StageCliError('OWNER_OR_REPLAN_REQUIRED: technical scope review did not prove a decision-free bounded clarification');
+  }
+
+  let output: ReturnType<typeof scopeOutput> | undefined;
+  await updateState(stateRoot, runId, (state) => {
+    const pipeline = getPipeline(state, pipelineId);
+    if (!pipeline.stages[stage]) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    const manifest = readFrozenManifestFromState(state);
+    const effective = effectiveAllowedChangePaths(manifest, state);
+    const newPaths = paths.filter((path) => !effective.some((scope) => pathMatchesScope(path, scope)));
+    for (const path of newPaths) assertRuntimeScopeExtensible(manifest, path);
+    if (newPaths.length) {
+      state.runtime_scope_extensions ??= [];
+      state.runtime_scope_extensions.push({
+        timestamp: now(),
+        scope_class: 'technical',
+        paths: newPaths,
+        reason: 'autonomous architecture clarification inside approved requirements/acceptance boundaries',
+        evidence_path: absoluteEvidence,
+        evidence_sha256: sha256(evidenceContent),
+      });
+    }
+    state.scope_preflight = {
+      timestamp: now(),
+      pipeline_id: pipeline.id,
+      stage,
+      paths: [...paths],
+    };
+    output = scopeOutput(state, manifest, paths);
+  });
+  return output!;
+}
+
 export async function approvePipeline(stateRoot: string, runId: string): Promise<PipelineState> {
   return updateState(stateRoot, runId, (state) => {
     if (state.status !== 'planned') throw new StageCliError(`Cannot approve run while it is ${state.status}`);
@@ -1032,6 +1273,12 @@ export async function recordTechnicalFixCycle(
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    const scopePreflight = state.scope_preflight;
+    if (!scopePreflight || scopePreflight.pipeline_id !== pipeline.id || scopePreflight.stage !== stage) {
+      throw new StageCliError(
+        `SCOPE_PREFLIGHT_REQUIRED: run stage-cli scope-check ${runId} ${stage} <planned-path>... --pipeline ${pipeline.id} before fix-cycle`,
+      );
+    }
     if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
       throw new StageCliError(`Technical fix cycle is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
     }
@@ -1041,6 +1288,7 @@ export async function recordTechnicalFixCycle(
     }
     runtime.technical_fix_cycles = next;
     runtime.message = `technical_fix cycle ${next}/3`;
+    state.scope_preflight = undefined;
 
     // If this fix happens after a candidate was already published, the source-changing
     // repair must force a fresh verify -> publish -> GitHub CI/DEV chain. We invalidate
@@ -1222,6 +1470,11 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
     else if (argument === '--evidence') options.evidencePath = args[++index];
     else if (argument === '--environment') options.environment = true;
     else if (argument === '--reason') options.reason = args[++index];
+    else if (argument === '--class') {
+      const value = args[++index];
+      if (value !== 'test' && value !== 'technical') throw new StageCliError('--class must be test or technical');
+      options.scopeClass = value;
+    }
     else if (argument?.startsWith('--')) throw new StageCliError(`Unknown option: ${argument}`);
     else if (argument) positional.push(argument);
   }
@@ -1289,6 +1542,8 @@ function usage(): string {
     '  stage-cli owner-accept <run-id> <stage> --pipeline <id> --result pass|fail [--message <text>]',
     '  stage-cli fail|block <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
     '  stage-cli resume <run-id> <stage> [--pipeline <id>]',
+    '  stage-cli scope-check <run-id> <stage> <path>... [--pipeline <id>] [--json]',
+    '  stage-cli scope-extend <run-id> <stage> <path>... --class technical --evidence <run-artifact.json> [--pipeline <id>] [--json]',
     '  stage-cli fix-cycle <run-id> <stage> [--pipeline <id>] [--json]',
     '  stage-cli supersede <old-run-id> <new-run-id> --reason <reason-code> [--state-root <path>] [--json]',
   ].join('\n');
@@ -1404,6 +1659,27 @@ export async function runCli(args: string[]): Promise<void> {
     const { preflightFile } = await import('./manifest-preflight.mjs');
     await preflightFile(state.manifest_file, { environment: true, cwd: process.cwd() });
     printState(await approvePipeline(options.stateRoot, runId), options.json);
+    return;
+  }
+  if (command === 'scope-check') {
+    const stage = positional[2];
+    if (!stage) throw new StageCliError('stage is required');
+    const result = await checkRuntimeScope(options.stateRoot, runId, stage, positional.slice(3), options.pipelineId);
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else console.log(`PASS effective_scope=${result.effective_allowed_change_paths.length} requested=${result.requested_paths.length}`);
+    return;
+  }
+  if (command === 'scope-extend') {
+    const stage = positional[2];
+    if (!stage) throw new StageCliError('stage is required');
+    if (options.scopeClass !== 'technical' || !options.evidencePath) {
+      throw new StageCliError('scope-extend requires --class technical --evidence <run-artifact.json>');
+    }
+    const result = await authorizeTechnicalScope(
+      options.stateRoot, runId, stage, positional.slice(3), options.evidencePath, options.pipelineId,
+    );
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else console.log(`PASS effective_scope=${result.effective_allowed_change_paths.length} requested=${result.requested_paths.length}`);
     return;
   }
   if (command === 'fix-cycle') {

@@ -47,6 +47,13 @@ The v2 manifest also freezes:
 - optional `preserved_baseline` exact HEAD/path/diff identity for existing implementation;
 - optional reason-coded `lineage` for supersede/replan history.
 
+Runtime effective scope is deliberately separate from the frozen manifest. PLAN freezes
+requirements, owner decisions, acceptance criteria and a minimal base implementation scope.
+RUN may add exact machine-owned test/support paths inside an already-approved app/package
+component. Additional production/config paths require fresh architecture + senior review proving
+a decision-free bounded clarification. Protected/security/trust-boundary paths still require
+owner/replan. Scope authorization happens before a new technical-fix cycle is counted.
+
 Planning/review evidence is append-only. Stable Issue story files are the
 exception: owner corrections update the same `stories/issue-N.md` file.
 
@@ -294,7 +301,7 @@ a duplicate.
 Use different mechanisms for different changes:
 
 - planning revision before init → same run-id;
-- technical fix during RUN → same run-id, maximum three cycles;
+- technical fix during RUN → same run-id, maximum three cycles; bounded machine-owned runtime scope extensions remain in the same run and do not rewrite the manifest;
 - frozen V2 manifest correction after init → `stage-cli supersede <old> <new> --reason <code>`;
 - architecture/scope/main-drift replan → new run with reason-coded `lineage.change_class=replan`.
 

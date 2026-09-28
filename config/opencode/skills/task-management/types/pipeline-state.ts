@@ -245,6 +245,24 @@ export interface PipelineRuntime {
   current_stage?: string;
 }
 
+export type RuntimeScopeClass = 'test' | 'technical';
+
+export interface RuntimeScopeExtension {
+  timestamp: string;
+  scope_class: RuntimeScopeClass;
+  paths: string[];
+  reason: string;
+  evidence_path?: string;
+  evidence_sha256?: string;
+}
+
+export interface ScopePreflight {
+  timestamp: string;
+  pipeline_id: string;
+  stage: string;
+  paths: string[];
+}
+
 export interface PipelineState {
   schema_version: number;
   run_id: string;
@@ -262,6 +280,8 @@ export interface PipelineState {
     new_file: string;
     new_sha256: string;
   }>;
+  runtime_scope_extensions?: RuntimeScopeExtension[];
+  scope_preflight?: ScopePreflight;
   project_policy_file?: string;
   project_policy_sha256?: string;
   status: PipelineStatus;
