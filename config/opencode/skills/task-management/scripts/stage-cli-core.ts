@@ -556,33 +556,6 @@ function lockPath(stateRoot: string, runId: string): string {
   return join(stateDir(stateRoot, runId), LOCK_FILE);
 }
 
-function rulesSnapshotPath(stateRoot: string, runId: string): string {
-  return join(stateDir(stateRoot, runId), 'rules', 'pipeline-rules.default.md');
-}
-
-function isRunLocalRulesSnapshot(stateRoot: string, runId: string, rulesFile: string): boolean {
-  return resolve(rulesFile) === resolve(rulesSnapshotPath(stateRoot, runId));
-}
-
-async function writeDefaultRulesSnapshot(
-  stateRoot: string,
-  runId: string,
-  rules: ResolvedRules,
-): Promise<string> {
-  if (rules.source !== 'opencode_default') {
-    throw new StageCliError('Default-rules snapshot requires opencode_default source');
-  }
-  const snapshot = rulesSnapshotPath(stateRoot, runId);
-  await mkdir(dirname(snapshot), { recursive: true });
-  await writeFile(snapshot, rules.content, 'utf8');
-  const frozen = await loadResolvedRules(snapshot, 'opencode_default');
-  if (frozen.sha256 !== rules.sha256 ||
-      frozen.metadata.rules_version !== rules.metadata.rules_version) {
-    throw new StageCliError('Default-rules snapshot verification failed');
-  }
-  return snapshot;
-}
-
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   const temporaryPath = `${path}.tmp-${process.pid}`;
   await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
@@ -717,10 +690,6 @@ export async function initFromManifest(
     if (await fileExists(statePath(stateRoot, manifest.run_id))) {
       throw new StageCliError(`State already exists: ${manifest.run_id}`);
     }
-    if (rules.source === 'opencode_default') {
-      state.rules_origin_file = rules.path;
-      state.rules_file = await writeDefaultRulesSnapshot(stateRoot, manifest.run_id, rules);
-    }
     await writeJsonAtomic(statePath(stateRoot, manifest.run_id), state);
   } finally {
     await unlock();
@@ -728,82 +697,26 @@ export async function initFromManifest(
   return state;
 }
 
-export async function refreshDefaultRulesSnapshot(
-  stateRoot: string,
-  runId: string,
-): Promise<PipelineState> {
-  const unlock = await acquireLock(stateRoot, runId);
-  try {
-    const state = await readState(stateRoot, runId);
-    if ((state.rules_source ?? 'project') !== 'opencode_default') {
-      throw new StageCliError('RULES_REFRESH_FORBIDDEN: project rules cannot be refreshed by pipeline');
-    }
-    if (state.superseded_by) {
-      throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by}`);
-    }
-    if (state.status === 'completed') {
-      throw new StageCliError('RULES_REFRESH_FORBIDDEN: completed run is audit-only');
-    }
+export async function validateState(stateRoot: string, runId: string): Promise<PipelineState> {
+  const state = await readState(stateRoot, runId);
+  const source: RulesSource = state.rules_source ?? 'project';
+  const rules = await loadResolvedRules(state.rules_file, source);
 
-    if (isRunLocalRulesSnapshot(stateRoot, runId, state.rules_file)) {
-      const frozen = await loadResolvedRules(state.rules_file, 'opencode_default');
-      if (frozen.metadata.rules_version !== state.rules_version || frozen.sha256 !== state.rules_sha256) {
-        throw new StageCliError('Frozen default rules snapshot changed since pipeline initialization');
-      }
-      return state;
-    }
-
-    const current = await loadResolvedRules(DEFAULT_RULES_PATH, 'opencode_default');
-    if (current.metadata.rules_version !== state.rules_version) {
-      throw new StageCliError(
-        `DEFAULT_RULES_VERSION_CHANGED_REPLAN_REQUIRED: state=${state.rules_version} current=${current.metadata.rules_version}`,
-      );
-    }
-
+  if (rules.metadata.rules_version !== state.rules_version || rules.sha256 !== state.rules_sha256) {
     const previousFile = state.rules_file;
     const previousSha = state.rules_sha256;
-    const snapshot = await writeDefaultRulesSnapshot(stateRoot, runId, current);
-    state.rules_origin_file = DEFAULT_RULES_PATH;
-    state.rules_file = snapshot;
-    state.rules_sha256 = current.sha256;
+    state.rules_version = rules.metadata.rules_version;
+    state.rules_sha256 = rules.sha256;
     state.rules_refresh_history ??= [];
     state.rules_refresh_history.push({
       timestamp: now(),
       previous_file: previousFile,
       previous_sha256: previousSha,
-      new_file: snapshot,
-      new_sha256: current.sha256,
+      new_file: rules.path,
+      new_sha256: rules.sha256,
     });
     state.updated_at = now();
     await writeJsonAtomic(statePath(stateRoot, runId), state);
-    return state;
-  } finally {
-    await unlock();
-  }
-}
-
-export async function validateState(stateRoot: string, runId: string): Promise<PipelineState> {
-  const state = await readState(stateRoot, runId);
-  const source: RulesSource = state.rules_source ?? 'project';
-  if (source === 'opencode_default' && !isRunLocalRulesSnapshot(stateRoot, runId, state.rules_file)) {
-    throw new StageCliError(
-      `DEFAULT_RULES_SNAPSHOT_REQUIRED: legacy run references mutable distribution rules; run stage-cli rules-refresh ${runId} --state-root ${stateRoot}`,
-    );
-  }
-  const rules = await loadResolvedRules(state.rules_file, source);
-  if (rules.metadata.rules_version !== state.rules_version) {
-    throw new StageCliError(
-      source === 'opencode_default'
-        ? 'Frozen default rules snapshot version changed'
-        : 'Rules version changed since pipeline initialization',
-    );
-  }
-  if (rules.sha256 !== state.rules_sha256) {
-    throw new StageCliError(
-      source === 'opencode_default'
-        ? 'Frozen default rules snapshot changed since pipeline initialization'
-        : 'Rules file changed since pipeline initialization',
-    );
   }
 
   if (state.manifest_file && state.manifest_sha256) {
@@ -1356,7 +1269,6 @@ function usage(): string {
   return [
     'Usage:',
     '  stage-cli rules [rules-file] [--json]',
-    '  stage-cli rules-refresh <run-id> [--state-root <path>] [--json]',
     '  stage-cli preflight <manifest> [--environment] [--json]',
     '  stage-cli plan-run-preflight <manifest> [--environment] [--json]',
     '  stage-cli artifacts <run-id> <run-relative-path>... [--state-root <path>] [--json]',
@@ -1384,12 +1296,6 @@ export async function runCli(args: string[]): Promise<void> {
 
   if (command === 'rules') {
     printRules(await resolveEffectiveRules(positional[1] ?? 'docs/pipeline-rules.md'), options.json);
-    return;
-  }
-  if (command === 'rules-refresh') {
-    const runId = positional[1];
-    if (!runId) throw new StageCliError('run-id is required');
-    printState(await refreshDefaultRulesSnapshot(options.stateRoot, runId), options.json);
     return;
   }
   if (command === 'preflight') {
