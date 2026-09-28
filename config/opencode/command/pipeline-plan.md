@@ -10,7 +10,7 @@ tags:
 
 Build a design-freeze PLAN only. Never implement source changes, create a worktree/branch/session, switch checkout, rebase, merge, clean, reset or invoke `openchamber session.create`. Owner opens an existing worktree-session and invokes this command inside that session. Other worktrees may PLAN concurrently; only one RUN executes at a time.
 
-`$ARGUMENTS` selects exactly one source mode: same-repository Issue refs such as `#51 #47`; an existing task/plan file path; or free task text. Empty arguments are allowed only when OpenChamber attached synthetic context contains `Linked GitHub issues for this session:` with at least one `owner/repo#N` ref. There is NO fallback to `docs/plan.md`. Explicit `#N` arguments override linked refs. `docs/pipeline-rules.md` remains the rules path; project rules take precedence and invalid rules BLOCK.
+`$ARGUMENTS` selects exactly one source mode: same-repository Issue refs such as `#51 #47`; an existing task/plan file path; or free task text. Empty arguments are allowed only when OpenChamber attached synthetic context contains `Linked GitHub issues for this session:` with at least one `owner/repo#N` ref. There is NO fallback to `docs/plan.md`. Explicit `#N` arguments override linked refs. `docs/pipeline-rules.md` remains the rules path; project rules take precedence and invalid rules BLOCK. PLAN and all delegated agents must never edit project or distribution rules.
 
 ## Preflight: inspect only
 
@@ -116,7 +116,7 @@ Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum`
 
 New PLANs MUST use `schema_version: 2`, `planning_mode: "design-freeze"` and:
 
-- frozen rules version;
+- rules version recorded at approval for initial consistency; RUN later adopts externally changed live rules metadata without rewriting the manifest;
 - `git_setup`, `allowed_change_paths`, `freshness_sensitive_paths`;
 - pipelines/DAG, explicit `deployable`, mandatory `deployment_validation` + owner-selected `testing_strategy` for deployable pipelines, explicit `executors[stage_id]` including `owner_acceptance`, active `github_gates[stage_id]`, deferred `future_github_gates`, local-only `gate_profiles`, conflict metadata and work-item mappings;
 - `planning_readiness.design_freeze: true`;
