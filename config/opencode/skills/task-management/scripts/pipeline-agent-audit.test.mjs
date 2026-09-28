@@ -226,16 +226,30 @@ test('GitHub gate reliability keeps pre-terminal evidence and real negative live
 });
 
 
-test('default rules drift is repaired deterministically without owner state edits', async () => {
+test('rules drift is adopted from the current file for both rule sources', async () => {
   const run = await text('config/opencode/command/pipeline-run.md');
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
   const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
 
-  assert.match(run, /DEFAULT_RULES_SNAPSHOT_REQUIRED/);
-  assert.match(run, /stage-cli rules-refresh/);
-  assert.match(run, /do \*\*not\*\* ask the owner to edit state|Never ask the owner to edit `state\.json`/i);
-  assert.match(orchestrator, /DEFAULT_RULES_SNAPSHOT_REQUIRED/);
-  assert.match(orchestrator, /rules-refresh/);
-  assert.match(rules, /run-local snapshot/i);
-  assert.match(rules, /version change requires replan/i);
+  assert.match(run, /Rules are live external policy/i);
+  assert.match(run, /changed rules hash\/version is not a blocker/i);
+  assert.match(orchestrator, /changed rules version\/SHA metadata is adopted automatically/i);
+  assert.match(rules, /project-local .* and distribution .* follow the same lifecycle/is);
+  assert.match(rules, /does not BLOCK by itself/i);
+  assert.doesNotMatch(run, /DEFAULT_RULES_SNAPSHOT_REQUIRED|stage-cli rules-refresh/);
+});
+
+test('pipeline source-mutating agents cannot edit project rules', async () => {
+  for (const file of [
+    'config/opencode/agent/subagents/code/coder-agent.md',
+    'config/opencode/agent/subagents/code/test-engineer.md',
+    'config/opencode/agent/subagents/core/documentation.md',
+    'config/opencode/agent/subagents/development/devops-specialist.md',
+  ]) {
+    const yaml = frontmatter(await text(file));
+    assert.match(yaml, /["']docs\/pipeline-rules\.md["']:\s*deny/, file);
+  }
+
+  const config = JSON.parse(await text('config/opencode/opencode.json'));
+  assert.equal(config.agent.CoderAgent.permission.edit['docs/pipeline-rules.md'], 'deny');
 });
