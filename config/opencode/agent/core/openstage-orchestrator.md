@@ -102,7 +102,7 @@ Do not duplicate their procedures in this agent prompt:
 - `stage-cli` owns rules/manifest freeze, DAG readiness and state transitions.
 - `git-worktree-cli` owns source identity, changed-file scope and candidate publish.
 - `gate-runner-cli` owns explicitly local fast/runtime command execution, evidence and shared runtime locks.
-- `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV inspection, validation, exact-candidate run selection, PASS/FAIL evidence and redacted failure diagnostics.
+- `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV inspection, validation, exact-candidate run selection, PASS/terminal-FAIL/pre-terminal-BLOCKED evidence and redacted failure diagnostics.
 - `deployment-target-cli` owns GitHub-initiated readiness probes for the OpenCode-host deployment target; agents never receive raw `gh` or SSH capability.
 - `github-issue-cli` owns authenticated same-repository Issue snapshots for PLAN.
 - `pipeline-github-sync` owns idempotent Issue status/PR-link comments; `github-pr-cli` owns create/update of the single non-merged PR to `main`.
