@@ -169,13 +169,13 @@ implementation/review
 .tmp/pipelines/<run-id>/candidate.json
 ```
 
-For `github_ci`/`github_dev`, `github-actions-gate-cli` structurally validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch and frozen event/workflow. Candidate CI must be read-only, secret-free and path-filter-free; every frozen required job plus the terminal job must complete successfully. Required artifacts are bound by GitHub artifact ID and `sha256:` digest. DEV evidence additionally points to the exact source CI run, repeats the same source artifact ID/digest, and for OpenCode-host CD repeats the frozen logical `target_id`. PASS **and terminal FAIL** evidence is written under:
+For `github_ci`/`github_dev`, `github-actions-gate-cli` structurally validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch and frozen event/workflow. Candidate CI must be read-only, secret-free and path-filter-free; every frozen required job plus the terminal job must complete successfully. Required artifacts are bound by GitHub artifact ID and `sha256:` digest. DEV evidence additionally points to the exact source CI run, repeats the same source artifact ID/digest, and for OpenCode-host CD repeats the frozen logical `target_id`. PASS, terminal FAIL, and pre-terminal BLOCKED evidence are written under:
 
 ```text
 .tmp/pipelines/<run-id>/github/<pipeline>-<stage>.json
 ```
 
-On FAIL the evidence retains exact run/attempt identity, job and failed-step conclusions, artifacts and a bounded redacted failed-log excerpt. `github-actions-gate-cli diagnose` can refresh a separate diagnostics file without giving OpenStage raw `gh` permission.
+Terminal FAIL retains exact run/attempt identity, job and failed-step conclusions, artifacts and a bounded redacted failed-log excerpt. Failures before a terminal run (for example workflow validation drift, source-CI/environment readiness, dispatch denial, run discovery/fetch failure, terminal metadata fetch failure or timeout) write `status=BLOCKED` with a deterministic `failure_phase`, candidate/workflow identity and observed run identity when one exists. `github-actions-gate-cli show` therefore remains useful even when no terminal run exists. `diagnose` refreshes terminal-run diagnostics without giving OpenStage raw `gh` permission.
 
 `stage-cli complete` re-validates canonical machine evidence before allowing a `local_gate`, `git_verify`, `git_publish`, `github_ci` or `github_dev` stage to complete. A model statement that a check passed is insufficient.
 
