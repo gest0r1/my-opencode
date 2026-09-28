@@ -65,6 +65,7 @@ jobs:
             config/opencode/skills/task-management/scripts/worktree-refresh.test.mjs \
             config/opencode/skills/task-management/scripts/github-handoff-core.test.mjs \
             config/opencode/skills/task-management/scripts/github-actions-gate-cli.test.mjs \
+            config/opencode/skills/task-management/scripts/github-actions-gate-runtime.test.mjs \
             config/opencode/skills/task-management/scripts/github-actions-hardening.test.mjs \
             config/opencode/skills/task-management/scripts/deployment-target-cli.test.mjs \
             config/opencode/skills/task-management/scripts/github-issue-cli.test.mjs \
