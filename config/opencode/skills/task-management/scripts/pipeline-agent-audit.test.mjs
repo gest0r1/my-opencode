@@ -224,3 +224,18 @@ test('GitHub gate reliability keeps pre-terminal evidence and real negative live
   assert.match(negative, /Intentional fixture failure/);
   assert.match(contracts, /github-actions-gate-runtime\.test\.mjs/);
 });
+
+
+test('default rules drift is repaired deterministically without owner state edits', async () => {
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
+
+  assert.match(run, /DEFAULT_RULES_SNAPSHOT_REQUIRED/);
+  assert.match(run, /stage-cli rules-refresh/);
+  assert.match(run, /Never ask the owner to edit `state\.json`/i);
+  assert.match(orchestrator, /DEFAULT_RULES_SNAPSHOT_REQUIRED/);
+  assert.match(orchestrator, /rules-refresh/);
+  assert.match(rules, /run-local snapshot/i);
+  assert.match(rules, /version change requires replan/i);
+});
