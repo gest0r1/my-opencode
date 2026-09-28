@@ -40,6 +40,10 @@ CI/CD evidence связывает candidate SHA, workflow run/attempt, required 
 
 После `init` frozen manifest не правится. Коррекция frozen V2 создаётся командой `stage-cli supersede <old-run> <new-run> --reason <code>`: копируется только planning/source/work-item контекст, но не state/candidate/gate/GitHub evidence. Для каждого нового run сохраняется reason-coded lineage.
 
+## Runtime implementation scope
+
+The approved manifest freezes product decisions, acceptance criteria and base implementation scope, not an exhaustive list of future test files. RUN can add audited machine-owned test/support paths for already-approved app/package components. Additional production/config paths require decision-free architecture/reviewer evidence; protected/security/trust-boundary changes still require owner/replan. The frozen manifest itself is never rewritten.
+
 ## Live rules
 
 Project `docs/pipeline-rules.md` and OpenCode's distribution `pipeline-rules.default.md` follow the same rule lifecycle. Pipeline commands and their agents never edit either rules source.
