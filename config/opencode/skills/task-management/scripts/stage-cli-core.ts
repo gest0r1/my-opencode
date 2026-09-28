@@ -556,6 +556,33 @@ function lockPath(stateRoot: string, runId: string): string {
   return join(stateDir(stateRoot, runId), LOCK_FILE);
 }
 
+function rulesSnapshotPath(stateRoot: string, runId: string): string {
+  return join(stateDir(stateRoot, runId), 'rules', 'pipeline-rules.default.md');
+}
+
+function isRunLocalRulesSnapshot(stateRoot: string, runId: string, rulesFile: string): boolean {
+  return resolve(rulesFile) === resolve(rulesSnapshotPath(stateRoot, runId));
+}
+
+async function writeDefaultRulesSnapshot(
+  stateRoot: string,
+  runId: string,
+  rules: ResolvedRules,
+): Promise<string> {
+  if (rules.source !== 'opencode_default') {
+    throw new StageCliError('Default-rules snapshot requires opencode_default source');
+  }
+  const snapshot = rulesSnapshotPath(stateRoot, runId);
+  await mkdir(dirname(snapshot), { recursive: true });
+  await writeFile(snapshot, rules.content, 'utf8');
+  const frozen = await loadResolvedRules(snapshot, 'opencode_default');
+  if (frozen.sha256 !== rules.sha256 ||
+      frozen.metadata.rules_version !== rules.metadata.rules_version) {
+    throw new StageCliError('Default-rules snapshot verification failed');
+  }
+  return snapshot;
+}
+
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   const temporaryPath = `${path}.tmp-${process.pid}`;
   await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
