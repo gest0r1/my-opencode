@@ -111,7 +111,7 @@ exit 96
         )
         env.pop("OPENCHAMBER_BIND_HOST")
         run_installer(env)
-        assert sum("release download" in line for line in log.read_text().splitlines()) == 2
+        assert sum("release download" in line for line in log.read_text().splitlines()) == 3
         print("PASS: Docker bridge selects wildcard bind with no unnecessary archive download")
 
         # The operator can explicitly restore the old interface-only bind.
@@ -120,7 +120,7 @@ exit 96
         )
         env["OPENCHAMBER_BIND_HOST"] = "172.18.0.1"
         run_installer(env)
-        assert sum("release download" in line for line in log.read_text().splitlines()) == 3
+        assert sum("release download" in line for line in log.read_text().splitlines()) == 4
         print("PASS: explicit bind override remains available for rollback")
 
 
