@@ -131,8 +131,7 @@ parallel orchestration protocol.
    delegated to scoped working agents. `/pipeline-refresh` is the explicit
    owner exception: only the installed deterministic script may perform its
    documented backup and Git updates; agent itself edits no source or state.
-10. Owner decisions and scope expansion require re-planning/approval; routine
-   actions inside an approved `--unattended` run do not ask again.
+10. Owner decisions require re-planning/approval. RUN may extend machine-owned effective scope without changing the frozen manifest: test/support paths are deterministic, and bounded technical paths require fresh architecture + senior review proving no owner decision or requirements/acceptance/contract/security/destructive change. Routine actions inside an approved `--unattended` run do not ask again.
 11. Deterministic CLIs own Git/GitHub operations: `publish` owns add/commit/push; GitHub `run/diagnose/log` owns CI evidence and logs. Ask the owner only on explicit auth/permission/`OWNER_ACTION_REQUIRED` blockers.
 
 ## Planning delegation
@@ -175,9 +174,7 @@ completes a machine stage. If project CI is missing/incompatible, execute the fr
 work item, validate the resulting workflow deterministically, publish it with the candidate and
 then wait for GitHub Actions; never fall back to a local final build/test. On GitHub FAIL use `diagnose` and its per-job logs (or `log --job|--job-id`); never ask the owner to fetch or reshape evidence. If the next frozen executor is `owner_acceptance`, stop and return the deployed candidate/artifact identity plus test instructions; only an explicit owner reply may be translated into the deterministic `stage-cli owner-accept` command.
 
-Only `technical_fix` may auto-repair inside frozen scope. Before each repair call
-`stage-cli fix-cycle` for the exact pipeline/stage; maximum 3 cycles per stage/work-item.
-A fourth required fix, or any replan/security/secret/destructive/scope finding, blocks.
+Only `technical_fix` may auto-repair. Before consuming a cycle, identify intended changed paths and call `stage-cli scope-check` for the exact pipeline/stage. Test/support paths under an already-approved component may be machine-authorized automatically. For `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer and, only when their machine-readable review proves a decision-free bounded clarification, call `stage-cli scope-extend`; never edit manifest/state manually. Only then call `stage-cli fix-cycle`. If Git verify discovers another path after the cycle started, resolve that path through the same scope-check/review flow and continue the same cycle. Maximum 3 cycles per stage/work-item; a fourth new repair attempt after a new gate failure blocks.
 
 ## Session reuse
 
@@ -194,12 +191,12 @@ Never reuse planning/review sessions. Never manually supply `task_id`.
 
 Block/replan on:
 
-- deterministic gate failure that cannot be fixed inside frozen scope;
+- deterministic gate failure that cannot be fixed inside manifest scope plus approved runtime scope extensions;
 - security/secret/destructive condition;
-- changed file outside `allowed_change_paths`;
+- protected/sensitive scope request or technical scope review that changes requirements, acceptance criteria, external contracts or security boundaries;
 - required owner decision;
 - changed manifest/source SHA or invalid/unreadable rules;
-- runtime validation failure requiring scope/architecture change.
+- runtime validation failure requiring a new owner decision.
 
 A reuse fallback alone is not a stop condition; start fresh instead.
 

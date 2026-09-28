@@ -58,10 +58,21 @@ function scopesOverlap(left, right) {
   return false;
 }
 
+function safeScopePath(value) {
+  if (typeof value !== 'string' || !value) return false;
+  if (value.endsWith('/**')) {
+    const base = value.slice(0, -3).replace(/\/$/, '');
+    return safeRelativePath(base) && !/[?*\[\]{}]/.test(base);
+  }
+  return safeRelativePath(value) && !/[?*\[\]{}]/.test(value);
+}
+
 function assertSafePathArray(value, field) {
   if (value === undefined) return;
-  if (!Array.isArray(value) || value.some((item) => !safeRelativePath(item))) {
-    throw new ManifestV2PolicyError(`${field} must contain safe repository-relative paths`);
+  if (!Array.isArray(value) || value.some((item) => !safeScopePath(item))) {
+    throw new ManifestV2PolicyError(
+      `${field} supports only exact repository-relative paths or directory/** scopes`,
+    );
   }
 }
 

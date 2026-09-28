@@ -77,7 +77,7 @@ test('owner-created linked worktree is adopted read-only; setup and primary chec
   await writeFile(path.join(f.b, 'outside.txt'), 'out of scope\n');
   result = gate(f.b, ['verify', f.manifestPath]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /outside approved scope/);
+  assert.match(result.stderr, /outside effective scope/);
   await rm(path.join(f.b, 'outside.txt'));
   result = gate(f.b, ['publish', f.manifestPath]);
   assert.equal(result.status, 0, result.stderr);
@@ -173,5 +173,31 @@ test('preserved baseline keeps existing branch work without granting new write s
   await writeFile(path.join(f.b, 'legacy.txt'), 'mutated by new run\n');
   result = gate(f.b, ['verify', f.manifestPath]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /outside approved scope.*legacy\.txt/);
+  assert.match(result.stderr, /outside effective scope.*legacy\.txt/);
+});
+
+
+test('verify accepts machine-owned runtime scope extensions without mutating manifest', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const originalManifest = await readFile(f.manifestPath, 'utf8');
+  await writeFile(path.join(f.artifactRoot, 'state.json'), JSON.stringify({
+    run_id: 'run-b',
+    runtime_scope_extensions: [{
+      timestamp: new Date().toISOString(),
+      scope_class: 'test',
+      paths: ['outside.test.ts'],
+      reason: 'automatic test/support scope extension for an already-approved component',
+    }],
+  }, null, 2) + '\n');
+  await writeFile(path.join(f.b, 'outside.test.ts'), 'runtime-authorized test\n');
+
+  const result = gate(f.b, ['verify', f.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.deepEqual(output.changed_files, ['outside.test.ts']);
+  const evidence = JSON.parse(await readFile(path.join(f.artifactRoot, 'git-verify.json'), 'utf8'));
+  assert.ok(evidence.effective_allowed_change_paths.includes('outside.test.ts'));
+  assert.equal(evidence.runtime_scope_extensions[0].scope_class, 'test');
+  assert.equal(await readFile(f.manifestPath, 'utf8'), originalManifest);
 });
