@@ -118,17 +118,6 @@ function command(exe: string, args: string[], cwd = process.cwd()): string {
   return String(result.stdout ?? '');
 }
 
-function commandBestEffort(exe: string, args: string[], cwd = process.cwd()): string {
-  const result = spawnSync(exe, args, {
-    cwd,
-    shell: false,
-    encoding: 'utf8',
-    timeout: 60_000,
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  return String(result.stdout || result.stderr || result.error?.message || '');
-}
-
 function failedJobLog(repo: string, runId: number, jobId: number): string {
   try {
     return command('gh', ['run', 'view', String(runId), '--repo', repo, '--job', String(jobId), '--log-failed']);
