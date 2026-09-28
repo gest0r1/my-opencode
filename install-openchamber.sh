@@ -64,15 +64,22 @@ gh release download "$TAG" --repo "$APP_REPO" --pattern manifest.json --dir "$TM
 mapfile -t META < <(node - "$MANIFEST" "$REF_SHA" <<'NODE'
 const fs=require('fs');
 const m=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-if(m.schema_version!==2 || m.platform!=='linux-x64' || m.source_sha!==process.argv[3] ||
-   !/^openchamber-integration-linux-x64-[a-f0-9]{40}\.tar\.gz$/.test(m.asset) ||
-   !/^[a-f0-9]{64}$/.test(m.sha256) || !/^\d+\.\d+\.\d+$/.test(m.opencode_version)) process.exit(1);
-console.log(m.asset+'\n'+m.sha256+'\n'+m.opencode_version);
+const expectedSource=process.argv[3];
+if(![2,3].includes(m.schema_version) || m.platform!=='linux-x64' || m.source_sha!==expectedSource ||
+   !/^[a-f0-9]{64}$/.test(String(m.sha256||'')) || !/^\d+\.\d+\.\d+$/.test(String(m.opencode_version||''))) process.exit(1);
+const bundleSource=m.schema_version===3 ? m.bundle_source_sha : m.source_sha;
+const bundleTag=m.schema_version===3 ? m.bundle_tag : `linux-bundle-${m.source_sha}`;
+if(!/^[a-f0-9]{40}$/.test(String(bundleSource||'')) ||
+   bundleTag!==`linux-bundle-${bundleSource}` ||
+   m.asset!==`openchamber-integration-linux-x64-${bundleSource}.tar.gz`) process.exit(1);
+if(m.schema_version===3 && !/^[a-f0-9]{64}$/.test(String(m.bundle_fingerprint||''))) process.exit(1);
+console.log([m.asset,m.sha256,m.opencode_version,bundleTag,bundleSource].join('\n'));
 NODE
 )
-[[ "${#META[@]}" == 3 ]] || { echo "Invalid distribution manifest for $REF_SHA" >&2; exit 1; }
+[[ "${#META[@]}" == 5 ]] || { echo "Invalid distribution manifest for $REF_SHA" >&2; exit 1; }
 ASSET="${META[0]}"; DIGEST="${META[1]}"; OPENCODE_VERSION="${META[2]}"
-RELEASE="$ROOT/releases/$REF_SHA"
+BUNDLE_TAG="${META[3]}"; BUNDLE_SOURCE_SHA="${META[4]}"
+RELEASE="$ROOT/releases/$BUNDLE_SOURCE_SHA"
 
 # The Docker bridge needs a host listener reachable by NPM. A wildcard bind
 # also exposes loopback, which upstream uses for the managed OpenCode callback.
@@ -108,13 +115,21 @@ config_changed=0
 [[ "$CONFIG_SHA" == "$prev_config" ]] || config_changed=1
 binary_changed=0
 installed_ok || binary_changed=1
+ref_changed=0
+[[ "$REF_SHA" == "$prev_ref" ]] || ref_changed=1
 # Repair a missing/incorrect service without transferring an unchanged archive.
 need_service=0
 [[ -f "$DROP" ]] && grep -Fq -- "--host $HOST --port $PORT" "$DROP" 2>/dev/null || need_service=1
 [[ -f "$UNIT" ]] || need_service=1
 systemctl --user is-active --quiet openchamber.service || need_service=1
-if (( config_changed == 0 && binary_changed == 0 && need_service == 0 )) && [[ "${1:-}" != --opencode-update ]]; then
-  echo "Already current: OpenChamber $REF_SHA, OpenCode $OPENCODE_VERSION; large downloads: 0"
+if (( config_changed == 0 && binary_changed == 0 && need_service == 0 && ref_changed == 0 )) && [[ "${1:-}" != --opencode-update ]]; then
+  echo "Already current: OpenChamber $REF_SHA, bundle $BUNDLE_SOURCE_SHA, OpenCode $OPENCODE_VERSION; large downloads: 0"
+  exit 0
+fi
+if (( config_changed == 0 && binary_changed == 0 && need_service == 0 && ref_changed == 1 )) && [[ "${1:-}" != --opencode-update ]]; then
+  printf 'config_sha=%s\nopenchamber_sha=%s\nbundle_source_sha=%s\nopencode_version=%s\n' "$CONFIG_SHA" "$REF_SHA" "$BUNDLE_SOURCE_SHA" "$OPENCODE_VERSION" > "$STATE.tmp.$$"
+  mv -f "$STATE.tmp.$$" "$STATE"
+  echo "Advanced OpenChamber source to $REF_SHA using cached bundle $BUNDLE_SOURCE_SHA; large downloads: 0"
   exit 0
 fi
 
@@ -147,13 +162,20 @@ trap 'rollback "$?" "$LINENO"' ERR
 
 if (( binary_changed == 1 )); then
   if cached_release_ok; then
-    echo "Using cached exact-SHA release $REF_SHA; large downloads: 0"
-    ln -s "releases/$REF_SHA" "$ROOT/.current-new.$$"
+    echo "Using cached verified bundle $BUNDLE_SOURCE_SHA for OpenChamber source $REF_SHA; large downloads: 0"
+    ln -s "releases/$BUNDLE_SOURCE_SHA" "$ROOT/.current-new.$$"
     mv -Tf "$ROOT/.current-new.$$" "$ROOT/current"
   else
-    echo "Downloading verified GitHub-built bundle for $REF_SHA"
-    gh release download "$TAG" --repo "$APP_REPO" \
-      --pattern "$ASSET" --pattern install-linux-integration-bundle.sh --dir "$TMP"
+    echo "Downloading verified GitHub-built bundle $BUNDLE_SOURCE_SHA for OpenChamber source $REF_SHA"
+    if [[ "$BUNDLE_TAG" == "$TAG" ]]; then
+      gh release download "$TAG" --repo "$APP_REPO" \
+        --pattern "$ASSET" --pattern install-linux-integration-bundle.sh --dir "$TMP"
+    else
+      gh release download "$TAG" --repo "$APP_REPO" \
+        --pattern install-linux-integration-bundle.sh --dir "$TMP"
+      gh release download "$BUNDLE_TAG" --repo "$APP_REPO" \
+        --pattern "$ASSET" --dir "$TMP"
+    fi
     printf '%s  %s\n' "$DIGEST" "$TMP/$ASSET" | sha256sum -c -
     bash "$TMP/install-linux-integration-bundle.sh" "$TMP/$ASSET" "$MANIFEST" "$ROOT"
   fi
@@ -255,10 +277,10 @@ if (( ready != 1 )); then
 fi
 [[ "$("$BIN" --version)" == "$OPENCODE_VERSION" ]]
 "$ROOT/bin/openchamber" --version
-printf 'config_sha=%s\nopenchamber_sha=%s\nopencode_version=%s\n' "$CONFIG_SHA" "$REF_SHA" "$OPENCODE_VERSION" > "$STATE.tmp.$$"
+printf 'config_sha=%s\nopenchamber_sha=%s\nbundle_source_sha=%s\nopencode_version=%s\n' "$CONFIG_SHA" "$REF_SHA" "$BUNDLE_SOURCE_SHA" "$OPENCODE_VERSION" > "$STATE.tmp.$$"
 mv -f "$STATE.tmp.$$" "$STATE"
 trap - ERR
-echo "SUCCESS: OpenChamber $REF_SHA + OpenCode $OPENCODE_VERSION; http://$PROBE_HOST:$PORT/ ($HTTP)"
+echo "SUCCESS: OpenChamber $REF_SHA (bundle $BUNDLE_SOURCE_SHA) + OpenCode $OPENCODE_VERSION; http://$PROBE_HOST:$PORT/ ($HTTP)"
 echo "Bind: $HOST:$PORT (firewall is managed by the operator)"
 echo "Rollback backup: $BACKUP"
 [[ -z "$NEW_PASSWORD" ]] || echo "NEW UI PASSWORD (store securely): $NEW_PASSWORD"
