@@ -1037,9 +1037,9 @@ export async function checkRuntimeScope(
     const pipeline = getPipeline(state, pipelineId);
     if (!pipeline.stages[stage]) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     const manifest = readFrozenManifestFromState(state);
-    for (const path of paths) assertRuntimeScopeExtensible(manifest, path);
     const effective = effectiveAllowedChangePaths(manifest, state);
     const outside = paths.filter((path) => !effective.some((scope) => pathMatchesScope(path, scope)));
+    for (const path of outside) assertRuntimeScopeExtensible(manifest, path);
     const autoTests = outside.filter((path) => canAutoExtendTestScope(path, manifest, state));
     const unresolved = outside.filter((path) => !autoTests.includes(path));
 
@@ -1140,9 +1140,9 @@ export async function authorizeTechnicalScope(
     const pipeline = getPipeline(state, pipelineId);
     if (!pipeline.stages[stage]) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     const manifest = readFrozenManifestFromState(state);
-    for (const path of paths) assertRuntimeScopeExtensible(manifest, path);
     const effective = effectiveAllowedChangePaths(manifest, state);
     const newPaths = paths.filter((path) => !effective.some((scope) => pathMatchesScope(path, scope)));
+    for (const path of newPaths) assertRuntimeScopeExtensible(manifest, path);
     if (newPaths.length) {
       state.runtime_scope_extensions ??= [];
       state.runtime_scope_extensions.push({
