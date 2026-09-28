@@ -114,19 +114,16 @@ gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/content
 ```
 
 Он последовательно:
-- устанавливает/обновляет OpenCode и всегда накатывает актуальную конфигурацию из приватного `gest0r1/my-opencode`;
+- разрешает exact SHA `gest0r1/openchamber-ru@main`;
+- скачивает маленький exact-SHA manifest из GitHub Release;
+- использует проверенный Linux x64 bundle, указанный manifest; если runtime-входы не менялись, manifest может ссылаться на bundle предыдущего SHA;
+- повторно не скачивает большой bundle, если его `bundle_source_sha` уже есть в локальном cache;
+- проверяет SHA-256 bundle перед установкой;
+- устанавливает/обновляет OpenCode config из приватного `gest0r1/my-opencode`;
 - мигрирует runtime на единый `~/.config/opencode.env`;
-- проверяет Node.js и при необходимости ставит Node.js 22 через nvm;
-- ставит Bun, если его нет;
-- временно скачивает snapshot `gest0r1/openchamber-ru@main`;
-- выполняет `bun install --frozen-lockfile` и `bun run build:web`;
-- пакует именно собранный fork в `.tgz` и устанавливает его глобально через npm;
-- создаёт managed launcher `/usr/local/bin/openchamber`, который загружает тот же `~/.config/opencode.env`;
-- создаёт systemd drop-in `~/.config/systemd/user/openchamber.service.d/10-opencode-env.conf`, подключающий тот же env к автозагрузке;
-- при `openchamber startup enable` автоматически добавляет `--no-env-snapshot`, чтобы OpenChamber не создавал вторую копию общего окружения в своём `startup.env`;
-- удаляет временный исходный код после установки.
+- создаёт managed launchers и systemd user service/drop-in.
 
-В результате сервер не содержит dev-clone `openchamber-ru`: установлен runtime-пакет, собранный из текущего GitHub `main`.
+Сборка OpenChamber выполняется только в GitHub Actions producer workflow. Сервер не содержит dev-clone и не запускает source build.
 
 ### Проверка
 
@@ -196,9 +193,11 @@ git commit / git push
         ↓
 GitHub: gest0r1/my-opencode + gest0r1/openchamber-ru
         ↓
+GitHub Actions: fingerprint → reuse или verified Linux x64 bundle release
+        ↓
 install-openchamber.sh
         ↓
-временный snapshot → build → runtime install → удаление исходников
+exact-SHA manifest → verified bundle → runtime install
 ```
 
 ### Обновление сервера
@@ -210,13 +209,12 @@ gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/content
 ```
 
 Она повторно:
-1. обновит OpenCode;
-2. установит актуальный private config из `my-opencode@main`;
-3. мигрирует/проверит единый runtime env;
-4. скачает текущий `openchamber-ru@main`;
-5. пересоберёт fork;
-6. заменит установленный runtime OpenChamber новой сборкой;
-7. обновит launchers и systemd drop-in.
+1. определит текущий `openchamber-ru@main` SHA;
+2. проверит exact-SHA Linux x64 manifest;
+3. скачает bundle только если указанный `bundle_source_sha` ещё не закеширован локально;
+4. проверит SHA-256 и переключит runtime;
+5. установит актуальный private config из `my-opencode@main`;
+6. обновит launchers и systemd drop-in при необходимости.
 
 Отдельный `git pull` на сервере не нужен: рабочая копия исходников там не хранится.
 
