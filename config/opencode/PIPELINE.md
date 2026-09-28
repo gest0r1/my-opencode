@@ -76,10 +76,10 @@ validation fail if it changes.
 
 Project rules and distribution rules have different lifetimes:
 
-- repository `docs/pipeline-rules.md` is project-owned and remains live-frozen; changing it after init blocks the RUN;
-- OpenCode distribution `pipeline-rules.default.md` is copied by `stage-cli init` to
-  `.tmp/pipelines/<run-id>/rules/pipeline-rules.default.md`; the RUN validates this machine-owned snapshot and is unaffected by later OpenCode upgrades;
-- a legacy run whose state still references the mutable installed default rules returns `DEFAULT_RULES_SNAPSHOT_REQUIRED`. OpenStage must run `stage-cli rules-refresh <run-id>` and retry validation. This deterministic recovery is allowed only for `opencode_default` with the same `rules_version`; a version change returns `DEFAULT_RULES_VERSION_CHANGED_REPLAN_REQUIRED`.
+- repository `docs/pipeline-rules.md` and OpenCode distribution `pipeline-rules.default.md` use the same live-rules model;
+- pipeline commands and their agents never edit either rules source;
+- owner/distribution changes made while the pipeline is stopped are valid: the next `stage-cli validate` reads current rules and updates rules version/SHA audit metadata without blocking on the old hash;
+- missing, unreadable, malformed rules or invalid `edit_policy` still block.
 
 Never solve rules drift by editing `state.json` or granting the model write permission to machine state.
 
