@@ -202,10 +202,10 @@ test('RUN uses deterministic publication and CI diagnostics before owner shell i
   const run = await text('config/opencode/command/pipeline-run.md');
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
   assert.match(run, /publish.*owns staging.*candidate commit.*non-force push/is);
-  assert.match(run, /github-actions-gate-cli(?:\.ts)?\s+diagnose|call `diagnose`/i);
-  assert.match(run, /Never ask the owner to paste CI logs/i);
-  assert.match(orchestrator, /Never ask the owner to run `git add`, `git commit`, `git push`/);
-  assert.match(orchestrator, /terminal GitHub FAIL.*CLI-written evidence\/diagnostics/i);
+  assert.match(run, /diagnose.*per-job.*\.log/is);
+  assert.match(run, /log \.\.\. --job\|--job-id/i);
+  assert.match(orchestrator, /GitHub `run\/diagnose\/log` owns CI evidence and logs/i);
+  assert.match(orchestrator, /never ask the owner to fetch or reshape evidence/i);
 });
 
 
@@ -216,8 +216,7 @@ test('GitHub gate reliability keeps pre-terminal evidence and real negative live
   const negative = await text('.github/workflows/pipeline-gate-live-failure-fixture.yml');
   const contracts = await text('.github/workflows/pipeline-contracts.yml');
 
-  assert.match(run, /pre-terminal BLOCKED evidence|before terminal completion/i);
-  assert.match(run, /failure_phase/);
+  assert.match(run, /FAIL\/BLOCKED.*canonical.*phase/is);
   assert.match(rules, /canonical BLOCKED evidence/i);
   assert.match(rules, /failure_phase/);
   assert.match(live, /Dispatch intentional failure and require canonical FAIL evidence/);

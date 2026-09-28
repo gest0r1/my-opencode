@@ -13,6 +13,7 @@ import {
   selectWorkflowRun,
   buildGithubBlockedEvidence,
   buildGithubFailureEvidence,
+  sanitizeGithubFailedLog,
   validateDevEvidence,
   validateWorkflowResult,
 } from './github-actions-gate-core.mjs';
@@ -117,19 +118,63 @@ function command(exe: string, args: string[], cwd = process.cwd()): string {
   return String(result.stdout ?? '');
 }
 
-function commandBestEffort(exe: string, args: string[], cwd = process.cwd()): string {
-  const result = spawnSync(exe, args, {
-    cwd,
-    shell: false,
-    encoding: 'utf8',
-    timeout: 60_000,
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  return String(result.stdout || result.stderr || result.error?.message || '');
+function failedJobLog(repo: string, runId: number, jobId: number): string {
+  try {
+    return command('gh', ['run', 'view', String(runId), '--repo', repo, '--job', String(jobId), '--log-failed']);
+  } catch {
+    return command('gh', ['run', 'view', String(runId), '--repo', repo, '--job', String(jobId), '--log']);
+  }
 }
 
-function failedRunLog(repo: string, runId: number): string {
-  return commandBestEffort('gh', ['run', 'view', String(runId), '--repo', repo, '--log-failed']);
+function diagnosticJobFilename(pipelineId: string, stage: string, jobId: number): string {
+  return `${pipelineId}-${stage}-job-${jobId}.log`;
+}
+
+function failedJobs(jobs: any[]): any[] {
+  return jobs.filter((job) =>
+    job?.status === 'completed' &&
+    job?.conclusion &&
+    job.conclusion !== 'success' &&
+    job.conclusion !== 'skipped');
+}
+
+async function writeDiagnosticJobLog(
+  runRoot: string,
+  repo: string,
+  workflowRunId: number,
+  pipelineId: string,
+  stage: string,
+  job: any,
+): Promise<string> {
+  const jobId = Number(job?.id);
+  if (!Number.isInteger(jobId) || jobId <= 0) throw new CliError('GITHUB_DIAGNOSTICS_JOB_ID_INVALID');
+  const relative = join('github', diagnosticJobFilename(pipelineId, stage, jobId));
+  const file = join(runRoot, relative);
+  const log = sanitizeGithubFailedLog(failedJobLog(repo, workflowRunId, jobId));
+  await writeFile(file, log.endsWith('\n') ? log : `${log}\n`, 'utf8');
+  return relative;
+}
+
+function selectDiagnosticJob(jobs: any[], args: string[]): any {
+  const jobIdRaw = option(args, '--job-id');
+  const jobName = option(args, '--job');
+  if ((jobIdRaw && jobName) || (!jobIdRaw && !jobName)) {
+    throw new CliError('GITHUB_DIAGNOSTICS_JOB_SELECTOR_REQUIRED: use exactly one of --job <name> or --job-id <id>');
+  }
+  if (jobIdRaw) {
+    const jobId = Number(jobIdRaw);
+    if (!Number.isInteger(jobId) || jobId <= 0) throw new CliError('GITHUB_DIAGNOSTICS_JOB_ID_INVALID');
+    const job = jobs.find((item) => Number(item?.id) === jobId);
+    if (!job) throw new CliError(`GITHUB_DIAGNOSTICS_JOB_NOT_FOUND: ${jobId}`);
+    return job;
+  }
+  const matches = jobs.filter((item) => String(item?.name ?? '') === jobName);
+  if (matches.length !== 1) {
+    throw new CliError(matches.length
+      ? `GITHUB_DIAGNOSTICS_JOB_AMBIGUOUS: ${jobName}`
+      : `GITHUB_DIAGNOSTICS_JOB_NOT_FOUND: ${jobName}`);
+  }
+  return matches[0];
 }
 
 function ghJson(args: string[]): any {
@@ -746,7 +791,6 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
         candidateSha: candidate!.candidate_sha,
         contract,
         validationError: message,
-        failedLog: failedRunLog(repo as string, Number(run.id)),
       }),
       gate: 'github_actions',
       run_id: runId,
@@ -821,11 +865,67 @@ async function diagnoseCommand(runId: string, pipelineId: string, stage: string,
       candidateSha: String(prior.candidate_sha ?? ''),
       contract,
       validationError: prior.validation_error ?? 'GITHUB_GATE_DIAGNOSTICS',
-      failedLog: failedRunLog(repo, workflowRunId),
     });
+    const summaries = Array.isArray(diagnostics.jobs) ? diagnostics.jobs : [];
+    const failed = [];
+    for (const job of failedJobs(jobs)) {
+      const logFile = await writeDiagnosticJobLog(
+        runRoot, repo, workflowRunId, pipelineId, stage, job,
+      );
+      const summary = summaries.find((item: any) => Number(item?.id) === Number(job?.id));
+      failed.push({
+        ...(summary ?? {
+          id: Number(job?.id),
+          name: String(job?.name ?? ''),
+          status: String(job?.status ?? ''),
+          conclusion: job?.conclusion ?? null,
+          failed_steps: [],
+        }),
+        log_file: logFile,
+      });
+    }
+    const compact = { ...diagnostics, failed_jobs: failed };
     const file = join(runRoot, 'github', `${pipelineId}-${stage}-diagnostics.json`);
-    await writeFile(file, `${JSON.stringify(diagnostics, null, 2)}\n`, 'utf8');
-    return { ...diagnostics, evidence: file };
+    await writeFile(file, `${JSON.stringify(compact, null, 2)}\n`, 'utf8');
+    return { ...compact, evidence: file };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/\b401\b|authentication|not logged|auth login|bad credentials/i.test(message)) {
+      throw new CliError(`GITHUB_DIAGNOSTICS_AUTH_REQUIRED: ${message}`);
+    }
+    if (/\b403\b|resource not accessible|permission|forbidden/i.test(message)) {
+      throw new CliError(`GITHUB_DIAGNOSTICS_PERMISSION_DENIED: ${message}`);
+    }
+    throw error;
+  }
+}
+
+async function logCommand(
+  runId: string,
+  pipelineId: string,
+  stage: string,
+  stateRoot: string,
+  args: string[],
+): Promise<void> {
+  const { manifest, runRoot } = await loadRun(runId, stateRoot);
+  resolveGate(manifest, pipelineId, stage);
+  const evidenceFile = join(runRoot, 'github', `${pipelineId}-${stage}.json`);
+  const prior = JSON.parse(await readFile(evidenceFile, 'utf8'));
+  const workflowRunId = Number(prior.workflow_run_id);
+  if (!Number.isInteger(workflowRunId) || workflowRunId <= 0) {
+    throw new CliError('GITHUB_DIAGNOSTICS_RUN_ID_MISSING');
+  }
+  const repo = repository(manifest);
+  try {
+    const jobs = fetchJobs(repo, workflowRunId);
+    const job = selectDiagnosticJob(jobs, args);
+    const logFile = await writeDiagnosticJobLog(
+      runRoot, repo, workflowRunId, pipelineId, stage, job,
+    );
+    const log = await readFile(join(runRoot, logFile), 'utf8');
+    console.log(`job_id=${Number(job.id)} job=${String(job.name ?? '')} conclusion=${String(job.conclusion ?? '')}`);
+    console.log(`log_file=${logFile}`);
+    process.stdout.write(log);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/\b401\b|authentication|not logged|auth login|bad credentials/i.test(message)) {
@@ -847,6 +947,7 @@ function usage(): string {
     '  github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts show <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts diagnose <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
+    '  github-actions-gate-cli.ts log <run-id> <pipeline-id> <stage-id> (--job <name>|--job-id <id>) [--state-root <path>]',
   ].join('\n');
 }
 
@@ -882,10 +983,24 @@ async function main(args: string[]): Promise<void> {
     console.log(JSON.stringify(await diagnoseCommand(runId, pipelineId, stage, stateRoot), null, 2));
     return;
   }
+  if (commandName === 'log') {
+    await logCommand(runId, pipelineId, stage, stateRoot, args);
+    return;
+  }
   throw new CliError(usage());
 }
 
-export { inspectFile, resolveGate, resolveFutureGate, validateCommand, validateFutureCommand, runGate, diagnoseCommand };
+export {
+  inspectFile,
+  resolveGate,
+  resolveFutureGate,
+  validateCommand,
+  validateFutureCommand,
+  runGate,
+  diagnoseCommand,
+  logCommand,
+  selectDiagnosticJob,
+};
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   main(process.argv.slice(2)).catch((error: unknown) => {

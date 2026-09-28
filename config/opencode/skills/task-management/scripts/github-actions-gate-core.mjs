@@ -504,7 +504,6 @@ export function buildGithubFailureEvidence({
   candidateSha,
   contract,
   validationError,
-  failedLog = '',
 }) {
   return {
     status: 'FAIL',
@@ -526,7 +525,6 @@ export function buildGithubFailureEvidence({
       expired: artifact?.expired === true,
       digest: artifact?.digest ?? null,
     })),
-    failed_log_excerpt: sanitizeGithubFailedLog(failedLog),
   };
 }
 
