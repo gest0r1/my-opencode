@@ -301,7 +301,7 @@ a duplicate.
 Use different mechanisms for different changes:
 
 - planning revision before init → same run-id;
-- technical fix during RUN → same run-id, maximum three cycles; bounded machine-owned runtime scope extensions remain in the same run and do not rewrite the manifest;
+- technical fix during RUN → same run-id with an initial three-cycle budget; owner-granted `+N` cycles and owner-approved block-local runtime replans remain in the same run and are audited without rewriting the manifest;
 - frozen V2 manifest correction after init → `stage-cli supersede <old> <new> --reason <code>`;
 - architecture/scope/main-drift replan → new run with reason-coded `lineage.change_class=replan`.
 
