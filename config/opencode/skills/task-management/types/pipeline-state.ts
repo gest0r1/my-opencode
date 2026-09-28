@@ -251,9 +251,17 @@ export interface PipelineState {
   manifest_file?: string;
   manifest_sha256?: string;
   rules_file: string;
+  rules_origin_file?: string;
   rules_source?: RulesSource;
   rules_version: number;
   rules_sha256: string;
+  rules_refresh_history?: Array<{
+    timestamp: string;
+    previous_file: string;
+    previous_sha256: string;
+    new_file: string;
+    new_sha256: string;
+  }>;
   project_policy_file?: string;
   project_policy_sha256?: string;
   status: PipelineStatus;
