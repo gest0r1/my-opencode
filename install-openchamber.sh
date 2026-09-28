@@ -127,8 +127,8 @@ if (( config_changed == 0 && binary_changed == 0 && need_service == 0 && ref_cha
   exit 0
 fi
 if (( config_changed == 0 && binary_changed == 0 && need_service == 0 && ref_changed == 1 )) && [[ "${1:-}" != --opencode-update ]]; then
-  printf 'config_sha=%s\nopenchamber_sha=%s\nbundle_source_sha=%s\nopencode_version=%s\n' "$CONFIG_SHA" "$REF_SHA" "$BUNDLE_SOURCE_SHA" "$OPENCODE_VERSION" > "$STATE.tmp.$"
-  mv -f "$STATE.tmp.$" "$STATE"
+  printf 'config_sha=%s\nopenchamber_sha=%s\nbundle_source_sha=%s\nopencode_version=%s\n' "$CONFIG_SHA" "$REF_SHA" "$BUNDLE_SOURCE_SHA" "$OPENCODE_VERSION" > "$STATE.tmp.$$"
+  mv -f "$STATE.tmp.$$" "$STATE"
   echo "Advanced OpenChamber source to $REF_SHA using cached bundle $BUNDLE_SOURCE_SHA; large downloads: 0"
   exit 0
 fi
@@ -163,7 +163,7 @@ trap 'rollback "$?" "$LINENO"' ERR
 if (( binary_changed == 1 )); then
   if cached_release_ok; then
     echo "Using cached verified bundle $BUNDLE_SOURCE_SHA for OpenChamber source $REF_SHA; large downloads: 0"
-    ln -s "releases/$BUNDLE_SOURCE_SHA" "$ROOT/.current-new.$"
+    ln -s "releases/$BUNDLE_SOURCE_SHA" "$ROOT/.current-new.$$"
     mv -Tf "$ROOT/.current-new.$$" "$ROOT/current"
   else
     echo "Downloading verified GitHub-built bundle $BUNDLE_SOURCE_SHA for OpenChamber source $REF_SHA"
@@ -277,7 +277,7 @@ if (( ready != 1 )); then
 fi
 [[ "$("$BIN" --version)" == "$OPENCODE_VERSION" ]]
 "$ROOT/bin/openchamber" --version
-printf 'config_sha=%s\nopenchamber_sha=%s\nbundle_source_sha=%s\nopencode_version=%s\n' "$CONFIG_SHA" "$REF_SHA" "$BUNDLE_SOURCE_SHA" "$OPENCODE_VERSION" > "$STATE.tmp.$"
+printf 'config_sha=%s\nopenchamber_sha=%s\nbundle_source_sha=%s\nopencode_version=%s\n' "$CONFIG_SHA" "$REF_SHA" "$BUNDLE_SOURCE_SHA" "$OPENCODE_VERSION" > "$STATE.tmp.$$"
 mv -f "$STATE.tmp.$$" "$STATE"
 trap - ERR
 echo "SUCCESS: OpenChamber $REF_SHA (bundle $BUNDLE_SOURCE_SHA) + OpenCode $OPENCODE_VERSION; http://$PROBE_HOST:$PORT/ ($HTTP)"
