@@ -139,6 +139,7 @@ jobs:
           fi
           test -f "$LIVE_RUN_ROOT/github/app-negative.json"
           npx --yes tsx             config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts             diagnose "$LIVE_RUN_ID" app negative --state-root "$LIVE_STATE_ROOT"             > "$RUNNER_TEMP/negative-diagnostics-output.json"
+          npx --yes tsx             config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts             log "$LIVE_RUN_ID" app negative --job pipeline_ci --state-root "$LIVE_STATE_ROOT"             > "$RUNNER_TEMP/negative-job-log.txt"
 
       - name: Assert live failure diagnostics and redaction
         shell: bash
@@ -146,6 +147,7 @@ jobs:
           set -Eeuo pipefail
           node -             "$LIVE_RUN_ROOT/github/app-negative.json"             "$LIVE_RUN_ROOT/github/app-negative-diagnostics.json" <<'NODE'
           const fs = require('fs');
+          const path = require('path');
           const [evidenceFile, diagnosticsFile] = process.argv.slice(2);
           const evidence = JSON.parse(fs.readFileSync(evidenceFile, 'utf8'));
           const diagnostics = JSON.parse(fs.readFileSync(diagnosticsFile, 'utf8'));
@@ -153,13 +155,18 @@ jobs:
           if (evidence.candidate_sha !== process.env.TARGET_SHA) throw new Error('negative candidate SHA mismatch');
           if (evidence.workflow !== '.github/workflows/pipeline-gate-live-failure-fixture.yml') throw new Error('negative workflow mismatch');
           if (!Number.isInteger(Number(evidence.workflow_run_id))) throw new Error('negative run id missing');
-          const jobs = Array.isArray(diagnostics.jobs) ? diagnostics.jobs : [];
-          const failed = jobs.flatMap((job) => job.failed_steps || []);
-          if (!failed.some((step) => step.name === 'Intentional fixture failure')) {
+          if ('failed_log_excerpt' in diagnostics) throw new Error('diagnostics JSON must stay compact');
+          const failedJobs = Array.isArray(diagnostics.failed_jobs) ? diagnostics.failed_jobs : [];
+          const failedJob = failedJobs.find((job) => job.name === 'pipeline_ci');
+          if (!failedJob) throw new Error('failed job missing from diagnostics');
+          if (!(failedJob.failed_steps || []).some((step) => step.name === 'Intentional fixture failure')) {
             throw new Error('failed fixture step missing from diagnostics');
           }
-          const log = String(diagnostics.failed_log_excerpt || '');
-          if (!log.includes('intentional live negative fixture failure')) throw new Error('failed log excerpt missing');
+          const log = fs.readFileSync(path.join(process.env.LIVE_RUN_ROOT, failedJob.log_file), 'utf8');
+          if (!log.includes('intentional live negative fixture failure')) throw new Error('per-job log missing failure');
           if (log.includes('fixture-secret-value')) throw new Error('secret-like fixture value was not redacted');
           if (!/TOKEN=\[REDACTED\]/i.test(log)) throw new Error('redaction marker missing');
           NODE
+          grep -Fq 'intentional live negative fixture failure' "$RUNNER_TEMP/negative-job-log.txt"
+          grep -Fq 'TOKEN=[REDACTED]' "$RUNNER_TEMP/negative-job-log.txt"
+          ! grep -Fq 'fixture-secret-value' "$RUNNER_TEMP/negative-job-log.txt"
