@@ -162,8 +162,8 @@ trap 'rollback "$?" "$LINENO"' ERR
 
 if (( binary_changed == 1 )); then
   if cached_release_ok; then
-    echo "Using cached exact-SHA release $REF_SHA; large downloads: 0"
-    ln -s "releases/$REF_SHA" "$ROOT/.current-new.$$"
+    echo "Using cached verified bundle $BUNDLE_SOURCE_SHA for OpenChamber source $REF_SHA; large downloads: 0"
+    ln -s "releases/$BUNDLE_SOURCE_SHA" "$ROOT/.current-new.$"
     mv -Tf "$ROOT/.current-new.$$" "$ROOT/current"
   else
     echo "Downloading verified GitHub-built bundle $BUNDLE_SOURCE_SHA for OpenChamber source $REF_SHA"
