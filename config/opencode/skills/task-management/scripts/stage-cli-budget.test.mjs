@@ -198,7 +198,7 @@ test('runtime replan clarification can start before exhaustion but does not gran
     owner_questions: ['Use approach A or B for this block?'],
   });
 
-  result = run(fx.root, [
+  let result = run(fx.root, [
     'runtime-replan-propose', fx.runId, 'implementation',
     '--pipeline', 'app', '--evidence', evidence, '--state-root', fx.stateRoot, '--json',
   ]);
@@ -251,7 +251,7 @@ test('runtime replan approval can add cycles before exhaustion (5/6 -> 5/10)', a
     ...reviewBase(fx, 'needs_owner_clarification'),
     owner_questions: ['Confirm whether the block may replace the internal helper.'],
   });
-  let result = run(fx.root, [
+  result = run(fx.root, [
     'runtime-replan-propose', fx.runId, 'implementation',
     '--pipeline', 'app', '--evidence', first, '--state-root', fx.stateRoot,
   ]);
@@ -268,7 +268,8 @@ test('runtime replan approval can add cycles before exhaustion (5/6 -> 5/10)', a
   assert.equal(result.status, 0, result.stderr);
   let state = JSON.parse(result.stdout);
   let runtime = state.pipelines.app.stages.implementation;
-  assert.equal(runtime.technical_fix_limit, 3);
+  assert.equal(runtime.technical_fix_cycles, 5);
+  assert.equal(runtime.technical_fix_limit, 6);
   assert.equal(runtime.runtime_replans.length, 2);
   assert.equal(runtime.runtime_replans[0].status, 'superseded');
   assert.equal(runtime.runtime_replans[1].status, 'awaiting_owner_approval');
@@ -285,8 +286,9 @@ test('runtime replan approval can add cycles before exhaustion (5/6 -> 5/10)', a
   assert.equal(runtime.technical_fix_limit, 10);
   assert.equal(runtime.runtime_replans[1].status, 'approved');
   assert.equal(runtime.runtime_replans[1].granted_cycles, 4);
-  assert.equal(runtime.technical_fix_budget_grants[0].source, 'runtime_replan');
-  assert.equal(runtime.technical_fix_budget_grants[0].runtime_replan_revision, 2);
+  assert.equal(runtime.technical_fix_budget_grants[0].source, 'owner_direct');
+  assert.equal(runtime.technical_fix_budget_grants[1].source, 'runtime_replan');
+  assert.equal(runtime.technical_fix_budget_grants[1].runtime_replan_revision, 2);
 
   result = run(fx.root, [
     'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
