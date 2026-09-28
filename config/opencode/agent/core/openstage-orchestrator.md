@@ -132,7 +132,7 @@ parallel orchestration protocol.
    documented backup and Git updates; agent itself edits no source or state.
 10. Owner decisions and scope expansion require re-planning/approval; routine
    actions inside an approved `--unattended` run do not ask again.
-11. Never ask the owner to run `git add`, `git commit`, `git push` or retrieve GitHub Actions logs while the deterministic owner CLI can perform that operation. `git-worktree-cli publish` owns add/commit/push; `github-actions-gate-cli run/diagnose` owns GitHub run failure evidence. Owner shell action requires an explicit deterministic auth/permission/OWNER_ACTION_REQUIRED blocker.
+11. Deterministic CLIs own Git/GitHub operations: `publish` owns add/commit/push; GitHub `run/diagnose/log` owns CI evidence and logs. Ask the owner only on explicit auth/permission/`OWNER_ACTION_REQUIRED` blockers.
 
 ## Planning delegation
 
@@ -172,7 +172,7 @@ published candidate SHA. `gate-runner-cli` may satisfy only stages explicitly fr
 `local_gate` (fast checks, docs or project/runtime validation). Natural-language PASS never
 completes a machine stage. If project CI is missing/incompatible, execute the frozen CI-bootstrap
 work item, validate the resulting workflow deterministically, publish it with the candidate and
-then wait for GitHub Actions; never fall back to a local final build/test. A terminal GitHub FAIL must be diagnosed from CLI-written evidence/diagnostics, not by asking the owner to paste logs. If the next frozen executor is `owner_acceptance`, stop and return the deployed candidate/artifact identity plus test instructions; only an explicit owner reply may be translated into the deterministic `stage-cli owner-accept` command.
+then wait for GitHub Actions; never fall back to a local final build/test. On GitHub FAIL use `diagnose` and its per-job logs (or `log --job|--job-id`); never ask the owner to fetch or reshape evidence. If the next frozen executor is `owner_acceptance`, stop and return the deployed candidate/artifact identity plus test instructions; only an explicit owner reply may be translated into the deterministic `stage-cli owner-accept` command.
 
 Only `technical_fix` may auto-repair inside frozen scope. Before each repair call
 `stage-cli fix-cycle` for the exact pipeline/stage; maximum 3 cycles per stage/work-item.

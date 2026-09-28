@@ -175,7 +175,7 @@ For `github_ci`/`github_dev`, `github-actions-gate-cli` structurally validates t
 .tmp/pipelines/<run-id>/github/<pipeline>-<stage>.json
 ```
 
-Terminal FAIL retains exact run/attempt identity, job and failed-step conclusions, artifacts and a bounded redacted failed-log excerpt. Failures before a terminal run (for example workflow validation drift, source-CI/environment readiness, dispatch denial, run discovery/fetch failure, terminal metadata fetch failure or timeout) write `status=BLOCKED` with a deterministic `failure_phase`, candidate/workflow identity and observed run identity when one exists. `github-actions-gate-cli show` therefore remains useful even when no terminal run exists. `diagnose` refreshes terminal-run diagnostics without giving OpenStage raw `gh` permission.
+Terminal FAIL retains exact run/attempt and job/failed-step identity. `diagnose` writes compact diagnostics plus one bounded redacted multiline `github/*-job-<id>.log` per failed job; `log --job|--job-id` refreshes/prints one exact-run job. Pre-terminal failures write `status=BLOCKED` with deterministic `failure_phase` and available identity. OpenStage never needs raw `gh` or owner-side log conversion.
 
 `stage-cli complete` re-validates canonical machine evidence before allowing a `local_gate`, `git_verify`, `git_publish`, `github_ci` or `github_dev` stage to complete. A model statement that a check passed is insufficient.
 

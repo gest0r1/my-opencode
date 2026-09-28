@@ -71,10 +71,10 @@ async function fixture() {
   return { root, stateRoot, runId, runRoot, bin };
 }
 
-function runCli(fx, env = {}) {
+function gateCli(fx, commandArgs, env = {}) {
   return spawnSync('npx', [
     '--yes', 'tsx', CLI,
-    'run', fx.runId, 'app', 'tests',
+    ...commandArgs,
     '--state-root', fx.stateRoot,
   ], {
     cwd: fx.root,
@@ -82,6 +82,10 @@ function runCli(fx, env = {}) {
     env: { ...process.env, PATH: fx.bin + path.delimiter + process.env.PATH, ...env },
     timeout: 20_000,
   });
+}
+
+function runCli(fx, env = {}) {
+  return gateCli(fx, ['run', fx.runId, 'app', 'tests'], env);
 }
 
 test('dispatch failure writes canonical BLOCKED evidence before any workflow run exists', async () => {
@@ -137,4 +141,83 @@ exit 1
   assert.equal(evidence.status, 'BLOCKED');
   assert.equal(evidence.failure_phase, 'run_discovery');
   assert.match(evidence.validation_error, /GitHub Actions API unavailable/);
+});
+
+
+test('terminal failure diagnose writes readable per-job log and log command reuses exact run job', async () => {
+  const fx = await fixture();
+  const gh = path.join(fx.bin, 'gh');
+  const counter = path.join(fx.root, 'run-list-count');
+  await writeFile(gh, `#!/bin/sh
+set -eu
+counter='${counter}'
+case "$*" in
+  "api repos/owner/repo/actions/workflows/ci.yml/runs?branch=feature%2Fx&per_page=100")
+    n=0
+    [ ! -f "$counter" ] || n=$(cat "$counter")
+    if [ "$n" = 0 ]; then
+      printf '1' > "$counter"
+      printf '%s\\n' '{"workflow_runs":[]}'
+    else
+      printf '%s\\n' '{"workflow_runs":[{"id":77,"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","head_branch":"feature/x","event":"workflow_dispatch","run_attempt":1}]}'
+    fi
+    ;;
+  "workflow run ci.yml --repo owner/repo --ref feature/x -f candidate_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    ;;
+  "api repos/owner/repo/actions/runs/77")
+    printf '%s\\n' '{"id":77,"run_attempt":1,"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","head_branch":"feature/x","event":"workflow_dispatch","status":"completed","conclusion":"failure"}'
+    ;;
+  "api repos/owner/repo/actions/runs/77/jobs?filter=latest&per_page=100")
+    printf '%s\\n' '{"jobs":[{"id":101,"name":"pipeline_ci","status":"completed","conclusion":"failure","steps":[{"number":1,"name":"Intentional failure","status":"completed","conclusion":"failure"}]}]}'
+    ;;
+  "api repos/owner/repo/actions/runs/77/artifacts?per_page=100")
+    printf '%s\\n' '{"artifacts":[]}'
+    ;;
+  "run view 77 --repo owner/repo --job 101 --log-failed"|"run view 77 --repo owner/repo --job 101 --log")
+    printf '%s\\n' 'TOKEN=fixture-secret-value'
+    printf '%s\\n' 'first diagnostic line'
+    printf '%s\\n' 'second diagnostic line'
+    ;;
+  *)
+    printf 'unexpected gh args: %s\\n' "$*" >&2
+    exit 2
+    ;;
+esac
+`);
+  await chmod(gh, 0o755);
+
+  let result = runCli(fx, { GITHUB_ACTIONS_GATE_POLL_MS: '250' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /GITHUB_RUN_FAILED/);
+
+  const canonical = JSON.parse(await readFile(path.join(fx.runRoot, 'github', 'app-tests.json'), 'utf8'));
+  assert.equal(canonical.status, 'FAIL');
+  assert.equal(canonical.workflow_run_id, 77);
+  assert.equal('failed_log_excerpt' in canonical, false);
+
+  result = gateCli(fx, ['diagnose', fx.runId, 'app', 'tests']);
+  assert.equal(result.status, 0, result.stderr);
+  const diagnostics = JSON.parse(await readFile(
+    path.join(fx.runRoot, 'github', 'app-tests-diagnostics.json'), 'utf8',
+  ));
+  assert.equal('failed_log_excerpt' in diagnostics, false);
+  assert.equal(diagnostics.failed_jobs.length, 1);
+  assert.equal(diagnostics.failed_jobs[0].id, 101);
+  assert.equal(diagnostics.failed_jobs[0].name, 'pipeline_ci');
+  assert.deepEqual(
+    diagnostics.failed_jobs[0].failed_steps.map((step) => step.name),
+    ['Intentional failure'],
+  );
+
+  const jobLog = await readFile(path.join(fx.runRoot, diagnostics.failed_jobs[0].log_file), 'utf8');
+  assert.match(jobLog, /TOKEN=\[REDACTED\]/);
+  assert.match(jobLog, /first diagnostic line\nsecond diagnostic line/);
+  assert.doesNotMatch(jobLog, /fixture-secret-value/);
+
+  result = gateCli(fx, ['log', fx.runId, 'app', 'tests', '--job', 'pipeline_ci']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /job_id=101 job=pipeline_ci conclusion=failure/);
+  assert.match(result.stdout, /TOKEN=\[REDACTED\]/);
+  assert.match(result.stdout, /first diagnostic line/);
+  assert.doesNotMatch(result.stdout, /fixture-secret-value/);
 });
