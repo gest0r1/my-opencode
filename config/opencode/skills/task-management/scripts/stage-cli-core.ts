@@ -1427,6 +1427,7 @@ export async function proposeRuntimeReplan(
       previous.superseded_at = now();
     }
     const revision = runtime.runtime_replans.reduce((max, item) => Math.max(max, item.revision), 0) + 1;
+    state.scope_preflight = undefined;
     runtime.runtime_replans.push({
       revision,
       status: validated.status,
