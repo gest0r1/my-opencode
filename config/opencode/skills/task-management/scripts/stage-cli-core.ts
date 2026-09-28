@@ -260,6 +260,36 @@ function scopeOutput(state: PipelineState, manifest: PipelineManifest, paths: st
   };
 }
 
+function runtimeScopeSensitive(path: string): boolean {
+  const name = path.split('/').pop() ?? path;
+  return path === 'docs/pipeline-rules.md' ||
+    path.startsWith('.github/workflows/') ||
+    path.startsWith('.opencode/') ||
+    name === '.env' ||
+    (/^\.env\./.test(name) && name !== '.env.example') ||
+    /\.(key|pem|p12|pfx|secret)$/i.test(name);
+}
+
+function runtimeScopeProtectedByPolicy(manifest: PipelineManifest, path: string): boolean {
+  if (!manifest.project_policy?.path) return false;
+  let policy: any;
+  try {
+    policy = JSON.parse(readFileSync(resolve(manifest.project_policy.path), 'utf8'));
+  } catch {
+    throw new StageCliError('Project policy is missing or invalid while checking runtime scope');
+  }
+  return (policy.protected_paths ?? []).some((scope: string) =>
+    typeof scope === 'string' && pathMatchesScope(path, scope));
+}
+
+function assertRuntimeScopeExtensible(manifest: PipelineManifest, path: string): void {
+  if (runtimeScopeSensitive(path) || runtimeScopeProtectedByPolicy(manifest, path)) {
+    throw new StageCliError(
+      `OWNER_OR_REPLAN_REQUIRED: runtime scope cannot auto-authorize protected/sensitive path: ${path}`,
+    );
+  }
+}
+
 export async function hashRunArtifacts(
   stateRoot: string,
   runId: string,
@@ -1007,6 +1037,7 @@ export async function checkRuntimeScope(
     const pipeline = getPipeline(state, pipelineId);
     if (!pipeline.stages[stage]) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     const manifest = readFrozenManifestFromState(state);
+    for (const path of paths) assertRuntimeScopeExtensible(manifest, path);
     const effective = effectiveAllowedChangePaths(manifest, state);
     const outside = paths.filter((path) => !effective.some((scope) => pathMatchesScope(path, scope)));
     const autoTests = outside.filter((path) => canAutoExtendTestScope(path, manifest, state));
@@ -1109,6 +1140,7 @@ export async function authorizeTechnicalScope(
     const pipeline = getPipeline(state, pipelineId);
     if (!pipeline.stages[stage]) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     const manifest = readFrozenManifestFromState(state);
+    for (const path of paths) assertRuntimeScopeExtensible(manifest, path);
     const effective = effectiveAllowedChangePaths(manifest, state);
     const newPaths = paths.filter((path) => !effective.some((scope) => pathMatchesScope(path, scope)));
     if (newPaths.length) {
@@ -1241,6 +1273,12 @@ export async function recordTechnicalFixCycle(
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    const scopePreflight = state.scope_preflight;
+    if (!scopePreflight || scopePreflight.pipeline_id !== pipeline.id || scopePreflight.stage !== stage) {
+      throw new StageCliError(
+        `SCOPE_PREFLIGHT_REQUIRED: run stage-cli scope-check ${runId} ${stage} <planned-path>... --pipeline ${pipeline.id} before fix-cycle`,
+      );
+    }
     if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
       throw new StageCliError(`Technical fix cycle is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
     }
@@ -1250,6 +1288,7 @@ export async function recordTechnicalFixCycle(
     }
     runtime.technical_fix_cycles = next;
     runtime.message = `technical_fix cycle ${next}/3`;
+    state.scope_preflight = undefined;
 
     // If this fix happens after a candidate was already published, the source-changing
     // repair must force a fresh verify -> publish -> GitHub CI/DEV chain. We invalidate
