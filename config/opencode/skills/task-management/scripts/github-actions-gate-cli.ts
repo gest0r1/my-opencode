@@ -443,10 +443,8 @@ async function sourceCiEvidence(runRoot: string, pipelineId: string, contract: G
   const evidence = JSON.parse(await readFile(path, 'utf8'));
   if (evidence.status !== 'PASS' ||
       String(evidence.candidate_sha).toLowerCase() !== candidateSha.toLowerCase() ||
-      !Number.isInteger(Number(evidence.artifact_id)) ||
-      typeof evidence.artifact_digest !== 'string' ||
-      !/^sha256:[0-9a-f]{64}$/i.test(evidence.artifact_digest)) {
-    throw new CliError('source CI evidence is missing, failed, artifact-id/digestless or belongs to another candidate SHA');
+      !Number.isInteger(Number(evidence.workflow_run_id))) {
+    throw new CliError('source CI evidence is missing, failed or belongs to another candidate SHA');
   }
   return evidence;
 }
@@ -490,13 +488,10 @@ async function waitForRun(
   let lastObservedRun: any;
 
   if (contract.mode === 'stateful') {
-    if (!contract.trusted_ref || !contract.source_ci_stage) {
-      throw new GateExecutionError('pre_dispatch_contract', 'stateful DEV trusted/source contract is missing');
+    if (!contract.trusted_ref || !contract.source_ci_stage || !sourceCi) {
+      throw new GateExecutionError('pre_dispatch_contract', 'stateful DEV trusted/source CI contract is missing');
     }
     const sourceContract = pipeline.github_gates?.[contract.source_ci_stage];
-    if (!sourceContract?.artifact) {
-      throw new GateExecutionError('pre_dispatch_contract', 'stateful DEV source CI artifact contract is missing');
-    }
 
     let before: number[];
     try {
@@ -512,10 +507,12 @@ async function waitForRun(
         '--ref', contract.trusted_ref,
         '-f', `candidate_sha=${candidate!.candidate_sha}`,
         '-f', `ci_run_id=${sourceCi.workflow_run_id}`,
-        '-f', `ci_artifact=${sourceContract.artifact}`,
-        '-f', `ci_artifact_id=${sourceCi.artifact_id}`,
-        '-f', `ci_artifact_digest=${sourceCi.artifact_digest}`,
         '-f', `pipeline_run_id=${runId}`,
+        ...(sourceContract?.artifact ? [
+          '-f', `ci_artifact=${sourceContract.artifact}`,
+          '-f', `ci_artifact_id=${sourceCi.artifact_id}`,
+          '-f', `ci_artifact_digest=${sourceCi.artifact_digest}`,
+        ] : []),
         ...(contract.target_id ? ['-f', `deployment_target_id=${contract.target_id}`] : []),
       ]);
     } catch (error) {
@@ -568,15 +565,14 @@ async function waitForRun(
         throw new GateExecutionError('pre_dispatch_contract', 'disposable DEV source CI evidence is missing');
       }
       const sourceContract = pipeline.github_gates?.[contract.source_ci_stage];
-      if (!sourceContract?.artifact) {
-        throw new GateExecutionError('pre_dispatch_contract', 'disposable DEV source CI artifact contract is missing');
-      }
       dispatchArgs.push(
         '-f', 'ci_run_id=' + sourceCi.workflow_run_id,
-        '-f', 'ci_artifact=' + sourceContract.artifact,
-        '-f', 'ci_artifact_id=' + sourceCi.artifact_id,
-        '-f', 'ci_artifact_digest=' + sourceCi.artifact_digest,
         '-f', 'pipeline_run_id=' + runId,
+        ...(sourceContract?.artifact ? [
+          '-f', 'ci_artifact=' + sourceContract.artifact,
+          '-f', 'ci_artifact_id=' + sourceCi.artifact_id,
+          '-f', 'ci_artifact_digest=' + sourceCi.artifact_digest,
+        ] : []),
         ...(contract.target_id ? ['-f', 'deployment_target_id=' + contract.target_id] : []),
       );
     }
@@ -617,10 +613,24 @@ async function verifyDevEvidence(
   contract: GateContract,
   candidateSha: string,
   sourceCiRunId: number,
-  sourceCiArtifactId: number,
-  sourceCiArtifactDigest: string,
+  sourceCiArtifactId?: number,
+  sourceCiArtifactDigest?: string,
 ): Promise<any> {
-  if (!contract.artifact || !contract.evidence_file) throw new CliError('DEV evidence contract is missing');
+  if (!contract.artifact || !contract.evidence_file) {
+    // Artifactless DEV is a frozen trusted workflow contract. Successful terminal
+    // completion proves that its exact-SHA install/verification steps accepted
+    // candidate_sha and the exact source CI run.
+    return {
+      status: 'PASS',
+      candidate_sha: candidateSha,
+      installed_sha: candidateSha,
+      ci_run_id: sourceCiRunId,
+      ...(contract.target_id ? { target_id: contract.target_id } : {}),
+      smoke_result: 'PASS',
+      evidence_source: 'trusted_workflow_success',
+      workflow_run_id: Number(run.id),
+    };
+  }
   const directory = await mkdtemp(join(tmpdir(), 'pipeline-dev-evidence-'));
   try {
     command('gh', [
@@ -718,7 +728,7 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
   let artifacts: any[];
   try {
     jobs = fetchJobs(repo as string, Number(run.id));
-    artifacts = fetchArtifacts(repo as string, Number(run.id));
+    artifacts = contract.artifact ? fetchArtifacts(repo as string, Number(run.id)) : [];
   } catch (error) {
     const blocked = executionError('terminal_metadata_fetch', error, run);
     const evidence = {
@@ -768,8 +778,8 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
           contract,
           candidate!.candidate_sha,
           Number(sourceCi?.workflow_run_id),
-          Number(sourceCi?.artifact_id),
-          String(sourceCi?.artifact_digest ?? ''),
+          sourceCi?.artifact_id === undefined ? undefined : Number(sourceCi.artifact_id),
+          sourceCi?.artifact_digest === undefined ? undefined : String(sourceCi.artifact_digest),
         )
       : undefined;
 
@@ -827,10 +837,12 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
     ...(devEvidence ? {
       dev_evidence_validated: true,
       installed_sha: devEvidence.installed_sha,
-      ci_artifact_id: devEvidence.ci_artifact_id,
-      ci_artifact_digest: devEvidence.ci_artifact_digest,
+      source_ci_run_id: devEvidence.ci_run_id,
+      ...(devEvidence.ci_artifact_id !== undefined ? { ci_artifact_id: devEvidence.ci_artifact_id } : {}),
+      ...(devEvidence.ci_artifact_digest !== undefined ? { ci_artifact_digest: devEvidence.ci_artifact_digest } : {}),
       ...(devEvidence.target_id ? { target_id: devEvidence.target_id } : {}),
       smoke_result: devEvidence.smoke_result,
+      ...(devEvidence.evidence_source ? { dev_evidence_source: devEvidence.evidence_source } : {}),
     } : {}),
     recorded_at: new Date().toISOString(),
   };

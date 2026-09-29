@@ -14,17 +14,17 @@ OpenCode и OpenChamber являются средой запуска pipeline. �
 
 ## Authoritative CI/CD
 
-Schema v2 фиксирует явный executor каждой стадии. Финальные test/build/typecheck/lint подтверждаются только `github_ci` для exact published candidate SHA. Local gates допустимы только как явно замороженные fast/precheck/docs проверки и не заменяют GitHub CI.
+Schema v2 фиксирует явный executor каждой стадии. Зависимые work-block pipelines открываются после frozen `ready_after_stage` предыдущего блока, а не после полного CI/CD completion. Для одного продукта upstream blocks доводятся до source-ready, затем terminal deployable sink публикует один cumulative candidate SHA. Финальные test/build/typecheck/lint подтверждаются только `github_ci` для этого exact SHA.
 
 Для deployable pipeline PLAN строит capability matrix и владелец выбирает один режим:
 
 - `github` — install/runtime validation в GitHub/disposable среде;
-- `opencode_host` — trusted GitHub CD устанавливает exact CI artifact на машину, где работает OpenCode;
-- `hybrid` — сначала GitHub automated validation, затем тот же artifact разворачивается на OpenCode host и проходит owner acceptance.
+- `opencode_host` — trusted GitHub CD устанавливает/checkout exact candidate SHA на машину, где работает OpenCode;
+- `hybrid` — сначала GitHub automated validation, затем тот же exact candidate SHA разворачивается на OpenCode host и проходит owner acceptance.
 
 Для OpenCode-host CD deterministic probe проверяет trusted workflow, Environment, trusted ref, configured secret names/runner labels и реальный GitHub→host probe. Агенты не получают raw `gh`/SSH credentials.
 
-CI/CD evidence связывает candidate SHA, workflow run/attempt, required jobs, artifact ID/digest, source CI run и, для OpenCode-host, `target_id`. Terminal FAIL хранит failed jobs/steps; `diagnose` пишет отдельные redacted multiline job logs, а `log --job|--job-id` читает один exact-run job. Pre-terminal ошибки сохраняются как BLOCKED с `failure_phase`. Владелец не выгружает и не преобразует CI logs, пока deterministic GitHub auth работает. Stateful CD требует protected Environment и non-cancelling concurrency.
+Canonical CI/CD artifactless: workflows не используют Actions artifacts; evidence связывает candidate SHA, workflow run/attempt, required jobs, source CI run и, для OpenCode-host, `target_id`/installed SHA. Terminal FAIL хранит failed jobs/steps; `diagnose` пишет отдельные redacted multiline job logs, а `log --job|--job-id` читает один exact-run job. Pre-terminal ошибки сохраняются как BLOCKED с `failure_phase`. Владелец не выгружает и не преобразует CI logs, пока deterministic GitHub auth работает. Stateful CD требует protected Environment и non-cancelling concurrency.
 
 Если CI/CD workflow отсутствует, PLAN замораживает bootstrap work item. Candidate-safe CI может быть создан и запущен в текущем run. Новый privileged stateful CD workflow создаётся как `future_github_gates` и становится runnable только после merge в trusted ref.
 

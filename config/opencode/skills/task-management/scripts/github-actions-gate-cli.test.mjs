@@ -20,6 +20,11 @@ const contract = {
   trigger: 'push',
   artifact: 'candidate-build',
 };
+const artifactlessContract = {
+  workflow: '.github/workflows/ci.yml',
+  terminal_job: 'pipeline_ci',
+  trigger: 'push',
+};
 
 test('workflow inspection requires declared push trigger and terminal job', () => {
   const result = inspectWorkflowText(`
@@ -47,6 +52,112 @@ jobs:
 `, contract, 'github_ci');
   assert.equal(result.status, 'READY');
   assert.equal(result.terminal_job_name, 'pipeline_ci');
+  assert.deepEqual(result.issues, []);
+});
+
+test('artifactless candidate CI rejects GitHub Actions artifact uploads', () => {
+  const clean = inspectWorkflowText(`
+on:
+  push:
+permissions:
+  contents: read
+jobs:
+  pipeline_ci:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
+`, artifactlessContract, 'github_ci');
+  assert.equal(clean.status, 'READY');
+
+  const withUpload = inspectWorkflowText(`
+on:
+  push:
+permissions:
+  contents: read
+jobs:
+  pipeline_ci:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
+      - uses: actions/upload-artifact@1111111111111111111111111111111111111111
+        with:
+          name: provenance
+          path: package.json
+`, artifactlessContract, 'github_ci');
+  assert.equal(withUpload.status, 'INCOMPATIBLE');
+  assert.ok(withUpload.issues.some((item) => item.includes('artifactless authoritative gate')));
+});
+
+test('artifactless disposable DEV consumes exact candidate SHA and source CI run', () => {
+  const dev = {
+    workflow: '.github/workflows/dev-disposable.yml',
+    terminal_job: 'pipeline_dev',
+    trigger: 'workflow_dispatch',
+    mode: 'disposable',
+    source_ci_stage: 'tests',
+  };
+  const workflow = [
+    'name: Disposable DEV',
+    'on:',
+    '  workflow_dispatch:',
+    '    inputs:',
+    '      candidate_sha: { required: true }',
+    '      ci_run_id: { required: true }',
+    '      pipeline_run_id: { required: true }',
+    'permissions:',
+    '  contents: read',
+    'jobs:',
+    '  pipeline_dev:',
+    '    runs-on: ubuntu-latest',
+    '    steps:',
+    '      - uses: actions/checkout@1111111111111111111111111111111111111111',
+    '        with:',
+    '          ref: ${{ inputs.candidate_sha }}',
+    '      - run: echo "source-ci=${{ inputs.ci_run_id }}"',
+    '      - run: ./scripts/verify-installed-sha "${{ inputs.candidate_sha }}"',
+  ].join(String.fromCharCode(10));
+  const result = inspectWorkflowText(workflow, dev, 'github_dev');
+  assert.equal(result.status, 'READY');
+  assert.deepEqual(result.issues, []);
+});
+
+test('artifactless stateful DEV uses trusted ref but consumes candidate SHA in job steps', () => {
+  const dev = {
+    workflow: '.github/workflows/dev.yml',
+    terminal_job: 'pipeline_dev',
+    trigger: 'workflow_dispatch',
+    mode: 'stateful',
+    environment: 'development',
+    trusted_ref: 'main',
+    concurrency_group: 'development',
+    source_ci_stage: 'tests',
+    target_id: 'dev-host',
+  };
+  const result = inspectWorkflowText(`
+name: DEV
+run-name: pipeline-dev-\${{ inputs.pipeline_run_id }}-\${{ inputs.candidate_sha }}
+concurrency:
+  group: development
+  cancel-in-progress: false
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha: { required: true }
+      ci_run_id: { required: true }
+      pipeline_run_id: { required: true }
+      deployment_target_id: { required: true }
+permissions:
+  contents: read
+jobs:
+  pipeline_dev:
+    environment: development
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./deploy "\${{ inputs.candidate_sha }}" "\${{ inputs.deployment_target_id }}"
+      - run: ./verify-source-ci "\${{ inputs.ci_run_id }}"
+      - run: ./verify-installed-sha "\${{ inputs.candidate_sha }}"
+`, dev, 'github_dev');
+  assert.equal(result.status, 'READY');
   assert.deepEqual(result.issues, []);
 });
 
@@ -223,7 +334,7 @@ test('disposable DEV workflow consumes exact CI artifact without secrets', () =>
     '          artifact-ids: ${{ inputs.ci_artifact_id }}',
     '          run-id: ${{ inputs.ci_run_id }}',
     '          github-token: ${{ github.token }}',
-    '      - run: echo inputs.ci_run_id inputs.ci_artifact inputs.ci_artifact_id inputs.ci_artifact_digest',
+    '      - run: echo inputs.candidate_sha inputs.ci_run_id inputs.ci_artifact inputs.ci_artifact_id inputs.ci_artifact_digest',
     '      - run: printf "{\\\"status\\\":\\\"PASS\\\"}" > dev-evidence.json',
     '      - uses: actions/upload-artifact@3333333333333333333333333333333333333333',
     '        with:',
@@ -240,7 +351,7 @@ test('disposable DEV workflow consumes exact CI artifact without secrets', () =>
   assert.ok(unsafeResult.issues.some((item) => item.includes('must not reference')));
 });
 
-test('stateful DEV workflow is trusted-ref dispatch and consumes CI artifact', () => {
+test('legacy stateful DEV workflow remains trusted-ref compatible with CI artifacts', () => {
   const dev = {
     workflow: '.github/workflows/dev.yml',
     terminal_job: 'pipeline_dev',
@@ -287,7 +398,7 @@ jobs:
           run-id: \${{ inputs.ci_run_id }}
           artifact-ids: \${{ inputs.ci_artifact_id }}
           github-token: \${{ github.token }}
-      - run: echo '\${{ inputs.ci_run_id }} \${{ inputs.ci_artifact }} \${{ inputs.ci_artifact_id }} \${{ inputs.ci_artifact_digest }}'
+      - run: echo '\${{ inputs.candidate_sha }} \${{ inputs.ci_run_id }} \${{ inputs.ci_artifact }} \${{ inputs.ci_artifact_id }} \${{ inputs.ci_artifact_digest }}'
       - run: printf '{"status":"PASS"}' > dev-evidence.json
       - uses: actions/upload-artifact@3333333333333333333333333333333333333333
         with:

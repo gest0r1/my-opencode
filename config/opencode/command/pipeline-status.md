@@ -28,18 +28,18 @@ tags:
 1. Прочитай `.tmp/pipelines/{run-id}/state.json`.
 2. Выполни `stage-cli validate`.
 3. Покажи статус run.
-4. Покажи статус каждого pipeline.
-5. Покажи текущую стадию.
+4. Покажи статус каждого pipeline и отдельно source-ready состояние: достигнут ли его `ready_after_stage`, даже если поздний CI/CD stage сейчас BLOCKED.
+5. Покажи текущую стадию и runnable queue из `stage-cli next`. Если один pipeline BLOCKED, но queue не пуста, статус RUN трактуй как продолжающийся, а blocker — как deferred для соответствующего pipeline.
 6. Покажи завершённые, активные, ожидающие и заблокированные stages.
 7. Покажи последние ошибки и evidence.
-8. Для стадий `github_ci`/`github_dev` покажи frozen workflow, candidate SHA, workflow run ID/attempt, terminal job, `required_jobs` с их PASS status, artifact ID/name/`sha256:` digest и source CI run/artifact ID/digest (для DEV), а для stateful DEV — Environment/trusted ref/concurrency validation и `target_id` для OpenCode-host CD. Не считай natural-language статус evidence.
+8. Для стадий `github_ci`/`github_dev` покажи frozen workflow, exact candidate SHA, workflow run ID/attempt, terminal job и `required_jobs` с PASS status. Для DEV покажи exact source-CI run ID, `installed_sha`/candidate SHA, а для stateful DEV — Environment/trusted ref/concurrency validation и `target_id`. Canonical gates artifactless: artifact ID/digest не ожидаются. Не считай natural-language статус evidence.
 9. Покажи `future_github_gates`: они могут быть разработаны в текущем run, но не считаются активными/runnable до merge в trusted ref. Если есть `deployment_target_check`, покажи `kind`, `transport`, Environment, trusted ref, probe workflow/run/job и время последней PLAN-проверки без вывода значений секретов.
 10. Для GitHub Issue run покажи repository/source issues, `planning_base_sha`/`run_base_sha`, `issue_results`, PR number и количество недоставленных событий `github_outbox`.
 11. Если есть `preserved_baseline`, покажи его HEAD и число frozen paths отдельно от writable scope. Если state содержит `superseded_by`/`supersede_reason` или manifest содержит `lineage`, покажи цепочку run-ов и reason code.
 12. Для rules покажи `rules_source`, текущий `rules_file`, `rules_version` и hash из state. Эти поля — audit metadata текущей принятой версии rules; изменение hash/version между pipeline-командами само по себе не является blocker.
 13. Покажи `runtime_scope_extensions` отдельно от frozen manifest scope: class (`test|technical`), exact paths, reason и review evidence для technical. Если есть `scope_preflight`, покажи pipeline/stage/paths и отметь, что следующий matching `fix-cycle` его потребит.
 14. Для каждого stage покажи technical-fix budget как `used/limit`, историю `technical_fix_budget_grants` и активный `runtime_replan` (revision/status/evidence/owner_questions/granted_cycles). Явно различай `awaiting_owner_clarification` и `awaiting_owner_approval`; это не terminal full replan.
-15. Для `github_ci`/`github_dev` со статусом FAIL или BLOCKED покажи canonical evidence. Для FAIL: workflow run/attempt, failed jobs/steps, `validation_error` и diagnostics. Для BLOCKED: `failure_phase`, candidate/workflow identity и observed run ID/status, если run уже найден. Не проси пользователя вручную выгружать Actions logs, если deterministic CLI имеет доступ.
+15. Отдельно покажи integrated candidate: текущий `candidate_sha` и для каждого deployable pipeline — совпадает ли PASS `deployment_validation.stage` с этим SHA. Для `github_ci`/`github_dev` со статусом FAIL или BLOCKED покажи canonical evidence. Для FAIL: workflow run/attempt, failed jobs/steps, `validation_error` и diagnostics. Для BLOCKED: `failure_phase`, candidate/workflow identity и observed run ID/status, если run уже найден. Не проси пользователя вручную выгружать Actions logs, если deterministic CLI имеет доступ.
 
 ## Запрещено
 

@@ -158,21 +158,23 @@ freeze their path+SHA-256 in schema-v2 manifest evidence. Then require the exact
 
 When continuing already-committed implementation, freeze `git-worktree-cli baseline <base-sha>` output as `preserved_baseline`; historical paths remain immutable unless they also belong to writable scope.
 
-For every deployable pipeline, present the owner with the frozen capability matrix and an advisory recommendation, then require an explicit owner choice of `github | opencode_host | hybrid`. Never choose the testing strategy on the owner's behalf. Local/hybrid is available only when the trusted GitHub→OpenCode-host probe and active stateful CD contract are READY; workflows authored in the current candidate are future automation only.
+For one delivered product composed of several work-block pipelines, plan source-ready milestones on upstream blocks and put the single integrated publish/CI/DEV chain on the terminal deployable DAG sink. Do not create per-block artifact-producing CI. For every deployable sink, present the owner with the frozen capability matrix and an advisory recommendation, then require an explicit owner choice of `github | opencode_host | hybrid`. Never choose the testing strategy on the owner's behalf. Local/hybrid is available only when the trusted GitHub→OpenCode-host probe and active stateful CD contract are READY; workflows authored in the current candidate are future automation only.
 
 ## Execution delegation
 
 OpenStage owns all stage transitions and reusable task calls. Child agents do
 not call other execution agents to advance the pipeline.
 
+Treat `stage-cli next` as the only scheduler. Upstream dependencies are satisfied at their frozen `ready_after_stage` source-ready milestone. If an upstream pipeline later blocks on external GitHub/CD infrastructure but `next` exposes downstream or independent work, continue that work; do not terminate the whole RUN.
+
 Dispatch implementation only from frozen work-item IDs/path/SHA-256. After each
 source-changing item require Git scope verify. In schema v2, authoritative test/build/typecheck/lint
-PASS comes only from `github_ci` evidence produced by `github-actions-gate-cli` for the exact
-published candidate SHA. `gate-runner-cli` may satisfy only stages explicitly frozen as
+PASS comes only from artifactless `github_ci` evidence produced by `github-actions-gate-cli` for the exact
+published cumulative candidate SHA. `gate-runner-cli` may satisfy only stages explicitly frozen as
 `local_gate` (fast checks, docs or project/runtime validation). Natural-language PASS never
 completes a machine stage. If project CI is missing/incompatible, execute the frozen CI-bootstrap
 work item, validate the resulting workflow deterministically, publish it with the candidate and
-then wait for GitHub Actions; never fall back to a local final build/test. On GitHub FAIL use `diagnose` and its per-job logs (or `log --job|--job-id`); never ask the owner to fetch or reshape evidence. If the next frozen executor is `owner_acceptance`, stop and return the deployed candidate/artifact identity plus test instructions; only an explicit owner reply may be translated into the deterministic `stage-cli owner-accept` command.
+then wait for GitHub Actions; never fall back to a local final build/test. On GitHub FAIL use `diagnose` and its per-job logs (or `log --job|--job-id`); never ask the owner to fetch or reshape evidence. If the next frozen executor is `owner_acceptance`, stop and return the deployed exact candidate SHA/source-CI identity plus test instructions; only an explicit owner reply may be translated into the deterministic `stage-cli owner-accept` command.
 
 Only `technical_fix` may auto-repair. Before consuming a cycle, identify intended changed paths and call `stage-cli scope-check` for the exact pipeline/stage. Test/support paths under an already-approved component may be machine-authorized automatically. For `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer and, only when their machine-readable review proves a decision-free bounded clarification, call `stage-cli scope-extend`; never edit manifest/state manually. Only then call `stage-cli fix-cycle`. If Git verify discovers another path after the cycle started, resolve that path through the same scope-check/review flow and continue the same cycle.
 

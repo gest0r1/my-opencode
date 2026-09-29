@@ -160,24 +160,23 @@ finish with `pending=0`.
 Every deployable pipeline freezes an explicit owner decision:
 
 - `github`: fresh install, upgrade/repeat install and useful runtime/E2E validation run only in GitHub/disposable infrastructure.
-- `opencode_host`: GitHub Actions deploys the exact CI artifact to the machine where OpenCode runs, then validates there automatically, hands it to the owner, or both.
-- `hybrid`: GitHub-side automated validation completes first, then the same artifact ID/digest is deployed by trusted GitHub CD to the OpenCode host and the owner performs the final test.
+- `opencode_host`: trusted GitHub Actions installs/checks out the exact approved candidate SHA on the machine where OpenCode runs, then validates there automatically, hands it to the owner, or both.
+- `hybrid`: GitHub-side automated validation completes first, then the same exact candidate SHA is installed by trusted GitHub CD on the OpenCode host and the owner performs the final test.
 
 PLAN builds a capability matrix and may recommend one option, but the owner chooses it. The OpenCode-host capability probe is itself trusted automation: it is dispatched from the trusted ref with a correlation ID, uses explicit read-only GitHub permissions and the protected Environment, and must run the frozen probe job. `github_ssh` probes must use strict non-interactive SSH and all required Environment secret names; `self_hosted_runner` probes must execute on the frozen self-hosted runner labels. Local/hybrid requires a READY trusted GitHub→OpenCode-host probe and an already-trusted stateful CD workflow. If those workflows are being introduced in the current candidate, they may be authored as future automation but cannot be consumed as privileged CD until merged to the trusted ref.
 
 ## 3. Candidate publication, GitHub CI and DEV
 
-RUN follows the frozen DAG and executor contract. The canonical release path is:
+RUN follows the frozen DAG and executor contract. Dependencies between work blocks unlock at the upstream `ready_after_stage` source-ready boundary; a later external CI/CD blocker does not freeze downstream implementation. For several blocks that compose one product, the canonical path is:
 
 ```text
-implementation/review
-  -> source documentation/finalization
-  -> optional local fast gates
+block A implementation/review -> source-ready
+  -> block B implementation/review -> source-ready
+  -> ... all approved blocks source-ready
   -> Git scope verify
-  -> publish exact candidate SHA
-  -> GitHub Actions CI for that SHA
-  -> immutable artifact/evidence
-  -> DEV/runtime validation of the same SHA/artifact
+  -> publish ONE cumulative candidate SHA
+  -> artifactless GitHub Actions CI for that exact SHA
+  -> artifactless DEV/runtime validation of the same SHA
   -> acceptance/handoff
 ```
 
@@ -187,7 +186,7 @@ implementation/review
 .tmp/pipelines/<run-id>/candidate.json
 ```
 
-For `github_ci`/`github_dev`, `github-actions-gate-cli` structurally validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch and frozen event/workflow. Candidate CI must be read-only, secret-free and path-filter-free; every frozen required job plus the terminal job must complete successfully. Required artifacts are bound by GitHub artifact ID and `sha256:` digest. DEV evidence additionally points to the exact source CI run, repeats the same source artifact ID/digest, and for OpenCode-host CD repeats the frozen logical `target_id`. PASS, terminal FAIL, and pre-terminal BLOCKED evidence are written under:
+For `github_ci`/`github_dev`, `github-actions-gate-cli` structurally validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch/trusted ref and frozen event/workflow. Candidate CI must be read-only, secret-free, path-filter-free and artifactless; every frozen required job plus the terminal job must complete successfully. DEV receives the exact candidate SHA plus source-CI run ID, and for OpenCode-host CD repeats the frozen logical `target_id`. Artifactless workflow success is canonical evidence only when frozen job steps consume that candidate/source identity. PASS, terminal FAIL, and pre-terminal BLOCKED evidence are written under:
 
 ```text
 .tmp/pipelines/<run-id>/github/<pipeline>-<stage>.json
@@ -199,7 +198,7 @@ Terminal FAIL retains exact run/attempt and job/failed-step identity. `diagnose`
 
 If a target project has no compatible GitHub CI workflow, PLAN freezes a bootstrap/adaptation work item and workflow scope. RUN implements that candidate-safe CI workflow in the target project, validates it before publication, publishes it with the candidate branch and waits for GitHub Actions on that exact SHA. First-time CI workflows use a `push` trigger; there is no local final-build/test fallback. For `github` and `hybrid` testing strategies the GitHub validation stage includes both fresh-install and upgrade/repeat-install required jobs. For `opencode_host`, those required jobs belong to the trusted stateful CD stage on the OpenCode host. Existing disposable `github_dev` is secret-free and runs on the candidate ref. Existing stateful `github_dev` runs from a verified Environment/trusted ref with frozen non-cancelling concurrency. If stateful DEV is missing, PLAN may freeze it under `future_github_gates`; RUN authors that workflow now but cannot execute it until owner merge makes the workflow trusted. A later PLAN can promote it to active `github_dev`.
 
-Any source-changing fix after publication creates a new candidate SHA. `stage-cli fix-cycle` invalidates the completed chain from the preceding `git_verify` through publish/CI/DEV, making `git_verify` runnable again while preserving old evidence as audit history. The repaired source must then pass verify → publish → GitHub CI → DEV again; CI/artifact/DEV evidence belonging to the previous SHA cannot complete the reopened stages.
+Any source-changing fix after publication creates a new candidate SHA. `stage-cli fix-cycle` invalidates the completed chain from the preceding `git_verify` through publish/CI/DEV, making `git_verify` runnable again while preserving old evidence as audit history. The repaired source must then pass verify → publish → GitHub CI → DEV again; evidence belonging to the previous SHA cannot satisfy final delivery.
 
 ## 4. Automatic PR handoff
 
@@ -214,7 +213,7 @@ The PR helper:
 
 1. requires `state.status == completed` and every mapped pipeline completed;
 2. verifies that the current origin equals the repository frozen in state;
-3. verifies the published non-default candidate branch and SHA;
+3. verifies the published non-default candidate branch and SHA, plus PASS deployment-validation evidence for that same final cumulative SHA on every deployable pipeline;
 4. flushes pending Issue status comments;
 5. takes Issue numbers only from the frozen source/mapping;
 6. creates or updates exactly one open PR from the candidate branch to `main`;
