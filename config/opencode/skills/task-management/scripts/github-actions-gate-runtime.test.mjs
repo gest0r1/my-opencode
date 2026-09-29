@@ -144,6 +144,150 @@ exit 1
 });
 
 
+test('artifactless disposable DEV dispatches exact candidate SHA and source CI run without artifact APIs', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'github-gate-runtime-dev-'));
+  const stateRoot = path.join(root, '.tmp', 'state');
+  const runId = 'run-1';
+  const runRoot = path.join(root, '.tmp', 'artifacts', runId);
+  const manifestFile = path.join(runRoot, 'manifest.json');
+  const workflow = path.join(root, '.github', 'workflows', 'dev.yml');
+  const bin = path.join(root, 'bin');
+  await mkdir(path.dirname(workflow), { recursive: true });
+  await mkdir(path.join(stateRoot, runId), { recursive: true });
+  await mkdir(path.join(runRoot, 'github'), { recursive: true });
+  await mkdir(bin, { recursive: true });
+
+  await writeFile(workflow, [
+    'name: DEV',
+    'on:',
+    '  workflow_dispatch:',
+    '    inputs:',
+    '      candidate_sha: { required: true }',
+    '      ci_run_id: { required: true }',
+    '      pipeline_run_id: { required: true }',
+    'permissions:',
+    '  contents: read',
+    'jobs:',
+    '  pipeline_dev:',
+    '    runs-on: ubuntu-latest',
+    '    steps:',
+    '      - uses: actions/checkout@1111111111111111111111111111111111111111',
+    '        with:',
+    '          ref: ${{ inputs.candidate_sha }}',
+    '      - run: echo "ci=${{ inputs.ci_run_id }}"',
+    '      - run: ./verify-installed-sha "${{ inputs.candidate_sha }}"',
+    '',
+  ].join('\n'));
+
+  const manifest = {
+    schema_version: 2,
+    run_id: runId,
+    repository: 'owner/repo',
+    git_setup: { branch: 'feature/x' },
+    pipelines: [{
+      id: 'app',
+      stages: ['tests', 'dev'],
+      executors: { tests: 'github_ci', dev: 'github_dev' },
+      github_gates: {
+        tests: {
+          workflow: '.github/workflows/ci.yml',
+          terminal_job: 'pipeline_ci',
+          trigger: 'push',
+        },
+        dev: {
+          workflow: '.github/workflows/dev.yml',
+          terminal_job: 'pipeline_dev',
+          trigger: 'workflow_dispatch',
+          mode: 'disposable',
+          source_ci_stage: 'tests',
+          timeout_seconds: 30,
+        },
+      },
+    }],
+  };
+  await writeFile(manifestFile, JSON.stringify(manifest, null, 2));
+  await writeFile(path.join(runRoot, 'candidate.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: runId,
+    branch: 'feature/x',
+    candidate_sha: 'a'.repeat(40),
+    remote_sha: 'a'.repeat(40),
+  }, null, 2));
+  await writeFile(path.join(runRoot, 'github', 'app-tests.json'), JSON.stringify({
+    status: 'PASS',
+    run_id: runId,
+    pipeline_id: 'app',
+    stage: 'tests',
+    executor: 'github_ci',
+    workflow: '.github/workflows/ci.yml',
+    workflow_run_id: 50,
+    candidate_sha: 'a'.repeat(40),
+  }, null, 2));
+  await writeFile(path.join(stateRoot, runId, 'state.json'), JSON.stringify({
+    run_id: runId,
+    manifest_file: manifestFile,
+  }, null, 2));
+
+  const gh = path.join(bin, 'gh');
+  const counter = path.join(root, 'dev-run-list-count');
+  await writeFile(gh, `#!/bin/sh
+set -eu
+counter='${counter}'
+case "$*" in
+  "api repos/owner/repo/actions/workflows/dev.yml/runs?branch=feature%2Fx&per_page=100")
+    n=0
+    [ ! -f "$counter" ] || n=$(cat "$counter")
+    if [ "$n" = 0 ]; then
+      printf '1' > "$counter"
+      printf '%s\\n' '{"workflow_runs":[]}'
+    else
+      printf '%s\\n' '{"workflow_runs":[{"id":88,"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","head_branch":"feature/x","event":"workflow_dispatch","run_attempt":1}]}'
+    fi
+    ;;
+  "workflow run dev.yml --repo owner/repo --ref feature/x -f candidate_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -f ci_run_id=50 -f pipeline_run_id=run-1")
+    ;;
+  "api repos/owner/repo/actions/runs/88")
+    printf '%s\\n' '{"id":88,"run_attempt":1,"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","head_branch":"feature/x","event":"workflow_dispatch","status":"completed","conclusion":"success"}'
+    ;;
+  "api repos/owner/repo/actions/runs/88/jobs?filter=latest&per_page=100")
+    printf '%s\\n' '{"jobs":[{"id":89,"name":"pipeline_dev","status":"completed","conclusion":"success","steps":[]}]}'
+    ;;
+  *"/artifacts"*)
+    printf '%s\\n' 'artifact API must not be called' >&2
+    exit 3
+    ;;
+  *)
+    printf 'unexpected gh args: %s\\n' "$*" >&2
+    exit 2
+    ;;
+esac
+`);
+  await chmod(gh, 0o755);
+
+  const result = spawnSync('npx', [
+    '--yes', 'tsx', CLI,
+    'run', runId, 'app', 'dev',
+    '--state-root', stateRoot,
+  ], {
+    cwd: root,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: bin + path.delimiter + process.env.PATH,
+      GITHUB_ACTIONS_GATE_POLL_MS: '250',
+    },
+    timeout: 20_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const evidence = JSON.parse(await readFile(path.join(runRoot, 'github', 'app-dev.json'), 'utf8'));
+  assert.equal(evidence.status, 'PASS');
+  assert.equal(evidence.source_ci_run_id, 50);
+  assert.equal(evidence.installed_sha, 'a'.repeat(40));
+  assert.equal(evidence.dev_evidence_source, 'trusted_workflow_success');
+  assert.equal('ci_artifact_id' in evidence, false);
+  assert.equal('ci_artifact_digest' in evidence, false);
+});
+
 test('terminal failure diagnose writes readable per-job log and log command reuses exact run job', async () => {
   const fx = await fixture();
   const gh = path.join(fx.bin, 'gh');
