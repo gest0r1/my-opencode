@@ -222,7 +222,7 @@ test('schema v2 freezes CI bootstrap work item and workflow scope', async () => 
   );
 });
 
-test('schema v2 supports disposable DEV only from a prior CI artifact', async () => {
+test('schema v2 supports artifactless disposable DEV from prior exact-SHA CI evidence', async () => {
   const fx = await fixture('v2-disposable-dev');
   fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests', 'dev');
   fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
@@ -254,19 +254,11 @@ test('schema v2 supports disposable DEV only from a prior CI artifact', async ()
       trigger: 'workflow_dispatch',
       mode: 'disposable',
       source_ci_stage: 'tests',
-      artifact: 'dev-evidence',
-      evidence_file: 'dev-evidence.json',
     },
   };
   assert.equal(
     validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
     'PASS',
-  );
-
-  delete fx.manifest.pipelines[0].github_gates.tests.artifact;
-  assert.throws(
-    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
-    /GITHUB_DEV_SOURCE_ARTIFACT_REQUIRED/,
   );
 });
 
@@ -850,7 +842,6 @@ test('stage-cli accepts artifactless stateful DEV evidence bound to exact source
       terminal_job: 'pipeline_ci',
       required_jobs: ['fresh_install', 'upgrade_install'],
       trigger: 'push',
-      artifact: 'candidate-build',
     },
     dev: {
       workflow: '.github/workflows/dev.yml',
@@ -862,8 +853,6 @@ test('stage-cli accepts artifactless stateful DEV evidence bound to exact source
       concurrency_group: 'development',
       target_id: 'opencode-development-host',
       source_ci_stage: 'tests',
-      artifact: 'dev-evidence',
-      evidence_file: 'dev-evidence.json',
     },
   };
   delete fx.manifest.pipelines[0].ready_after_stage;
