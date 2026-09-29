@@ -99,7 +99,7 @@ test('next exposes only dependency-ready stages and supports independent paralle
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const manifest = await baseManifest(root, 'dag-ready-run', [
-    { id: 'a', stages: ['implementation'] },
+    { id: 'a', stages: ['implementation'], ready_after_stage: 'implementation' },
     { id: 'b', stages: ['implementation'], depends_on: ['a'] },
     { id: 'c', stages: ['implementation'] },
   ]);
@@ -128,7 +128,7 @@ test('next exposes only dependency-ready stages and supports independent paralle
     stateRoot,
   ]);
   assert.notEqual(premature.status, 0);
-  assert.match(premature.stderr, /dependency is not completed/);
+  assert.match(premature.stderr, /dependency is not source-ready/);
 
   for (const id of ['a', 'c']) {
     result = run(root, [
@@ -164,6 +164,62 @@ test('next exposes only dependency-ready stages and supports independent paralle
   ]);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).status, 'completed');
+});
+
+test('late blocker after source-ready does not freeze downstream work', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await baseManifest(root, 'dag-late-blocker', [
+    { id: 'a', stages: ['implementation', 'late-validation'], ready_after_stage: 'implementation' },
+    { id: 'b', stages: ['implementation'], depends_on: ['a'] },
+  ]);
+  const manifestPath = await writeManifest(root, manifest);
+
+  let result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['approve', manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(root, ['start', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['complete', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(root, ['start', manifest.run_id, 'late-validation', '--pipeline', 'a', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['block', manifest.run_id, 'late-validation', '--pipeline', 'a', '--state-root', stateRoot, '--message', 'external quota']);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(root, ['next', manifest.run_id, '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout);
+  assert.deepEqual(state.runnable, [{ pipeline_id: 'b', stage: 'implementation' }]);
+  assert.equal(state.status, 'in_progress');
+});
+
+test('blocker before source-ready keeps dependent work closed', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await baseManifest(root, 'dag-early-blocker', [
+    { id: 'a', stages: ['implementation', 'review'], ready_after_stage: 'review' },
+    { id: 'b', stages: ['implementation'], depends_on: ['a'] },
+  ]);
+  const manifestPath = await writeManifest(root, manifest);
+
+  let result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['approve', manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['start', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['block', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(root, ['next', manifest.run_id, '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout);
+  assert.deepEqual(state.runnable, []);
+  assert.equal(state.status, 'blocked');
 });
 
 test('init rejects dependency cycles before execution', async () => {
