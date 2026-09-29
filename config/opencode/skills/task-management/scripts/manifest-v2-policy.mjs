@@ -323,9 +323,7 @@ function validateProjectPolicy(manifest, cwd) {
             typeof gate.environment !== 'string' || !gate.environment.trim() ||
             typeof gate.trusted_ref !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(gate.trusted_ref) ||
             gate.trusted_ref.includes('..') || gate.trusted_ref.endsWith('/') ||
-            typeof gate.artifact !== 'string' || !gate.artifact.trim() ||
-            typeof gate.concurrency_group !== 'string' || !gate.concurrency_group.trim() ||
-            typeof gate.evidence_file !== 'string' || !/^[A-Za-z0-9._-]+\.json$/.test(gate.evidence_file)) {
+            typeof gate.concurrency_group !== 'string' || !gate.concurrency_group.trim()) {
           throw new ManifestV2PolicyError('project_policy.github_actions.dev stateful contract is incomplete');
         }
       }
@@ -443,6 +441,9 @@ export function validatePackageManagerContract(invocations, { cwd = process.cwd(
 
 function validateGithubExecutionContract(manifest) {
   const workItems = new Map((manifest.work_items ?? []).map((item) => [item.id, item]));
+  const dependedOn = new Set(
+    (manifest.pipelines ?? []).flatMap((pipeline) => pipeline.depends_on ?? []),
+  );
   for (const pipeline of manifest.pipelines ?? []) {
     if (!pipeline.executors || typeof pipeline.executors !== 'object' || Array.isArray(pipeline.executors)) {
       throw new ManifestV2PolicyError(`schema v2 pipeline requires executors: ${pipeline.id}`);
@@ -457,6 +458,19 @@ function validateGithubExecutionContract(manifest) {
     }
 
     const stages = pipeline.stages ?? [];
+    if (dependedOn.has(pipeline.id)) {
+      if (typeof pipeline.ready_after_stage !== 'string' || !stages.includes(pipeline.ready_after_stage)) {
+        throw new ManifestV2PolicyError(`DEPENDENCY_SOURCE_READY_STAGE_REQUIRED: ${pipeline.id}`);
+      }
+      const readyIndex = stages.indexOf(pipeline.ready_after_stage);
+      for (const later of stages.slice(readyIndex + 1)) {
+        if (pipeline.executors[later] === 'agent') {
+          throw new ManifestV2PolicyError(
+            `SOURCE_STAGE_AFTER_READY_BOUNDARY: ${pipeline.id}/${later}`,
+          );
+        }
+      }
+    }
     if (stages.some((stage) => pipeline.executors[stage] === 'github_dev') && pipeline.deployable !== true) {
       throw new ManifestV2PolicyError(`GITHUB_DEV_REQUIRES_DEPLOYABLE_PIPELINE: ${pipeline.id}`);
     }
@@ -545,8 +559,8 @@ function validateGithubExecutionContract(manifest) {
             throw new ManifestV2PolicyError('GITHUB_DEV_SOURCE_CI_ORDER_INVALID: ' + pipeline.id + '/' + stage);
           }
           const sourceGate = pipeline.github_gates?.[gate.source_ci_stage];
-          if (!sourceGate || typeof sourceGate.artifact !== 'string' || !sourceGate.artifact.trim()) {
-            throw new ManifestV2PolicyError('GITHUB_DEV_SOURCE_ARTIFACT_REQUIRED: ' + pipeline.id + '/' + stage);
+          if (!sourceGate) {
+            throw new ManifestV2PolicyError('GITHUB_DEV_SOURCE_CI_GATE_MISSING: ' + pipeline.id + '/' + stage);
           }
           if (gate.trigger !== 'workflow_dispatch') {
             throw new ManifestV2PolicyError('GITHUB_DEV_REQUIRES_DISPATCH: ' + pipeline.id + '/' + stage);
@@ -554,10 +568,11 @@ function validateGithubExecutionContract(manifest) {
           if (gate.bootstrap_required === true) {
             throw new ManifestV2PolicyError('GITHUB_DEV_CANNOT_BOOTSTRAP_SEPARATELY: ' + pipeline.id + '/' + stage);
           }
-          if (typeof gate.artifact !== 'string' || !gate.artifact.trim()) {
-            throw new ManifestV2PolicyError('GITHUB_DEV_EVIDENCE_ARTIFACT_REQUIRED: ' + pipeline.id + '/' + stage);
+          if ((gate.artifact === undefined) !== (gate.evidence_file === undefined)) {
+            throw new ManifestV2PolicyError('GITHUB_DEV_LEGACY_ARTIFACT_PAIR_INVALID: ' + pipeline.id + '/' + stage);
           }
-          if (typeof gate.evidence_file !== 'string' || !/^[A-Za-z0-9._-]+\.json$/.test(gate.evidence_file)) {
+          if (gate.evidence_file !== undefined &&
+              (typeof gate.evidence_file !== 'string' || !/^[A-Za-z0-9._-]+\.json$/.test(gate.evidence_file))) {
             throw new ManifestV2PolicyError('GITHUB_DEV_EVIDENCE_FILE_INVALID: ' + pipeline.id + '/' + stage);
           }
 
@@ -694,8 +709,9 @@ function validateGithubExecutionContract(manifest) {
           gate.trusted_ref.includes('..') || gate.trusted_ref.endsWith('/') ||
           typeof gate.concurrency_group !== 'string' || !gate.concurrency_group.trim() ||
           typeof gate.source_ci_stage !== 'string' || pipeline.executors[gate.source_ci_stage] !== 'github_ci' ||
-          typeof gate.artifact !== 'string' || !gate.artifact.trim() ||
-          typeof gate.evidence_file !== 'string' || !/^[A-Za-z0-9._-]+\.json$/.test(gate.evidence_file) ||
+          ((gate.artifact === undefined) !== (gate.evidence_file === undefined)) ||
+          (gate.evidence_file !== undefined &&
+            (typeof gate.evidence_file !== 'string' || !/^[A-Za-z0-9._-]+\.json$/.test(gate.evidence_file))) ||
           gate.bootstrap_required !== true || typeof gate.bootstrap_work_item_id !== 'string') {
         throw new ManifestV2PolicyError(`FUTURE_GITHUB_DEV_INVALID: ${pipeline.id}/${name}`);
       }
