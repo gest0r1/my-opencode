@@ -103,6 +103,7 @@ test('next exposes only dependency-ready stages and supports independent paralle
     { id: 'b', stages: ['implementation'], depends_on: ['a'] },
     { id: 'c', stages: ['implementation'] },
   ]);
+  manifest.pipelines[0].executors['late-validation'] = 'review';
   const manifestPath = await writeManifest(root, manifest);
 
   let result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
@@ -173,6 +174,7 @@ test('late blocker after source-ready does not freeze downstream work', async ()
     { id: 'a', stages: ['implementation', 'late-validation'], ready_after_stage: 'implementation' },
     { id: 'b', stages: ['implementation'], depends_on: ['a'] },
   ]);
+  manifest.pipelines[0].executors['late-validation'] = 'review';
   const manifestPath = await writeManifest(root, manifest);
 
   let result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
@@ -226,8 +228,8 @@ test('init rejects dependency cycles before execution', async () => {
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const manifest = await baseManifest(root, 'cycle-run', [
-    { id: 'a', stages: ['implementation'], depends_on: ['b'] },
-    { id: 'b', stages: ['implementation'], depends_on: ['a'] },
+    { id: 'a', stages: ['implementation'], ready_after_stage: 'implementation', depends_on: ['b'] },
+    { id: 'b', stages: ['implementation'], ready_after_stage: 'implementation', depends_on: ['a'] },
   ]);
   const manifestPath = await writeManifest(root, manifest);
   const result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
