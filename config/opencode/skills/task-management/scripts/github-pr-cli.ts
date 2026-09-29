@@ -135,6 +135,37 @@ function assertCandidate(candidate: Record<string, any>): { branch: string; cand
   return { branch, candidateSha };
 }
 
+async function assertFinalDeploymentValidation(
+  runDir: string,
+  state: Record<string, any>,
+  candidateSha: string,
+): Promise<void> {
+  const manifestFile = String(state.manifest_file ?? '');
+  if (!manifestFile) throw new GitHubPrCliError('state manifest_file is missing');
+  const manifest = await readJson(manifestFile, 'manifest.json');
+  for (const pipeline of manifest.pipelines ?? []) {
+    if (pipeline?.deployable !== true) continue;
+    const stage = pipeline?.deployment_validation?.stage;
+    if (typeof stage !== 'string' || !stage) {
+      throw new GitHubPrCliError(`deployable pipeline has no deployment validation stage: ${String(pipeline?.id)}`);
+    }
+    const executor = pipeline?.executors?.[stage];
+    if (executor !== 'github_ci' && executor !== 'github_dev') {
+      throw new GitHubPrCliError(`deployment validation is not a GitHub gate: ${String(pipeline?.id)}/${stage}`);
+    }
+    const evidence = await readJson(
+      path.join(runDir, 'github', `${String(pipeline.id)}-${stage}.json`),
+      `deployment validation evidence ${String(pipeline.id)}/${stage}`,
+    );
+    if (evidence.status !== 'PASS' ||
+        String(evidence.candidate_sha ?? '').toLowerCase() !== candidateSha.toLowerCase()) {
+      throw new GitHubPrCliError(
+        `FINAL_CANDIDATE_VALIDATION_REQUIRED: ${String(pipeline.id)}/${stage} must PASS candidate ${candidateSha}`,
+      );
+    }
+  }
+}
+
 export function managedPrBlock(runId: string, candidateSha: string, issueNumbers: number[]): string {
   return [
     MANAGED_START,
@@ -191,6 +222,7 @@ export async function publishPullRequest(
   }
 
   const candidate = assertCandidate(await readJson(path.join(runDir, 'candidate.json'), 'candidate.json'));
+  await assertFinalDeploymentValidation(runDir, state, candidate.candidateSha);
   requireGitHubAuth(cwd);
 
   const sync = await syncRun(runId, { stateRoot });
