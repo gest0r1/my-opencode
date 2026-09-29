@@ -408,9 +408,55 @@ test('schema v2 serializes declared conflict groups through the DAG', async () =
     /CONFLICT_NOT_SERIALIZED/,
   );
   fx.manifest.pipelines[1].depends_on = ['app'];
+  fx.manifest.pipelines[0].ready_after_stage = 'finalize';
+  fx.manifest.pipelines[0].release_ready_after_stage = 'finalize';
   assert.equal(
     validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
     'PASS',
+  );
+});
+
+test('schema v2 requires source-ready milestone on depended-on pipelines', async () => {
+  const fx = await fixture('v2-source-ready-required');
+  const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
+  fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...secondItem });
+  delete fx.manifest.pipelines[0].ready_after_stage;
+  delete fx.manifest.pipelines[0].release_ready_after_stage;
+  fx.manifest.pipelines.push({
+    id: 'b',
+    deployable: false,
+    stages: ['implementation'],
+    executors: { implementation: 'agent' },
+    work_items: ['wi-2'],
+    decision_ids: [],
+    research_ids: [],
+    contract_ids: [],
+    depends_on: ['app'],
+  });
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /DEPENDENCY_SOURCE_READY_STAGE_REQUIRED/,
+  );
+});
+
+test('schema v2 rejects source-mutating agent stages after source-ready boundary', async () => {
+  const fx = await fixture('v2-source-ready-no-late-agent');
+  const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
+  fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...secondItem });
+  fx.manifest.pipelines.push({
+    id: 'b',
+    deployable: false,
+    stages: ['implementation'],
+    executors: { implementation: 'agent' },
+    work_items: ['wi-2'],
+    decision_ids: [],
+    research_ids: [],
+    contract_ids: [],
+    depends_on: ['app'],
+  });
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /SOURCE_STAGE_AFTER_READY_BOUNDARY/,
   );
 });
 
