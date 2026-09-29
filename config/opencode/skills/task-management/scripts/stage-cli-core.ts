@@ -882,8 +882,26 @@ function getPipeline(state: PipelineState, pipelineId?: string): PipelineRuntime
   return pipelines[0] as PipelineRuntime;
 }
 
+function milestoneDone(pipeline: PipelineRuntime, stage: string | undefined): boolean {
+  if (!stage) return pipeline.status === 'completed';
+  const index = pipeline.stage_order.indexOf(stage);
+  if (index < 0) return false;
+  return pipeline.stage_order.slice(0, index + 1).every((name) => {
+    const status = pipeline.stages[name]?.status;
+    return status === 'completed' || status === 'skipped';
+  });
+}
+
+function dependencyReady(state: PipelineState, dependencyId: string): boolean {
+  const dependency = state.pipelines[dependencyId];
+  if (!dependency) return false;
+  return dependency.ready_after_stage
+    ? milestoneDone(dependency, dependency.ready_after_stage)
+    : dependency.status === 'completed';
+}
+
 function dependenciesComplete(state: PipelineState, pipeline: PipelineRuntime): boolean {
-  return (pipeline.depends_on ?? []).every((id) => state.pipelines[id]?.status === 'completed');
+  return (pipeline.depends_on ?? []).every((id) => dependencyReady(state, id));
 }
 
 function firstPendingStage(pipeline: PipelineRuntime): string | undefined {
@@ -930,28 +948,30 @@ function recalculateRunStatus(state: PipelineState): void {
     state.status = 'completed';
     return;
   }
+
+  const runnable = computeRunnable(state);
+  const active = pipelines.some((pipeline) => pipeline.status === 'in_progress');
+  if (active || runnable.length > 0) {
+    if (!active &&
+        pipelines.every((pipeline) => ['release_ready', 'completed'].includes(pipeline.status))) {
+      state.status = 'release_ready';
+    } else if (!active &&
+               pipelines.every((pipeline) => ['ready', 'release_ready', 'completed'].includes(pipeline.status))) {
+      state.status = 'ready';
+    } else {
+      // A blocked/failed pipeline may coexist with useful downstream/independent
+      // work when its source-ready milestone was already reached.
+      state.status = 'in_progress';
+    }
+    return;
+  }
+
   if (pipelines.some((pipeline) => pipeline.status === 'failed')) {
     state.status = 'failed';
     return;
   }
   if (pipelines.some((pipeline) => pipeline.status === 'blocked')) {
     state.status = 'blocked';
-    return;
-  }
-  if (pipelines.some((pipeline) => pipeline.status === 'in_progress')) {
-    state.status = 'in_progress';
-    return;
-  }
-  if (computeRunnable(state).length > 0) {
-    if (pipelines.every((pipeline) => ['release_ready', 'completed'].includes(pipeline.status))) {
-      state.status = 'release_ready';
-    } else if (pipelines.every((pipeline) => ['ready', 'release_ready', 'completed'].includes(pipeline.status))) {
-      state.status = 'ready';
-    } else if (pipelines.some((pipeline) => ['ready', 'release_ready'].includes(pipeline.status))) {
-      state.status = 'in_progress';
-    } else {
-      state.status = 'approved';
-    }
     return;
   }
   state.status = pipelines.some((pipeline) => pipeline.status === 'approved') ? 'approved' : 'planned';
@@ -1178,8 +1198,14 @@ export async function approvePipeline(stateRoot: string, runId: string): Promise
 
 function assertPipelineDependencies(state: PipelineState, pipeline: PipelineRuntime): void {
   for (const dependency of pipeline.depends_on ?? []) {
-    if (state.pipelines[dependency]?.status !== 'completed') {
-      throw new StageCliError(`Pipeline dependency is not completed: ${pipeline.id} -> ${dependency}`);
+    if (!dependencyReady(state, dependency)) {
+      const upstream = state.pipelines[dependency];
+      const required = upstream?.ready_after_stage
+        ? `ready_after_stage=${upstream.ready_after_stage}`
+        : 'completed';
+      throw new StageCliError(
+        `Pipeline dependency is not source-ready: ${pipeline.id} -> ${dependency} requires ${required}`,
+      );
     }
   }
 }
