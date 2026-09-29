@@ -351,7 +351,7 @@ test('disposable DEV workflow consumes exact CI artifact without secrets', () =>
   assert.ok(unsafeResult.issues.some((item) => item.includes('must not reference')));
 });
 
-test('stateful DEV workflow is trusted-ref dispatch and consumes CI artifact', () => {
+test('legacy stateful DEV workflow remains trusted-ref compatible with CI artifacts', () => {
   const dev = {
     workflow: '.github/workflows/dev.yml',
     terminal_job: 'pipeline_dev',
