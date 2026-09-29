@@ -135,7 +135,7 @@ test('artifactless stateful DEV uses trusted ref but consumes candidate SHA in j
   };
   const result = inspectWorkflowText(`
 name: DEV
-run-name: pipeline-dev-${{ inputs.pipeline_run_id }}-${{ inputs.candidate_sha }}
+run-name: pipeline-dev-\${{ inputs.pipeline_run_id }}-\${{ inputs.candidate_sha }}
 concurrency:
   group: development
   cancel-in-progress: false
@@ -153,9 +153,9 @@ jobs:
     environment: development
     runs-on: ubuntu-latest
     steps:
-      - run: ./deploy "${{ inputs.candidate_sha }}" "${{ inputs.deployment_target_id }}"
-      - run: ./verify-source-ci "${{ inputs.ci_run_id }}"
-      - run: ./verify-installed-sha "${{ inputs.candidate_sha }}"
+      - run: ./deploy "\${{ inputs.candidate_sha }}" "\${{ inputs.deployment_target_id }}"
+      - run: ./verify-source-ci "\${{ inputs.ci_run_id }}"
+      - run: ./verify-installed-sha "\${{ inputs.candidate_sha }}"
 `, dev, 'github_dev');
   assert.equal(result.status, 'READY');
   assert.deepEqual(result.issues, []);
