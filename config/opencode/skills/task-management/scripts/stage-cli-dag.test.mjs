@@ -103,7 +103,6 @@ test('next exposes only dependency-ready stages and supports independent paralle
     { id: 'b', stages: ['implementation'], depends_on: ['a'] },
     { id: 'c', stages: ['implementation'] },
   ]);
-  manifest.pipelines[0].executors['late-validation'] = 'review';
   const manifestPath = await writeManifest(root, manifest);
 
   let result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
