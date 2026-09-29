@@ -171,7 +171,7 @@ test('required artifact must expose immutable SHA-256 digest', () => {
   assert.equal(pass.artifact_digest, DIGEST);
 });
 
-test('stateful DEV requires frozen concurrency and digest input', () => {
+test('legacy stateful DEV artifact contract remains compatible and requires frozen concurrency', () => {
   const contract = {
     workflow: '.github/workflows/dev.yml',
     terminal_job: 'pipeline_dev',
@@ -208,7 +208,7 @@ jobs:
           artifact-ids: inputs.ci_artifact_id
           run-id: inputs.ci_run_id
           github-token: github.token
-      - run: echo inputs.ci_run_id inputs.ci_artifact inputs.ci_artifact_id inputs.ci_artifact_digest
+      - run: echo inputs.candidate_sha inputs.ci_run_id inputs.ci_artifact inputs.ci_artifact_id inputs.ci_artifact_digest
       - uses: actions/upload-artifact@3333333333333333333333333333333333333333
         with:
           name: dev-evidence
