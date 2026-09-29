@@ -219,6 +219,24 @@ test('RUN finishes the active fix cycle before budget checkpoint and never auto-
 });
 
 
+test('pipeline contracts require source-ready scheduling and artifactless integrated delivery', async () => {
+  const plan = await text('config/opencode/command/pipeline-plan.md');
+  const run = await text('config/opencode/command/pipeline-run.md');
+  const status = await text('config/opencode/command/pipeline-status.md');
+  const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
+  const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
+
+  assert.match(plan, /ready_after_stage.*source-ready boundary/is);
+  assert.match(plan, /terminal DAG sink.*cumulative product/is);
+  assert.match(plan, /artifactless.*MUST NOT use `actions\/upload-artifact`/is);
+  assert.match(run, /dependency is satisfied.*ready_after_stage/is);
+  assert.match(run, /late CI\/CD\/infrastructure blocker.*does not freeze downstream source work/is);
+  assert.match(run, /artifactless.*candidate_sha.*required-job evidence/is);
+  assert.match(rules, /terminal DAG sink owns the single integrated publish\/validation chain/is);
+  assert.match(status, /integrated candidate/i);
+  assert.match(orchestrator, /single integrated publish\/CI\/DEV chain/i);
+});
+
 test('PLAN proves v2 run viability and baseline scope before owner approval', async () => {
   const plan = await text('config/opencode/command/pipeline-plan.md');
   assert.match(plan, /stage-cli\.ts plan-run-preflight/);

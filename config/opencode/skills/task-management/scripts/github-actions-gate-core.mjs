@@ -169,6 +169,21 @@ function referencesInput(workflow, input) {
   return found;
 }
 
+function stepsReferenceInput(workflow, input) {
+  const needle = `inputs.${input}`;
+  for (const jobValue of Object.values(object(workflow?.jobs) ?? {})) {
+    const job = object(jobValue);
+    for (const step of Array.isArray(job?.steps) ? job.steps : []) {
+      let found = false;
+      walk(step, (value) => {
+        if (typeof value === 'string' && value.includes(needle)) found = true;
+      });
+      if (found) return true;
+    }
+  }
+  return false;
+}
+
 function statefulConcurrency(workflow) {
   const value = workflow?.concurrency;
   if (typeof value === 'string') return { group: value, cancelInProgress: undefined };
@@ -213,10 +228,15 @@ export function assertGithubGateContract(contract, executor = 'github_ci') {
     if (contract.trigger !== 'workflow_dispatch') {
       throw new GithubActionsGateError('GITHUB_DEV_REQUIRES_DISPATCH');
     }
-    if (typeof contract.artifact !== 'string' || !contract.artifact.trim()) {
-      throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_REQUIRED');
+    if ((contract.artifact === undefined) !== (contract.evidence_file === undefined)) {
+      throw new GithubActionsGateError('GITHUB_DEV_LEGACY_ARTIFACT_PAIR_INVALID');
     }
-    if (typeof contract.evidence_file !== 'string' || !SAFE_JSON_FILE.test(contract.evidence_file)) {
+    if (contract.artifact !== undefined &&
+        (typeof contract.artifact !== 'string' || !contract.artifact.trim())) {
+      throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_INVALID');
+    }
+    if (contract.evidence_file !== undefined &&
+        (typeof contract.evidence_file !== 'string' || !SAFE_JSON_FILE.test(contract.evidence_file))) {
       throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_FILE_INVALID');
     }
     if (contract.mode === 'stateful') {
@@ -299,45 +319,58 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
     requiredJobNames.push(jobDisplayName(job, jobId));
   }
 
+  const uploadSteps = actionSteps(workflow, 'actions/upload-artifact@');
   if (contract.artifact) {
-    const upload = actionSteps(workflow, 'actions/upload-artifact@').some(({ step }) => {
+    const upload = uploadSteps.some(({ step }) => {
       const withArgs = object(step.with);
       return String(withArgs?.name ?? '') === contract.artifact;
     });
     if (!upload) issues.push('declared artifact is not uploaded: ' + contract.artifact);
+  } else if (uploadSteps.length) {
+    issues.push('artifactless authoritative gate must not upload GitHub Actions artifacts');
   }
 
   if (executor === 'github_dev') {
     const inputs = workflowDispatchInputs(workflow);
-    const requiredInputs = ['candidate_sha', 'ci_run_id', 'ci_artifact', 'ci_artifact_id', 'ci_artifact_digest', 'pipeline_run_id'];
+    const requiredInputs = ['candidate_sha', 'ci_run_id', 'pipeline_run_id'];
+    if (contract.artifact) requiredInputs.push('ci_artifact', 'ci_artifact_id', 'ci_artifact_digest');
     if (contract.target_id) requiredInputs.push('deployment_target_id');
     for (const required of requiredInputs) {
       if (!inputs.has(required)) issues.push('missing workflow_dispatch input: ' + required);
     }
-    const consumedInputs = ['ci_run_id', 'ci_artifact', 'ci_artifact_id', 'ci_artifact_digest'];
+
+    const consumedInputs = ['candidate_sha', 'ci_run_id'];
+    if (contract.artifact) consumedInputs.push('ci_artifact', 'ci_artifact_id', 'ci_artifact_digest');
     if (contract.target_id) consumedInputs.push('deployment_target_id');
     for (const required of consumedInputs) {
-      if (!referencesInput(workflow, required)) issues.push('DEV must consume workflow input: ' + required);
+      if (!stepsReferenceInput(workflow, required)) {
+        issues.push('DEV job steps must consume workflow input: ' + required);
+      }
     }
+
     const downloadSteps = actionSteps(workflow, 'actions/download-artifact@');
-    const sourceDownload = downloadSteps.some(({ step }) => {
-      const withArgs = object(step.with);
-      const artifactIds = String(withArgs?.['artifact-ids'] ?? '');
-      const runId = String(withArgs?.['run-id'] ?? '');
-      const token = String(withArgs?.['github-token'] ?? '');
-      return artifactIds.includes('inputs.ci_artifact_id') &&
-        runId.includes('inputs.ci_run_id') &&
-        (token.includes('github.token') || token.includes('secrets.GITHUB_TOKEN'));
-    });
-    if (!sourceDownload) {
-      issues.push('DEV download-artifact must use inputs.ci_artifact_id + inputs.ci_run_id + github-token');
+    if (contract.artifact) {
+      const sourceDownload = downloadSteps.some(({ step }) => {
+        const withArgs = object(step.with);
+        const artifactIds = String(withArgs?.['artifact-ids'] ?? '');
+        const runId = String(withArgs?.['run-id'] ?? '');
+        const token = String(withArgs?.['github-token'] ?? '');
+        return artifactIds.includes('inputs.ci_artifact_id') &&
+          runId.includes('inputs.ci_run_id') &&
+          (token.includes('github.token') || token.includes('secrets.GITHUB_TOKEN'));
+      });
+      if (!sourceDownload) {
+        issues.push('legacy DEV download-artifact must use inputs.ci_artifact_id + inputs.ci_run_id + github-token');
+      }
+      const devUpload = uploadSteps.some(({ step }) => {
+        const withArgs = object(step.with);
+        return String(withArgs?.name ?? '') === contract.artifact &&
+          String(withArgs?.path ?? '').includes(contract.evidence_file);
+      });
+      if (!devUpload) issues.push('legacy DEV must upload the declared evidence artifact/file');
+    } else if (downloadSteps.length) {
+      issues.push('artifactless DEV must not download GitHub Actions artifacts');
     }
-    const devUpload = actionSteps(workflow, 'actions/upload-artifact@').some(({ step }) => {
-      const withArgs = object(step.with);
-      return String(withArgs?.name ?? '') === contract.artifact &&
-        String(withArgs?.path ?? '').includes(contract.evidence_file);
-    });
-    if (!devUpload) issues.push('DEV must upload the declared evidence artifact/file');
 
     if (contract.mode === 'stateful') {
       const runName = String(workflow['run-name'] ?? '');
@@ -350,9 +383,6 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
       if (!concurrency || concurrency.group !== contract.concurrency_group || concurrency.cancelInProgress !== false) {
         issues.push('stateful DEV concurrency must use frozen group with cancel-in-progress: false');
       }
-      const candidateCheckout = actionSteps(workflow, 'actions/checkout@').some(({ step }) =>
-        String(object(step.with)?.ref ?? '').includes('inputs.candidate_sha'));
-      if (candidateCheckout) issues.push('stateful DEV must not checkout candidate source');
     } else if (containsSecretReference(workflow)) {
       issues.push('disposable DEV must not reference repository/environment secrets');
     }
@@ -418,10 +448,11 @@ export function validateDevEvidence(data, { candidateSha, ciRunId, ciArtifactId,
   if (String(data.candidate_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_CANDIDATE_MISMATCH');
   if (String(data.installed_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_INSTALLED_SHA_MISMATCH');
   if (Number(data.ci_run_id) !== Number(ciRunId)) throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_CI_RUN_MISMATCH');
-  if (Number(data.ci_artifact_id) !== Number(ciArtifactId)) {
+  if (ciArtifactId !== undefined && Number(data.ci_artifact_id) !== Number(ciArtifactId)) {
     throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_ID_MISMATCH');
   }
-  if (String(data.ci_artifact_digest ?? '').toLowerCase() !== String(ciArtifactDigest ?? '').toLowerCase()) {
+  if (ciArtifactDigest !== undefined &&
+      String(data.ci_artifact_digest ?? '').toLowerCase() !== String(ciArtifactDigest).toLowerCase()) {
     throw new GithubActionsGateError('GITHUB_DEV_EVIDENCE_ARTIFACT_DIGEST_MISMATCH');
   }
   if (targetId !== undefined && data.target_id !== targetId) {
@@ -432,8 +463,8 @@ export function validateDevEvidence(data, { candidateSha, ciRunId, ciArtifactId,
     candidate_sha: data.candidate_sha,
     installed_sha: data.installed_sha,
     ci_run_id: Number(data.ci_run_id),
-    ci_artifact_id: Number(data.ci_artifact_id),
-    ci_artifact_digest: data.ci_artifact_digest,
+    ...(ciArtifactId !== undefined ? { ci_artifact_id: Number(data.ci_artifact_id) } : {}),
+    ...(ciArtifactDigest !== undefined ? { ci_artifact_digest: data.ci_artifact_digest } : {}),
     ...(targetId !== undefined ? { target_id: data.target_id } : {}),
     smoke_result: data.smoke_result ?? null,
   };

@@ -10,18 +10,42 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(HERE, 'github-pr-cli.ts');
 const SHA = '1111111111111111111111111111111111111111';
 
-async function fixture({ existing = false, status = 'completed' } = {}) {
+async function fixture({ existing = false, status = 'completed', deployable = false, validationSha = SHA } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'github-pr-cli-'));
   const bin = path.join(root, 'bin');
   const runDir = path.join(root, '.tmp', 'pipelines', 'run-1');
   await mkdir(bin);
   await mkdir(runDir, { recursive: true });
 
+  const manifestFile = path.join(runDir, 'manifest.json');
+  await writeFile(manifestFile, JSON.stringify({
+    schema_version: 2,
+    run_id: 'run-1',
+    pipelines: [{
+      id: 'api',
+      deployable,
+      stages: deployable ? ['tests'] : [],
+      executors: deployable ? { tests: 'github_ci' } : {},
+      ...(deployable ? {
+        deployment_validation: { stage: 'tests', fresh_job: 'fresh-install', upgrade_job: 'upgrade-install' },
+      } : {}),
+    }],
+  }, null, 2));
+
+  if (deployable) {
+    await mkdir(path.join(runDir, 'github'), { recursive: true });
+    await writeFile(path.join(runDir, 'github', 'api-tests.json'), JSON.stringify({
+      status: 'PASS',
+      candidate_sha: validationSha,
+    }, null, 2));
+  }
+
   await writeFile(path.join(runDir, 'state.json'), JSON.stringify({
     schema_version: 1,
     run_id: 'run-1',
     source_type: 'github_issues',
     repository: 'gest0r1/sevami',
+    manifest_file: manifestFile,
     source_issues: [
       { repository: 'gest0r1/sevami', number: 5, url: 'https://github.com/gest0r1/sevami/issues/5', title: 'five' },
       { repository: 'gest0r1/sevami', number: 6, url: 'https://github.com/gest0r1/sevami/issues/6', title: 'six' },
@@ -181,3 +205,20 @@ test('blocks PR creation until the run is completed', async () => {
   assert.match(result.stderr, /run must be completed before PR creation/);
   await assert.rejects(readFile(f.ghLog, 'utf8'));
 });
+
+test('blocks PR when deployable validation belongs to an older candidate SHA', async () => {
+  const f = await fixture({ deployable: true, validationSha: '2'.repeat(40) });
+  const result = run(f);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /FINAL_CANDIDATE_VALIDATION_REQUIRED/);
+  await assert.rejects(readFile(f.ghLog, 'utf8'));
+});
+
+test('allows PR when deployable validation matches the final cumulative candidate SHA', async () => {
+  const f = await fixture({ deployable: true, validationSha: SHA });
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.candidate_sha, SHA);
+});
+

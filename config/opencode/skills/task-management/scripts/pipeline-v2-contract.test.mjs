@@ -222,7 +222,7 @@ test('schema v2 freezes CI bootstrap work item and workflow scope', async () => 
   );
 });
 
-test('schema v2 supports disposable DEV only from a prior CI artifact', async () => {
+test('schema v2 supports artifactless disposable DEV from prior exact-SHA CI evidence', async () => {
   const fx = await fixture('v2-disposable-dev');
   fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'tests', 'dev');
   fx.manifest.pipelines[0].executors['git-verify'] = 'git_verify';
@@ -247,7 +247,6 @@ test('schema v2 supports disposable DEV only from a prior CI artifact', async ()
       terminal_job: 'pipeline_ci',
       required_jobs: ['fresh_install', 'upgrade_install'],
       trigger: 'push',
-      artifact: 'candidate-build',
     },
     dev: {
       workflow: '.github/workflows/dev-disposable.yml',
@@ -255,19 +254,11 @@ test('schema v2 supports disposable DEV only from a prior CI artifact', async ()
       trigger: 'workflow_dispatch',
       mode: 'disposable',
       source_ci_stage: 'tests',
-      artifact: 'dev-evidence',
-      evidence_file: 'dev-evidence.json',
     },
   };
   assert.equal(
     validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
     'PASS',
-  );
-
-  delete fx.manifest.pipelines[0].github_gates.tests.artifact;
-  assert.throws(
-    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
-    /GITHUB_DEV_SOURCE_ARTIFACT_REQUIRED/,
   );
 });
 
@@ -308,8 +299,6 @@ test('schema v2 protects stateful DEV behind trusted default-branch workflow', a
       concurrency_group: 'development',
       target_id: 'opencode-development-host',
       source_ci_stage: 'tests',
-      artifact: 'dev-evidence',
-      evidence_file: 'dev-evidence.json',
     },
   };
 
@@ -408,9 +397,55 @@ test('schema v2 serializes declared conflict groups through the DAG', async () =
     /CONFLICT_NOT_SERIALIZED/,
   );
   fx.manifest.pipelines[1].depends_on = ['app'];
+  fx.manifest.pipelines[0].ready_after_stage = 'finalize';
+  fx.manifest.pipelines[0].release_ready_after_stage = 'finalize';
   assert.equal(
     validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
     'PASS',
+  );
+});
+
+test('schema v2 requires source-ready milestone on depended-on pipelines', async () => {
+  const fx = await fixture('v2-source-ready-required');
+  const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
+  fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...secondItem });
+  delete fx.manifest.pipelines[0].ready_after_stage;
+  delete fx.manifest.pipelines[0].release_ready_after_stage;
+  fx.manifest.pipelines.push({
+    id: 'b',
+    deployable: false,
+    stages: ['implementation'],
+    executors: { implementation: 'agent' },
+    work_items: ['wi-2'],
+    decision_ids: [],
+    research_ids: [],
+    contract_ids: [],
+    depends_on: ['app'],
+  });
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /DEPENDENCY_SOURCE_READY_STAGE_REQUIRED/,
+  );
+});
+
+test('schema v2 rejects source-mutating agent stages after source-ready boundary', async () => {
+  const fx = await fixture('v2-source-ready-no-late-agent');
+  const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
+  fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...secondItem });
+  fx.manifest.pipelines.push({
+    id: 'b',
+    deployable: false,
+    stages: ['implementation'],
+    executors: { implementation: 'agent' },
+    work_items: ['wi-2'],
+    decision_ids: [],
+    research_ids: [],
+    contract_ids: [],
+    depends_on: ['app'],
+  });
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /SOURCE_STAGE_AFTER_READY_BOUNDARY/,
   );
 });
 
@@ -779,7 +814,7 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   assert.equal(JSON.parse(result.stdout).pipelines.app.status, 'completed');
 });
 
-test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI', async () => {
+test('stage-cli accepts artifactless stateful DEV evidence bound to exact source CI and installed SHA', async () => {
   const fx = await fixture('v2-stateful-dev-evidence');
   fx.manifest.pipelines[0].stages = ['implementation', 'git-verify', 'publish', 'tests', 'dev'];
   fx.manifest.pipelines[0].executors = {
@@ -807,7 +842,6 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
       terminal_job: 'pipeline_ci',
       required_jobs: ['fresh_install', 'upgrade_install'],
       trigger: 'push',
-      artifact: 'candidate-build',
     },
     dev: {
       workflow: '.github/workflows/dev.yml',
@@ -819,8 +853,6 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
       concurrency_group: 'development',
       target_id: 'opencode-development-host',
       source_ci_stage: 'tests',
-      artifact: 'dev-evidence',
-      evidence_file: 'dev-evidence.json',
     },
   };
   delete fx.manifest.pipelines[0].ready_after_stage;
@@ -866,7 +898,6 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
   result = run(fx.root, ['complete', fx.manifest.run_id, 'publish', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 
-  const digest = 'sha256:' + 'a'.repeat(64);
   await mkdir(path.join(fx.runRoot, 'github'), { recursive: true });
   await writeFile(path.join(fx.runRoot, 'github', 'app-tests.json'), JSON.stringify({
     status: 'PASS',
@@ -880,9 +911,6 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     candidate_sha: candidateSha,
     head_sha: candidateSha,
     terminal_job: 'pipeline_ci',
-    artifact: 'candidate-build',
-    artifact_id: 90,
-    artifact_digest: digest,
   }, null, 2));
 
   result = run(fx.root, ['start', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--state-root', stateRoot]);
@@ -929,8 +957,6 @@ test('stage-cli requires stateful DEV installed-SHA evidence bound to source CI'
     trusted_ref: 'main',
     target_id: 'opencode-development-host',
     dev_evidence_validated: true,
-    ci_artifact_id: 90,
-    ci_artifact_digest: digest,
     installed_sha: 'd'.repeat(40),
   }, null, 2));
   result = run(fx.root, ['complete', fx.manifest.run_id, 'dev', '--pipeline', 'app', '--state-root', stateRoot]);

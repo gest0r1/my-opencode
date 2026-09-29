@@ -33,9 +33,11 @@ function gitValue(args: string[]): string | undefined {
 }
 
 async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
-  if (!['validate', 'next', 'start', 'complete', 'resume'].includes(args[0] ?? '')) return;
+  if (!['start', 'complete'].includes(args[0] ?? '')) return;
   const runId = args[1];
-  if (!runId) return;
+  const stage = args[2];
+  const pipelineId = optionFromArgs(args, '--pipeline');
+  if (!runId || !stage || !pipelineId) return;
 
   const stateRoot = resolve(stateRootFromArgs(args));
   let state: any;
@@ -46,6 +48,11 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
   const manifestFile = resolve(state.manifest_file);
   const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
   if (manifest.schema_version !== 2) return;
+  const targetPipeline = manifest.pipelines?.find((item: any) => item.id === pipelineId);
+  const targetExecutor = targetPipeline?.executors?.[stage];
+  if (targetExecutor !== 'github_ci' && targetExecutor !== 'github_dev' && targetExecutor !== 'owner_acceptance') {
+    return;
+  }
 
   const published = (manifest.pipelines ?? []).some((pipeline: any) =>
     (pipeline.stages ?? []).some((stage: string) =>
@@ -71,6 +78,7 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
   }
 
   for (const pipeline of manifest.pipelines ?? []) {
+    if (pipeline.deployable !== true) continue;
     for (const stage of pipeline.stages ?? []) {
       const runtime = state.pipelines?.[pipeline.id]?.stages?.[stage];
       if (runtime?.status !== 'completed') continue;
@@ -108,16 +116,20 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
       const requiresAutomatedPostDeploy =
         ['opencode_host', 'hybrid'].includes(String(pipeline.testing_strategy?.mode ?? '')) &&
         ['automated', 'automated_then_user'].includes(String(pipeline.testing_strategy?.post_deploy_test ?? ''));
+      const sourceContract = sourceStage ? pipeline.github_gates?.[sourceStage] : undefined;
+      const legacyArtifactValid = !sourceContract?.artifact ||
+        (Number.isInteger(Number(source?.artifact_id)) &&
+         Number(evidence.ci_artifact_id) === Number(source?.artifact_id) &&
+         /^sha256:[0-9a-f]{64}$/i.test(String(source?.artifact_digest ?? '')) &&
+         String(evidence.ci_artifact_digest ?? '').toLowerCase() === String(source?.artifact_digest ?? '').toLowerCase());
       const devCommon = evidence.dev_evidence_validated === true &&
         (!requiresAutomatedPostDeploy || evidence.smoke_result === 'PASS') &&
         (!contract?.target_id || evidence.target_id === contract.target_id) &&
         String(evidence.installed_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
         source?.status === 'PASS' &&
         String(source?.candidate_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
-        Number.isInteger(Number(source?.artifact_id)) &&
-        Number(evidence.ci_artifact_id) === Number(source?.artifact_id) &&
-        /^sha256:[0-9a-f]{64}$/i.test(String(source?.artifact_digest ?? '')) &&
-        String(evidence.ci_artifact_digest ?? '').toLowerCase() === String(source?.artifact_digest ?? '').toLowerCase() &&
+        Number.isInteger(Number(source?.workflow_run_id)) &&
+        legacyArtifactValid &&
         Number(evidence.source_ci_run_id) === Number(source?.workflow_run_id);
       const devIdentity = contract?.mode === 'stateful'
         ? evidence.trusted_ref === contract?.trusted_ref &&
@@ -272,12 +284,16 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
         join(artifactRoot, 'github', `${pipeline.id}-${sourceStage}.json`),
         `${pipeline.id}/${sourceStage}`,
       );
+      const sourceContract = pipeline.github_gates?.[sourceStage];
+      const legacyArtifactValid = !sourceContract?.artifact ||
+        (Number.isInteger(Number(source.artifact_id)) &&
+         Number(evidence.ci_artifact_id) === Number(source.artifact_id) &&
+         /^sha256:[0-9a-f]{64}$/i.test(String(source.artifact_digest ?? '')) &&
+         String(evidence.ci_artifact_digest ?? '').toLowerCase() === String(source.artifact_digest ?? '').toLowerCase());
       if (source.status !== 'PASS' ||
           String(source.candidate_sha).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
-          !Number.isInteger(Number(source.artifact_id)) ||
-          Number(evidence.ci_artifact_id) !== Number(source.artifact_id) ||
-          !/^sha256:[0-9a-f]{64}$/i.test(String(source.artifact_digest ?? '')) ||
-          String(evidence.ci_artifact_digest ?? '').toLowerCase() !== String(source.artifact_digest ?? '').toLowerCase() ||
+          !Number.isInteger(Number(source.workflow_run_id)) ||
+          !legacyArtifactValid ||
           Number(evidence.source_ci_run_id) !== Number(source.workflow_run_id)) {
         throw new Error(`EVIDENCE_INVALID_OR_STALE: github_dev source CI mismatch`);
       }
