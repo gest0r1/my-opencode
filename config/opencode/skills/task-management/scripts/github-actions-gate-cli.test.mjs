@@ -398,7 +398,7 @@ jobs:
           run-id: \${{ inputs.ci_run_id }}
           artifact-ids: \${{ inputs.ci_artifact_id }}
           github-token: \${{ github.token }}
-      - run: echo '\${{ inputs.ci_run_id }} \${{ inputs.ci_artifact }} \${{ inputs.ci_artifact_id }} \${{ inputs.ci_artifact_digest }}'
+      - run: echo '\${{ inputs.candidate_sha }} \${{ inputs.ci_run_id }} \${{ inputs.ci_artifact }} \${{ inputs.ci_artifact_id }} \${{ inputs.ci_artifact_digest }}'
       - run: printf '{"status":"PASS"}' > dev-evidence.json
       - uses: actions/upload-artifact@3333333333333333333333333333333333333333
         with:
