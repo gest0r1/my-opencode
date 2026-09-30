@@ -149,8 +149,12 @@ in_progress -> completed
 ```
 
 Taking a pipeline into work therefore produces the
-`approved -> in_progress` audit comment. Re-running sync does not duplicate a
-previously delivered event because each comment carries a stable hidden marker.
+`approved -> in_progress` audit comment. Comments are append-only per distinct
+pipeline lifecycle event: sync does not update a single sticky status comment or
+coalesce later transitions. Re-running sync does not duplicate the **same** event
+because each comment carries a stable hidden marker, but a new transition has a
+new event ID and therefore creates a new comment. If one Issue is mapped to
+several pipelines, each pipeline may emit its own audit comment for the same run.
 
 Before and after pipeline stages, and before PR handoff, synchronization must
 finish with `pending=0`.
