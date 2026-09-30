@@ -595,6 +595,13 @@ function validateGithubExecutionContract(manifest) {
     }
 
     if (pipeline.deployable) {
+      const publishIndex = stages.findIndex((stage) => pipeline.executors[stage] === 'git_publish');
+      const hasLocalPrecheck = publishIndex > 0 &&
+        stages.slice(0, publishIndex).some((stage) => pipeline.executors[stage] === 'local_gate');
+      if (!hasLocalPrecheck) {
+        throw new ManifestV2PolicyError(`DEPLOYABLE_LOCAL_PRECHECK_REQUIRED: ${pipeline.id}`);
+      }
+
       const validation = pipeline.deployment_validation;
       if (!validation || typeof validation !== 'object' ||
           typeof validation.stage !== 'string' || !stageSet.has(validation.stage)) {
