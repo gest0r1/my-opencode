@@ -163,15 +163,15 @@ test('schema v2 rejects pnpm workspace gates that fall back to npm or npx --yes'
   );
 });
 
-test('schema v2 requires GitHub CI for authoritative test/build stages', async () => {
+test('schema v2 allows deterministic local test/build gates before final GitHub CI', async () => {
   const fx = await fixture('v2-authoritative-ci');
   fx.manifest.pipelines[0].stages.push('tests');
   fx.manifest.pipelines[0].executors.tests = 'local_gate';
   fx.manifest.pipelines[0].profile = 'default';
   fx.manifest.gate_profiles = { default: { tests: ['pnpm test'] } };
-  assert.throws(
-    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
-    /AUTHORITATIVE_CI_REQUIRED/,
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
   );
 
   fx.manifest.pipelines[0].executors.tests = 'github_ci';
@@ -470,7 +470,7 @@ test('schema v2 freezes authoritative GitHub Issue snapshot hash', async () => {
   );
 });
 
-test('schema v2 requires fresh and upgrade jobs for deployable pipelines', async () => {
+test('deployable pipelines require final GitHub CI but not fresh/upgrade GitHub jobs', async () => {
   const fx = await fixture('v2-deployable-validation');
   fx.manifest.pipelines[0].deployable = true;
   fx.manifest.pipelines[0].decision_ids.push('decision-testing-strategy');
@@ -488,7 +488,6 @@ test('schema v2 requires fresh and upgrade jobs for deployable pipelines', async
       workflow: '.github/workflows/ci.yml',
       terminal_job: 'pipeline_ci',
       trigger: 'push',
-      artifact: 'candidate-build',
     },
   };
 
@@ -497,25 +496,32 @@ test('schema v2 requires fresh and upgrade jobs for deployable pipelines', async
     /DEPLOYMENT_VALIDATION_REQUIRED/,
   );
 
-  fx.manifest.pipelines[0].deployment_validation = {
-    stage: 'tests',
-    fresh_job: 'fresh_install',
-    upgrade_job: 'upgrade_install',
-  };
-  fx.manifest.pipelines[0].github_gates.tests.required_jobs = ['fresh_install'];
-  assert.throws(
-    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
-    /DEPLOYMENT_VALIDATION_JOBS_MISSING/,
-  );
-
-  fx.manifest.pipelines[0].github_gates.tests.required_jobs.push('upgrade_install');
+  fx.manifest.pipelines[0].deployment_validation = { stage: 'tests' };
   assert.equal(
     validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
     'PASS',
   );
+
+  fx.manifest.pipelines[0].deployment_validation.fresh_job = 'fresh_install';
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /DEPLOYMENT_VALIDATION_LEGACY_JOBS_INVALID/,
+  );
+
+  fx.manifest.pipelines[0].deployment_validation.upgrade_job = 'upgrade_install';
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+
+  fx.manifest.pipelines[0].deployment_validation = { stage: 'implementation' };
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /DEPLOYMENT_VALIDATION_REQUIRES_FINAL_GITHUB_CI/,
+  );
 });
 
-test('OpenCode-host deployment requires trusted probe evidence and owner-selected hybrid strategy', async () => {
+test('GitHub-driven OpenCode-host deployment still requires trusted probe evidence', async () => {
   const fx = await fixture('v2-opencode-host-target');
   const pipeline = fx.manifest.pipelines[0];
   pipeline.stages = ['implementation', 'git-verify', 'publish', 'tests', 'dev', 'owner-acceptance'];
@@ -535,7 +541,7 @@ test('OpenCode-host deployment requires trusted probe evidence and owner-selecte
     upgrade_job: 'upgrade_install',
   };
   pipeline.testing_strategy = {
-    mode: 'hybrid',
+    mode: 'opencode_host',
     owner_decision_id: 'decision-testing-strategy',
     github_validation_stage: 'tests',
     opencode_host_stage: 'dev',
@@ -622,6 +628,49 @@ test('OpenCode-host deployment requires trusted probe evidence and owner-selecte
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /OPENCODE_HOST_TARGET_EVIDENCE_MISMATCH/,
+  );
+});
+
+test('hybrid uses local post-CI deployment without GitHub-to-host probe', async () => {
+  const fx = await fixture('v2-hybrid-local-cd');
+  const pipeline = fx.manifest.pipelines[0];
+  pipeline.stages = ['implementation', 'precheck', 'git-verify', 'publish', 'tests', 'dev'];
+  pipeline.executors = {
+    implementation: 'agent',
+    precheck: 'local_gate',
+    'git-verify': 'git_verify',
+    publish: 'git_publish',
+    tests: 'github_ci',
+    dev: 'local_gate',
+  };
+  pipeline.profile = 'default';
+  fx.manifest.gate_profiles = {
+    default: {
+      precheck: ['pnpm test'],
+      dev: ['pnpm test'],
+    },
+  };
+  pipeline.deployable = true;
+  pipeline.decision_ids.push('decision-testing-strategy');
+  pipeline.deployment_validation = { stage: 'tests' };
+  pipeline.testing_strategy = {
+    mode: 'hybrid',
+    owner_decision_id: 'decision-testing-strategy',
+    github_validation_stage: 'tests',
+    opencode_host_stage: 'dev',
+    post_deploy_test: 'automated',
+  };
+  pipeline.github_gates = {
+    tests: {
+      workflow: '.github/workflows/ci.yml',
+      terminal_job: 'pipeline_ci',
+      trigger: 'push',
+    },
+  };
+
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
   );
 });
 
@@ -991,7 +1040,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
     upgrade_job: 'upgrade_install',
   };
   pipeline.testing_strategy = {
-    mode: 'hybrid',
+    mode: 'opencode_host',
     owner_decision_id: 'decision-testing-strategy',
     github_validation_stage: 'tests',
     opencode_host_stage: 'dev',
