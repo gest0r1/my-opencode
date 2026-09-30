@@ -634,20 +634,20 @@ test('GitHub-driven OpenCode-host deployment still requires trusted probe eviden
 test('hybrid uses local post-CI deployment without GitHub-to-host probe', async () => {
   const fx = await fixture('v2-hybrid-local-cd');
   const pipeline = fx.manifest.pipelines[0];
-  pipeline.stages = ['implementation', 'git-verify', 'precheck', 'publish', 'tests', 'dev'];
+  pipeline.stages = ['implementation', 'git-verify', 'precheck', 'publish', 'tests', 'local-deploy'];
   pipeline.executors = {
     implementation: 'agent',
     precheck: 'local_gate',
     'git-verify': 'git_verify',
     publish: 'git_publish',
     tests: 'github_ci',
-    dev: 'local_gate',
+    'local-deploy': 'local_gate',
   };
   pipeline.profile = 'default';
   fx.manifest.gate_profiles = {
     default: {
       precheck: ['pnpm test'],
-      dev: ['pnpm test'],
+      'local-deploy': ['bash install.sh --version {candidate_sha}'],
     },
   };
   pipeline.deployable = true;
@@ -657,7 +657,7 @@ test('hybrid uses local post-CI deployment without GitHub-to-host probe', async 
     mode: 'hybrid',
     owner_decision_id: 'decision-testing-strategy',
     github_validation_stage: 'tests',
-    opencode_host_stage: 'dev',
+    opencode_host_stage: 'local-deploy',
     post_deploy_test: 'automated',
   };
   pipeline.github_gates = {
