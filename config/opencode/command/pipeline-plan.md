@@ -152,11 +152,11 @@ Repository test/build/typecheck/lint/install/runtime checks may use `local_gate`
 
 For every `github_ci`/`github_dev` stage freeze `github_gates[stage_id]` with:
 - repository workflow path under `.github/workflows/*.yml|yaml`;
-- terminal job ID and every authoritative `required_jobs[]` job ID;
-- trigger (`push` for first-time/bootstrap candidate workflows, `workflow_dispatch` only for an already trusted workflow);
-- expected artifact when the contract produces one; runtime evidence binds its GitHub artifact ID and `sha256:` digest;
-- DEV `mode` (`disposable|stateful`), `source_ci_stage`, DEV evidence artifact/file plus `ci_artifact_id`/`ci_artifact_digest`; OpenCode-host stateful gates also freeze `target_id`; stateful additionally freezes environment, trusted workflow ref and `concurrency_group` with `cancel-in-progress: false`;
-- `bootstrap_required` + frozen `bootstrap_work_item_id` for candidate CI adaptation, or inside `future_github_gates` for a stateful DEV workflow that is authored now but becomes executable only after merge to the trusted ref.
+- terminal job ID and only the `required_jobs[]` needed by that gate;
+- trigger (`push` for first-time/bootstrap candidate CI, `workflow_dispatch` for already trusted dispatched workflows);
+- final `github_ci` is artifactless; legacy artifact fields remain accepted only for existing compatible contracts and are not the canonical design;
+- for the special `opencode_host` `github_dev`: `source_ci_stage`, stateful mode, `target_id`, environment, trusted ref and non-cancelling `concurrency_group`;
+- `bootstrap_required` + frozen `bootstrap_work_item_id` for candidate CI adaptation, or inside `future_github_gates` for a stateful remote-CD workflow that is authored now but becomes executable only after merge to the trusted ref.
 
 Before freeze inspect the proposed project workflow:
 
