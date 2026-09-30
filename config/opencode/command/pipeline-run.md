@@ -149,6 +149,8 @@ Before successful handoff drain Issue status outbox:
 node /root/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs sync <run-id>
 ```
 
+Issue audit comments are append-only **per distinct pipeline lifecycle event**. A transition such as `planned -> approved` and a later `approved -> in_progress` are different outbox events and are posted as separate comments. Sync idempotency only prevents reposting the same event marker; it does not PATCH or coalesce earlier comments. If the same Issue is mapped to multiple pipelines, each pipeline can emit its own comments for the same run.
+
 After every frozen stage is completed and `git-worktree-cli publish` produced PASS `candidate.json`, create/update the one delivery PR only through:
 
 ```text
