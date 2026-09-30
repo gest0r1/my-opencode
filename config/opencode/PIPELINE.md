@@ -92,7 +92,7 @@ Never solve rules drift by editing `state.json` or granting the model write perm
 
 ## Executor and package-manager integrity
 
-Every schema-v2 pipeline explicitly declares `deployable: true|false`, and every stage has an explicit executor. A deployable pipeline freezes distinct fresh-install and upgrade/repeat-install required jobs. Authoritative test/build/typecheck/lint stages use `github_ci`; only explicitly local fast/precheck/docs/runtime stages use `local_gate`. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate, not a reason to replace GitHub CI.
+Every schema-v2 pipeline explicitly declares `deployable: true|false`, and every stage has an explicit executor. Repository test/build/typecheck/lint/install/runtime checks may use `local_gate`; for a deployable sink PLAN freezes the cost-aware order `git_verify -> local fail-fast -> git_publish -> final github_ci`. `deployment_validation.stage` points to that final exact-SHA GitHub CI. Legacy `fresh_job`/`upgrade_job` metadata is optional. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate.
 
 ## 1. PLAN reads authoritative Issues
 
@@ -159,11 +159,11 @@ finish with `pending=0`.
 
 Every deployable pipeline freezes an explicit owner decision:
 
-- `github`: fresh install, upgrade/repeat install and useful runtime/E2E validation run only in GitHub/disposable infrastructure.
-- `opencode_host`: trusted GitHub Actions installs/checks out the exact approved candidate SHA on the machine where OpenCode runs, then validates there automatically, hands it to the owner, or both.
-- `hybrid`: GitHub-side automated validation completes first, then the same exact candidate SHA is installed by trusted GitHub CD on the OpenCode host and the owner performs the final test.
+- `github`: local fail-fast gates run first, then one final artifactless GitHub CI; no OpenCode-host CD.
+- `opencode_host`: local fail-fast + final GitHub CI + the existing trusted GitHub-driven stateful `github_dev` CD. This is the only mode that requires the deployment-target probe.
+- `hybrid`: local fail-fast + final GitHub CI + a post-CI `local_gate` that installs/updates the exact `candidate_sha` on the OpenCode/dev host and runs smoke. Owner acceptance is optional.
 
-PLAN builds a capability matrix and may recommend one option, but the owner chooses it. The OpenCode-host capability probe is itself trusted automation: it is dispatched from the trusted ref with a correlation ID, uses explicit read-only GitHub permissions and the protected Environment, and must run the frozen probe job. `github_ssh` probes must use strict non-interactive SSH and all required Environment secret names; `self_hosted_runner` probes must execute on the frozen self-hosted runner labels. Local/hybrid requires a READY trusted GitHub→OpenCode-host probe and an already-trusted stateful CD workflow. If those workflows are being introduced in the current candidate, they may be authored as future automation but cannot be consumed as privileged CD until merged to the trusted ref.
+PLAN builds a capability matrix and may recommend one option, but the owner chooses it. The model must not choose a strategy on the owner's behalf. The GitHub→OpenCode-host probe, protected Environment, trusted ref and Environment secret-name checks are retained only for `opencode_host`. Ordinary `hybrid` uses no trusted GitHub CD workflow and grants no raw SSH/Docker/deployment shell permissions to agents.
 
 ## 3. Candidate publication, GitHub CI and DEV
 
@@ -174,10 +174,11 @@ block A implementation/review -> source-ready
   -> block B implementation/review -> source-ready
   -> ... all approved blocks source-ready
   -> Git scope verify
+  -> deterministic local fail-fast gates
   -> publish ONE cumulative candidate SHA
-  -> artifactless GitHub Actions CI for that exact SHA
-  -> artifactless DEV/runtime validation of the same SHA
-  -> acceptance/handoff
+  -> one lean artifactless GitHub Actions CI for that exact SHA
+  -> optional local or trusted remote CD/runtime validation
+  -> optional acceptance/handoff
 ```
 
 `git-worktree-cli publish` **owns the complete candidate publication operation**: it stages approved changes, creates the candidate commit when needed, performs a non-force push of the selected worktree branch, verifies the remote SHA, and writes. OpenStage must not ask the owner to manually add/commit/push during RUN:
@@ -196,9 +197,11 @@ Terminal FAIL retains exact run/attempt and job/failed-step identity. `diagnose`
 
 `stage-cli complete` re-validates canonical machine evidence before allowing a `local_gate`, `git_verify`, `git_publish`, `github_ci` or `github_dev` stage to complete. A model statement that a check passed is insufficient.
 
-If a target project has no compatible GitHub CI workflow, PLAN freezes a bootstrap/adaptation work item and workflow scope. RUN implements that candidate-safe CI workflow in the target project, validates it before publication, publishes it with the candidate branch and waits for GitHub Actions on that exact SHA. First-time CI workflows use a `push` trigger; there is no local final-build/test fallback. For `github` and `hybrid` testing strategies the GitHub validation stage includes both fresh-install and upgrade/repeat-install required jobs. For `opencode_host`, those required jobs belong to the trusted stateful CD stage on the OpenCode host. Existing disposable `github_dev` is secret-free and runs on the candidate ref. Existing stateful `github_dev` runs from a verified Environment/trusted ref with frozen non-cancelling concurrency. If stateful DEV is missing, PLAN may freeze it under `future_github_gates`; RUN authors that workflow now but cannot execute it until owner merge makes the workflow trusted. A later PLAN can promote it to active `github_dev`.
+If a target project has no compatible final GitHub CI workflow, PLAN freezes the existing bootstrap/adaptation work item and workflow scope. RUN implements and validates that candidate-safe workflow before publication, publishes the candidate branch and waits for the exact-SHA GitHub run. The final CI is deliberately lean: expensive fresh/repeat-install/runtime checks belong in deterministic local gates unless the project has a concrete GitHub-only reason. `github_dev` and `future_github_gates` remain only for the special `opencode_host` remote-CD path.
 
-Any source-changing fix after publication creates a new candidate SHA. `stage-cli fix-cycle` invalidates the completed chain from the preceding `git_verify` through publish/CI/DEV, making `git_verify` runnable again while preserving old evidence as audit history. The repaired source must then pass verify → publish → GitHub CI → DEV again; evidence belonging to the previous SHA cannot satisfy final delivery.
+Any source-changing fix after publication creates a new candidate SHA. `stage-cli fix-cycle` invalidates the completed chain from the preceding `git_verify`, so the repaired source must pass verify → local fail-fast gates → publish → final GitHub CI → affected CD/runtime/acceptance again. Evidence belonging to the previous SHA cannot satisfy final delivery.
+
+Release packaging is outside candidate validation. If the target project has a real package/container/binary release, keep its existing tag/release workflow and publish deliverables directly to GitHub Releases or the package registry. Do not use Actions artifacts as durable release storage and do not create a universal release workflow for projects that do not ship one.
 
 ## 4. Automatic PR handoff
 

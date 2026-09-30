@@ -155,13 +155,16 @@ test('OpenStage cannot edit deterministic pipeline state or machine evidence', a
   }
 });
 
-test('deployment testing mode is an explicit owner choice and OpenStage has no raw SSH/GitHub shell', async () => {
+test('deployment mode is owner-selected, local-first, and OpenStage has no raw deployment shell', async () => {
   const plan = await text('config/opencode/command/pipeline-plan.md');
   const run = await text('config/opencode/command/pipeline-run.md');
   const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
   assert.match(plan, /must not choose it/i);
   assert.match(plan, /github.*opencode_host.*hybrid/s);
+  assert.match(plan, /git_verify[\s\S]*local fail-fast[\s\S]*git_publish[\s\S]*GitHub CI/i);
+  assert.match(plan, /hybrid[\s\S]*post-CI[\s\S]*local_gate/i);
   assert.match(run, /stage-cli owner-accept/);
+  assert.match(run, /hybrid[\s\S]*post-CI[\s\S]*local_gate/i);
   assert.doesNotMatch(yaml, /["']ssh\s+\*["']:\s*allow/i);
   assert.doesNotMatch(yaml, /["']gh\s+\*["']:\s*allow/i);
 });
@@ -219,7 +222,7 @@ test('RUN finishes the active fix cycle before budget checkpoint and never auto-
 });
 
 
-test('pipeline contracts require source-ready scheduling and artifactless integrated delivery', async () => {
+test('pipeline contracts require source-ready scheduling, local fail-fast, and artifactless final CI', async () => {
   const plan = await text('config/opencode/command/pipeline-plan.md');
   const run = await text('config/opencode/command/pipeline-run.md');
   const status = await text('config/opencode/command/pipeline-status.md');
@@ -227,14 +230,15 @@ test('pipeline contracts require source-ready scheduling and artifactless integr
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
 
   assert.match(plan, /ready_after_stage.*source-ready boundary/is);
-  assert.match(plan, /terminal DAG sink.*cumulative product/is);
+  assert.match(plan, /terminal DAG sink[\s\S]*local fail-fast[\s\S]*final GitHub CI/i);
   assert.match(plan, /artifactless.*MUST NOT use `actions\/upload-artifact`/is);
   assert.match(run, /dependency is satisfied.*ready_after_stage/is);
   assert.match(run, /late CI\/CD\/infrastructure blocker.*does not freeze downstream source work/is);
   assert.match(run, /artifactless.*candidate_sha.*required-job evidence/is);
   assert.match(rules, /terminal DAG sink owns the single integrated publish\/validation chain/is);
+  assert.match(rules, /after `git_verify` and before `git_publish`/i);
   assert.match(status, /integrated candidate/i);
-  assert.match(orchestrator, /single integrated publish\/CI\/DEV chain/i);
+  assert.match(orchestrator, /single integrated delivery chain/i);
 });
 
 test('PLAN proves v2 run viability and baseline scope before owner approval', async () => {

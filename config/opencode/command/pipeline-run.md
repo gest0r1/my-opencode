@@ -20,7 +20,7 @@ Unknown modes/arguments BLOCK.
 
 ## Authority
 
-`stage-cli` owns frozen manifest/rules/planning evidence, DAG, executor contracts, machine-owned runtime scope extensions, owner-acceptance state and transitions. `git-worktree-cli` owns identity/effective-scope/non-force publication. `gate-runner-cli` owns only stages explicitly frozen as `local_gate`. `github-actions-gate-cli` owns authoritative GitHub Actions CI/DEV validation, exact-candidate run selection, required-job status, artifact digest and Environment evidence. `deployment-target-cli` owns GitHub→OpenCode-host reachability/authentication probes. Model output never overrides deterministic FAIL/BLOCKED or owner decisions. OpenStage is the only orchestrator; never delegate orchestration to BatchExecutor or another child.
+`stage-cli` owns frozen manifest/rules/planning evidence, DAG, executor contracts, machine-owned runtime scope extensions, owner-acceptance state and transitions. `git-worktree-cli` owns identity/effective-scope/non-force publication. `gate-runner-cli` owns only stages explicitly frozen as `local_gate`. `github-actions-gate-cli` owns final exact-candidate GitHub CI evidence and the special GitHub-driven `github_dev` path, including required-job status and Environment evidence. `deployment-target-cli` owns GitHub→OpenCode-host reachability/authentication probes. Model output never overrides deterministic FAIL/BLOCKED or owner decisions. OpenStage is the only orchestrator; never delegate orchestration to BatchExecutor or another child.
 
 ## Preflight
 
@@ -28,7 +28,7 @@ Unknown modes/arguments BLOCK.
 2. Invoke `stage-cli preflight <manifest.json> --environment` before dispatch. Schema v2 rechecks planning evidence, source snapshot, work-items, conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract for `local_gate` only.
 3. `git-worktree-cli freshness <manifest>`: fetch `origin/main`. Relevant drift in allowed/freshness/global dependency/pipeline config is `STALE_PLAN` → BLOCK for `/pipeline-refresh` + new approval. Unrelated drift may be deterministically merged and recorded as effective run base. Merge conflicts are never agent-resolved scope expansion.
 4. `git-worktree-cli adopt <manifest>`; then `verify <manifest>`.
-5. If any pipeline selected `testing_strategy.mode=opencode_host|hybrid`, call `deployment-target-cli.ts check <run-id> --policy <frozen-policy-path>` immediately before the stateful deployment stage. It must still return `READY`; GitHub must still be able to execute the trusted probe against the OpenCode host with the frozen Environment/secret-name/trusted-ref contract. Loss of readiness is BLOCKED, never an agent-repairable shell workaround.
+5. Only when a pipeline selected `testing_strategy.mode=opencode_host`, call `deployment-target-cli.ts check <run-id> --policy <frozen-policy-path>` immediately before the stateful GitHub-driven deployment stage. It must still return `READY`; loss of readiness is BLOCKED, never an agent-repairable shell workaround. `hybrid` local CD does not use this probe.
 6. Owner ensures no other RUN is active. Runtime locks remain secondary safety for external mutable targets.
 
 ## Scheduler and frozen work
@@ -54,24 +54,24 @@ Dispatch strictly by the frozen `executors[stage_id]`; never infer executor from
 
 - `agent`: implementation / `technical_fix` work goes to the scoped worker for the exact frozen work item. Worker agents never publish or transition state.
 - `review`: fresh CodeReviewer with `technical_fix|replan|security_stop|scope_stop|secret_stop|destructive_stop|optional`.
-- `local_gate`: call `gate-runner-cli.ts <run-id> <pipeline-id> <stage-id>`. Only its PASS evidence can satisfy the stage; `stage-cli complete` verifies the canonical evidence file.
+- `local_gate`: call `gate-runner-cli.ts <run-id> <pipeline-id> <stage-id>`. Use it for deterministic test/lint/typecheck/build/docs and install/runtime/smoke gates. Only its PASS evidence can satisfy the stage; `stage-cli complete` verifies the canonical evidence file. For the cost-aware deployable path, local fail-fast gates are frozen after `git_verify` and before `git_publish`; post-CI local CD gates consume the published `{candidate_sha}`.
 - `git_verify`: after `stage-cli start`, use only `git-worktree-cli verify <manifest>`. It writes canonical `git-verify.json`; `stage-cli complete` rejects missing or pre-stage/stale verify evidence.
 - `git_publish`: Git verify, then `git-worktree-cli publish <manifest>`. **This executor owns staging, candidate commit creation, non-force push and remote-SHA verification. Never ask the owner to run `git add`, `git commit` or `git push` during RUN.** `stage-cli complete` requires PASS `candidate.json` with `candidate_sha == remote_sha`.
 - `github_ci`: `validate` then `run` for the frozen workflow/event/branch and exact published SHA; all `required_jobs[]` plus terminal job must be `completed/success`. Canonical v2 gates are artifactless: workflow run/attempt + exact `candidate_sha` + required-job evidence is the provenance contract, and `actions/upload-artifact`/`download-artifact` is incompatible with an artifactless gate. FAIL/BLOCKED always writes canonical identity/phase evidence. For terminal FAIL, `diagnose` writes compact job metadata plus redacted multiline per-job `.log` files; use `log ... --job|--job-id` for one exact-run job. Deterministic diagnostics own CI log access; ask the owner only on explicit auth/permission blockers.
-- `github_dev`: call deterministic `validate` then `run`. For `testing_strategy.mode=opencode_host|hybrid`, this stateful gate is the GitHub-initiated installation on the machine where OpenCode runs. It receives the exact `candidate_sha`, exact successful source-CI `workflow_run_id`, `pipeline_run_id` and optional `target_id`; no GitHub Actions artifact is transferred. The trusted workflow's job steps must consume `candidate_sha` and source CI identity, install/checkout that exact SHA, and fail unless its installation/smoke checks succeed. For `opencode_host`, fresh+upgrade validation jobs run in this stage. For `hybrid`, the GitHub validation stage must have passed first. `disposable` dispatches an existing secret-free workflow on the candidate ref. `stateful` dispatches an existing workflow from frozen `trusted_ref`, verifies the GitHub Environment/branch policy, and requires the frozen non-cancelling `concurrency_group`. A stateful workflow listed only in `future_github_gates` is source authored in this run but is not runnable now; after merge a later PLAN may activate it. For deployable pipelines, fresh-install and upgrade/repeat-install required jobs must both pass before delivery.
+- `github_dev`: retained for the special `testing_strategy.mode=opencode_host` path only. Call deterministic `validate` then `run`; the stateful trusted workflow receives the exact `candidate_sha`, exact successful source-CI `workflow_run_id`, `pipeline_run_id` and optional `target_id`, then installs/checks out that SHA and validates the target. `disposable` legacy gates remain supported when already frozen, but ordinary `hybrid` CD does **not** use `github_dev`; it uses `local_gate` after final GitHub CI.
 - Source documentation is changed by DocWriter only when represented by a frozen `agent` work item/scope and must complete before `git_publish`. Deterministic docs checks, if any, are explicit `local_gate` or `github_ci` stages. Post-publish finalization may update pipeline/PR metadata only; any repository source change after publication requires a new candidate SHA and rerun of affected GitHub/runtime gates.
 
-- `owner_acceptance`: manual owner test gate used only when the frozen local strategy says `post_deploy_test=user|automated_then_user`. Generic `stage-cli complete` is forbidden. Stop RUN after successful local CD and report the exact deployed candidate SHA/source-CI run and what the owner should verify. Only after an explicit owner response for that current stage call `stage-cli owner-accept <run-id> <stage> --pipeline <id> --result pass|fail [--message <text>]`. A PASS resumes scheduling; FAIL marks the stage failed and does not consume a technical-fix cycle until the failure is classified.
+- `owner_acceptance`: manual owner test gate used only when the frozen testing strategy says `post_deploy_test=user|automated_then_user`. Generic `stage-cli complete` is forbidden. Stop RUN after successful local CD and report the exact deployed candidate SHA/source-CI run and what the owner should verify. Only after an explicit owner response for that current stage call `stage-cli owner-accept <run-id> <stage> --pipeline <id> --result pass|fail [--message <text>]`. A PASS resumes scheduling; FAIL marks the stage failed and does not consume a technical-fix cycle until the failure is classified.
 
 ### Testing strategy execution
 
 The owner-selected manifest strategy is binding:
 
-- `github`: complete GitHub CI/disposable deployment validation only. Do not deploy to the OpenCode host.
-- `opencode_host`: after authoritative CI PASS for the exact candidate SHA, re-probe the target and dispatch trusted stateful GitHub CD to install that SHA on the OpenCode host. Fresh+upgrade/repeat validation belongs to that stateful gate. Then run automated local smoke, owner acceptance, or both according to `post_deploy_test`.
-- `hybrid`: first complete all frozen GitHub-side automated validation, then re-probe and install the same exact candidate SHA on the OpenCode host through trusted stateful GitHub CD, then stop for owner acceptance (optionally after automated local smoke).
+- `github`: run the frozen local fail-fast gates, publish the exact candidate, then complete the final artifactless GitHub CI. Do not deploy to the OpenCode host.
+- `opencode_host`: run local fail-fast, publish, complete final GitHub CI, re-probe the target, then dispatch the existing trusted stateful `github_dev` workflow for remote CD. Owner acceptance is optional according to `post_deploy_test`.
+- `hybrid`: run local fail-fast, publish, complete final GitHub CI, then execute the frozen post-CI `local_gate` install/update/smoke against the exact `candidate_sha`. No GitHub→host probe or stateful GitHub CD is involved. Owner acceptance is optional according to `post_deploy_test`.
 
-Never silently downgrade from local/hybrid to GitHub-only if the target becomes unavailable. BLOCK and report the readiness failure.
+Never silently replace the final GitHub CI with local-only delivery validation. For `opencode_host`, loss of target readiness BLOCKS. For `hybrid`, a local deployment/runtime failure is handled as the normal deterministic local gate failure.
 
 ### Missing or incompatible project workflow
 
@@ -80,12 +80,13 @@ A frozen GitHub gate marked `bootstrap_required` means RUN must implement the ma
 1. Git scope verify;
 2. `github-actions-gate-cli validate <run-id> <pipeline-id> <github-stage>`;
 3. if validation is not PASS, repair only inside the same frozen work item/scope using the normal technical-fix counter;
-4. publish the candidate branch;
-5. for first-time workflows use the frozen `push` trigger and wait for that exact candidate SHA.
+4. continue the frozen DAG through every local fail-fast gate between `git_verify` and `git_publish`;
+5. only after those local gates PASS, publish the candidate branch;
+6. for first-time workflows use the frozen `push` trigger and wait for that exact candidate SHA.
 
-If CI is missing/incompatible, implement its frozen bootstrap/adaptation work item and validate it before publish. If stateful DEV is missing, implement its frozen `future_github_gates` work item as source only and run `github-actions-gate-cli validate-future <run-id> <pipeline-id> <gate-name>` before publication; do **not** add a current-run `github_dev` stage for it. When the project policy's OpenCode-host probe workflow is also being introduced, include it in the same frozen future-CD work item and review it as non-mutating readiness automation, but do not execute it from the candidate. The current candidate must instead complete frozen fresh+upgrade validation in unprivileged CI. After owner merge makes those workflows trusted, a later PLAN can execute the GitHub→OpenCode-host probe and promote the trusted DEV workflow to active `github_dev`.
+If CI is missing/incompatible, implement its frozen bootstrap/adaptation work item and validate it before publish. If stateful DEV is missing for an explicitly selected `opencode_host` strategy, implement its frozen `future_github_gates` work item as source only and run `github-actions-gate-cli validate-future <run-id> <pipeline-id> <gate-name>` before publication; do **not** add a current-run `github_dev` stage for it. After owner merge makes that workflow trusted, a later PLAN can activate the remote-CD path. Ordinary `hybrid` does not need this bootstrap because its CD stage is local.
 
-Never replace a missing, incompatible or failed authoritative GitHub workflow with local npm/pnpm/pytest/build commands. If the frozen bootstrap/adaptation scope cannot produce a valid workflow, BLOCK/replan.
+Never replace a missing, incompatible or failed **final** GitHub CI workflow with local-only validation. Local npm/pnpm/pytest/build gates are expected before publication, but final independent exact-SHA CI must still pass. If the frozen bootstrap/adaptation scope cannot produce a valid final CI workflow, BLOCK/replan.
 
 Respect the repository package-manager contract for `local_gate`. Missing local tooling is environment BLOCKED; it does not authorize changing package managers.
 
@@ -106,9 +107,9 @@ For a failed qualitative/machine gate classified `technical_fix`:
    `stage-cli scope-extend <run-id> <stage> <path>... --class technical --evidence <review.json> --pipeline <id>`.
    This extends only machine-owned effective scope; **never edit the frozen manifest or its hash**.
 5. Only after scope preflight PASS call `stage-cli fix-cycle <run-id> <stage> --pipeline <id>`. `fix-cycle` rejects calls without the matching scope preflight and increments the counter only now.
-6. if a `git_publish` stage had already completed before the failed stage, `fix-cycle` deterministically reopens the chain from the preceding `git_verify` through publish/CI/DEV; do not call `resume` on the old failed gate or manually preserve its completed downstream state;
+6. if a `git_publish` stage had already completed before the failed stage, `fix-cycle` deterministically reopens the chain from the preceding `git_verify` through the frozen local pre-publish gates, publish, final CI and CD/runtime stages; do not call `resume` on the old failed gate or manually preserve its completed downstream state;
 7. apply one repair using the same frozen work-item identity and effective scope;
-8. query `stage-cli next`; for a post-publish fix the next stage must be the reopened `git_verify`, followed by normal `git_publish` and affected GitHub gates;
+8. query `stage-cli next`; for a post-publish fix the next stage must be the reopened `git_verify`, followed by the frozen local fail-fast gates, `git_publish`, final GitHub CI and affected CD/runtime gates;
 9. for a pre-publish fix, rerun the failed gate and every downstream gate invalidated by the change.
 
 If `git-worktree-cli verify` discovers an additional path **after** a cycle has already started, do not create another cycle and do not edit manifest/state manually. Run `scope-check` for that concrete offending path; auto-authorize a valid test path or complete the bounded technical-scope review, then rerun verify inside the **same** cycle. A real owner/replan requirement stops the RUN.
@@ -130,7 +131,7 @@ A pending runtime replan cannot be bypassed with `fix-budget-add`. Direct cycle 
 
 Do not make CI green by excluding/suppressing a failing tracked test merely because fixing it needs a runtime scope extension. Test removal/exclusion requires evidence that the test no longer represents approved requirements, not convenience.
 
-After any source-changing fix to an already published candidate: Git verify, publish a NEW candidate SHA, then rerun every affected `github_ci`, artifact, `github_dev`/runtime and acceptance gate. Evidence from the previous candidate is stale by construction and `stage-cli complete` must reject it.
+After any source-changing fix to an already published candidate: Git verify, rerun the frozen local fail-fast gates, publish a NEW candidate SHA, then rerun every affected final `github_ci`, CD/runtime and acceptance gate. Evidence from the previous candidate is stale by construction and `stage-cli complete` must reject it.
 
 ## Status semantics
 
