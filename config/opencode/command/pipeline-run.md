@@ -80,8 +80,9 @@ A frozen GitHub gate marked `bootstrap_required` means RUN must implement the ma
 1. Git scope verify;
 2. `github-actions-gate-cli validate <run-id> <pipeline-id> <github-stage>`;
 3. if validation is not PASS, repair only inside the same frozen work item/scope using the normal technical-fix counter;
-4. publish the candidate branch;
-5. for first-time workflows use the frozen `push` trigger and wait for that exact candidate SHA.
+4. continue the frozen DAG through every local fail-fast gate between `git_verify` and `git_publish`;
+5. only after those local gates PASS, publish the candidate branch;
+6. for first-time workflows use the frozen `push` trigger and wait for that exact candidate SHA.
 
 If CI is missing/incompatible, implement its frozen bootstrap/adaptation work item and validate it before publish. If stateful DEV is missing for an explicitly selected `opencode_host` strategy, implement its frozen `future_github_gates` work item as source only and run `github-actions-gate-cli validate-future <run-id> <pipeline-id> <gate-name>` before publication; do **not** add a current-run `github_dev` stage for it. After owner merge makes that workflow trusted, a later PLAN can activate the remote-CD path. Ordinary `hybrid` does not need this bootstrap because its CD stage is local.
 
