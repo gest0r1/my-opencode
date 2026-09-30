@@ -74,7 +74,7 @@ Manifest фиксирует `planning_base_sha` и `freshness_sensitive_paths`. 
 
 ## GitHub audit
 
-Каждый реальный pipeline-status transition попадает в durable `github_outbox` и публикуется idempotent comment в mapped Issues. Перед publish/PR pending должен быть ноль. `git-worktree-cli publish` самостоятельно выполняет stage/commit/non-force push и проверяет remote SHA; owner не должен вручную выполнять `git add`/`commit`/`push` во время RUN. После успешного run PR содержит `Closes #N`, а `pipeline-github-sync.mjs link-pr <run-id> <pr-number>` фиксирует точный PR в Issue/state. Merge в main выполняет владелец.
+Каждый реальный pipeline-status transition попадает в durable `github_outbox` и публикуется отдельным idempotent comment в mapped Issues. Идемпотентность действует на конкретный event marker: повторный sync не публикует тот же event второй раз, но следующий transition имеет новый event ID и создаёт новый комментарий; существующие audit-комментарии не редактируются и не объединяются. Если один Issue mapped к нескольким pipelines, каждая pipeline публикует собственные transitions, поэтому у одного run может быть несколько audit-комментариев в одном Issue. Перед publish/PR pending должен быть ноль. `git-worktree-cli publish` самостоятельно выполняет stage/commit/non-force push и проверяет remote SHA; owner не должен вручную выполнять `git add`/`commit`/`push` во время RUN. После успешного run PR содержит `Closes #N`, а `pipeline-github-sync.mjs link-pr <run-id> <pr-number>` фиксирует точный PR в Issue/state. Merge в main выполняет владелец.
 
 ## Команды
 
