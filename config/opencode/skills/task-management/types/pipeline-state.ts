@@ -120,8 +120,8 @@ export type PostDeployTestMode = 'automated' | 'user' | 'automated_then_user';
 
 export interface DeploymentValidationContract {
   stage: string;
-  fresh_job: string;
-  upgrade_job: string;
+  fresh_job?: string;
+  upgrade_job?: string;
 }
 
 export interface DeploymentTestingStrategy {
