@@ -218,6 +218,6 @@ stage-cli.ts validate {run-id} --json
 stage-cli.ts next {run-id} --json
 ```
 
-The initial PLAN invocation never runs init/approve. `--unattended` and reviewer approval are not owner approval. Approval sync for Issue runs must finish with `pending=0`.
+The initial PLAN invocation never runs init/approve. `--unattended` and reviewer approval are not owner approval. Approval sync for Issue runs must finish with `pending=0`. GitHub audit delivery is event-oriented, not a sticky-status comment: `init` queues a separate `created -> planned` event for every mapped pipeline and `approve` queues a separate `planned -> approved` event. `pipeline-github-sync` posts each distinct event as its own idempotent Issue comment; it does not edit the previous comment, and one Issue mapped to several pipelines may therefore receive several audit comments from one PLAN approval sequence.
 
 Return `/pipeline-run {run-id} --unattended` only after approval; never invoke RUN automatically.
