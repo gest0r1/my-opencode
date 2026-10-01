@@ -183,9 +183,13 @@ function validatePlanningInputs(manifest) {
   if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs) || Object.keys(inputs).length === 0) {
     throw new ManifestV2PolicyError('planning_inputs must be a non-empty object when present');
   }
+  const gateIds = new Set(Object.keys(manifest.planning_readiness?.gates ?? {}));
   for (const [gate, scopes] of Object.entries(inputs)) {
-    if (!gate || !Array.isArray(scopes) || scopes.length === 0) {
-      throw new ManifestV2PolicyError(`planning_inputs.${gate || '<empty>'} must be a non-empty path-scope array`);
+    if (!gate || (gate !== 'work_items' && !gateIds.has(gate))) {
+      throw new ManifestV2PolicyError(`planning_inputs key must reference an existing planning gate or work_items: ${gate || '<empty>'}`);
+    }
+    if (!Array.isArray(scopes) || scopes.length === 0) {
+      throw new ManifestV2PolicyError(`planning_inputs.${gate} must be a non-empty path-scope array`);
     }
     assertSafePathArray(scopes, `planning_inputs.${gate}`);
   }
