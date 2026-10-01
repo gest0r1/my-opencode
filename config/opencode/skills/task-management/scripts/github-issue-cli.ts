@@ -107,6 +107,82 @@ function normalizeComment(value: unknown): Record<string, unknown> {
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
+function isPipelineAuditComment(comment: Record<string, unknown>): boolean {
+  const body = typeof comment.body === 'string' ? comment.body : '';
+  return /<!--\s*pipeline-event:[^>]+-->/i.test(body);
+}
+
+function canonicalRequirements(snapshot: Record<string, any>): Record<string, unknown> {
+  const issues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
+  return {
+    schema_version: 1,
+    source_type: 'github_issues',
+    repository: String(snapshot.repository ?? ''),
+    issues: issues.map((issue: any) => ({
+      repository: String(issue.repository ?? snapshot.repository ?? ''),
+      number: Number(issue.number),
+      title: typeof issue.title === 'string' ? issue.title : '',
+      body: typeof issue.body === 'string' ? issue.body : '',
+      state: String(issue.state ?? ''),
+      comments: (Array.isArray(issue.comments) ? issue.comments : [])
+        .filter((comment: Record<string, unknown>) => !isPipelineAuditComment(comment))
+        .map((comment: Record<string, unknown>) => ({
+          id: comment.id ?? null,
+          user: comment.user ?? null,
+          body: typeof comment.body === 'string' ? comment.body : '',
+          created_at: comment.created_at ?? null,
+          updated_at: comment.updated_at ?? null,
+        })),
+    })),
+  };
+}
+
+export function requirementsSha256ForSnapshot(snapshot: Record<string, any>): string {
+  return sha256(JSON.stringify(canonicalRequirements(snapshot)));
+}
+
+export async function probeRequirements(
+  issueNumbers: number[],
+  options: { cwd?: string } = {},
+): Promise<Record<string, unknown>> {
+  const numbers = [...new Set(issueNumbers)];
+  if (numbers.length === 0) throw new GitHubIssueCliError('at least one issue number is required');
+  const cwd = options.cwd ?? process.cwd();
+  const repository = currentRepository(cwd);
+  requireGitHubAuth(cwd);
+  const issues: Record<string, unknown>[] = [];
+  for (const number of numbers) {
+    const endpoint = `repos/${repository}/issues/${number}`;
+    const issue = parseJson<Record<string, any>>(
+      gh(['api', endpoint, '-H', 'X-GitHub-Api-Version: 2022-11-28'], cwd),
+      `issue #${number}`,
+    );
+    if (issue.pull_request) throw new GitHubIssueCliError(`#${number} is a pull request, not an issue`);
+    if (issue.state !== 'open') throw new GitHubIssueCliError(`#${number} is not open (state=${String(issue.state)})`);
+    const pages = parseJson<unknown>(
+      gh(['api', '--paginate', '--slurp', `${endpoint}/comments`, '-H', 'X-GitHub-Api-Version: 2022-11-28'], cwd),
+      `comments for issue #${number}`,
+    );
+    issues.push({
+      repository,
+      number,
+      url: issue.html_url ?? `https://github.com/${repository}/issues/${number}`,
+      title: typeof issue.title === 'string' ? issue.title : '',
+      body: typeof issue.body === 'string' ? issue.body : '',
+      state: issue.state,
+      updated_at: issue.updated_at ?? null,
+      comments: flattenPages(pages).map(normalizeComment),
+    });
+  }
+  const snapshot = { schema_version: 1, source_type: 'github_issues', repository, issues };
+  return {
+    status: 'PASS',
+    repository,
+    issue_numbers: numbers,
+    requirements_sha256: requirementsSha256ForSnapshot(snapshot),
+  };
+}
+
 
 async function writeJsonAtomic(file: string, value: unknown): Promise<string> {
   await mkdir(path.dirname(file), { recursive: true });
@@ -129,6 +205,33 @@ export async function fetchIssues(
   const cwd = options.cwd ?? process.cwd();
   const stateRoot = options.stateRoot ?? DEFAULT_STATE_ROOT;
   const repository = currentRepository(cwd);
+  const output = path.join(path.resolve(stateRoot), runId, 'sources', 'github-issues.json');
+
+  const existing = await readFile(output, 'utf8').catch(() => undefined);
+  if (existing !== undefined) {
+    const snapshot = parseJson<Record<string, any>>(existing, 'existing authoritative issue snapshot');
+    const existingNumbers = Array.isArray(snapshot.issues)
+      ? snapshot.issues.map((issue: any) => Number(issue.number)).filter(Number.isSafeInteger)
+      : [];
+    if (snapshot.repository !== repository ||
+        JSON.stringify([...existingNumbers].sort((a, b) => a - b)) !== JSON.stringify([...numbers].sort((a, b) => a - b))) {
+      throw new GitHubIssueCliError('authoritative snapshot already exists for a different repository/issue set; use a new run-id');
+    }
+    const requirementsSha256 = String(
+      snapshot.requirements_sha256 ?? requirementsSha256ForSnapshot(snapshot),
+    );
+    return {
+      status: 'PASS',
+      run_id: runId,
+      repository,
+      issue_numbers: numbers,
+      snapshot: output,
+      snapshot_sha256: sha256(existing),
+      requirements_sha256: requirementsSha256,
+      reused: true,
+    };
+  }
+
   requireGitHubAuth(cwd);
 
   const issues: Record<string, unknown>[] = [];
@@ -166,16 +269,30 @@ export async function fetchIssues(
     });
   }
 
+  const requirementsSha256 = requirementsSha256ForSnapshot({
+    schema_version: 1,
+    source_type: 'github_issues',
+    repository,
+    issues,
+  });
   const snapshot = {
     schema_version: 1,
     source_type: 'github_issues',
     repository,
     fetched_at: new Date().toISOString(),
+    requirements_sha256: requirementsSha256,
     issues,
   };
-  const output = path.join(path.resolve(stateRoot), runId, 'sources', 'github-issues.json');
   const snapshotSha256 = await writeJsonAtomic(output, snapshot);
-  return { status: 'PASS', run_id: runId, repository, issue_numbers: numbers, snapshot: output, snapshot_sha256: snapshotSha256 };
+  return {
+    status: 'PASS',
+    run_id: runId,
+    repository,
+    issue_numbers: numbers,
+    snapshot: output,
+    snapshot_sha256: snapshotSha256,
+    requirements_sha256: requirementsSha256,
+  };
 }
 
 interface ParsedArgs {

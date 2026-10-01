@@ -25,6 +25,27 @@ A successful RUN creates or updates the delivery PR automatically. There is no
 separate owner command to create the PR. The owner reviews the resulting PR and
 merges it to `main` manually.
 
+
+When a second worktree was planned while another RUN was executing and `main`
+moves before that second RUN starts, use:
+
+```text
+/pipeline-refresh [run-id]
+```
+
+Refresh is impact-aware:
+
+- `NO_IMPACT`: keep the same v2 run, manifest and owner approval; the trusted
+  refresh CLI advances only the machine-owned effective `run_base_sha`.
+- `BOUNDED_IMPACT`: the refresh CLI creates a lineage draft itself, copies only
+  allowed planning/source/work-item context, never runtime evidence, and marks only
+  affected planning gates for `/pipeline-plan --refresh <new-run-id>`.
+- `STRUCTURAL_IMPACT`: preserve history and perform a normal full PLAN.
+
+OpenStage never copies run artifacts manually. `worktree-refresh.sh` owns the
+snapshot/Git merge and `pipeline-refresh-cli` owns impact classification plus any
+cross-run transfer.
+
 ## Manifest v2 and planning gates
 
 New design-freeze plans use manifest schema v2. V1 remains readable only for
@@ -45,7 +66,8 @@ blocking questions are presented to the owner.
 
 The v2 manifest also freezes:
 
-- authoritative GitHub Issue snapshot SHA-256;
+- authoritative GitHub Issue raw snapshot SHA-256 plus semantic requirements SHA-256;
+- per-gate `planning_inputs` read-sets used for incremental refresh impact analysis;
 - required planning artifacts and reviews;
 - atomic TaskManager work items by ID/path/SHA-256;
 - per-pipeline decision/research/contract IDs;
@@ -124,7 +146,13 @@ The reader:
 - deduplicates Issue numbers;
 - writes the authoritative snapshot atomically to
   `.tmp/pipelines/<run-id>/sources/github-issues.json`;
-- returns the snapshot SHA-256, which schema v2 freezes.
+- treats that snapshot as create-once for a run-id: a repeated `fetch` for the same
+  repository/Issue set returns the existing file and never refetches or overwrites
+  frozen source evidence; a different Issue set requires a new run-id;
+- returns both raw snapshot SHA-256 and semantic requirements SHA-256. The raw
+  digest protects the saved file; the semantic digest excludes `fetched_at`,
+  Issue `updated_at` bookkeeping, and pipeline-generated `pipeline-event` audit
+  comments while retaining human title/body/comment changes.
 
 Read full bodies/comments without modifying the snapshot via:
 
@@ -330,6 +358,8 @@ Use different mechanisms for different changes:
 - planning revision before init → same run-id;
 - technical/security fix during RUN → same run-id with an initial five-cycle budget; owner may pre-authorize a higher run-wide ceiling with `--fix-cycles N` (max 20), grant `+N` to one active stage later, or approve a block-local runtime replan; all remain in the same run and are audited without rewriting the manifest;
 - frozen V2 manifest correction after init → `stage-cli supersede <old> <new> --reason <code>`;
-- architecture/scope/main-drift replan → new run with reason-coded `lineage.change_class=replan`.
+- architecture/scope/structural main-drift replan → new run with reason-coded `lineage.change_class=replan`;
+- bounded main drift → deterministic CLI-created lineage draft plus affected-gate-only `/pipeline-plan --refresh`;
+- no-impact main drift → same approved run with machine-owned effective base adoption.
 
 Supersede copies only planning/source/work-item artifacts. Runtime state, locks, candidate and machine evidence are never reused. The old state records `superseded_by` and `supersede_reason`, so every run-id has a deterministic ancestry instead of unexplained v2b/v2c/v2d generations.

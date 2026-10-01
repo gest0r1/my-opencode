@@ -188,6 +188,18 @@ export interface PipelineLineage {
   reason_code: PipelineSupersedeReason;
 }
 
+export interface RefreshRevalidation {
+  classification: 'BOUNDED_IMPACT';
+  inherited_from_run_id: string;
+  new_base_sha: string;
+  changed_paths: string[];
+  affected_gates: string[];
+  reasons: string[];
+  rebuild_work_items: boolean;
+  work_items_status?: 'needs_revision' | 'ready';
+  impact_evidence: FrozenArtifact;
+}
+
 export interface PipelineManifest {
   schema_version: number;
   run_id: string;
@@ -204,13 +216,16 @@ export interface PipelineManifest {
   repository?: string;
   source_issues?: PipelineIssueSource[];
   source_snapshot_sha256?: string;
+  source_requirements_sha256?: string;
   planning_base_sha?: string;
+  planning_inputs?: Record<string, string[]>;
   freshness_sensitive_paths?: string[];
   work_items?: FrozenWorkItem[];
   project_policy?: ProjectPolicyRef;
   deployment_target_check?: FrozenArtifact;
   preserved_baseline?: PreservedBaseline;
   lineage?: PipelineLineage;
+  refresh_revalidation?: RefreshRevalidation;
 }
 
 export interface StageEvidence {
@@ -334,8 +349,10 @@ export interface PipelineState {
   repository?: string;
   source_issues?: PipelineIssueSource[];
   source_snapshot_sha256?: string;
+  source_requirements_sha256?: string;
   planning_base_sha?: string;
   run_base_sha?: string;
+  refresh_impact_sha256?: string;
   superseded_by?: string;
   supersede_reason?: PipelineSupersedeReason;
   issue_results?: PipelineIssueResult[];
