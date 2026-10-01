@@ -6,6 +6,7 @@ import {
   readFile,
   readdir,
   rename,
+  lstat,
   rm,
   stat,
   writeFile,
@@ -153,14 +154,14 @@ function runRoot(stateRoot: string, runId: string): string {
   return join(resolve(stateRoot), runId);
 }
 
-async function readManifest(stateRoot: string, runId: string): Promise<{ manifest: Manifest; path: string }> {
+async function readManifest(stateRoot: string, runId: string): Promise<{ manifest: Manifest; path: string; raw: string }> {
   const path = join(runRoot(stateRoot, runId), 'manifest.json');
   const raw = await readFile(path, 'utf8').catch(() => {
     throw new RefreshError(`manifest not found: ${path}`);
   });
   const manifest = JSON.parse(raw) as Manifest;
   if (manifest.run_id !== runId) throw new RefreshError('manifest run_id does not match selected run');
-  return { manifest, path };
+  return { manifest, path, raw };
 }
 
 async function readStateIfPresent(stateRoot: string, runId: string): Promise<State | undefined> {
@@ -319,8 +320,22 @@ async function sourceRequirementsStatus(manifest: Manifest, root: string, cwd: s
 }> {
   if (manifest.source_type !== 'github_issues') return { changed: false, frozen: null, live: null };
   const sourceFile = join(root, 'sources', 'github-issues.json');
-  const snapshot = JSON.parse(await readFile(sourceFile, 'utf8')) as Record<string, any>;
-  const frozen = String(manifest.source_requirements_sha256 ?? snapshot.requirements_sha256 ?? requirementsSha256ForSnapshot(snapshot));
+  const sourceRaw = await readFile(sourceFile, 'utf8');
+  if (manifest.source_snapshot_sha256 &&
+      sha256(sourceRaw).toLowerCase() !== String(manifest.source_snapshot_sha256).toLowerCase()) {
+    throw new RefreshError('frozen GitHub Issue snapshot integrity mismatch');
+  }
+  const snapshot = JSON.parse(sourceRaw) as Record<string, any>;
+  const computed = requirementsSha256ForSnapshot(snapshot);
+  if (snapshot.requirements_sha256 &&
+      String(snapshot.requirements_sha256).toLowerCase() !== computed.toLowerCase()) {
+    throw new RefreshError('stored semantic requirements digest does not match frozen Issue snapshot');
+  }
+  const frozen = String(manifest.source_requirements_sha256 ?? snapshot.requirements_sha256 ?? computed);
+  if (manifest.source_requirements_sha256 &&
+      String(manifest.source_requirements_sha256).toLowerCase() !== computed.toLowerCase()) {
+    throw new RefreshError('manifest semantic requirements digest does not match frozen Issue snapshot');
+  }
   const numbers = Array.isArray(manifest.source_issues)
     ? manifest.source_issues.map((issue: any) => Number(issue.number)).filter((value: number) => Number.isInteger(value) && value > 0)
     : [];
@@ -369,9 +384,28 @@ async function writeNoImpactRuntime(
   }
 }
 
+async function assertNoSymlinks(target: string): Promise<void> {
+  if (!(await exists(target))) return;
+  const info = await lstat(target);
+  if (info.isSymbolicLink()) throw new RefreshError(`artifact tree contains symlink: ${target}`);
+  if (!info.isDirectory()) return;
+  for (const entry of await readdir(target)) await assertNoSymlinks(join(target, entry));
+}
+
+function transferablePath(source: string): boolean {
+  const name = source.split('/').pop() ?? source;
+  return name !== 'deployment-target.json' && name !== 'refresh-impact.json';
+}
+
 async function copyIfPresent(source: string, destination: string, recursive = false): Promise<void> {
   if (!(await exists(source))) return;
-  await cp(source, destination, { recursive, force: false, errorOnExist: true });
+  await assertNoSymlinks(source);
+  await cp(source, destination, {
+    recursive,
+    force: false,
+    errorOnExist: true,
+    filter: async (current) => transferablePath(current),
+  });
 }
 
 async function preservedBaseline(newBase: string, cwd: string): Promise<Record<string, unknown> | undefined> {
@@ -573,9 +607,13 @@ async function analyzeAndApply(
   apply: boolean,
   cwd: string,
 ): Promise<Record<string, unknown>> {
-  const { manifest, path: manifestPath } = await readManifest(stateRoot, runId);
+  const { manifest, path: manifestPath, raw: manifestRaw } = await readManifest(stateRoot, runId);
   const state = await readStateIfPresent(stateRoot, runId);
   assertInactiveState(state);
+  if (state?.manifest_sha256 &&
+      String(state.manifest_sha256).toLowerCase() !== sha256(manifestRaw).toLowerCase()) {
+    throw new RefreshError('frozen manifest integrity mismatch');
+  }
 
   if (manifest.schema_version !== 2) {
     return {
