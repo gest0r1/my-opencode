@@ -1651,6 +1651,7 @@ export async function recordTechnicalFixCycle(
   runId: string,
   stage: string,
   pipelineId?: string,
+  repairClass: 'technical_fix' | 'security_fix' = 'technical_fix',
 ): Promise<PipelineState> {
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
@@ -1662,8 +1663,23 @@ export async function recordTechnicalFixCycle(
         `SCOPE_PREFLIGHT_REQUIRED: run stage-cli scope-check ${runId} ${stage} <planned-path>... --pipeline ${pipeline.id} before fix-cycle`,
       );
     }
+    const securityFixPreflight = state.security_fix_preflight;
+    if (repairClass === 'security_fix') {
+      if (!securityFixPreflight ||
+          securityFixPreflight.pipeline_id !== pipeline.id ||
+          securityFixPreflight.stage !== stage ||
+          JSON.stringify([...securityFixPreflight.paths].sort()) !== JSON.stringify([...scopePreflight.paths].sort())) {
+        throw new StageCliError(
+          `SECURITY_FIX_PREFLIGHT_REQUIRED: run stage-cli security-fix-check with matching evidence before security repair: ${pipeline.id}/${stage}`,
+        );
+      }
+    } else if (securityFixPreflight?.pipeline_id === pipeline.id && securityFixPreflight.stage === stage) {
+      throw new StageCliError(
+        `SECURITY_FIX_REPAIR_CLASS_REQUIRED: ${pipeline.id}/${stage} has approved security-fix evidence; use --repair-class security_fix`,
+      );
+    }
     if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
-      throw new StageCliError(`Technical fix cycle is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
+      throw new StageCliError(`Fix cycle is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
     }
     const limit = technicalFixLimit(runtime);
     const next = (runtime.technical_fix_cycles ?? 0) + 1;
@@ -1673,8 +1689,9 @@ export async function recordTechnicalFixCycle(
       );
     }
     runtime.technical_fix_cycles = next;
-    runtime.message = `technical_fix cycle ${next}/${limit}`;
+    runtime.message = `${repairClass} cycle ${next}/${limit}`;
     state.scope_preflight = undefined;
+    if (repairClass === 'security_fix') state.security_fix_preflight = undefined;
 
     // If this fix happens after a candidate was already published, the source-changing
     // repair must force a fresh verify -> publish -> GitHub CI/DEV chain. We invalidate
@@ -1711,7 +1728,7 @@ export async function recordTechnicalFixCycle(
           item.completed_at = undefined;
           item.evidence = undefined;
           if (name !== stage) item.message = undefined;
-          addHistory(state, pipeline.id, name, 'pending', `invalidated by technical_fix cycle ${next}/${limit} for ${stage}`);
+          addHistory(state, pipeline.id, name, 'pending', `invalidated by ${repairClass} cycle ${next}/${limit} for ${stage}`);
         }
         pipeline.status = 'approved';
         pipeline.current_stage = undefined;
@@ -2092,10 +2109,37 @@ export async function runCli(args: string[]): Promise<void> {
     else console.log(`PASS effective_scope=${result.effective_allowed_change_paths.length} requested=${result.requested_paths.length}`);
     return;
   }
+  if (command === 'security-fix-check') {
+    const stage = positional[2];
+    if (!stage || !options.pipelineId || !options.evidencePath) {
+      throw new StageCliError('security-fix-check requires <stage> --pipeline <id> --evidence <review.json>');
+    }
+    printState(
+      await authorizeSecurityFix(options.stateRoot, runId, stage, options.evidencePath, options.pipelineId),
+      options.json,
+    );
+    return;
+  }
   if (command === 'fix-cycle') {
     const stage = positional[2];
     if (!stage) throw new StageCliError('stage is required');
-    printState(await recordTechnicalFixCycle(options.stateRoot, runId, stage, options.pipelineId), options.json);
+    printState(
+      await recordTechnicalFixCycle(
+        options.stateRoot,
+        runId,
+        stage,
+        options.pipelineId,
+        options.repairClass ?? 'technical_fix',
+      ),
+      options.json,
+    );
+    return;
+  }
+  if (command === 'fix-budget-set') {
+    if (!options.cycles) {
+      throw new StageCliError('fix-budget-set requires --cycles <1..20>');
+    }
+    printState(await setRunTechnicalFixBudget(options.stateRoot, runId, options.cycles), options.json);
     return;
   }
   if (command === 'fix-budget-add') {
