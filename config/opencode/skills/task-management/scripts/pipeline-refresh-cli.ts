@@ -459,7 +459,16 @@ async function createBoundedRun(
     cloned.git_setup = { ...cloned.git_setup, base_sha: newBase };
     cloned.planning_base_sha = newBase;
     const semanticDigest = String((impact as any).source_requirements?.frozen ?? '');
-    if (/^[0-9a-f]{64}$/i.test(semanticDigest)) cloned.source_requirements_sha256 = semanticDigest;
+    if (cloned.source_type === 'github_issues' && /^[0-9a-f]{64}$/i.test(semanticDigest)) {
+      const inheritedSource = join(newRoot, 'sources', 'github-issues.json');
+      const snapshot = JSON.parse(await readFile(inheritedSource, 'utf8')) as Record<string, any>;
+      snapshot.requirements_sha256 = semanticDigest;
+      await writeJsonAtomic(inheritedSource, snapshot);
+      cloned.source_snapshot_sha256 = sha256(await readFile(inheritedSource, 'utf8'));
+      cloned.source_requirements_sha256 = semanticDigest;
+    } else if (/^[0-9a-f]{64}$/i.test(semanticDigest)) {
+      cloned.source_requirements_sha256 = semanticDigest;
+    }
     if (!cloned.planning_inputs || typeof cloned.planning_inputs !== 'object' || Array.isArray(cloned.planning_inputs)) {
       const fallback = [
         ...(Array.isArray(cloned.freshness_sensitive_paths) ? cloned.freshness_sensitive_paths : []),
