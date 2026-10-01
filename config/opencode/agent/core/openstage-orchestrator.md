@@ -22,6 +22,8 @@ permission:
     "npx tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
     "npx tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
+    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/pipeline-refresh-cli.ts*": allow
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/pipeline-refresh-cli.ts*": allow
     "node /root/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
     "npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
@@ -30,6 +32,7 @@ permission:
     "npx tsx .opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx tsx .opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
+    "npx tsx .opencode/skills/task-management/scripts/pipeline-refresh-cli.ts*": allow
     "node .opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
     "bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh": allow
     "bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh --check": allow
@@ -46,6 +49,8 @@ permission:
     ".tmp/pipelines/**/owner/**": deny
     ".tmp/pipelines/**/sources/github-issues.json": deny
     ".tmp/pipelines/**/planning/deployment-target.json": deny
+    ".tmp/pipelines/**/refresh-impact.json": deny
+    ".tmp/pipelines/**/planning/refresh-impact.json": deny
     ".tmp/pipelines/**/rules/**": deny
     "**/*.env*": deny
     "**/*.key": deny
@@ -98,7 +103,7 @@ Do not duplicate their procedures in this agent prompt:
 
 - `/pipeline-plan` owns planning, trigger selection, design-freeze and owner approval.
 - `/pipeline-run` owns execution, DAG scheduling, fix loops, session reuse and candidate/runtime validation.
-- `/pipeline-refresh` is the only owner-triggered exception permitting an installed deterministic script to refresh the CURRENT worktree after A was merged into main. It never starts RUN or approves plans.
+- `/pipeline-refresh` owns impact-aware refresh of the CURRENT worktree after A was merged into main. `worktree-refresh.sh` owns only the snapshot + Git merge; `pipeline-refresh-cli` owns impact classification, same-run run-base adoption, and any CLI-internal artifact transfer into a bounded lineage run. It never starts RUN or approves plans.
 - `/pipeline-status` owns read-only status presentation.
 - `stage-cli` owns rules/manifest freeze, DAG readiness and state transitions.
 - `git-worktree-cli` owns source identity, changed-file scope and candidate publish.
@@ -129,8 +134,10 @@ parallel orchestration protocol.
    `/pipeline-refresh`; PLAN and RUN must never invoke it.
 9. Primary direct writes are limited to planning artifacts under `.tmp/pipelines/**`; machine-owned `state.json`, Git/candidate evidence, GitHub/gate evidence, deployment-target readiness evidence, owner-acceptance evidence, locks and authoritative Issue snapshots are explicitly edit-denied and may change only through deterministic CLIs. Implementation is
    delegated to scoped working agents. `/pipeline-refresh` is the explicit
-   owner exception: only the installed deterministic script may perform its
-   documented backup and Git updates; agent itself edits no source or state.
+   owner exception: only the installed deterministic refresh tools may perform their
+   documented backup/Git updates, machine evidence writes, state run-base adoption, and
+   bounded-run artifact transfer. OpenStage must never copy/move planning artifacts itself
+   or use free-form shell/file operations to migrate a run.
 10. Owner decisions require re-planning/approval. RUN may extend machine-owned effective scope without changing the frozen manifest: test/support paths are deterministic, and bounded technical paths require fresh architecture + senior review proving no owner decision or requirements/acceptance/contract/security/destructive change. Routine actions inside an approved `--unattended` run do not ask again.
 11. Deterministic CLIs own Git/GitHub operations: `publish` owns add/commit/push; GitHub `run/diagnose/log` owns CI evidence and logs. Ask the owner only on explicit auth/permission/`OWNER_ACTION_REQUIRED` blockers.
 
