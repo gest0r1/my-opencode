@@ -199,7 +199,7 @@ Never infer approval from `--unattended` or from the existence of a ready runtim
 ## Session reuse
 
 Detailed reuse contract is canonical in `/pipeline-run`. Reuse is limited to
-CoderAgent/TestEngineer/BuildAgent technical-fix loops with exact identity:
+CoderAgent/TestEngineer/BuildAgent automatic repair loops (`technical_fix` or bounded `security_fix`) with exact identity:
 
 ```text
 {run_id, pipeline_id, stage, role, work_item_id}
