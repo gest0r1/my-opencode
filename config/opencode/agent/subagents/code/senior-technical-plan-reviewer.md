@@ -81,8 +81,12 @@ Review decisions, architecture, contracts, evidence, work decomposition and DAG 
 - scope expansion or vague work items.
 
 Classify findings only as:
-technical_fix | replan | security_stop | scope_stop | secret_stop |
+technical_fix | security_fix | replan | security_stop | scope_stop | secret_stop |
 destructive_stop | optional.
+
+Use `security_fix` only for a bounded remediation already determined by frozen
+security requirements with no owner decision, privilege expansion, secret exposure,
+destructive action or security-boundary change. Otherwise use the appropriate stop/replan category.
 
 A blocking finding cites an observed defect, frozen decision/contract/AC/security
 rule. Preference/style is optional. ready means no blocking finding remains.

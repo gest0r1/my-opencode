@@ -183,21 +183,23 @@ is `owner_acceptance`, stop and return the deployed exact candidate SHA/source-C
 instructions; only an explicit owner reply may be translated into the deterministic
 `stage-cli owner-accept` command.
 
-Only `technical_fix` may auto-repair. Before consuming a cycle, identify intended changed paths and call `stage-cli scope-check` for the exact pipeline/stage. Test/support paths under an already-approved component may be machine-authorized automatically. For `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer and, only when their machine-readable review proves a decision-free bounded clarification, call `stage-cli scope-extend`; never edit manifest/state manually. Only then call `stage-cli fix-cycle`. If Git verify discovers another path after the cycle started, resolve that path through the same scope-check/review flow and continue the same cycle.
+`technical_fix` and bounded `security_fix` may auto-repair. Before consuming either class, identify intended changed paths and call `stage-cli scope-check` for the exact pipeline/stage. Test/support paths under an already-approved component may be machine-authorized automatically. For `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer and, only when their machine-readable review proves a decision-free bounded clarification, call `stage-cli scope-extend`; never edit manifest/state manually.
 
-The initial fix budget is 3 cycles per stage/work-item. The owner may grant more cycles or request/approve a runtime replan before exhaustion. An already-started cycle must finish through its frozen downstream review/gates; for executor=`review`, dispatch a fresh CodeReviewer at that manifest-defined review stage. Budget exhaustion matters only when a resulting `technical_fix` would require the **next** `fix-cycle`. At that point stop until the owner chooses:
+For `security_fix`, require CodeReviewer machine-readable evidence and validate it first with `stage-cli security-fix-check`. That check must prove bounded remediation, no owner decision, no requirements/AC/external-contract/security-boundary change, no privilege expansion, no secret exposure and no destructive action. Then run the same scope preflight and call `stage-cli fix-cycle ... --repair-class security_fix`. A Critical/High label alone never forces a stop when frozen policy already determines the fail-closed/least-privilege repair. If the deterministic security check rejects the evidence, stop with the matching owner/replan category instead of silently downgrading it.
+
+The initial fix budget is 5 cycles per stage/work-item and is shared by `technical_fix` and `security_fix`. When the owner invokes RUN with `--fix-cycles N`, call deterministic `stage-cli fix-budget-set <run-id> --cycles N` before scheduling; it may only raise stage ceilings and never lower them. The owner may later grant more cycles or request/approve a runtime replan before exhaustion. An already-started cycle must finish through its frozen downstream review/gates; for executor=`review`, dispatch a fresh CodeReviewer at that manifest-defined review stage. Budget exhaustion matters only when a resulting automatic repair would require the **next** `fix-cycle`. At that point stop until the owner chooses:
 - explicit `+N` cycles → call deterministic `stage-cli fix-budget-add` and continue the same technical approach;
 - local runtime replan → only when the owner explicitly requests architecture/runtime replanning, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer in runtime-replan mode, record each version with `stage-cli runtime-replan-propose`, and stop for any clarification or final approval;
 - full replan only when frozen PLAN boundaries really change.
 
 At a budget checkpoint you may present runtime replan as an option, but never select or launch it solely because the counter is exhausted. A plain owner `+N` grant must not trigger architecture review.
 
-Never infer approval from `--unattended` or from the existence of a ready runtime-replan artifact. Only an explicit owner statement approving that local replan may be translated into `stage-cli runtime-replan-approve ... --cycles N`. After approval, run a fresh scope-check before the next fix-cycle. A pending runtime replan cannot be bypassed with a direct budget grant.
+Never infer approval from `--unattended` or from the existence of a ready runtime-replan artifact. Only an explicit owner statement approving that local replan may be translated into `stage-cli runtime-replan-approve ... --cycles N`. After approval, run a fresh scope-check before the next fix-cycle. A pending runtime replan cannot be bypassed with a direct budget grant. True `security_stop`, `secret_stop`, `destructive_stop`, protected/sensitive `scope_stop` and PLAN-boundary `replan` are BLOCKED owner checkpoints, not terminal implementation failures.
 
 ## Session reuse
 
 Detailed reuse contract is canonical in `/pipeline-run`. Reuse is limited to
-CoderAgent/TestEngineer/BuildAgent technical-fix loops with exact identity:
+CoderAgent/TestEngineer/BuildAgent automatic repair loops (`technical_fix` or bounded `security_fix`) with exact identity:
 
 ```text
 {run_id, pipeline_id, stage, role, work_item_id}
@@ -210,8 +212,10 @@ Never reuse planning/review sessions. Never manually supply `task_id`.
 Block/replan on:
 
 - deterministic gate failure that cannot be fixed inside manifest scope plus approved runtime scope extensions;
-- security/secret/destructive condition;
-- protected/sensitive scope request or technical scope review that changes requirements, acceptance criteria, external contracts or security boundaries;
+- `security_stop` requiring an owner security-policy/trust/access decision;
+- `secret_stop` requiring credential rotation/revocation or handling actual secret exposure;
+- `destructive_stop` requiring irreversible/destructive remediation;
+- protected/sensitive `scope_stop` or technical scope review that changes requirements, acceptance criteria, external contracts or security boundaries;
 - required owner decision;
 - changed manifest/source SHA or invalid/unreadable rules;
 - runtime validation failure requiring a new owner decision.
