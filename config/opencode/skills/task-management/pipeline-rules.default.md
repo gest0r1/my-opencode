@@ -1,6 +1,6 @@
 ---
 document_type: pipeline_rules
-rules_version: 2
+rules_version: 3
 rules_scope: opencode_default
 edit_policy: distribution_only
 ---
@@ -132,15 +132,18 @@ approved base/source -> final cumulative candidate SHA -> installed candidate SH
 
 ## Review findings and fix cycles
 
-- Review findings are `technical_fix | replan | security_stop | scope_stop | secret_stop | destructive_stop | optional`.
-- Only `technical_fix` may be repaired automatically inside frozen scope.
-- Before every automatic repair, RUN records the attempt through deterministic `stage-cli fix-cycle`; the initial automatic technical-fix budget is **3 per stage/work-item**.
-- Exhausting the current budget does not interrupt an already-started repair. That cycle continues through its frozen review/gates (executor=`review` runs CodeReviewer); the owner checkpoint occurs only if the resulting finding requires another `technical_fix` beyond the current limit.
+- Review findings are `technical_fix | security_fix | replan | security_stop | scope_stop | secret_stop | destructive_stop | optional`.
+- `technical_fix` and bounded `security_fix` may be repaired automatically. `security_fix` is allowed only when deterministic `stage-cli security-fix-check` validates machine-readable review evidence proving: bounded remediation, no owner decision, no requirements/AC/external-contract/security-boundary change, no privilege expansion, no secret exposure and no destructive change.
+- Severity alone never forces a stop. A Critical/High security defect may remain `security_fix` when the frozen policy already determines the least-privilege/fail-closed remediation.
+- Before every automatic repair, RUN records the attempt through deterministic `stage-cli fix-cycle`; `security_fix` additionally uses `--repair-class security_fix`. Both classes consume the same budget. The initial automatic fix budget is **5 per stage/work-item**.
+- Owner may raise the run-wide ceiling at RUN start with `--fix-cycles N`; OpenStage maps that explicit owner option to deterministic `stage-cli fix-budget-set --cycles N`. The command only raises ceilings (maximum 20) and never lowers an existing stage budget. Per-stage `fix-budget-add` remains available during RUN.
+- Exhausting the current budget does not interrupt an already-started repair. That cycle continues through its frozen review/gates (executor=`review` runs CodeReviewer); the owner checkpoint occurs only if the resulting finding requires another automatic repair beyond the current limit.
 - At that checkpoint runtime replan may be offered, but ArchitectureAnalyzer/SeniorTechnicalPlanReviewer run only on explicit owner request. A plain `+N` grant means continue the current approach through deterministic `fix-budget-add`, without implicit architecture review. The owner may also grant `+N` cycles or request/approve runtime replan before exhaustion; deterministic owner commands update the current ceiling immediately.
 - A runtime replan stays in the same RUN and current pipeline/stage/work-item. Fresh architecture + senior review may iterate with owner clarification, but implementation remains stopped. The final local plan must reach `awaiting_owner_approval` and receive explicit owner approval through deterministic `runtime-replan-approve --cycles N` before any new fix cycle is allowed.
-- `--unattended` never supplies that approval. A pending runtime replan cannot be bypassed by a direct budget grant.
+- `--unattended` never supplies runtime-replan approval and never bypasses true security/secret/destructive owner checkpoints. A pending runtime replan cannot be bypassed by a direct budget grant.
 - Runtime replan is only for a changed technical approach inside existing requirements/acceptance/contracts/security boundaries. If those boundaries change, use normal full replan/supersede.
-- `replan` and security/scope/secret/destructive findings block immediately and never consume a fix cycle.
+- `security_stop` is reserved for a real owner security-policy/trust/access decision or a remediation that cannot satisfy the bounded `security_fix` contract. `secret_stop` covers actual secret/credential exposure or rotation/revocation decisions. `destructive_stop` covers irreversible/destructive remediation. `scope_stop` covers protected/sensitive or otherwise non-authorizable scope. These conditions use BLOCKED/resumable owner checkpoints rather than being reported as terminal implementation failure merely because the finding is security-related.
+- `replan` and true security/scope/secret/destructive stops do not consume a fix cycle.
 - Lifecycle terms are distinct: pre-init planning revision stays on the same run-id; `technical_fix` and approved runtime replan stay on the same approved run; a frozen-manifest correction after init uses deterministic `stage-cli supersede` with reason-coded lineage and copies no runtime/machine evidence; architecture/scope/main-drift replan creates a new reason-coded run.
 
 ## Status semantics
