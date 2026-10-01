@@ -121,6 +121,7 @@ test('OpenStage exposes only deterministic GitHub lifecycle commands', async () 
     /github-pr-cli\.ts\*": allow/,
     /github-actions-gate-cli\.ts\*": allow/,
     /deployment-target-cli\.ts\*": allow/,
+    /pipeline-refresh-cli\.ts\*": allow/,
     /pipeline-github-sync\.mjs\*": allow/,
   ]) {
     assert.match(yaml, required);
@@ -149,7 +150,8 @@ test('OpenStage cannot edit deterministic pipeline state or machine evidence', a
   for (const path of [
     'state\\.json', 'candidate\\.json', 'git-verify\\.json', 'git-runtime\\.json',
     'github/\\*\\*', 'gates/\\*\\*', 'owner/\\*\\*', 'sources/github-issues\\.json',
-    'planning/deployment-target\\.json', 'rules/\\*\\*',
+    'planning/deployment-target\\.json', 'refresh-impact\\.json',
+    'planning/refresh-impact\\.json', 'rules/\\*\\*',
   ]) {
     assert.match(yaml, new RegExp('\\.tmp/pipelines/\\*\\*/' + path + '"?:\\s*deny'));
   }
