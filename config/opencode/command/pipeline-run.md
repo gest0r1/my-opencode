@@ -105,7 +105,7 @@ For `technical_fix`:
 2. identify exact repository paths before source mutation;
 3. call `stage-cli scope-check <run-id> <stage> <path>... --pipeline <id> --json`;
 4. when it returns `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer and use `stage-cli scope-extend ... --class technical --evidence <review.json>` only when that evidence proves a decision-free bounded clarification;
-5. after scope PASS call `stage-cli fix-cycle <run-id> <stage> --pipeline <id>`.
+5. Only after scope preflight PASS call `stage-cli fix-cycle <run-id> <stage> --pipeline <id>`.
 
 For a CodeReviewer finding classified `security_fix`, do **not** stop merely because severity is Critical/High. Autonomous security repair is allowed only when the frozen contract already determines the safe remediation. CodeReviewer must write machine-readable evidence proving all of:
 
@@ -148,7 +148,7 @@ Budget exhaustion is checked only when a review/gate result requires the **next*
 At a budget checkpoint the owner has three choices:
 
 1. **Continue current approach:** explicit `+N` → `fix-budget-add`.
-2. **Runtime replan this block:** only on explicit owner intent; fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer, `runtime-replan-propose`, mandatory owner clarification/approval, then `runtime-replan-approve --cycles N`.
+2. **Runtime replan this block:** only on explicit owner intent; fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer, `stage-cli runtime-replan-propose`, mandatory owner clarification/approval, then `stage-cli runtime-replan-approve --cycles N`.
 3. **Full replan:** only when frozen requirements, acceptance criteria, external contracts, security/trust boundaries, destructive behavior or another PLAN-level decision changes.
 
 A pending runtime replan cannot be bypassed with `fix-budget-add`. `--unattended` never supplies runtime-replan approval.
