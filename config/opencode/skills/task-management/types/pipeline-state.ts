@@ -232,7 +232,7 @@ export type RuntimeReplanStatus =
 
 export interface TechnicalFixBudgetGrant {
   timestamp: string;
-  source: 'owner_direct' | 'runtime_replan';
+  source: 'owner_direct' | 'runtime_replan' | 'run_override';
   added_cycles: number;
   previous_limit: number;
   new_limit: number;
@@ -294,6 +294,15 @@ export interface ScopePreflight {
   paths: string[];
 }
 
+export interface SecurityFixPreflight {
+  timestamp: string;
+  pipeline_id: string;
+  stage: string;
+  paths: string[];
+  evidence_path: string;
+  evidence_sha256: string;
+}
+
 export interface PipelineState {
   schema_version: number;
   run_id: string;
@@ -313,6 +322,7 @@ export interface PipelineState {
   }>;
   runtime_scope_extensions?: RuntimeScopeExtension[];
   scope_preflight?: ScopePreflight;
+  security_fix_preflight?: SecurityFixPreflight;
   project_policy_file?: string;
   project_policy_sha256?: string;
   status: PipelineStatus;

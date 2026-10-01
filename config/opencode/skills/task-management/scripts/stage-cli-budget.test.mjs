@@ -86,8 +86,8 @@ async function fixture(runId) {
   assert.equal(result.status, 0, result.stderr);
   return { root, stateRoot, runId };
 }
-async function exhaustThree(fx) {
-  for (let cycle = 1; cycle <= 3; cycle += 1) {
+async function exhaustFive(fx) {
+  for (let cycle = 1; cycle <= 5; cycle += 1) {
     let result = run(fx.root, [
       'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
       '--pipeline', 'app', '--state-root', fx.stateRoot,
@@ -100,7 +100,7 @@ async function exhaustThree(fx) {
     assert.equal(result.status, 0, result.stderr);
     const state = JSON.parse(result.stdout);
     assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, cycle);
-    assert.equal(state.pipelines.app.stages.implementation.technical_fix_limit, 3);
+    assert.equal(state.pipelines.app.stages.implementation.technical_fix_limit, 5);
   }
 }
 async function writeReview(fx, name, review) {
@@ -124,9 +124,9 @@ function reviewBase(fx, status) {
   };
 }
 
-test('initial budget is 3 and owner can grant +3 after exhaustion', async () => {
+test('initial budget is 5 and owner can grant +3 after exhaustion', async () => {
   const fx = await fixture('budget-direct-grant');
-  await exhaustThree(fx);
+  await exhaustFive(fx);
 
   let result = run(fx.root, [
     'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
@@ -147,14 +147,14 @@ test('initial budget is 3 and owner can grant +3 after exhaustion', async () => 
   assert.equal(result.status, 0, result.stderr);
   let state = JSON.parse(result.stdout);
   let runtime = state.pipelines.app.stages.implementation;
-  assert.equal(runtime.technical_fix_cycles, 3);
-  assert.equal(runtime.technical_fix_limit, 6);
+  assert.equal(runtime.technical_fix_cycles, 5);
+  assert.equal(runtime.technical_fix_limit, 8);
   assert.deepEqual(runtime.technical_fix_budget_grants[0], {
     timestamp: runtime.technical_fix_budget_grants[0].timestamp,
     source: 'owner_direct',
     added_cycles: 3,
-    previous_limit: 3,
-    new_limit: 6,
+    previous_limit: 5,
+    new_limit: 8,
   });
 
   result = run(fx.root, [
@@ -169,9 +169,9 @@ test('initial budget is 3 and owner can grant +3 after exhaustion', async () => 
   assert.equal(result.status, 0, result.stderr);
   state = JSON.parse(result.stdout);
   runtime = state.pipelines.app.stages.implementation;
-  assert.equal(runtime.technical_fix_cycles, 4);
-  assert.equal(runtime.technical_fix_limit, 6);
-  assert.match(runtime.message, /cycle 4\/6/);
+  assert.equal(runtime.technical_fix_cycles, 6);
+  assert.equal(runtime.technical_fix_limit, 8);
+  assert.match(runtime.message, /cycle 6\/8/);
 });
 
 test('owner can increase the fix budget before exhaustion', async () => {
@@ -184,11 +184,134 @@ test('owner can increase the fix budget before exhaustion', async () => {
   const state = JSON.parse(result.stdout);
   const runtime = state.pipelines.app.stages.implementation;
   assert.equal(runtime.technical_fix_cycles ?? 0, 0);
-  assert.equal(runtime.technical_fix_limit, 7);
+  assert.equal(runtime.technical_fix_limit, 9);
   assert.equal(runtime.technical_fix_budget_grants[0].source, 'owner_direct');
   assert.equal(runtime.technical_fix_budget_grants[0].added_cycles, 4);
-  assert.equal(runtime.technical_fix_budget_grants[0].previous_limit, 3);
-  assert.equal(runtime.technical_fix_budget_grants[0].new_limit, 7);
+  assert.equal(runtime.technical_fix_budget_grants[0].previous_limit, 5);
+  assert.equal(runtime.technical_fix_budget_grants[0].new_limit, 9);
+});
+
+test('RUN-level fix-budget-set raises all stage ceilings and never lowers them', async () => {
+  const fx = await fixture('budget-run-override');
+
+  let result = run(fx.root, [
+    'fix-budget-set', fx.runId, '--cycles', '12', '--state-root', fx.stateRoot, '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  let state = JSON.parse(result.stdout);
+  let runtime = state.pipelines.app.stages.implementation;
+  assert.equal(runtime.technical_fix_limit, 12);
+  assert.deepEqual(runtime.technical_fix_budget_grants[0], {
+    timestamp: runtime.technical_fix_budget_grants[0].timestamp,
+    source: 'run_override',
+    added_cycles: 7,
+    previous_limit: 5,
+    new_limit: 12,
+  });
+
+  result = run(fx.root, [
+    'fix-budget-set', fx.runId, '--cycles', '7', '--state-root', fx.stateRoot, '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  state = JSON.parse(result.stdout);
+  runtime = state.pipelines.app.stages.implementation;
+  assert.equal(runtime.technical_fix_limit, 12);
+  assert.equal(runtime.technical_fix_budget_grants.length, 1);
+});
+
+test('automatic repair budget has a hard ceiling of 20', async () => {
+  const fx = await fixture('budget-max-ceiling');
+
+  let result = run(fx.root, [
+    'fix-budget-set', fx.runId, '--cycles', '20', '--state-root', fx.stateRoot, '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(fx.root, [
+    'fix-budget-add', fx.runId, 'implementation',
+    '--pipeline', 'app', '--cycles', '1', '--state-root', fx.stateRoot,
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /TECHNICAL_FIX_LIMIT_MAX/);
+});
+
+test('bounded security_fix requires deterministic evidence and consumes the shared fix budget', async () => {
+  const fx = await fixture('security-fix-cycle');
+  const evidence = await writeReview(fx, 'security-fix-app-implementation-1.json', {
+    kind: 'security_fix',
+    pipeline_id: 'app',
+    stage: 'implementation',
+    paths: ['packages/db/src/change.ts'],
+    policy_basis: ['CT-08', 'least-privilege EXECUTE'],
+    bounded_remediation: true,
+    owner_decision_required: false,
+    requirements_changed: false,
+    acceptance_criteria_changed: false,
+    external_contract_changed: false,
+    security_boundary_changed: false,
+    privilege_expansion: false,
+    secret_exposure: false,
+    destructive_change: false,
+  });
+
+  let result = run(fx.root, [
+    'security-fix-check', fx.runId, 'implementation',
+    '--pipeline', 'app', '--evidence', evidence, '--state-root', fx.stateRoot, '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  let state = JSON.parse(result.stdout);
+  assert.equal(state.security_fix_preflight.pipeline_id, 'app');
+
+  result = run(fx.root, [
+    'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
+    '--pipeline', 'app', '--state-root', fx.stateRoot,
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(fx.root, [
+    'fix-cycle', fx.runId, 'implementation',
+    '--pipeline', 'app', '--state-root', fx.stateRoot,
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SECURITY_FIX_REPAIR_CLASS_REQUIRED/);
+
+  result = run(fx.root, [
+    'fix-cycle', fx.runId, 'implementation', '--repair-class', 'security_fix',
+    '--pipeline', 'app', '--state-root', fx.stateRoot, '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  state = JSON.parse(result.stdout);
+  assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, 1);
+  assert.equal(state.pipelines.app.stages.implementation.technical_fix_limit, 5);
+  assert.match(state.pipelines.app.stages.implementation.message, /security_fix cycle 1\/5/);
+  assert.equal(state.security_fix_preflight, undefined);
+});
+
+test('security_fix authorization rejects privilege expansion and owner decisions', async () => {
+  const fx = await fixture('security-fix-stop');
+  const evidence = await writeReview(fx, 'security-fix-app-implementation-stop.json', {
+    kind: 'security_fix',
+    pipeline_id: 'app',
+    stage: 'implementation',
+    paths: ['packages/db/src/change.ts'],
+    policy_basis: ['security policy'],
+    bounded_remediation: true,
+    owner_decision_required: false,
+    requirements_changed: false,
+    acceptance_criteria_changed: false,
+    external_contract_changed: false,
+    security_boundary_changed: false,
+    privilege_expansion: true,
+    secret_exposure: false,
+    destructive_change: false,
+  });
+
+  const result = run(fx.root, [
+    'security-fix-check', fx.runId, 'implementation',
+    '--pipeline', 'app', '--evidence', evidence, '--state-root', fx.stateRoot,
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SECURITY_FIX_OWNER_STOP_REQUIRED/);
 });
 
 test('runtime replan clarification can start before exhaustion but does not grant cycles', async () => {
@@ -205,7 +328,7 @@ test('runtime replan clarification can start before exhaustion but does not gran
   assert.equal(result.status, 0, result.stderr);
   let state = JSON.parse(result.stdout);
   let runtime = state.pipelines.app.stages.implementation;
-  assert.equal(runtime.technical_fix_limit, 3);
+  assert.equal(runtime.technical_fix_limit, 5);
   assert.equal(runtime.runtime_replans[0].status, 'awaiting_owner_clarification');
   assert.deepEqual(runtime.runtime_replans[0].owner_questions, ['Use approach A or B for this block?']);
 
@@ -226,26 +349,13 @@ test('runtime replan clarification can start before exhaustion but does not gran
 
 test('runtime replan approval can add cycles before exhaustion (5/6 -> 5/10)', async () => {
   const fx = await fixture('runtime-replan-approve');
-  await exhaustThree(fx);
+  await exhaustFive(fx);
 
   let result = run(fx.root, [
     'fix-budget-add', fx.runId, 'implementation',
-    '--pipeline', 'app', '--cycles', '3', '--state-root', fx.stateRoot, '--json',
+    '--pipeline', 'app', '--cycles', '1', '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
-
-  for (let cycle = 4; cycle <= 5; cycle += 1) {
-    result = run(fx.root, [
-      'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
-      '--pipeline', 'app', '--state-root', fx.stateRoot,
-    ]);
-    assert.equal(result.status, 0, result.stderr);
-    result = run(fx.root, [
-      'fix-cycle', fx.runId, 'implementation',
-      '--pipeline', 'app', '--state-root', fx.stateRoot, '--json',
-    ]);
-    assert.equal(result.status, 0, result.stderr);
-  }
 
   const first = await writeReview(fx, 'runtime-replan-app-implementation-1.json', {
     ...reviewBase(fx, 'needs_owner_clarification'),
@@ -307,7 +417,7 @@ test('runtime replan approval can add cycles before exhaustion (5/6 -> 5/10)', a
 
 test('runtime replan cannot cross frozen PLAN boundaries', async () => {
   const fx = await fixture('runtime-replan-full-plan');
-  await exhaustThree(fx);
+  await exhaustFive(fx);
   const evidence = await writeReview(fx, 'runtime-replan-app-implementation-1.json', {
     ...reviewBase(fx, 'ready_for_owner_approval'),
     acceptance_criteria_changed: true,
@@ -323,7 +433,7 @@ test('runtime replan cannot cross frozen PLAN boundaries', async () => {
 
 test('runtime replan evidence must be run-owned', async () => {
   const fx = await fixture('runtime-replan-evidence-boundary');
-  await exhaustThree(fx);
+  await exhaustFive(fx);
   const outside = path.join(fx.root, 'outside-review.json');
   await writeFile(outside, JSON.stringify(reviewBase(fx, 'ready_for_owner_approval')) + '\n');
   const result = run(fx.root, [

@@ -56,7 +56,19 @@ Release packaging отделён от candidate CI. Если проект реа
 
 ## Runtime fix budget
 
-RUN начинает каждый stage с budget 3 technical-fix cycles. Владелец может увеличить budget или запросить/утвердить локальный runtime replan в любой момент stage; исчерпание лишь делает такую owner-развилку обязательной. Runtime replan может проходить несколько раундов уточнений, но новые циклы выдаются только после явного owner approval финального локального плана. Изменение frozen requirements/acceptance/contracts/security boundaries остаётся full replan.
+RUN начинает каждый stage с общим budget **5 automatic repair cycles** для `technical_fix` и bounded `security_fix`. При запуске владелец может заранее увеличить потолок всего RUN:
+
+```text
+/pipeline-run <run-id> --unattended --fix-cycles 10
+```
+
+`--fix-cycles N` задаёт ceiling, а не `+N`; deterministic `stage-cli fix-budget-set` только повышает существующие лимиты и не может их уменьшить. Максимум — 20. Во время RUN остаётся точечный `fix-budget-add +N` для активного stage. Исчерпание budget лишь делает owner-развилку обязательной; уже начатый цикл завершается через frozen review/gates. Runtime replan может проходить несколько раундов уточнений, но новые циклы выдаются только после явного owner approval финального локального плана. Изменение frozen requirements/acceptance/contracts/security boundaries остаётся full replan.
+
+### Security fixes vs stops
+
+`security_fix` — автоматический bounded repair, если frozen AC/contract/security rule уже однозначно определяет fail-closed/least-privilege исправление. Severity Critical/High сама по себе не требует остановки. Перед таким repair CodeReviewer пишет machine-readable evidence, а `stage-cli security-fix-check` детерминированно проверяет отсутствие owner decision, privilege expansion, secret exposure, destructive action и security-boundary change.
+
+`security_stop` используется только когда владельцу реально нужно решить security policy/trust/access. `secret_stop` — при фактической утечке/необходимости rotation/revocation. `destructive_stop` — при необратимом remediation. Protected/sensitive scope остаётся `scope_stop`, а изменение security boundary — replan. Эти случаи должны быть `BLOCKED / awaiting owner`, а не terminal `failed` только из-за самого факта security-находки.
 
 ## Runtime implementation scope
 
@@ -79,7 +91,7 @@ Manifest фиксирует `planning_base_sha` и `freshness_sensitive_paths`. 
 ## Команды
 
 - `/pipeline-plan`
-- `/pipeline-run <run-id>`
+- `/pipeline-run <run-id> [--unattended] [--fix-cycles <5..20>] [--no-session-reuse]`
 - `/pipeline-status <run-id>`
 - `/pipeline-refresh` при релевантном main drift
 
