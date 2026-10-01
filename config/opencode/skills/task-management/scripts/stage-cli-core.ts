@@ -17,6 +17,8 @@ import type {
 } from '../types/pipeline-state';
 
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
+const DEFAULT_TECHNICAL_FIX_LIMIT = 5;
+const MAX_TECHNICAL_FIX_LIMIT = 20;
 const STATE_FILE = 'state.json';
 const LOCK_FILE = '.lock';
 const HUMAN_ONLY = 'human_only';
@@ -65,6 +67,7 @@ export interface StageCommandOptions {
   environment?: boolean;
   reason?: string;
   scopeClass?: 'test' | 'technical';
+  repairClass?: 'technical_fix' | 'security_fix';
   cycles?: number;
 }
 
@@ -680,7 +683,7 @@ async function readState(stateRoot: string, runId: string): Promise<PipelineStat
 
 function createPipelineRuntime(pipeline: PipelineManifestPipeline): PipelineRuntime {
   const stageRuntime: Record<string, StageRuntime> = {};
-  for (const stage of pipeline.stages) stageRuntime[stage] = { status: 'pending', technical_fix_limit: 3 };
+  for (const stage of pipeline.stages) stageRuntime[stage] = { status: 'pending', technical_fix_limit: DEFAULT_TECHNICAL_FIX_LIMIT };
   return {
     id: pipeline.id,
     status: 'planned',
@@ -1291,7 +1294,7 @@ export async function completeStage(
 }
 
 function technicalFixLimit(runtime: StageRuntime): number {
-  return runtime.technical_fix_limit ?? 3;
+  return runtime.technical_fix_limit ?? DEFAULT_TECHNICAL_FIX_LIMIT;
 }
 
 function activeRuntimeReplan(runtime: StageRuntime) {
@@ -1716,8 +1719,8 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
     else if (argument === '--reason') options.reason = args[++index];
     else if (argument === '--cycles') {
       const value = Number(args[++index]);
-      if (!Number.isInteger(value) || value < 1 || value > 20) {
-        throw new StageCliError('--cycles must be an integer from 1 to 20');
+      if (!Number.isInteger(value) || value < 1 || value > MAX_TECHNICAL_FIX_LIMIT) {
+        throw new StageCliError(`--cycles must be an integer from 1 to ${MAX_TECHNICAL_FIX_LIMIT}`);
       }
       options.cycles = value;
     }
@@ -1725,6 +1728,13 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
       const value = args[++index];
       if (value !== 'test' && value !== 'technical') throw new StageCliError('--class must be test or technical');
       options.scopeClass = value;
+    }
+    else if (argument === '--repair-class') {
+      const value = args[++index];
+      if (value !== 'technical_fix' && value !== 'security_fix') {
+        throw new StageCliError('--repair-class must be technical_fix or security_fix');
+      }
+      options.repairClass = value;
     }
     else if (argument?.startsWith('--')) throw new StageCliError(`Unknown option: ${argument}`);
     else if (argument) positional.push(argument);
@@ -1747,7 +1757,7 @@ function printState(state: PipelineState, asJson: boolean): void {
       const status = runtime?.status ?? 'unknown';
       const marker = status === 'completed' ? '✓' : status === 'in_progress' ? '→' : '○';
       const used = runtime?.technical_fix_cycles ?? 0;
-      const limit = runtime ? technicalFixLimit(runtime) : 3;
+      const limit = runtime ? technicalFixLimit(runtime) : DEFAULT_TECHNICAL_FIX_LIMIT;
       console.log(`  ${marker} ${stage}: ${status} fix_budget=${used}/${limit}`);
       const pendingReplan = runtime ? activeRuntimeReplan(runtime) : undefined;
       if (pendingReplan) console.log(`      runtime_replan=${pendingReplan.revision}:${pendingReplan.status}`);
@@ -1800,7 +1810,9 @@ function usage(): string {
     '  stage-cli resume <run-id> <stage> [--pipeline <id>]',
     '  stage-cli scope-check <run-id> <stage> <path>... [--pipeline <id>] [--json]',
     '  stage-cli scope-extend <run-id> <stage> <path>... --class technical --evidence <run-artifact.json> [--pipeline <id>] [--json]',
-    '  stage-cli fix-cycle <run-id> <stage> [--pipeline <id>] [--json]',
+    '  stage-cli security-fix-check <run-id> <stage> --pipeline <id> --evidence <review.json> [--json]',
+    '  stage-cli fix-cycle <run-id> <stage> [--pipeline <id>] [--repair-class technical_fix|security_fix] [--json]',
+    '  stage-cli fix-budget-set <run-id> --cycles <1..20> [--json]',
     '  stage-cli fix-budget-add <run-id> <stage> --pipeline <id> --cycles <1..20> [--json]',
     '  stage-cli runtime-replan-propose <run-id> <stage> --pipeline <id> --evidence <review.json> [--json]',
     '  stage-cli runtime-replan-approve <run-id> <stage> --pipeline <id> --cycles <1..20> [--json]',
