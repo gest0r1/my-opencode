@@ -166,6 +166,8 @@ Use owner stops only where owner judgement/action is actually required:
 
 For `security_stop | secret_stop | destructive_stop | scope_stop | replan`, use `stage-cli block` and report a resumable BLOCKED owner checkpoint. Do **not** mark the RUN terminal `failed` merely because a security finding exists. These stops consume no fix cycle.
 
+When an owner security decision is genuinely required, do not ask the owner to design the security mechanism. Present: (1) what resource/action is being protected in plain language, (2) what the frozen policy cannot decide, (3) the safest fail-closed default, (4) concrete owner choices and consequences, and (5) a recommendation. Ask only for the policy/business choice; implementation details remain the pipeline's responsibility.
+
 Do not make CI green by excluding/suppressing a failing tracked test merely because fixing it needs a runtime scope extension. Test removal/exclusion requires evidence that the test no longer represents approved requirements, not convenience.
 
 After any source-changing fix to an already published candidate: Git verify, rerun the frozen local fail-fast gates, publish a NEW candidate SHA, then rerun every affected final `github_ci`, CD/runtime and acceptance gate. Evidence from the previous candidate is stale by construction and `stage-cli complete` must reject it.
