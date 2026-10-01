@@ -1305,6 +1305,144 @@ function activeRuntimeReplan(runtime: StageRuntime) {
       record.status === 'awaiting_owner_approval');
 }
 
+export async function setRunTechnicalFixBudget(
+  stateRoot: string,
+  runId: string,
+  limit: number,
+): Promise<PipelineState> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_TECHNICAL_FIX_LIMIT) {
+    throw new StageCliError(`fix-budget-set cycles must be an integer from 1 to ${MAX_TECHNICAL_FIX_LIMIT}`);
+  }
+  return updateState(stateRoot, runId, (state) => {
+    if (state.status === 'completed') {
+      throw new StageCliError(`Fix budget cannot change for completed run: ${runId}`);
+    }
+    for (const pipeline of Object.values(state.pipelines)) {
+      for (const stage of pipeline.stage_order) {
+        const runtime = pipeline.stages[stage];
+        if (!runtime) continue;
+        const previousLimit = technicalFixLimit(runtime);
+        if (limit <= previousLimit) continue;
+        const pending = activeRuntimeReplan(runtime);
+        if (pending) {
+          throw new StageCliError(
+            `RUNTIME_REPLAN_PENDING: ${pipeline.id}/${stage} revision=${pending.revision} status=${pending.status}; approve or clarify that replan before raising the run budget`,
+          );
+        }
+        runtime.technical_fix_limit = limit;
+        runtime.technical_fix_budget_grants ??= [];
+        runtime.technical_fix_budget_grants.push({
+          timestamp: now(),
+          source: 'run_override',
+          added_cycles: limit - previousLimit,
+          previous_limit: previousLimit,
+          new_limit: limit,
+        });
+      }
+    }
+  });
+}
+
+type SecurityFixReview = {
+  kind?: unknown;
+  pipeline_id?: unknown;
+  stage?: unknown;
+  paths?: unknown;
+  policy_basis?: unknown;
+  bounded_remediation?: unknown;
+  owner_decision_required?: unknown;
+  requirements_changed?: unknown;
+  acceptance_criteria_changed?: unknown;
+  external_contract_changed?: unknown;
+  security_boundary_changed?: unknown;
+  privilege_expansion?: unknown;
+  secret_exposure?: unknown;
+  destructive_change?: unknown;
+};
+
+function validateSecurityFixReview(
+  review: SecurityFixReview,
+  pipelineId: string,
+  stage: string,
+): string[] {
+  if (review.kind !== 'security_fix') {
+    throw new StageCliError('security fix evidence must have kind=security_fix');
+  }
+  if (review.pipeline_id !== pipelineId || review.stage !== stage) {
+    throw new StageCliError('security fix evidence pipeline/stage does not match the target');
+  }
+  const paths = Array.isArray(review.paths) ? review.paths.map(String) : [];
+  if (!paths.length || paths.some((path) => !safeRepoPath(path) || /[?*\[\]{}]/.test(path))) {
+    throw new StageCliError('security fix evidence must define non-empty concrete repository paths');
+  }
+  if (new Set(paths).size !== paths.length) {
+    throw new StageCliError('security fix evidence paths must be unique');
+  }
+  const policyBasis = Array.isArray(review.policy_basis)
+    ? review.policy_basis.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  if (!policyBasis.length) {
+    throw new StageCliError('security fix evidence must cite at least one frozen AC/contract/security rule in policy_basis');
+  }
+  if (
+    review.bounded_remediation !== true ||
+    review.owner_decision_required !== false ||
+    review.requirements_changed !== false ||
+    review.acceptance_criteria_changed !== false ||
+    review.external_contract_changed !== false ||
+    review.security_boundary_changed !== false ||
+    review.privilege_expansion !== false ||
+    review.secret_exposure !== false ||
+    review.destructive_change !== false
+  ) {
+    throw new StageCliError(
+      'SECURITY_FIX_OWNER_STOP_REQUIRED: autonomous security repair must be bounded, decision-free, non-expanding, secret-free and non-destructive',
+    );
+  }
+  return paths;
+}
+
+export async function authorizeSecurityFix(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  evidencePath: string,
+  pipelineId?: string,
+): Promise<PipelineState> {
+  const root = resolve(stateRoot, runId);
+  const absoluteEvidence = resolve(evidencePath.startsWith('/') ? evidencePath : join(process.cwd(), evidencePath));
+  if (!absoluteEvidence.startsWith(`${root}/`)) {
+    throw new StageCliError('security fix evidence must live inside the current run directory');
+  }
+  const evidenceContent = await readFile(absoluteEvidence, 'utf8').catch(() => {
+    throw new StageCliError(`security fix evidence not found: ${evidencePath}`);
+  });
+  let review: SecurityFixReview;
+  try {
+    review = JSON.parse(evidenceContent) as SecurityFixReview;
+  } catch {
+    throw new StageCliError('security fix evidence is not valid JSON');
+  }
+
+  return updateState(stateRoot, runId, (state) => {
+    const pipeline = getPipeline(state, pipelineId);
+    const runtime = pipeline.stages[stage];
+    if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
+      throw new StageCliError(`Security fix is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
+    }
+    const paths = validateSecurityFixReview(review, pipeline.id, stage);
+    state.security_fix_preflight = {
+      timestamp: now(),
+      pipeline_id: pipeline.id,
+      stage,
+      paths,
+      evidence_path: absoluteEvidence,
+      evidence_sha256: sha256(evidenceContent),
+    };
+  });
+}
+
 export async function grantTechnicalFixBudget(
   stateRoot: string,
   runId: string,
@@ -1312,8 +1450,8 @@ export async function grantTechnicalFixBudget(
   cycles: number,
   pipelineId?: string,
 ): Promise<PipelineState> {
-  if (!Number.isInteger(cycles) || cycles < 1 || cycles > 20) {
-    throw new StageCliError('fix-budget-add cycles must be an integer from 1 to 20');
+  if (!Number.isInteger(cycles) || cycles < 1 || cycles > MAX_TECHNICAL_FIX_LIMIT) {
+    throw new StageCliError(`fix-budget-add cycles must be an integer from 1 to ${MAX_TECHNICAL_FIX_LIMIT}`);
   }
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
@@ -1445,6 +1583,7 @@ export async function proposeRuntimeReplan(
     }
     const revision = runtime.runtime_replans.reduce((max, item) => Math.max(max, item.revision), 0) + 1;
     state.scope_preflight = undefined;
+    state.security_fix_preflight = undefined;
     runtime.runtime_replans.push({
       revision,
       status: validated.status,
@@ -1468,8 +1607,8 @@ export async function approveRuntimeReplan(
   cycles: number,
   pipelineId?: string,
 ): Promise<PipelineState> {
-  if (!Number.isInteger(cycles) || cycles < 1 || cycles > 20) {
-    throw new StageCliError('runtime-replan-approve cycles must be an integer from 1 to 20');
+  if (!Number.isInteger(cycles) || cycles < 1 || cycles > MAX_TECHNICAL_FIX_LIMIT) {
+    throw new StageCliError(`runtime-replan-approve cycles must be an integer from 1 to ${MAX_TECHNICAL_FIX_LIMIT}`);
   }
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
