@@ -1468,6 +1468,11 @@ export async function grantTechnicalFixBudget(
     }
     const previousLimit = technicalFixLimit(runtime);
     const newLimit = previousLimit + cycles;
+    if (newLimit > MAX_TECHNICAL_FIX_LIMIT) {
+      throw new StageCliError(
+        `TECHNICAL_FIX_LIMIT_MAX: ${pipeline.id}/${stage} requested=${newLimit} max=${MAX_TECHNICAL_FIX_LIMIT}`,
+      );
+    }
     runtime.technical_fix_limit = newLimit;
     runtime.technical_fix_budget_grants ??= [];
     runtime.technical_fix_budget_grants.push({
@@ -1628,6 +1633,11 @@ export async function approveRuntimeReplan(
     }
     const previousLimit = technicalFixLimit(runtime);
     const newLimit = previousLimit + cycles;
+    if (newLimit > MAX_TECHNICAL_FIX_LIMIT) {
+      throw new StageCliError(
+        `TECHNICAL_FIX_LIMIT_MAX: ${pipeline.id}/${stage} requested=${newLimit} max=${MAX_TECHNICAL_FIX_LIMIT}`,
+      );
+    }
     pending.status = 'approved';
     pending.approved_at = now();
     pending.granted_cycles = cycles;
