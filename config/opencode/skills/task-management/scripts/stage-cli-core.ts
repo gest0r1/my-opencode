@@ -577,6 +577,9 @@ function assertV2Manifest(manifest: PipelineManifest): void {
   assertV2WorkItems(manifest);
   if (manifest.source_type === 'github_issues') {
     assertSha256Value(manifest.source_snapshot_sha256, 'source_snapshot_sha256');
+    if (manifest.source_requirements_sha256 !== undefined) {
+      assertSha256Value(manifest.source_requirements_sha256, 'source_requirements_sha256');
+    }
   }
   if (manifest.project_policy !== undefined) {
     if (!manifest.project_policy || !safeRepoPath(manifest.project_policy.path)) {
@@ -762,6 +765,7 @@ export async function initFromManifest(
     ...(manifest.repository ? { repository: manifest.repository } : {}),
     ...(manifest.source_issues ? { source_issues: manifest.source_issues.map((issue) => ({ ...issue })) } : {}),
     ...(manifest.source_snapshot_sha256 ? { source_snapshot_sha256: manifest.source_snapshot_sha256 } : {}),
+    ...(manifest.source_requirements_sha256 ? { source_requirements_sha256: manifest.source_requirements_sha256 } : {}),
     ...(manifest.project_policy ? {
       project_policy_file: resolve(manifest.project_policy.path),
       project_policy_sha256: manifest.project_policy.sha256,

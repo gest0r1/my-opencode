@@ -146,6 +146,9 @@ The reader:
 - deduplicates Issue numbers;
 - writes the authoritative snapshot atomically to
   `.tmp/pipelines/<run-id>/sources/github-issues.json`;
+- treats that snapshot as create-once for a run-id: a repeated `fetch` for the same
+  repository/Issue set returns the existing file and never refetches or overwrites
+  frozen source evidence; a different Issue set requires a new run-id;
 - returns both raw snapshot SHA-256 and semantic requirements SHA-256. The raw
   digest protects the saved file; the semantic digest excludes `fetched_at`,
   Issue `updated_at` bookkeeping, and pipeline-generated `pipeline-event` audit
