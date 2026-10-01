@@ -66,7 +66,7 @@ test('one-command B refresh updates local main, preserves all evidence including
   result = shell(f.b);
   assert.equal(result.status, 0, result.stdout + '\n' + result.stderr);
   assert.match(result.stdout, /REFRESH PASS/);
-  assert.match(result.stdout, /NEXT: create NEW run-id\/manifest/);
+  assert.match(result.stdout, /NEXT: run pipeline-refresh-cli apply/);
   assert.equal(git(f.main, 'rev-parse', 'HEAD'), newMain);
   assert.equal(git(f.b, 'rev-parse', 'HEAD'), newMain);
   assert.equal(git(f.b, 'branch', '--show-current'), 'feature/B');

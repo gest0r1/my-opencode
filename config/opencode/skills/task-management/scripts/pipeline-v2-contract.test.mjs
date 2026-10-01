@@ -470,6 +470,49 @@ test('schema v2 freezes authoritative GitHub Issue snapshot hash', async () => {
   );
 });
 
+test('schema v2 validates optional planning read-sets for incremental refresh', async () => {
+  const fx = await fixture('v2-planning-inputs');
+  fx.manifest.planning_inputs = {
+    architecture: ['src/**'],
+    work_items: ['src/app.ts'],
+  };
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+  fx.manifest.planning_inputs.architecture = ['src/*.ts'];
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /planning_inputs\.architecture/,
+  );
+});
+
+test('schema v2 validates semantic GitHub Issue requirements digest when frozen', async () => {
+  const fx = await fixture('v2-github-semantic');
+  const semantic = '1'.repeat(64);
+  const snapshot = await fx.frozen(
+    'sources/github-issues.json',
+    JSON.stringify({ requirements_sha256: semantic, issues: [{ number: 5 }] }) + '\n',
+  );
+  fx.manifest.source_type = 'github_issues';
+  fx.manifest.repository = 'owner/repo';
+  fx.manifest.source_issues = [{ repository: 'owner/repo', number: 5, url: 'https://github.com/owner/repo/issues/5', title: 'Five' }];
+  fx.manifest.pipelines[0].issue_numbers = [5];
+  fx.manifest.planning_base_sha = 'a'.repeat(40);
+  fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/v2' };
+  fx.manifest.source_snapshot_sha256 = snapshot.sha256;
+  fx.manifest.source_requirements_sha256 = semantic;
+  assert.equal(
+    validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
+    'PASS',
+  );
+  fx.manifest.source_requirements_sha256 = '2'.repeat(64);
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /semantic GitHub Issue requirements SHA-256 mismatch/,
+  );
+});
+
 test('deployable pipelines require final GitHub CI but not fresh/upgrade GitHub jobs', async () => {
   const fx = await fixture('v2-deployable-validation');
   fx.manifest.pipelines[0].deployable = true;
