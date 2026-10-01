@@ -95,6 +95,24 @@ async function advanceMain(fx, relative, content) {
   return newBase;
 }
 
+test('preflight blocks an active RUN before any refresh mutation', async () => {
+  const fx = await fixture('active-run');
+  await writeFile(path.join(fx.runRoot, 'state.json'), JSON.stringify({
+    run_id: fx.runId,
+    status: 'in_progress',
+    active_stages: ['app/implementation'],
+  }, null, 2));
+
+  const result = spawnSync('npx', ['--yes', 'tsx', CLI, 'preflight', fx.runId], {
+    cwd: fx.b,
+    encoding: 'utf8',
+    env: process.env,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /RUN_ACTIVE/);
+  assert.equal(git(fx.b, 'rev-parse', 'HEAD'), fx.base);
+});
+
 test('NO_IMPACT adopts new run base without creating a new run', async () => {
   const fx = await fixture('no-impact');
   const newBase = await advanceMain(fx, 'docs/other.md', '# unrelated\n');
