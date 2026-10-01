@@ -219,6 +219,22 @@ test('RUN-level fix-budget-set raises all stage ceilings and never lowers them',
   assert.equal(runtime.technical_fix_budget_grants.length, 1);
 });
 
+test('automatic repair budget has a hard ceiling of 20', async () => {
+  const fx = await fixture('budget-max-ceiling');
+
+  let result = run(fx.root, [
+    'fix-budget-set', fx.runId, '--cycles', '20', '--state-root', fx.stateRoot, '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = run(fx.root, [
+    'fix-budget-add', fx.runId, 'implementation',
+    '--pipeline', 'app', '--cycles', '1', '--state-root', fx.stateRoot,
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /TECHNICAL_FIX_LIMIT_MAX/);
+});
+
 test('bounded security_fix requires deterministic evidence and consumes the shared fix budget', async () => {
   const fx = await fixture('security-fix-cycle');
   const evidence = await writeReview(fx, 'security-fix-app-implementation-1.json', {
