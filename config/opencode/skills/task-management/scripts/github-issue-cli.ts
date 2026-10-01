@@ -205,6 +205,33 @@ export async function fetchIssues(
   const cwd = options.cwd ?? process.cwd();
   const stateRoot = options.stateRoot ?? DEFAULT_STATE_ROOT;
   const repository = currentRepository(cwd);
+  const output = path.join(path.resolve(stateRoot), runId, 'sources', 'github-issues.json');
+
+  const existing = await readFile(output, 'utf8').catch(() => undefined);
+  if (existing !== undefined) {
+    const snapshot = parseJson<Record<string, any>>(existing, 'existing authoritative issue snapshot');
+    const existingNumbers = Array.isArray(snapshot.issues)
+      ? snapshot.issues.map((issue: any) => Number(issue.number)).filter(Number.isSafeInteger)
+      : [];
+    if (snapshot.repository !== repository ||
+        JSON.stringify([...existingNumbers].sort((a, b) => a - b)) !== JSON.stringify([...numbers].sort((a, b) => a - b))) {
+      throw new GitHubIssueCliError('authoritative snapshot already exists for a different repository/issue set; use a new run-id');
+    }
+    const requirementsSha256 = String(
+      snapshot.requirements_sha256 ?? requirementsSha256ForSnapshot(snapshot),
+    );
+    return {
+      status: 'PASS',
+      run_id: runId,
+      repository,
+      issue_numbers: numbers,
+      snapshot: output,
+      snapshot_sha256: sha256(existing),
+      requirements_sha256: requirementsSha256,
+      reused: true,
+    };
+  }
+
   requireGitHubAuth(cwd);
 
   const issues: Record<string, unknown>[] = [];
@@ -256,7 +283,6 @@ export async function fetchIssues(
     requirements_sha256: requirementsSha256,
     issues,
   };
-  const output = path.join(path.resolve(stateRoot), runId, 'sources', 'github-issues.json');
   const snapshotSha256 = await writeJsonAtomic(output, snapshot);
   return {
     status: 'PASS',
