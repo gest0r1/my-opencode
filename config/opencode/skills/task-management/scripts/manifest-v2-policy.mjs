@@ -177,6 +177,20 @@ function assertConflictSerialization(manifest) {
   }
 }
 
+function validatePlanningInputs(manifest) {
+  if (manifest.planning_inputs === undefined) return;
+  const inputs = manifest.planning_inputs;
+  if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs) || Object.keys(inputs).length === 0) {
+    throw new ManifestV2PolicyError('planning_inputs must be a non-empty object when present');
+  }
+  for (const [gate, scopes] of Object.entries(inputs)) {
+    if (!gate || !Array.isArray(scopes) || scopes.length === 0) {
+      throw new ManifestV2PolicyError(`planning_inputs.${gate || '<empty>'} must be a non-empty path-scope array`);
+    }
+    assertSafePathArray(scopes, `planning_inputs.${gate}`);
+  }
+}
+
 function validatePlanningReadiness(manifest, root) {
   const readiness = manifest.planning_readiness;
   if (!readiness || typeof readiness !== 'object' || readiness.design_freeze !== true) {
@@ -272,6 +286,18 @@ function validateSourceSnapshot(manifest, root) {
   catch { throw new ManifestV2PolicyError('authoritative GitHub Issue snapshot is missing'); }
   if (sha256(content) !== manifest.source_snapshot_sha256.toLowerCase()) {
     throw new ManifestV2PolicyError('authoritative GitHub Issue snapshot SHA-256 mismatch');
+  }
+  if (manifest.source_requirements_sha256 !== undefined) {
+    if (!SHA256.test(String(manifest.source_requirements_sha256))) {
+      throw new ManifestV2PolicyError('source_requirements_sha256 must be SHA-256 when present');
+    }
+    let snapshot;
+    try { snapshot = JSON.parse(content); }
+    catch { throw new ManifestV2PolicyError('authoritative GitHub Issue snapshot is invalid JSON'); }
+    if (!SHA256.test(String(snapshot.requirements_sha256 ?? '')) ||
+        snapshot.requirements_sha256.toLowerCase() !== manifest.source_requirements_sha256.toLowerCase()) {
+      throw new ManifestV2PolicyError('semantic GitHub Issue requirements SHA-256 mismatch');
+    }
   }
 }
 
@@ -732,6 +758,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
   const cwd = options.cwd ?? process.cwd();
   const root = runRoot(manifest, cwd, options.manifestPath);
   validatePlanningReadiness(manifest, root);
+  validatePlanningInputs(manifest);
   validateWorkItems(manifest, root);
   validatePreservedBaseline(manifest);
   validateLineage(manifest);
