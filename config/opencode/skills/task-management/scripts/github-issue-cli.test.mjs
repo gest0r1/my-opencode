@@ -104,23 +104,39 @@ test('fetch writes normalized authoritative snapshot and deduplicates issue numb
 test('semantic requirements digest ignores fetch time and pipeline audit comments but detects human requirement edits', async () => {
   const { root, bin } = await fixture();
 
-  let result = run(root, bin, ['fetch', 'run-semantic', '5']);
+  let result = run(root, bin, ['fetch', 'run-semantic-a', '5']);
   assert.equal(result.status, 0, result.stderr);
   const first = JSON.parse(result.stdout);
 
-  result = run(root, bin, ['fetch', 'run-semantic', '5'], { AUDIT_COMMENT: '1' });
+  result = run(root, bin, ['fetch', 'run-semantic-a', '5'], { AUDIT_COMMENT: '1' });
+  assert.equal(result.status, 0, result.stderr);
+  const reused = JSON.parse(result.stdout);
+  assert.equal(reused.reused, true);
+  assert.equal(reused.snapshot_sha256, first.snapshot_sha256);
+  assert.equal(reused.requirements_sha256, first.requirements_sha256);
+
+  result = run(root, bin, ['fetch', 'run-semantic-b', '5'], { AUDIT_COMMENT: '1' });
   assert.equal(result.status, 0, result.stderr);
   const withAudit = JSON.parse(result.stdout);
   assert.equal(withAudit.requirements_sha256, first.requirements_sha256);
   assert.notEqual(withAudit.snapshot_sha256, first.snapshot_sha256);
 
-  result = run(root, bin, ['fetch', 'run-semantic', '5'], {
+  result = run(root, bin, ['fetch', 'run-semantic-c', '5'], {
     AUDIT_COMMENT: '1',
     ISSUE_BODY: 'human changed requirement',
   });
   assert.equal(result.status, 0, result.stderr);
   const changed = JSON.parse(result.stdout);
   assert.notEqual(changed.requirements_sha256, first.requirements_sha256);
+});
+
+test('fetch blocks reuse of one run-id for a different issue set', async () => {
+  const { root, bin } = await fixture();
+  let result = run(root, bin, ['fetch', 'run-fixed-source', '5']);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, bin, ['fetch', 'run-fixed-source', '9']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /snapshot already exists for a different repository\/issue set/);
 });
 
 test('fetch blocks pull requests, closed issues and GitHub lookup failures', async () => {
