@@ -33,7 +33,11 @@ if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
 fi
 case "$*" in
   *"repos/gest0r1/sevami/issues/5/comments"*)
-    echo '[[{"id":501,"html_url":"https://github.com/gest0r1/sevami/issues/5#issuecomment-501","body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"}]]'
+    if [ "${AUDIT_COMMENT:-0}" = "1" ]; then
+      echo '[[{"id":501,"html_url":"https://github.com/gest0r1/sevami/issues/5#issuecomment-501","body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":502,"html_url":"https://github.com/gest0r1/sevami/issues/5#issuecomment-502","body":"<!-- pipeline-event:test:issue-5 -->\\nPipeline audit","user":{"login":"bot"},"created_at":"2026-09-26T10:01:00Z","updated_at":"2026-09-26T10:01:00Z"}]]'
+    else
+      echo '[[{"id":501,"html_url":"https://github.com/gest0r1/sevami/issues/5#issuecomment-501","body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"}]]'
+    fi
     ;;
   *"repos/gest0r1/sevami/issues/9/comments"*)
     echo '[[]]'
@@ -42,7 +46,8 @@ case "$*" in
     echo '[[]]'
     ;;
   *"repos/gest0r1/sevami/issues/5"*)
-    echo '{"number":5,"html_url":"https://github.com/gest0r1/sevami/issues/5","title":"Issue five","body":"body five","state":"open","updated_at":"2026-09-26T10:00:00Z"}'
+    body="${ISSUE_BODY:-body five}"
+    printf '{"number":5,"html_url":"https://github.com/gest0r1/sevami/issues/5","title":"Issue five","body":"%s","state":"open","updated_at":"2026-09-26T10:00:00Z"}\\n' "$body"
     ;;
   *"repos/gest0r1/sevami/issues/9"*)
     echo '{"number":9,"html_url":"https://github.com/gest0r1/sevami/issues/9","title":"Issue nine","body":"","state":"open","updated_at":"2026-09-26T11:00:00Z"}'
@@ -85,6 +90,7 @@ test('fetch writes normalized authoritative snapshot and deduplicates issue numb
   assert.equal(output.repository, 'gest0r1/sevami');
   assert.deepEqual(output.issue_numbers, [5, 9]);
   assert.match(output.snapshot_sha256, /^[0-9a-f]{64}$/);
+  assert.match(output.requirements_sha256, /^[0-9a-f]{64}$/);
 
   const snapshot = JSON.parse(
     await readFile(path.join(root, '.tmp', 'pipelines', 'run-1', 'sources', 'github-issues.json'), 'utf8'),
@@ -93,6 +99,28 @@ test('fetch writes normalized authoritative snapshot and deduplicates issue numb
   assert.equal(snapshot.issues.length, 2);
   assert.equal(snapshot.issues[0].title, 'Issue five');
   assert.equal(snapshot.issues[0].comments[0].body, 'requirement note');
+});
+
+test('semantic requirements digest ignores fetch time and pipeline audit comments but detects human requirement edits', async () => {
+  const { root, bin } = await fixture();
+
+  let result = run(root, bin, ['fetch', 'run-semantic', '5']);
+  assert.equal(result.status, 0, result.stderr);
+  const first = JSON.parse(result.stdout);
+
+  result = run(root, bin, ['fetch', 'run-semantic', '5'], { AUDIT_COMMENT: '1' });
+  assert.equal(result.status, 0, result.stderr);
+  const withAudit = JSON.parse(result.stdout);
+  assert.equal(withAudit.requirements_sha256, first.requirements_sha256);
+  assert.notEqual(withAudit.snapshot_sha256, first.snapshot_sha256);
+
+  result = run(root, bin, ['fetch', 'run-semantic', '5'], {
+    AUDIT_COMMENT: '1',
+    ISSUE_BODY: 'human changed requirement',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const changed = JSON.parse(result.stdout);
+  assert.notEqual(changed.requirements_sha256, first.requirements_sha256);
 });
 
 test('fetch blocks pull requests, closed issues and GitHub lookup failures', async () => {
