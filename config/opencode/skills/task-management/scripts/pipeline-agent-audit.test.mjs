@@ -177,37 +177,48 @@ test('canonical RUN requires deterministic v2 run-preflight before next', async 
   assert.match(orchestrator, /stage-cli run-preflight/);
 });
 
-test('pipeline contracts use an initial three-cycle budget with owner-controlled extensions', async () => {
+test('pipeline contracts use a five-cycle shared repair budget with owner-controlled overrides', async () => {
   const plan = await text('config/opencode/command/pipeline-plan.md');
   const run = await text('config/opencode/command/pipeline-run.md');
+  const status = await text('config/opencode/command/pipeline-status.md');
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
   const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
   const reviewer = await text('config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md');
+  const codeReviewer = await text('config/opencode/agent/subagents/code/reviewer.md');
 
-  assert.match(plan, /up to \*\*3 cycles\*\*/);
-  assert.match(run, /initial automatic budget is \*\*3 technical_fix cycles/i);
+  assert.match(plan, /up to \*\*3 cycles\*\*/); // planning-gate revision budget remains separate
+  assert.match(plan, /--fix-cycles <5\.\.20>/);
+  assert.match(run, /default automatic budget is \*\*5 cycles per stage\/work-item\*\*/i);
+  assert.match(run, /stage-cli fix-budget-set/);
   assert.match(run, /stage-cli fix-budget-add/);
+  assert.match(run, /stage-cli security-fix-check/);
+  assert.match(run, /--repair-class security_fix/);
   assert.match(run, /stage-cli runtime-replan-propose/);
   assert.match(run, /stage-cli runtime-replan-approve/);
-  assert.match(run, /explicit owner approval even under `--unattended`/i);
-  assert.match(orchestrator, /initial fix budget is 3 cycles/i);
+  assert.match(run, /`--unattended` never supplies runtime-replan approval/i);
+  assert.match(orchestrator, /initial fix budget is 5 cycles/i);
+  assert.match(orchestrator, /security-fix-check/i);
   assert.match(orchestrator, /Never infer approval from `--unattended`/i);
-  assert.match(rules, /initial automatic technical-fix budget is \*\*3 per stage\/work-item\*\*/i);
+  assert.match(rules, /initial automatic fix budget is \*\*5 per stage\/work-item\*\*/i);
+  assert.match(rules, /severity alone never forces a stop/i);
+  assert.match(status, /run_override\|owner_direct\|runtime_replan/);
   assert.match(reviewer, /ready_for_owner_approval/);
   assert.match(reviewer, /needs_owner_clarification/);
+  assert.match(codeReviewer, /technical_fix \| security_fix \| replan/);
+  assert.match(codeReviewer, /"privilege_expansion": false/);
   assert.match(plan, /gate advances only on literal `status: ready`/i);
 });
 
 
-test('RUN finishes the active fix cycle before budget checkpoint and never auto-selects runtime replan', async () => {
+test('RUN finishes the active repair cycle before budget checkpoint and never auto-selects runtime replan', async () => {
   const run = await text('config/opencode/command/pipeline-run.md');
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
   const rules = await text('config/opencode/skills/task-management/pipeline-rules.default.md');
 
-  assert.match(run, /already started.*CodeReviewer\/review result.*N\/N/is);
+  assert.match(run, /cycle already started.*finish through that review\/gate.*N\/N/is);
   assert.match(run, /Budget exhaustion is checked only when.*next.*source-changing repair/is);
-  assert.match(run, /runtime replan.*only on explicit owner intent/is);
-  assert.match(run, /owner says only.*\+N.*fix-budget-add.*do not add architecture review implicitly/is);
+  assert.match(run, /Runtime replan this block.*only on explicit owner intent/is);
+  assert.match(run, /explicit `\+N`.*fix-budget-add/is);
 
   assert.match(orchestrator, /already-started cycle must finish through its frozen downstream review\/gates/i);
   assert.match(orchestrator, /executor=`review`.*CodeReviewer/i);
