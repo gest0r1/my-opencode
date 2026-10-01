@@ -204,7 +204,7 @@ Use the deterministic CLI that owns the operation. Owner shell intervention is a
 
 `--unattended` skips interaction only inside the already-approved frozen scope. It does not approve decisions, changed scope/base/manifest/evidence, exceptions or merge. It also never auto-approves a runtime replan: `awaiting_owner_clarification` and `awaiting_owner_approval` are mandatory owner checkpoints.
 
-Reuse child sessions only for CoderAgent/TestEngineer/BuildAgent technical-fix cycles with exact:
+Reuse child sessions only for CoderAgent/TestEngineer/BuildAgent automatic repair cycles (`technical_fix` or bounded `security_fix`) with exact:
 
 ```text
 {run_id,pipeline_id,stage,role,work_item_id}
