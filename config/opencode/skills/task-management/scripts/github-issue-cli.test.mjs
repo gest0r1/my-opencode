@@ -33,7 +33,7 @@ if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
 fi
 case "$*" in
   *"repos/gest0r1/sevami/issues/5/comments"*)
-    if [ "${AUDIT_COMMENT:-0}" = "1" ]; then
+    if [ "\${AUDIT_COMMENT:-0}" = "1" ]; then
       echo '[[{"id":501,"html_url":"https://github.com/gest0r1/sevami/issues/5#issuecomment-501","body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":502,"html_url":"https://github.com/gest0r1/sevami/issues/5#issuecomment-502","body":"<!-- pipeline-event:test:issue-5 -->\\nPipeline audit","user":{"login":"bot"},"created_at":"2026-09-26T10:01:00Z","updated_at":"2026-09-26T10:01:00Z"}]]'
     else
       echo '[[{"id":501,"html_url":"https://github.com/gest0r1/sevami/issues/5#issuecomment-501","body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"}]]'
@@ -46,7 +46,7 @@ case "$*" in
     echo '[[]]'
     ;;
   *"repos/gest0r1/sevami/issues/5"*)
-    body="${ISSUE_BODY:-body five}"
+    body="\${ISSUE_BODY:-body five}"
     printf '{"number":5,"html_url":"https://github.com/gest0r1/sevami/issues/5","title":"Issue five","body":"%s","state":"open","updated_at":"2026-09-26T10:00:00Z"}\\n' "$body"
     ;;
   *"repos/gest0r1/sevami/issues/9"*)
