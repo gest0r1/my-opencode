@@ -11,6 +11,8 @@ The owner-facing flow is intentionally short:
 /pipeline-plan #5 #6 #7
 # review and approve the exact frozen PLAN
 /pipeline-run <run-id> --unattended
+# optional when the owner wants a larger autonomous repair window:
+/pipeline-run <run-id> --unattended --fix-cycles 10
 ```
 
 A successful RUN creates or updates the delivery PR automatically. There is no
@@ -52,7 +54,8 @@ requirements, owner decisions, acceptance criteria and a minimal base implementa
 RUN may add exact machine-owned test/support paths inside an already-approved app/package
 component. Additional production/config paths require fresh architecture + senior review proving
 a decision-free bounded clarification. Protected/security/trust-boundary paths still require
-owner/replan. Scope authorization happens before a new technical-fix cycle is counted.
+owner/replan. Scope authorization happens before a new automatic repair cycle is counted. The
+shared automatic budget covers both `technical_fix` and bounded `security_fix`.
 
 Planning/review evidence is append-only. Stable Issue story files are the
 exception: owner corrections update the same `stories/issue-N.md` file.
@@ -307,7 +310,7 @@ a duplicate.
 Use different mechanisms for different changes:
 
 - planning revision before init → same run-id;
-- technical fix during RUN → same run-id with an initial three-cycle budget; owner-granted `+N` cycles and owner-approved block-local runtime replans remain in the same run and are audited without rewriting the manifest;
+- technical/security fix during RUN → same run-id with an initial five-cycle budget; owner may pre-authorize a higher run-wide ceiling with `--fix-cycles N` (max 20), grant `+N` to one active stage later, or approve a block-local runtime replan; all remain in the same run and are audited without rewriting the manifest;
 - frozen V2 manifest correction after init → `stage-cli supersede <old> <new> --reason <code>`;
 - architecture/scope/main-drift replan → new run with reason-coded `lineage.change_class=replan`.
 
