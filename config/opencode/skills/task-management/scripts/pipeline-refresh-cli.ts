@@ -166,10 +166,20 @@ async function readManifest(stateRoot: string, runId: string): Promise<{ manifes
 
 async function readStateIfPresent(stateRoot: string, runId: string): Promise<State | undefined> {
   const path = join(runRoot(stateRoot, runId), 'state.json');
+  if (!(await exists(path))) return undefined;
+  let raw: string;
   try {
-    return JSON.parse(await readFile(path, 'utf8')) as State;
-  } catch {
-    return undefined;
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    throw new RefreshError(`state.json is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    const state = JSON.parse(raw) as State;
+    if (state.run_id && state.run_id !== runId) throw new RefreshError('state.json run_id does not match selected run');
+    return state;
+  } catch (error) {
+    if (error instanceof RefreshError) throw error;
+    throw new RefreshError('state.json is invalid JSON');
   }
 }
 
