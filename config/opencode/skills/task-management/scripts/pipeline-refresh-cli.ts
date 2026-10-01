@@ -458,6 +458,20 @@ async function createBoundedRun(
     cloned.run_id = newRunId;
     cloned.git_setup = { ...cloned.git_setup, base_sha: newBase };
     cloned.planning_base_sha = newBase;
+    const semanticDigest = String((impact as any).source_requirements?.frozen ?? '');
+    if (/^[0-9a-f]{64}$/i.test(semanticDigest)) cloned.source_requirements_sha256 = semanticDigest;
+    if (!cloned.planning_inputs || typeof cloned.planning_inputs !== 'object' || Array.isArray(cloned.planning_inputs)) {
+      const fallback = [
+        ...(Array.isArray(cloned.freshness_sensitive_paths) ? cloned.freshness_sensitive_paths : []),
+        ...(Array.isArray(cloned.allowed_change_paths) ? cloned.allowed_change_paths : []),
+      ].filter(validScope);
+      const scopes = [...new Set(fallback)].sort();
+      if (scopes.length) {
+        cloned.planning_inputs = {};
+        for (const gate of readinessGateNames(cloned)) cloned.planning_inputs[gate] = scopes;
+        cloned.planning_inputs.work_items = scopes;
+      }
+    }
     cloned.lineage = {
       change_class: 'replan',
       supersedes: oldRunId,
