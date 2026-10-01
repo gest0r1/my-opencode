@@ -17,9 +17,15 @@ Never infer or switch to another worktree. The current session directory is the 
 
 ## 1. Worktree preflight / merge
 
-Use `git-worktree-cli.ts inspect` first. Require an owner-created linked worktree, a non-default branch, a clean checkout, and no active RUN.
+Use `git-worktree-cli.ts inspect` first. Then resolve the selected run and prove that no RUN is active **before any Git mutation**:
 
-For `--check`, execute only:
+```text
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/pipeline-refresh-cli.ts preflight [run-id]
+```
+
+Require an owner-created linked worktree, a non-default branch, a clean checkout, and `refresh_preflight: PASS`.
+
+For `--check`, after the CLI preflight execute only:
 
 ```bash
 bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh --check
@@ -27,7 +33,7 @@ bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh -
 
 Then stop. `--check` does not fetch/merge main and therefore does not classify impact.
 
-For apply, execute exactly:
+For apply, after the CLI preflight execute exactly:
 
 ```bash
 bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh

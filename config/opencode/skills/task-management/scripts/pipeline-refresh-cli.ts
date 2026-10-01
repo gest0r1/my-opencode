@@ -727,13 +727,13 @@ async function analyzeAndApply(
 }
 
 function parseArgs(args: string[]): {
-  commandName: 'check' | 'apply';
+  commandName: 'preflight' | 'check' | 'apply';
   runId?: string;
   stateRoot: string;
 } {
   const [commandName, ...rest] = args;
-  if (commandName !== 'check' && commandName !== 'apply') {
-    throw new RefreshError('usage: pipeline-refresh-cli.ts check|apply [run-id] [--state-root <path>]');
+  if (commandName !== 'preflight' && commandName !== 'check' && commandName !== 'apply') {
+    throw new RefreshError('usage: pipeline-refresh-cli.ts preflight|check|apply [run-id] [--state-root <path>]');
   }
   let runId: string | undefined;
   let stateRoot = DEFAULT_STATE_ROOT;
@@ -758,7 +758,25 @@ async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
   const cwd = git(['rev-parse', '--show-toplevel']);
   const runId = await resolveRunId(parsed.stateRoot, parsed.runId, cwd);
-  const result = await analyzeAndApply(parsed.stateRoot, runId, parsed.commandName === 'apply', cwd);
+
+  if (parsed.commandName === 'preflight' || parsed.commandName === 'check') {
+    const { manifest } = await readManifest(parsed.stateRoot, runId);
+    const state = await readStateIfPresent(parsed.stateRoot, runId);
+    assertInactiveState(state);
+    const context = await inspectContext(manifest, cwd);
+    console.log(JSON.stringify({
+      status: 'PASS',
+      action: 'refresh_preflight',
+      run_id: runId,
+      branch: context.branch,
+      current_main_sha: context.main,
+      head_sha: context.head,
+      run_status: state?.status ?? 'draft',
+    }, null, 2));
+    return;
+  }
+
+  const result = await analyzeAndApply(parsed.stateRoot, runId, true, cwd);
   console.log(JSON.stringify(result, null, 2));
 }
 
