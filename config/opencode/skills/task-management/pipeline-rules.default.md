@@ -1,6 +1,6 @@
 ---
 document_type: pipeline_rules
-rules_version: 3
+rules_version: 2
 rules_scope: opencode_default
 edit_policy: distribution_only
 ---
