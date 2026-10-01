@@ -10,8 +10,14 @@ The owner-facing flow is intentionally short:
 ```text
 /pipeline-plan #5 #6 #7
 # review and approve the exact frozen PLAN
+
+Recommended:
 /pipeline-run <run-id> --unattended
-# optional when the owner wants a larger autonomous repair window:
+
+Available RUN options:
+/pipeline-run <run-id> [--unattended] [--fix-cycles <5..20>] [--no-session-reuse]
+
+# example for a longer unattended window:
 /pipeline-run <run-id> --unattended --fix-cycles 10
 ```
 
@@ -282,6 +288,18 @@ narrower policy in code: they read Issues and post comments, but do not expose a
 Issue state-change/close command.
 
 The pipeline engine has no generic secrets-management or PR-merge operation. Stateful DEV deployment credentials remain inside the target repository's protected GitHub Environment/workflow. When the selected target is the machine where OpenCode runs, PLAN uses `deployment-target-cli inspect` to dispatch the trusted GitHub probe workflow and prove GitHub→host reachability/authentication; RUN repeats that probe immediately before CD. The CLI inspects only required Environment secret **names**, never secret values, and OpenStage/subagents never receive raw `gh` or SSH capability.
+
+## Automatic security repair
+
+RUN distinguishes a bounded implementation defect from a real owner security decision.
+
+- `security_fix`: frozen AC/contracts/security rules already determine the remediation, and deterministic `stage-cli security-fix-check` proves no owner decision, no requirements/AC/external-contract/security-boundary change, no privilege expansion, no secret exposure and no destructive action. It uses the same automatic-repair budget as `technical_fix`.
+- `security_stop`: owner must decide security policy, trust or role/access semantics, or the remediation cannot satisfy the bounded security-fix contract.
+- `secret_stop`: actual credential/secret exposure or rotation/revocation action is required.
+- `destructive_stop`: remediation is irreversible/destructive.
+- `scope_stop`: protected/sensitive scope cannot be machine-authorized.
+
+Critical/High severity does not by itself force an owner stop. True stop categories are recorded as resumable `BLOCKED` checkpoints rather than terminal `failed` solely because the finding is security-related.
 
 ## Failure behavior
 
