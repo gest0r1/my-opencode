@@ -144,7 +144,7 @@ approved base/source -> final cumulative candidate SHA -> installed candidate SH
 - Runtime replan is only for a changed technical approach inside existing requirements/acceptance/contracts/security boundaries. If those boundaries change, use normal full replan/supersede.
 - `security_stop` is reserved for a real owner security-policy/trust/access decision or a remediation that cannot satisfy the bounded `security_fix` contract. `secret_stop` covers actual secret/credential exposure or rotation/revocation decisions. `destructive_stop` covers irreversible/destructive remediation. `scope_stop` covers protected/sensitive or otherwise non-authorizable scope. These conditions use BLOCKED/resumable owner checkpoints rather than being reported as terminal implementation failure merely because the finding is security-related.
 - `replan` and true security/scope/secret/destructive stops do not consume a fix cycle.
-- Lifecycle terms are distinct: pre-init planning revision stays on the same run-id; `technical_fix` and approved runtime replan stay on the same approved run; a frozen-manifest correction after init uses deterministic `stage-cli supersede` with reason-coded lineage and copies no runtime/machine evidence; architecture/scope/main-drift replan creates a new reason-coded run.
+- Lifecycle terms are distinct: pre-init planning revision stays on the same run-id; `technical_fix`, bounded `security_fix` and approved runtime replan stay on the same approved run; a frozen-manifest correction after init uses deterministic `stage-cli supersede` with reason-coded lineage and copies no runtime/machine evidence; architecture/scope/main-drift replan creates a new reason-coded run.
 
 ## Status semantics
 
