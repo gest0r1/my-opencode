@@ -127,7 +127,7 @@ stage-cli fix-cycle <run-id> <stage> --pipeline <id> --repair-class security_fix
 
 `security-fix-check` is deterministic and fail-closed. It rejects the automatic path when an owner decision, privilege expansion, secret exposure, destructive remediation or PLAN/security-boundary change is present. A security authorization cannot be consumed by a normal `technical_fix` cycle and its exact paths must match the scope preflight.
 
-If `git-worktree-cli verify` discovers an additional path after a cycle already started, resolve it through the same scope-check/review flow **inside the same cycle** and continue that cycle. A real protected/sensitive/owner/replan requirement stops the RUN.
+If `git-worktree-cli verify` discovers an additional path after a cycle already started, resolve it through the same scope-check/review flow inside the **same** cycle and continue that cycle. A real protected/sensitive/owner/replan requirement stops the RUN.
 
 For a source-changing fix after `git_publish`, `fix-cycle` reopens the chain from the preceding `git_verify` through local fail-fast, publish, final CI and affected CD/runtime stages. Evidence for the previous candidate becomes stale.
 
