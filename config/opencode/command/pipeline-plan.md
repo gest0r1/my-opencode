@@ -192,7 +192,7 @@ Freeze its exact `head_sha`, sorted `changed_paths[]` and `diff_sha256` as `pres
 
 Distinguish lifecycle changes:
 - planning `needs_revision`: same run-id/draft, up to 3 autonomous cycles;
-- `technical_fix`: same approved run, max 3 cycles;
+- `technical_fix` / bounded `security_fix`: same approved run, default 5 automatic cycles per stage/work-item; owner may raise the RUN ceiling explicitly with `--fix-cycles N` (max 20) or add `+N` later to one active stage;
 - deterministic manifest correction **before init**: same draft/run-id;
 - frozen-manifest correction after init: create a lineage-preserving draft through `stage-cli supersede <old> <new> --reason <code>`;
 - architecture/scope/main-drift replan: new run with `lineage.change_class=replan` and a reason code.
@@ -220,4 +220,14 @@ stage-cli.ts next {run-id} --json
 
 The initial PLAN invocation never runs init/approve. `--unattended` and reviewer approval are not owner approval. Approval sync for Issue runs must finish with `pending=0`. GitHub audit delivery is event-oriented, not a sticky-status comment: `init` queues a separate `created -> planned` event for every mapped pipeline and `approve` queues a separate `planned -> approved` event. `pipeline-github-sync` posts each distinct event as its own idempotent Issue comment; it does not edit the previous comment, and one Issue mapped to several pipelines may therefore receive several audit comments from one PLAN approval sequence.
 
-Return `/pipeline-run {run-id} --unattended` only after approval; never invoke RUN automatically.
+After approval, show a concrete recommended RUN command **and** the available option template so the owner does not have to remember flags. Example:
+
+```text
+Recommended:
+/pipeline-run {run-id} --unattended
+
+Available options:
+/pipeline-run {run-id} [--unattended] [--fix-cycles <5..20>] [--no-session-reuse]
+```
+
+If the owner has said they will be away or wants a larger autonomous repair window, recommend a concrete higher ceiling, for example `/pipeline-run {run-id} --unattended --fix-cycles 10`. Do not choose a higher ceiling without that context. Never invoke RUN automatically.
