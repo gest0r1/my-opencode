@@ -1367,7 +1367,7 @@ test('new init and pre-approval checks reject v1 while historical v1 status rema
   assert.match(result.stderr, /LEGACY_V1_REPLAN_REQUIRED/);
 });
 
-test('technical fix counter permits exactly three cycles and blocks the fourth', async () => {
+test('automatic repair counter permits exactly five default cycles and blocks the sixth', async () => {
   const fx = await fixture('v2-fix-cycle-limit');
   const stateRoot = path.join(fx.root, '.tmp', 'fix-cycle-state');
 
@@ -1378,7 +1378,7 @@ test('technical fix counter permits exactly three cycles and blocks the fourth',
   result = run(fx.root, ['start', fx.manifest.run_id, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 
-  for (let cycle = 1; cycle <= 3; cycle += 1) {
+  for (let cycle = 1; cycle <= 5; cycle += 1) {
     result = run(fx.root, [
       'scope-check', fx.manifest.run_id, 'implementation', 'src/app.ts', '--pipeline', 'app',
       '--state-root', stateRoot, '--json',
