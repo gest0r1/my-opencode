@@ -47,14 +47,18 @@ jobs:
 
           test -s /tmp/opencode-config.json
           test -s /tmp/opencode-agents.txt
-          grep -Fq 'CoderAgent' /tmp/opencode-agents.txt
-          grep -Fq 'CodeReviewer' /tmp/opencode-agents.txt
-
           node - <<'NODE'
           const fs = require('fs');
           const text = fs.readFileSync('/tmp/opencode-config.json', 'utf8');
           const config = JSON.parse(text);
+          const agents = JSON.parse(fs.readFileSync('/tmp/opencode-agents.txt', 'utf8'));
+          if (!Array.isArray(agents) || agents.length < 10) {
+            throw new Error(`unexpected agent catalog: ${Array.isArray(agents) ? agents.length : 'not-array'}`);
+          }
           const serialized = JSON.stringify(config);
+          for (const required of ['CoderAgent', 'CodeReviewer']) {
+            if (!serialized.includes(required)) throw new Error(`missing configured agent: ${required}`);
+          }
           for (const required of ['context7', 'gh_grep', '1c-buddy']) {
             if (!serialized.includes(required)) throw new Error(`missing configured MCP: ${required}`);
           }
