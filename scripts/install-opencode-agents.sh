@@ -138,7 +138,7 @@ archive_legacy_root() {
   safe_name=${safe_name//./_}
   mkdir -p "$LEGACY_BACKUP_ROOT"
   destination="$LEGACY_BACKUP_ROOT/$safe_name"
-  [[ ! -e "$destination" ]] || destination="$destination-$"
+  [[ ! -e "$destination" ]] || destination="${destination}-${BASHPID}"
 
   mv "$root" "$destination"
   echo "Removed legacy agent lookup root: $root"
