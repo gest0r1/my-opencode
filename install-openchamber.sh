@@ -233,19 +233,21 @@ EOF
 }
 
 write_state() {
-  local restart_pending=$1 package_source=$2 package_fingerprint=$3
+  local runtime_pending=$1 service_pending=$2 package_source=$3 package_fingerprint=$4 package_sha256=$5
   local tmp="${STATE}.tmp.${BASHPID}"
   printf '%s\n' \
     "config_sha=$CONFIG_SHA" \
     "openchamber_sha=$APP_SHA" \
     "package_source_sha=$package_source" \
     "package_fingerprint=$package_fingerprint" \
+    "package_sha256=$package_sha256" \
     "openchamber_version=$EXPECTED_OPENCHAMBER_VERSION" \
     "opencode_version=$OPENCODE_VERSION" \
     "bind_host=$HOST" \
     "bind_port=$PORT" \
     "common_env_sha=$(file_sha256 "$COMMON_ENV")" \
-    "restart_pending=$restart_pending" \
+    "runtime_pending=$runtime_pending" \
+    "service_restart_pending=$service_pending" \
     > "$tmp"
   mv -f "$tmp" "$STATE"
 }
@@ -266,10 +268,17 @@ prev_config="$(state_value config_sha)"
 prev_app="$(state_value openchamber_sha)"
 prev_package_source="$(state_value package_source_sha)"
 prev_package_fingerprint="$(state_value package_fingerprint)"
+prev_package_sha256="$(state_value package_sha256)"
 prev_host="$(state_value bind_host)"
 prev_port="$(state_value bind_port)"
 prev_env_sha="$(state_value common_env_sha)"
-prev_restart_pending="$(state_value restart_pending)"
+prev_runtime_pending="$(state_value runtime_pending)"
+prev_service_pending="$(state_value service_restart_pending)"
+legacy_restart_pending="$(state_value restart_pending)"
+if [[ -z "$prev_runtime_pending" && "$legacy_restart_pending" == 1 ]]; then prev_runtime_pending=1; fi
+if [[ -z "$prev_service_pending" && "$legacy_restart_pending" == 1 ]]; then prev_service_pending=1; fi
+prev_runtime_pending="${prev_runtime_pending:-0}"
+prev_service_pending="${prev_service_pending:-0}"
 
 embedded_terminal=0
 if inside_openchamber_terminal; then
@@ -407,7 +416,7 @@ runtime_needs_apply=0
 if (( manifest_available == 1 )); then
   if [[ "$installed_openchamber" != "$EXPECTED_OPENCHAMBER_VERSION" ||
         "$prev_package_source" != "$PACKAGE_SOURCE_SHA" ||
-        "$prev_restart_pending" == 1 ]]; then
+        "$prev_runtime_pending" == 1 ]]; then
     runtime_needs_apply=1
   fi
 else
@@ -415,7 +424,7 @@ else
   PACKAGE_FINGERPRINT="source-$APP_SHA"
   if [[ "$installed_openchamber" != "$EXPECTED_OPENCHAMBER_VERSION" ||
         "$prev_app" != "$APP_SHA" ||
-        "$prev_restart_pending" == 1 ]]; then
+        "$prev_runtime_pending" == 1 ]]; then
     runtime_needs_apply=1
   fi
 fi
@@ -441,6 +450,15 @@ cache_package_from_release() {
 }
 
 build_source_package() {
+  local cache="$CACHE_ROOT/openchamber-web-$APP_SHA.tgz"
+  if [[ -f "$cache" && -n "$prev_package_sha256" ]] &&
+     printf '%s  %s\n' "$prev_package_sha256" "$cache" | sha256sum -c - >/dev/null 2>&1; then
+    echo "Using cached staged OpenChamber source package: $cache"
+    PACKAGE_FILE="$cache"
+    PACKAGE_SHA256="$prev_package_sha256"
+    return 0
+  fi
+
   ensure_bun
   echo "Building OpenChamber fork $APP_REPO@$APP_SHA (release package unavailable)"
   gh api "repos/$APP_REPO/tarball/$APP_SHA" > "$TMP/openchamber.tar.gz"
@@ -470,8 +488,8 @@ build_source_package() {
     exit 1
   }
 
-  local cache="$CACHE_ROOT/openchamber-web-$APP_SHA.tgz"
   cp -f "${packages[0]}" "$cache"
+  PACKAGE_SHA256="$(sha256sum "$cache" | awk '{print $1}')"
   PACKAGE_FILE="$cache"
 }
 
@@ -559,16 +577,18 @@ service_needs_reconcile=0
 (( drop_changed == 0 )) || service_needs_reconcile=1
 [[ -f "$NATIVE_STARTUP_ENV" ]] || service_needs_reconcile=1
 
-restart_pending=0
+runtime_pending=0
+service_pending=0
 if (( runtime_needs_apply == 1 && package_changed == 0 )); then
-  restart_pending=1
+  runtime_pending=1
+  service_pending=1
 fi
 
-if [[ "$restart_pending" == 1 && "$package_changed" == 0 ]]; then
+if [[ "$runtime_pending" == 1 ]]; then
   # The desired package is staged, but activating it would replace the runtime
   # currently serving this terminal. Do not invoke startup through the old CLI.
   echo "OpenChamber package/service activation deferred; current console remains alive."
-elif (( service_needs_reconcile == 1 )); then
+elif (( service_needs_reconcile == 1 || prev_service_pending == 1 )); then
   startup_args=(startup enable --host "$HOST" --port "$PORT" --no-env-snapshot)
   if [[ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
     startup_args+=(--ui-password "$OPENCHAMBER_UI_PASSWORD")
@@ -577,22 +597,23 @@ elif (( service_needs_reconcile == 1 )); then
   if [[ "$effective_restart_mode" == defer ]]; then
     startup_args+=(--no-start)
     openchamber "${startup_args[@]}"
-    restart_pending=1
+    service_pending=1
     echo "OpenChamber service restart deferred; current console remains alive."
   else
     openchamber "${startup_args[@]}"
     systemctl --user restart openchamber.service
     wait_for_service
-    restart_pending=0
+    service_pending=0
   fi
 elif (( service_active == 0 )); then
   if [[ "$effective_restart_mode" == defer ]]; then
     systemctl --user enable openchamber.service >/dev/null
-    restart_pending=1
+    service_pending=1
     echo "OpenChamber service is installed but start is deferred."
   else
     systemctl --user enable --now openchamber.service
     wait_for_service
+    service_pending=0
   fi
 else
   echo "OpenChamber service unchanged and active: restart skipped"
@@ -600,7 +621,8 @@ fi
 
 # Remove legacy password only after native persistence is verified and no apply
 # is pending. Until then it remains the migration fallback.
-if [[ "$restart_pending" == 0 && -f "$LEGACY_PASSWORD_ENV" && -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
+if [[ "$runtime_pending" == 0 && "$service_pending" == 0 &&
+      -f "$LEGACY_PASSWORD_ENV" && -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
   persisted_password="$(read_ui_password_from_env_file "$NATIVE_STARTUP_ENV" 2>/dev/null || true)"
   if [[ -n "$persisted_password" && "$persisted_password" == "$OPENCHAMBER_UI_PASSWORD" ]]; then
     rm -f -- "$LEGACY_PASSWORD_ENV"
@@ -613,13 +635,13 @@ fi
 rm -f -- "$LEGACY_DROP_A" "$LEGACY_DROP_B"
 systemctl --user daemon-reload
 
-write_state "$restart_pending" "$PACKAGE_SOURCE_SHA" "$PACKAGE_FINGERPRINT"
+write_state "$runtime_pending" "$service_pending" "$PACKAGE_SOURCE_SHA" "$PACKAGE_FINGERPRINT" "$PACKAGE_SHA256"
 
 echo
 echo "SUCCESS: config=$CONFIG_SHA OpenChamber=$APP_SHA OpenCode=$installed_opencode"
-if [[ "$restart_pending" == 1 ]]; then
+if [[ "$runtime_pending" == 1 || "$service_pending" == 1 ]]; then
   echo "PENDING APPLY: current OpenChamber terminal was preserved."
-  if [[ -n "$PACKAGE_FILE" && "$package_changed" == 0 ]]; then
+  if [[ "$runtime_pending" == 1 ]]; then
     echo "Run the same installer from SSH/external console with:"
     echo "  OPENCHAMBER_RESTART_MODE=now"
   else
