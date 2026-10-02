@@ -65,6 +65,9 @@ def main():
     require(cleanup, 'PLUGIN_ROOT="$HOME/.config/opencode/plugins"', "plural plugin root")
     require(cleanup, 'archive_lookup_root "$PLUGIN_ROOT"', "plugin root retirement")
     require(cleanup, 'archive_lookup_root "$LEGACY_PLUGIN_ROOT"', "legacy plugin root retirement")
+    require(cleanup, 'LEGACY_SKILL_ROOTS=(', "legacy global skill roots")
+    require(cleanup, '$HOME/.opencode/skills', "legacy plural global skill root")
+    require(cleanup, '$HOME/.opencode/skill', "legacy singular global skill root")
     require(cleanup, 'OPENCHAMBER_CLEANUP_RUNTIME_MODE', "console-safe cleanup mode")
 
     # Canonical OpenCode locations and atomic managed-config replacement.
