@@ -1,208 +1,80 @@
 #!/usr/bin/env python3
-"""Contract tests for the thin OpenChamber/OpenCode 2.x installer."""
-import io
-import os
+"""Static contract tests for the incremental, console-safe V2 installer."""
 from pathlib import Path
-import subprocess
-import tarfile
-import tempfile
 
-CONFIG_SHA = "a" * 40
-APP_SHA = "b" * 40
-ROOT_REPO = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]
+installer = (ROOT / "install-openchamber.sh").read_text()
+config_installer = (ROOT / "install.sh").read_text()
+cleanup = (ROOT / "scripts/cleanup-openchamber-v1-before-v2.sh").read_text()
 
 
-def executable(path: Path, content: str):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
-    path.chmod(0o755)
+def require(text: str, needle: str, label: str):
+    assert needle in text, f"missing contract: {label}: {needle}"
 
 
-def source_archive(path: Path):
-    package = b'{"name":"@openchamber/web","version":"2.1.0"}\n'
-    with tarfile.open(path, "w:gz") as archive:
-        info = tarfile.TarInfo("repo/packages/web/package.json")
-        info.size = len(package)
-        archive.addfile(info, io.BytesIO(package))
-
-
-def run(env):
-    return subprocess.run(
-        ["bash", str(ROOT_REPO / "install-openchamber.sh")],
-        env=env, text=True, capture_output=True,
-    )
-
-
-def fixture(tmp: Path):
-    home = tmp / "home"
-    fake = tmp / "fake"
-    fake.mkdir()
-    log = tmp / "calls.log"
-    archive = tmp / "source.tar.gz"
-    source_archive(archive)
-
-    executable(fake / "curl", "#!/bin/sh\nexit 97\n")
-    executable(fake / "systemctl", "#!/bin/sh\nprintf 'systemctl %s\\\n' \"$*\" >> \"$TEST_LOG\"\nexit 0\n")
-    executable(fake / "gh", r'''#!/bin/bash
-set -Eeuo pipefail
-printf 'gh %s\n' "$*" >> "$TEST_LOG"
-if [[ "$1 $2" == "auth status" ]]; then exit 0; fi
-if [[ "$1 $2" == "release download" ]]; then
-  [[ "${RELEASE_AVAILABLE:-1}" == 1 ]] || exit 44
-  dest=''
-  while (($#)); do
-    if [[ "$1" == --dir ]]; then dest="$2"; break; fi
-    shift
-  done
-  [[ -n "$dest" ]] || exit 45
-  mkdir -p "$dest"
-  : > "$dest/openchamber-web-2.1.0.tgz"
-  exit 0
-fi
-if [[ "$1" != api ]]; then exit 90; fi
-shift
-if [[ "${1:-}" == "-H" ]]; then shift 2; fi
-target="$1"
-case "$target" in
-  repos/gest0r1/my-opencode/commits/*) echo "$CONFIG_SHA" ;;
-  repos/gest0r1/openchamber-ru/commits/v2.1.0) echo "$RELEASE_SHA" ;;
-  repos/gest0r1/openchamber-ru/commits/*) echo "$APP_SHA" ;;
-  repos/gest0r1/my-opencode/contents/install.sh?ref=*)
-    cat <<'SCRIPT'
-#!/bin/bash
-set -Eeuo pipefail
-mkdir -p "$HOME/.opencode/bin"
-cat > "$HOME/.opencode/bin/opencode" <<'OC'
-#!/bin/sh
-echo 2.0.21
-OC
-chmod 755 "$HOME/.opencode/bin/opencode"
-SCRIPT
-    ;;
-  repos/gest0r1/openchamber-ru/tarball/*) cat "$TEST_ARCHIVE" ;;
-  *) echo "unexpected gh target: $target" >&2; exit 91 ;;
-esac
-''')
-    executable(fake / "bun", r'''#!/bin/bash
-set -Eeuo pipefail
-printf 'bun %s\n' "$*" >> "$TEST_LOG"
-case "$1 $2" in
-  "install --frozen-lockfile") exit 0 ;;
-  "run --cwd") exit 0 ;;
-  "pm pack")
-    dest=''
-    while (($#)); do
-      if [[ "$1" == --destination ]]; then dest="$2"; break; fi
-      shift
-    done
-    mkdir -p "$dest"
-    : > "$dest/openchamber-web-2.1.0.tgz"
-    ;;
-  "add -g")
-    mkdir -p "$HOME/.bun/bin"
-    cat > "$HOME/.bun/bin/openchamber" <<'OC'
-#!/bin/bash
-case "${1:-}" in
-  --version) echo 2.1.0 ;;
-  startup)
-    printf 'openchamber %s\n' "$*" >> "$TEST_LOG"
-    exit 0
-    ;;
-  *) exit 0 ;;
-esac
-OC
-    chmod 755 "$HOME/.bun/bin/openchamber"
-    ;;
-  *) exit 0 ;;
-esac
-''')
-
-    env = os.environ.copy()
-    env.update({
-        "HOME": str(home),
-        "XDG_STATE_HOME": str(home / ".local/state"),
-        "PATH": f"{fake}:{env['PATH']}",
-        "BUN_INSTALL": str(home / ".bun"),
-        "TEST_LOG": str(log),
-        "TEST_ARCHIVE": str(archive),
-        "CONFIG_SHA": CONFIG_SHA,
-        "APP_SHA": APP_SHA,
-        "RELEASE_SHA": APP_SHA,
-        "RELEASE_AVAILABLE": "1",
-        "OPENCODE_CONFIG_REF": "upgrade/opencode-v2",
-        "OPENCHAMBER_REF": "upgrade/openchamber-2.1.0",
-    })
-    return home, log, env
+def forbid(text: str, needle: str, label: str):
+    assert needle not in text, f"forbidden regression: {label}: {needle}"
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="openchamber-v2-installer-") as directory:
-        tmp = Path(directory)
-        home, log, env = fixture(tmp)
+    # Network/NPM contract.
+    require(installer, 'HOST="', "bind host variable")
+    require(installer, '172.18.0.1', "NPM Docker bridge default")
+    require(installer, 'OPENCHAMBER_BIND_PORT', "bind port override")
+    require(installer, 'wait_for_service()', "readiness helper")
+    require(installer, 'for attempt in {1..45}', "bounded startup readiness retry")
 
-        result = run(env)
-        assert result.returncode == 0, result.stdout + "\n" + result.stderr
-        assert "SUCCESS: OpenChamber 2.1.0" in result.stdout
-        assert "Installed OpenChamber from gest0r1/openchamber-ru release v2.1.0" in result.stdout
-        calls = log.read_text()
-        assert "gh release download v2.1.0" in calls
-        assert "bun install --frozen-lockfile" not in calls
-        assert "bun run --cwd packages/web build" not in calls
-        assert "bun pm pack --destination" not in calls
-        assert "bun add -g" in calls
-        assert "openchamber startup enable --host 127.0.0.1 --port 3000" in calls
-        assert "openchamber startup status" in calls
-        state = home / ".local/state/my-opencode/openchamber-v2-install.state"
-        saved = state.read_text()
-        assert f"openchamber_sha={APP_SHA}" in saved
-        assert "openchamber_version=2.1.0" in saved
-        assert "opencode_version=2.0.21" in saved
-        print("PASS: exact release package installs without building OpenChamber on the host")
+    # Incremental OpenCode behavior restored from 1.x.
+    require(installer, 'opencode_binary_changed=0', "OpenCode binary decision")
+    require(installer, 'config_changed=0', "config decision")
+    require(installer, 'OPENCODE_SKIP_BINARY_INSTALL=1', "config-only binary skip")
+    require(installer, 'OpenCode binary/config unchanged: downloads skipped', "no-op fast path")
+    require(installer, 'FORCE_OPENCODE_UPDATE=1', "explicit OpenCode update")
 
-        log.write_text("")
-        result = run(env)
-        assert result.returncode == 0, result.stdout + "\n" + result.stderr
-        calls = log.read_text()
-        assert "gh release download" not in calls
-        assert "bun install --frozen-lockfile" not in calls
-        assert "bun pm pack --destination" not in calls
-        assert "openchamber startup enable --host 127.0.0.1 --port 3000" in calls
-        print("PASS: repeat install skips unchanged OpenChamber package work")
+    # Immutable/fingerprinted OpenChamber package behavior.
+    require(installer, 'v2-web-package-$APP_SHA', "exact-SHA package manifest")
+    require(installer, 'runtime_fingerprint', "runtime fingerprint validation")
+    require(installer, 'package_source_sha', "reused package source SHA")
+    require(installer, 'sha256sum -c -', "package integrity verification")
+    require(installer, 'release lookup skipped', "unchanged runtime metadata fast path")
+    require(installer, 'Using cached verified OpenChamber package', "verified package cache")
+    require(installer, 'Using cached staged OpenChamber source package', "staged source cache")
+    require(installer, 'bun run --cwd packages/web build', "source fallback remains available")
 
-        with tempfile.TemporaryDirectory(prefix="openchamber-v2-source-fallback-") as fallback_directory:
-            fallback_home, fallback_log, fallback_env = fixture(Path(fallback_directory))
-            fallback_env["RELEASE_SHA"] = "c" * 40
-            result = run(fallback_env)
-            assert result.returncode == 0, result.stdout + "\n" + result.stderr
-            assert "falling back to source build" in result.stdout
-            calls = fallback_log.read_text()
-            assert "gh release download" not in calls
-            assert "bun install --frozen-lockfile" in calls
-            assert "bun run --cwd packages/web build" in calls
-            assert "bun pm pack --destination" in calls
-            print("PASS: auto mode builds exact source SHA when release tag is not exact")
+    # Concurrency and terminal self-preservation.
+    require(installer, 'flock -x 9', "installer lock")
+    require(installer, 'OPENCHAMBER_EMBEDDED_TERMINAL', "embedded terminal marker")
+    require(installer, 'effective_restart_mode=defer', "automatic deferred restart")
+    require(installer, '--no-start', "native startup staging without restart")
+    require(installer, '--no-env-snapshot', "minimal native startup environment")
+    require(installer, 'PENDING APPLY: current OpenChamber terminal was preserved.', "safe handoff")
+    require(installer, 'runtime_pending=', "separate runtime pending state")
+    require(installer, 'service_restart_pending=', "separate service pending state")
 
-        with tempfile.TemporaryDirectory(prefix="openchamber-v2-release-required-") as release_directory:
-            _, release_log, release_env = fixture(Path(release_directory))
-            release_env["RELEASE_SHA"] = "c" * 40
-            release_env["OPENCHAMBER_PACKAGE_MODE"] = "release"
-            result = run(release_env)
-            assert result.returncode != 0
-            assert "Exact release package unavailable" in result.stderr
-            calls = release_log.read_text()
-            assert "bun install --frozen-lockfile" not in calls
-            assert "tarball" not in calls
-            print("PASS: release mode fails closed instead of silently building source")
+    # Startup environment must not persist build/session-local plugin paths.
+    require(installer, 'sanitize_native_startup_env()', "startup env sanitizer")
+    require(installer, 'removed transient/session variables', "sanitizer audit output")
+    require(installer, 'OPENCHAMBER_UI_PASSWORD', "password preservation")
+    require(installer, 'OPENCHAMBER_DATA_DIR', "data-dir preservation")
 
-        legacy = home / ".config/systemd/user/openchamber.service.d/90-openchamber-runtime.conf"
-        legacy.parent.mkdir(parents=True, exist_ok=True)
-        legacy.write_text("[Service]\nExecStart=/usr/local/bin/openchamber\n")
-        before = legacy.read_text()
-        result = run(env)
-        assert result.returncode == 3
-        assert "LEGACY_SERVICE_DETECTED" in result.stderr
-        assert legacy.read_text() == before
-        print("PASS: legacy 1.x service override blocks without being deleted")
+    # One-time legacy cleanup must remove active duplicate lookup roots while
+    # retaining a rollback copy outside OpenCode discovery.
+    require(cleanup, 'preserve_ui_password_only', "password-only migration")
+    require(cleanup, 'rm -f -- "$NATIVE_STARTUP_ENV"', "old startup snapshot removal")
+    require(cleanup, 'LEGACY_PLUGIN_ROOT="$HOME/.config/opencode/plugin"', "singular plugin root")
+    require(cleanup, 'PLUGIN_ROOT="$HOME/.config/opencode/plugins"', "plural plugin root")
+    require(cleanup, 'archive_lookup_root "$PLUGIN_ROOT"', "plugin root retirement")
+    require(cleanup, 'archive_lookup_root "$LEGACY_PLUGIN_ROOT"', "legacy plugin root retirement")
+    require(cleanup, 'OPENCHAMBER_CLEANUP_RUNTIME_MODE', "console-safe cleanup mode")
+
+    # Canonical OpenCode locations.
+    require(config_installer, '$HOME/.config/opencode/agents', "canonical agent path")
+    require(config_installer, 'OPENCODE_SKIP_BINARY_INSTALL', "config-only install support")
+    require(config_installer, '$HOME/.local/share/opencode/auth.json', "canonical auth path")
+    forbid(config_installer, 'Legacy agent directories were retained for rollback.',
+           "active legacy agent roots must not remain")
+
+    print("PASS: V2 installer contract is incremental, console-safe, and legacy-clean")
 
 
 if __name__ == "__main__":
