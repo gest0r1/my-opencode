@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Thin OpenChamber 2.x + OpenCode 2.x installer.
-# Builds the fork web package, installs it globally, then delegates service
-# lifecycle to OpenChamber's native "startup" command.
+# Installs an exact fork web release package when available, otherwise builds
+# the exact source SHA, then delegates service lifecycle to native "startup".
 set -Eeuo pipefail
 
 CONFIG_REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
@@ -10,6 +10,7 @@ APP_REPO="${OPENCHAMBER_REPO:-gest0r1/openchamber-ru}"
 APP_REF="${OPENCHAMBER_REF:-main}"
 OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"
 EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.0}"
+OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}"
 HOST="${OPENCHAMBER_BIND_HOST:-127.0.0.1}"
 PORT="${OPENCHAMBER_BIND_PORT:-3000}"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode/openchamber-v2-install.state"
@@ -27,6 +28,7 @@ Environment:
   OPENCHAMBER_REF
   OPENCODE_INSTALL_VERSION (default: 2.0.21)
   OPENCHAMBER_EXPECTED_VERSION (default: 2.1.0)
+  OPENCHAMBER_PACKAGE_MODE (auto|release|source; default: auto)
   OPENCHAMBER_BIND_HOST (default: 127.0.0.1)
   OPENCHAMBER_BIND_PORT (default: 3000)
 EOF
@@ -45,6 +47,10 @@ gh auth status --hostname github.com >/dev/null 2>&1 || {
 [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1 && "$PORT" -le 65535 ]] || {
   echo 'OPENCHAMBER_BIND_PORT must be 1..65535' >&2; exit 1;
 }
+case "$OPENCHAMBER_PACKAGE_MODE" in
+  auto|release|source) ;;
+  *) echo 'OPENCHAMBER_PACKAGE_MODE must be auto, release or source' >&2; exit 1 ;;
+esac
 
 ensure_node22() {
   local major
@@ -108,11 +114,35 @@ previous_app_sha=''
 [[ ! -f "$STATE" ]] || previous_app_sha="$(sed -n 's/^openchamber_sha=//p' "$STATE" | head -1)"
 installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
 
-if [[ "$previous_app_sha" != "$APP_SHA" || "$installed_openchamber" != "$EXPECTED_OPENCHAMBER_VERSION" ]]; then
+install_release_package() {
+  local tag="v$EXPECTED_OPENCHAMBER_VERSION"
+  local tag_sha=''
+  tag_sha="$(ref_sha "$APP_REPO" "$tag" 2>/dev/null || true)"
+  [[ -n "$tag_sha" && "$tag_sha" == "$APP_SHA" ]] || return 1
+
+  mkdir -p "$TMP/release"
+  if ! gh release download "$tag" \
+      --repo "$APP_REPO" \
+      --pattern "openchamber-web-$EXPECTED_OPENCHAMBER_VERSION.tgz" \
+      --dir "$TMP/release" \
+      --clobber; then
+    return 1
+  fi
+
+  shopt -s nullglob
+  local packages=("$TMP"/release/openchamber-web-"$EXPECTED_OPENCHAMBER_VERSION".tgz)
+  shopt -u nullglob
+  [[ "${#packages[@]}" -eq 1 ]] || return 1
+  bun add -g "${packages[0]}"
+  echo "Installed OpenChamber from $APP_REPO release $tag at exact SHA $APP_SHA"
+}
+
+install_source_package() {
   echo "Building OpenChamber fork $APP_REPO@$APP_SHA"
   gh api "repos/$APP_REPO/tarball/$APP_SHA" > "$TMP/openchamber.tar.gz"
   mkdir -p "$TMP/src"
   tar -xzf "$TMP/openchamber.tar.gz" -C "$TMP/src" --strip-components=1
+  local actual_version
   actual_version="$(node -e 'const p=require(process.argv[1]); process.stdout.write(String(p.version))' "$TMP/src/packages/web/package.json")"
   [[ "$actual_version" == "$EXPECTED_OPENCHAMBER_VERSION" ]] || {
     echo "OpenChamber package version mismatch: expected=$EXPECTED_OPENCHAMBER_VERSION actual=$actual_version" >&2
@@ -127,10 +157,30 @@ if [[ "$previous_app_sha" != "$APP_SHA" || "$installed_openchamber" != "$EXPECTE
     bun pm pack --destination "$TMP/pack"
   )
   shopt -s nullglob
-  packages=("$TMP"/pack/*.tgz)
+  local packages=("$TMP"/pack/*.tgz)
   shopt -u nullglob
   [[ "${#packages[@]}" -eq 1 ]] || { echo 'Expected exactly one packed OpenChamber web package' >&2; exit 1; }
   bun add -g "${packages[0]}"
+}
+
+if [[ "$previous_app_sha" != "$APP_SHA" || "$installed_openchamber" != "$EXPECTED_OPENCHAMBER_VERSION" ]]; then
+  case "$OPENCHAMBER_PACKAGE_MODE" in
+    release)
+      install_release_package || {
+        echo "Exact release package unavailable for $APP_REPO@$APP_SHA (v$EXPECTED_OPENCHAMBER_VERSION)" >&2
+        exit 1
+      }
+      ;;
+    source)
+      install_source_package
+      ;;
+    auto)
+      if ! install_release_package; then
+        echo "Exact release package is not available yet; falling back to source build"
+        install_source_package
+      fi
+      ;;
+  esac
 fi
 
 export PATH="${BUN_INSTALL:-$HOME/.bun}/bin:$PATH"
