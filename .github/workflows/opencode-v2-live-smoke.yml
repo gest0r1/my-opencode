@@ -1,0 +1,64 @@
+name: OpenCode V2 live smoke
+
+on:
+  push:
+    branches:
+      - 'upgrade/opencode-v2'
+    paths:
+      - 'install.sh'
+      - 'scripts/install-opencode-agents.sh'
+      - 'config/opencode/**'
+      - '.github/workflows/opencode-v2-live-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-v2-live-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install OpenCode 2.0.21 with this branch config
+        env:
+          OPENCODE_CONFIG_REF: ${{ github.sha }}
+          OPENCODE_INSTALL_VERSION: 2.0.21
+        run: |
+          set -Eeuo pipefail
+          bash install.sh
+
+      - name: Validate real V2 config and agents
+        run: |
+          set -Eeuo pipefail
+          export PATH="$HOME/.opencode/bin:$PATH"
+          version="$(opencode --version | sed -E 's/^opencode[[:space:]]+v?//; s/^v//')"
+          test "$version" = "2.0.21"
+
+          timeout 45s opencode --standalone debug config > /tmp/opencode-config.json
+          timeout 45s opencode --standalone debug agents > /tmp/opencode-agents.txt
+
+          test -s /tmp/opencode-config.json
+          test -s /tmp/opencode-agents.txt
+          grep -Fq 'CoderAgent' /tmp/opencode-agents.txt
+          grep -Fq 'CodeReviewer' /tmp/opencode-agents.txt
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync('/tmp/opencode-config.json', 'utf8');
+          const config = JSON.parse(text);
+          const serialized = JSON.stringify(config);
+          for (const required of ['context7', 'gh_grep', '1c-buddy']) {
+            if (!serialized.includes(required)) throw new Error(`missing configured MCP: ${required}`);
+          }
+          for (const retired of ['yonote', 'exchange', 'bitrix24', 'n8n', 'itop', 'google-drive', 'image-gen']) {
+            if (serialized.includes(`"${retired}"`)) throw new Error(`retired MCP still active: ${retired}`);
+          }
+          NODE
