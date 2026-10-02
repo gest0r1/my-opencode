@@ -18,6 +18,10 @@ AUTH_FILE="$HOME/.local/share/opencode/auth.json"
 COMMON_ENV="$HOME/.config/opencode.env"
 LEGACY_PLUGIN_ROOT="$HOME/.config/opencode/plugin"
 PLUGIN_ROOT="$HOME/.config/opencode/plugins"
+LEGACY_SKILL_ROOTS=(
+  "$HOME/.opencode/skill"
+  "$HOME/.opencode/skills"
+)
 CLEANUP_RUNTIME_MODE="${OPENCHAMBER_CLEANUP_RUNTIME_MODE:-auto}"
 
 case "$CLEANUP_RUNTIME_MODE" in
@@ -246,6 +250,12 @@ archive_lookup_root "$PLUGIN_ROOT" "opencode-plugins"
 archive_lookup_root "$LEGACY_PLUGIN_ROOT" "opencode-plugin-legacy"
 mkdir -p "$PLUGIN_ROOT"
 
+for root in "${LEGACY_SKILL_ROOTS[@]}"; do
+  label="${root#"$HOME/"}"
+  label="${label//\//__}"
+  archive_lookup_root "$root" "$label"
+done
+
 # Force exact-SHA install logic to run again.
 rm -f --   "$STATE_ROOT/openchamber-install.state"   "$STATE_ROOT/openchamber-v2-install.state"
 
@@ -266,5 +276,6 @@ echo "Removed/rebuilt on reinstall:"
 echo "  $NATIVE_STARTUP_ENV"
 echo "  $PLUGIN_ROOT"
 echo "  $LEGACY_PLUGIN_ROOT"
+echo "  ${LEGACY_SKILL_ROOTS[*]}"
 echo
 echo "Legacy backup (if anything was migrated): $BACKUP_ROOT"
