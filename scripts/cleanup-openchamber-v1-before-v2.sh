@@ -16,6 +16,8 @@ LEGACY_PASSWORD_ENV="$HOME/.config/openchamber-live.env"
 NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
 AUTH_FILE="$HOME/.local/share/opencode/auth.json"
 COMMON_ENV="$HOME/.config/opencode.env"
+LEGACY_PLUGIN_ROOT="$HOME/.config/opencode/plugin"
+PLUGIN_ROOT="$HOME/.config/opencode/plugins"
 CLEANUP_RUNTIME_MODE="${OPENCHAMBER_CLEANUP_RUNTIME_MODE:-auto}"
 
 case "$CLEANUP_RUNTIME_MODE" in
@@ -53,6 +55,48 @@ if [[ "$effective_runtime_mode" == auto ]]; then
 fi
 
 mkdir -p "$BACKUP_ROOT" "$CANONICAL_AGENTS"
+
+read_env_value() {
+  local file=$1 key=$2 value=''
+  [[ -f "$file" ]] || return 1
+  value="$(
+    set +u
+    unset "$key"
+    # shellcheck disable=SC1090
+    source "$file" >/dev/null 2>&1 || true
+    eval "printf '%s' \"\${$key:-}\""
+  )"
+  [[ -n "$value" ]] || return 1
+  printf '%s' "$value"
+}
+
+preserve_ui_password_only() {
+  local password=''
+  if password="$(read_env_value "$NATIVE_STARTUP_ENV" OPENCHAMBER_UI_PASSWORD 2>/dev/null)"; then
+    mkdir -p "$(dirname "$LEGACY_PASSWORD_ENV")"
+    umask 077
+    printf 'OPENCHAMBER_UI_PASSWORD=%q\n' "$password" > "$LEGACY_PASSWORD_ENV"
+    chmod 600 "$LEGACY_PASSWORD_ENV"
+    echo "Preserved OpenChamber UI password only."
+  fi
+
+  if [[ -f "$NATIVE_STARTUP_ENV" ]]; then
+    rm -f -- "$NATIVE_STARTUP_ENV"
+    echo "Removed stale native startup environment snapshot: $NATIVE_STARTUP_ENV"
+  fi
+}
+
+archive_lookup_root() {
+  local root=$1 label=$2 destination
+  [[ -e "$root" ]] || return 0
+  destination="$BACKUP_ROOT/$label"
+  [[ ! -e "$destination" ]] || destination="$destination-${BASHPID}"
+  mv "$root" "$destination"
+  echo "Removed active legacy lookup root: $root"
+  echo "Backup: $destination"
+}
+
+preserve_ui_password_only
 
 frontmatter_name() {
   local file=$1
@@ -194,6 +238,14 @@ for root in "${LEGACY_AGENT_ROOTS[@]}"; do
   migrate_and_archive_agent_root "$root"
 done
 
+# OpenCode 2 scans both plugins/ and legacy plugin/. The config installer will
+# repopulate the canonical plugins/ directory from the distribution. Moving
+# both roots out of active lookup prevents retired plugin files from surviving
+# an overlay update and producing duplicate/broken loads.
+archive_lookup_root "$PLUGIN_ROOT" "opencode-plugins"
+archive_lookup_root "$LEGACY_PLUGIN_ROOT" "opencode-plugin-legacy"
+mkdir -p "$PLUGIN_ROOT"
+
 # Force exact-SHA install logic to run again.
 rm -f --   "$STATE_ROOT/openchamber-install.state"   "$STATE_ROOT/openchamber-v2-install.state"
 
@@ -208,8 +260,11 @@ echo "Cleanup complete."
 echo "Preserved credentials/settings:"
 echo "  $AUTH_FILE"
 echo "  $COMMON_ENV"
-echo "  $LEGACY_PASSWORD_ENV"
-echo "  $NATIVE_STARTUP_ENV"
+echo "  $LEGACY_PASSWORD_ENV  (password-only migration bridge)"
 echo "  $HOME/.opencode/bin/opencode"
+echo "Removed/rebuilt on reinstall:"
+echo "  $NATIVE_STARTUP_ENV"
+echo "  $PLUGIN_ROOT"
+echo "  $LEGACY_PLUGIN_ROOT"
 echo
 echo "Legacy backup (if anything was migrated): $BACKUP_ROOT"
