@@ -363,8 +363,10 @@ fetch_package_manifest() {
       --clobber >/dev/null 2>&1; then
     return 1
   fi
+  [[ -f "$dir/manifest.json" ]] || return 1
 
-  mapfile -t meta < <(node - "$dir/manifest.json" "$APP_SHA" "$EXPECTED_OPENCHAMBER_VERSION" <<'NODE'
+  local parsed
+  if ! parsed="$(node - "$dir/manifest.json" "$APP_SHA" "$EXPECTED_OPENCHAMBER_VERSION" <<'NODE'
 const fs = require('node:fs');
 const [file, expectedSource, expectedVersion] = process.argv.slice(2);
 const m = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -387,7 +389,10 @@ console.log([
   m.sha256,
 ].join('\n'));
 NODE
-  )
+  )"; then
+    return 1
+  fi
+  mapfile -t meta <<< "$parsed"
   [[ "${#meta[@]}" -eq 5 ]] || return 1
   PACKAGE_SOURCE_SHA="${meta[0]}"
   PACKAGE_FINGERPRINT="${meta[1]}"
@@ -612,8 +617,13 @@ elif (( service_needs_reconcile == 1 || prev_service_pending == 1 )); then
   fi
 
   if [[ "$effective_restart_mode" == defer ]]; then
-    startup_args+=(--no-start)
-    openchamber "${startup_args[@]}"
+    if openchamber startup --help 2>/dev/null | grep -Fq -- '--no-start'; then
+      startup_args+=(--no-start)
+      openchamber "${startup_args[@]}"
+      echo "OpenChamber native unit updated without restarting the service."
+    else
+      echo "Installed OpenChamber CLI does not support --no-start; unit rewrite is deferred too."
+    fi
     service_pending=1
     echo "OpenChamber service restart deferred; current console remains alive."
   else
