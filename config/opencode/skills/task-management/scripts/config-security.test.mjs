@@ -55,9 +55,9 @@ function filesUnder(dir) {
 }
 
 test('distribution exposes only the approved MCP allowlist', () => {
-  assert.deepEqual(Object.keys(config.mcp ?? {}).sort(), allowedMcp);
+  assert.deepEqual(Object.keys(config.mcp?.servers ?? {}).sort(), allowedMcp);
   for (const name of retiredMcp) {
-    assert.equal(config.mcp?.[name], undefined, `retired MCP must stay absent: ${name}`);
+    assert.equal(config.mcp?.servers?.[name], undefined, `retired MCP must stay absent: ${name}`);
   }
 });
 
