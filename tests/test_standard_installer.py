@@ -47,12 +47,25 @@ def fixture(tmp: Path):
 set -Eeuo pipefail
 printf 'gh %s\n' "$*" >> "$TEST_LOG"
 if [[ "$1 $2" == "auth status" ]]; then exit 0; fi
+if [[ "$1 $2" == "release download" ]]; then
+  [[ "${RELEASE_AVAILABLE:-1}" == 1 ]] || exit 44
+  dest=''
+  while (($#)); do
+    if [[ "$1" == --dir ]]; then dest="$2"; break; fi
+    shift
+  done
+  [[ -n "$dest" ]] || exit 45
+  mkdir -p "$dest"
+  : > "$dest/openchamber-web-2.1.0.tgz"
+  exit 0
+fi
 if [[ "$1" != api ]]; then exit 90; fi
 shift
 if [[ "${1:-}" == "-H" ]]; then shift 2; fi
 target="$1"
 case "$target" in
   repos/gest0r1/my-opencode/commits/*) echo "$CONFIG_SHA" ;;
+  repos/gest0r1/openchamber-ru/commits/v2.1.0) echo "$RELEASE_SHA" ;;
   repos/gest0r1/openchamber-ru/commits/*) echo "$APP_SHA" ;;
   repos/gest0r1/my-opencode/contents/install.sh?ref=*)
     cat <<'SCRIPT'
@@ -114,6 +127,8 @@ esac
         "TEST_ARCHIVE": str(archive),
         "CONFIG_SHA": CONFIG_SHA,
         "APP_SHA": APP_SHA,
+        "RELEASE_SHA": APP_SHA,
+        "RELEASE_AVAILABLE": "1",
         "OPENCODE_CONFIG_REF": "upgrade/opencode-v2",
         "OPENCHAMBER_REF": "upgrade/openchamber-2.1.0",
     })
@@ -128,10 +143,12 @@ def main():
         result = run(env)
         assert result.returncode == 0, result.stdout + "\n" + result.stderr
         assert "SUCCESS: OpenChamber 2.1.0" in result.stdout
+        assert "Installed OpenChamber from gest0r1/openchamber-ru release v2.1.0" in result.stdout
         calls = log.read_text()
-        assert "bun install --frozen-lockfile" in calls
-        assert "bun run --cwd packages/web build" in calls
-        assert "bun pm pack --destination" in calls
+        assert "gh release download v2.1.0" in calls
+        assert "bun install --frozen-lockfile" not in calls
+        assert "bun run --cwd packages/web build" not in calls
+        assert "bun pm pack --destination" not in calls
         assert "bun add -g" in calls
         assert "openchamber startup enable --host 127.0.0.1 --port 3000" in calls
         assert "openchamber startup status" in calls
@@ -140,16 +157,42 @@ def main():
         assert f"openchamber_sha={APP_SHA}" in saved
         assert "openchamber_version=2.1.0" in saved
         assert "opencode_version=2.0.21" in saved
-        print("PASS: fresh v2 fork build delegates service lifecycle to native startup")
+        print("PASS: exact release package installs without building OpenChamber on the host")
 
         log.write_text("")
         result = run(env)
         assert result.returncode == 0, result.stdout + "\n" + result.stderr
         calls = log.read_text()
+        assert "gh release download" not in calls
         assert "bun install --frozen-lockfile" not in calls
         assert "bun pm pack --destination" not in calls
         assert "openchamber startup enable --host 127.0.0.1 --port 3000" in calls
-        print("PASS: repeat install skips unchanged fork build")
+        print("PASS: repeat install skips unchanged OpenChamber package work")
+
+        with tempfile.TemporaryDirectory(prefix="openchamber-v2-source-fallback-") as fallback_directory:
+            fallback_home, fallback_log, fallback_env = fixture(Path(fallback_directory))
+            fallback_env["RELEASE_SHA"] = "c" * 40
+            result = run(fallback_env)
+            assert result.returncode == 0, result.stdout + "\n" + result.stderr
+            assert "falling back to source build" in result.stdout
+            calls = fallback_log.read_text()
+            assert "gh release download" not in calls
+            assert "bun install --frozen-lockfile" in calls
+            assert "bun run --cwd packages/web build" in calls
+            assert "bun pm pack --destination" in calls
+            print("PASS: auto mode builds exact source SHA when release tag is not exact")
+
+        with tempfile.TemporaryDirectory(prefix="openchamber-v2-release-required-") as release_directory:
+            _, release_log, release_env = fixture(Path(release_directory))
+            release_env["RELEASE_SHA"] = "c" * 40
+            release_env["OPENCHAMBER_PACKAGE_MODE"] = "release"
+            result = run(release_env)
+            assert result.returncode != 0
+            assert "Exact release package unavailable" in result.stderr
+            calls = release_log.read_text()
+            assert "bun install --frozen-lockfile" not in calls
+            assert "tarball" not in calls
+            print("PASS: release mode fails closed instead of silently building source")
 
         legacy = home / ".config/systemd/user/openchamber.service.d/90-openchamber-runtime.conf"
         legacy.parent.mkdir(parents=True, exist_ok=True)
