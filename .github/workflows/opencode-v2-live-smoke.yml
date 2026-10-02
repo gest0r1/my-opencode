@@ -52,7 +52,9 @@ jobs:
             exit 1
           fi
           test -f "$HOME/.config/opencode/plugins/pipeline-runtime.ts"
-          test -f "$HOME/.config/opencode/context/shell-strategy/shell_strategy.md"
+          test -f "$HOME/.config/opencode/AGENTS.md"
+          grep -Fq '# Shell Non-Interactive Strategy (Global)' "$HOME/.config/opencode/AGENTS.md"
+          test ! -e "$HOME/.config/opencode/context/shell-strategy"
           test ! -e "$HOME/.config/opencode/plugins/shell-strategy"
           ! grep -Fq '@franlol/opencode-md-table-formatter' "$HOME/.config/opencode/opencode.json"
           (
