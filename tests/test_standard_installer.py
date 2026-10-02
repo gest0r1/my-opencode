@@ -75,7 +75,13 @@ def main():
     require(config_installer, 'mkdir -p "$STAGE_CONFIG/agents"', "canonical plural agent path")
     require(config_installer, 'STAGE_CONFIG=', "staged config tree")
     require(config_installer, 'mv "$STAGE_CONFIG" "$CONFIG_HOME"', "atomic config commit")
-    require(config_installer, 'rollback_transaction()', "atomic rollback")
+    require(config_installer, 'rollback_transaction()', "atomic config rollback")
+    require(config_installer, 'rollback_binary()', "OpenCode binary rollback")
+    require(config_installer, 'BINARY_BACKUP=', "OpenCode binary backup")
+    require(config_installer, 'INSTALL_TRANSACTION_COMMITTED=1', "generation commit marker")
+    assert config_installer.index('pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export') < \
+        config_installer.index('https://opencode.ai/v2/install'), \
+        "plugin validation must happen before OpenCode binary replacement"
     require(config_installer, 'bun install --production', "local plugin dependency install")
     require(config_installer, 'pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export',
             "plugin entrypoint validation")
