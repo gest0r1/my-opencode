@@ -20,7 +20,7 @@ UNIT="$UNIT_DIR/openchamber.service"
 DROP_DIR="$UNIT_DIR/openchamber.service.d"
 NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
 
-for cmd in gh mktemp systemctl readlink ln mv cp rm sed; do
+for cmd in gh mktemp systemctl readlink ln mv cp rm sed grep; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "Missing prerequisite: $cmd" >&2
     exit 1
@@ -112,8 +112,12 @@ fi
 export BUN_INSTALL="$RELEASE_DIR"
 export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:$HOME/.opencode/bin:$LEGACY_BUN_INSTALL/bin:$PATH"
 
+# Disable Bash command hashing in the child. The core reads the legacy CLI
+# before installing the new release; with normal hashall Bash could keep using
+# that old path after Bun creates $RELEASE_DIR/bin/openchamber and then write a
+# new systemd unit that still points at the legacy global package.
 set +e
-bash "$CORE" "$@"
+bash +h "$CORE" "$@"
 core_rc=$?
 set -e
 (( core_rc == 0 )) || rollback_all "$core_rc"
@@ -138,8 +142,8 @@ if [[ "$runtime_pending" == 0 && -x "$RELEASE_DIR/bin/openchamber" ]]; then
 fi
 
 # A non-pending successful migration must end with a valid canonical runtime.
-# This guards against accidentally declaring success while still depending on
-# the legacy Bun-global package.
+# It must also have a unit whose ExecStart resolves inside that same immutable
+# generation. Only after these invariants pass may the legacy Bun package go.
 if [[ "$runtime_pending" == 0 && "$service_restart_pending" == 0 ]]; then
   if [[ ! -x "$OPENCHAMBER_CURRENT_BIN" ]]; then
     echo "Atomic install finished without a canonical OpenChamber current runtime." >&2
@@ -148,6 +152,10 @@ if [[ "$runtime_pending" == 0 && "$service_restart_pending" == 0 ]]; then
   current_version="$(oc_version_of "$OPENCHAMBER_CURRENT_BIN" || true)"
   if [[ "$current_version" != "$EXPECTED_OPENCHAMBER_VERSION" ]]; then
     echo "Canonical OpenChamber version mismatch: expected=$EXPECTED_OPENCHAMBER_VERSION actual=$current_version" >&2
+    rollback_all 1
+  fi
+  if [[ ! -f "$UNIT" ]] || ! grep -Fq "$RELEASE_DIR/" "$UNIT"; then
+    echo "OpenChamber unit is not pinned to immutable runtime $RELEASE_DIR" >&2
     rollback_all 1
   fi
   if ! systemctl --user is-active --quiet openchamber.service; then
