@@ -88,7 +88,7 @@ for architecture, test strategy, rollback and accepted/residual risks. Technolog
 evidence and contract inventory remain separate only when those conditional gates
 were actually triggered. Never overwrite an older review artifact; when the
 architecture gate is rerun, write the new supplied artifact path and let OpenStage
-freeze the final ready revision as planning_readiness.required_artifacts.architecture.
+freeze the final ready revision as planning_readiness.gates.architecture.artifact.
 
 Return only:
 
