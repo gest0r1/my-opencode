@@ -318,8 +318,12 @@ test('pipeline agents cannot edit project or distribution rules', async () => {
   }
 
   const config = JSON.parse(await text('config/opencode/opencode.json'));
-  assert.equal(config.agent.CoderAgent.permission.edit['docs/pipeline-rules.md'], 'deny');
-  assert.equal(config.agent.CoderAgent.permission.edit['**/pipeline-rules.default.md'], 'deny');
+  const coderRules = config.agents.CoderAgent.permissions;
+  const denies = (resource) => coderRules.some(
+    (rule) => rule.action === 'edit' && rule.resource === resource && rule.effect === 'deny',
+  );
+  assert.equal(denies('docs/pipeline-rules.md'), true);
+  assert.equal(denies('**/pipeline-rules.default.md'), true);
 });
 
 
