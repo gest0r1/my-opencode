@@ -163,7 +163,9 @@ const file = process.argv[2];
 const config = JSON.parse(fs.readFileSync(file, "utf8"));
 if ("plugin" in config) throw new Error("V1 key 'plugin' is not allowed in OpenCode V2 config");
 if (config.plugins != null && !Array.isArray(config.plugins)) throw new Error("'plugins' must be an array");
-if (!Array.isArray(config.instructions)) throw new Error("'instructions' must be an array");
+if (config.instructions != null && (!Array.isArray(config.instructions) || config.instructions.length > 0)) {
+  throw new Error("OpenCode V2 does not load config.instructions; use global AGENTS.md");
+}
 NODE
 
 (
@@ -176,8 +178,12 @@ NODE
   '
 )
 
-[[ -f "$STAGE_CONFIG/context/shell-strategy/shell_strategy.md" ]] || {
-  echo "Ошибка: shell-strategy instruction missing from staged context." >&2
+[[ -f "$STAGE_CONFIG/AGENTS.md" ]] || {
+  echo "Ошибка: global AGENTS.md missing from staged OpenCode V2 config." >&2
+  exit 1
+}
+grep -Fq '# Shell Non-Interactive Strategy (Global)' "$STAGE_CONFIG/AGENTS.md" || {
+  echo "Ошибка: managed shell strategy missing from global AGENTS.md." >&2
   exit 1
 }
 [[ ! -e "$STAGE_CONFIG/plugins/shell-strategy" ]] || {
