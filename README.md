@@ -18,9 +18,9 @@ scripts/                         # Пользовательские скрипт
   opencode-web-reboot/           # Скрипт перезапуска opencode-web сервиса
 ```
 
-> ⚠️ **Канон агентов (с 2026-08-01):** `~/.opencode/agent/` — install-дир, его читает бинарник.  
-> Зеркало в git: `config/opencode/agent/`. Дубли в `~/.config/opencode/agent(s)/` УДАЛЕНЫ (не читались).  
-> Править агентов ТОЛЬКО в `~/.opencode/agent/`, затем `cp -r ~/.opencode/agent/. config/opencode/agent/` + commit/push.
+> ⚠️ **Канон агентов для OpenCode 2.x:** `~/.config/opencode/agents/`.  
+> Зеркало в git: `config/opencode/agent/`. Installer переносит отсутствующие пользовательские агенты из legacy `~/.opencode/agent/` и `~/.config/opencode/agent/`, затем убирает эти legacy roots из active lookup path.  
+> Править managed-агентов в git-зеркале `config/opencode/agent/`; после установки активной остаётся только canonical plural-директория.
 
 > ⚠️ **Скиллы `~/.agents/skills/` (с 2026-08-11):** читаются opencode нативно (agent-compatible dir).  
 > Зеркало в git: `config/agents/skills/`. Править в `~/.agents/skills/`, затем `cp -r ~/.agents/skills/. config/agents/skills/` + commit/push.
@@ -92,7 +92,7 @@ gh api -H "Accept: application/vnd.github.raw" repos/gest0r1/my-opencode/content
 - проверяет установленную версию OpenCode;
 - скачивает `main` этого репозитория во временный каталог через GitHub API;
 - копирует глобальные конфиги, включая скрытые файлы, в `~/.config/opencode/`;
-- ставит агентов из `config/opencode/agent/` в `~/.opencode/agent/`;
+- ставит агентов из `config/opencode/agent/` в `~/.config/opencode/agents/` и выводит legacy agent roots из active lookup path;
 - ставит скиллы в `~/.agents/skills/`;
 - создаёт или мигрирует единый `~/.config/opencode.env`;
 - удаляет legacy `~/.config/opencode-web.env` после миграции;
@@ -135,7 +135,7 @@ opencode auth list
 
 ### Запуск и порт
 
-OpenChamber по умолчанию слушает порт **3000** на localhost.
+В серверной установке OpenChamber по умолчанию слушает **http://172.18.0.1:3000** — адрес Docker bridge, через который к нему обращается Nginx Proxy Manager. Адрес можно переопределить через `OPENCHAMBER_BIND_HOST`.
 
 ```bash
 openchamber --ui-password '<password>'
@@ -163,7 +163,7 @@ openchamber -p 3001 --ui-password '<password>'
 
 ```bash
 openchamber startup enable \
-  --host <DOCKER_BRIDGE_IP> \
+  --host 172.18.0.1 \
   --port 3000 \
   --ui-password '<password>'
 ```
@@ -250,14 +250,14 @@ OpenChamber разрабатывается отдельно в `gest0r1/opencham
 ## Ручное восстановление
 
 ```bash
-mkdir -p ~/.config/opencode ~/.opencode/agent ~/.agents/skills
+mkdir -p ~/.config/opencode/agents ~/.agents/skills
 
 # Глобальные конфиги, включая скрытые файлы
 cp -a config/opencode/. ~/.config/opencode/
 
-# Агенты должны находиться в ~/.opencode/agent/, а не ~/.config/opencode/agent/
-rm -rf ~/.config/opencode/agent
-cp -a config/opencode/agent/. ~/.opencode/agent/
+# OpenCode 2.x: только canonical plural path.
+rm -rf ~/.opencode/agent ~/.config/opencode/agent
+cp -a config/opencode/agent/. ~/.config/opencode/agents/
 
 # Скиллы агентов
 cp -a config/agents/skills/. ~/.agents/skills/
