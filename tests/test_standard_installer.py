@@ -3,7 +3,10 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-installer = (ROOT / "install-openchamber.sh").read_text()
+wrapper = (ROOT / "install-openchamber.sh").read_text()
+core = (ROOT / "scripts/install-openchamber-v2-core.sh").read_text()
+installer = wrapper + "\n" + core
+runtime_store = (ROOT / "scripts/openchamber-runtime-store.sh").read_text()
 config_installer = (ROOT / "install.sh").read_text()
 cleanup = (ROOT / "scripts/cleanup-openchamber-v1-before-v2.sh").read_text()
 
@@ -57,6 +60,24 @@ def main():
     require(installer, 'OPENCHAMBER_UI_PASSWORD', "password preservation")
     require(installer, 'OPENCHAMBER_DATA_DIR', "data-dir preservation")
 
+    # OpenChamber runtime activation is a separate transaction: immutable
+    # release prefix, service snapshot, atomic current switch, rollback.
+    require(wrapper, 'scripts/install-openchamber-v2-core.sh', "wrapper delegates to versioned core")
+    require(wrapper, 'scripts/openchamber-runtime-store.sh', "wrapper loads runtime transaction helper")
+    require(wrapper, 'BUN_INSTALL="$RELEASE_DIR"', "Bun writes only inactive immutable release")
+    require(wrapper, 'oc_snapshot_service', "service generation snapshot")
+    require(wrapper, 'oc_rollback_service', "service/runtime rollback")
+    require(wrapper, 'oc_activate_release', "atomic runtime activation")
+    require(wrapper, 'OPENCHAMBER_RUNTIME_ROOT', "canonical immutable runtime store")
+    require(wrapper, 'Atomic OpenChamber runtime committed:', "atomic commit audit output")
+    require(runtime_store, 'OPENCHAMBER_RELEASES="$OPENCHAMBER_RUNTIME_ROOT/releases"',
+            "immutable releases root")
+    require(runtime_store, 'OPENCHAMBER_CURRENT="$OPENCHAMBER_RUNTIME_ROOT/current"',
+            "atomic current link")
+    require(runtime_store, 'mv -Tf "$link_tmp" "$OPENCHAMBER_CURRENT"', "atomic symlink publish")
+    require(runtime_store, 'oc_rollback_activation()', "runtime rollback helper")
+    require(runtime_store, 'LEGACY_BUN_INSTALL', "legacy Bun rollback source separation")
+
     # One-time legacy cleanup must remove active duplicate lookup roots while
     # retaining a rollback copy outside OpenCode discovery.
     require(cleanup, 'preserve_ui_password_only', "password-only migration")
@@ -73,6 +94,8 @@ def main():
     require(cleanup, 'archive_lookup_root "$LEGACY_TOOL_ROOT"', "legacy tool root retirement")
     require(cleanup, 'OPENCHAMBER_CLEANUP_RUNTIME_MODE', "console-safe cleanup mode")
     require(cleanup, 'local pid="$$"', "cleanup process ancestry starts from current shell PID")
+    require(cleanup, 'retained as rollback source until atomic commit', "legacy runtime rollback retention")
+    forbid(cleanup, 'bun remove -g @openchamber/web', "cleanup must not destroy runtime rollback source")
     forbid(cleanup, 'local pid="$"', "broken embedded-terminal PID detection")
 
     # Canonical OpenCode locations and atomic managed-config replacement.
@@ -105,7 +128,7 @@ def main():
     forbid(config_installer, 'Legacy agent directories were retained for rollback.',
            "active legacy agent roots must not remain")
 
-    print("PASS: V2 installer contract is incremental, console-safe, and legacy-clean")
+    print("PASS: V2 installer contract is incremental, console-safe, atomic per component, and legacy-clean")
 
 
 if __name__ == "__main__":
