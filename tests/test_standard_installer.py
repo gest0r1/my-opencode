@@ -91,6 +91,10 @@ def main():
             "plugin entrypoint validation")
     require(config_installer, 'shell-strategy must not live under plugins/ in V2',
             "retired plugin location rejection")
+    require(config_installer, 'global AGENTS.md missing from staged OpenCode V2 config',
+            "V2 active global instructions")
+    require(config_installer, 'OpenCode V2 does not load config.instructions; use global AGENTS.md',
+            "inactive V2 instructions rejection")
     require(config_installer, 'OPENCODE_SKIP_BINARY_INSTALL', "config-only install support")
     forbid(config_installer, 'Legacy agent directories were retained for rollback.',
            "active legacy agent roots must not remain")
