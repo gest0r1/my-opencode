@@ -24,7 +24,6 @@ const LOCK_FILE = '.lock';
 const HUMAN_ONLY = 'human_only';
 const DISTRIBUTION_ONLY = 'distribution_only';
 const SUPERSEDE_REASONS = new Set([
-  'V1_TO_V2_MIGRATION',
   'MANIFEST_CONTRACT_CORRECTION',
   'BASELINE_SCOPE_MISMATCH',
   'PLANNING_EVIDENCE_CORRECTION',
@@ -576,10 +575,7 @@ function assertV2Manifest(manifest: PipelineManifest): void {
   assertV2PlanningShape(manifest);
   assertV2WorkItems(manifest);
   if (manifest.source_type === 'github_issues') {
-    assertSha256Value(manifest.source_snapshot_sha256, 'source_snapshot_sha256');
-    if (manifest.source_requirements_sha256 !== undefined) {
-      assertSha256Value(manifest.source_requirements_sha256, 'source_requirements_sha256');
-    }
+    assertSha256Value(manifest.source_requirements_sha256, 'source_requirements_sha256');
   }
   if (manifest.project_policy !== undefined) {
     if (!manifest.project_policy || !safeRepoPath(manifest.project_policy.path)) {
@@ -593,7 +589,7 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
   if (!value || typeof value !== 'object') throw new StageCliError('Manifest must be an object');
   const manifest = value as Partial<PipelineManifest>;
   if (
-    ![1, 2].includes(Number(manifest.schema_version)) ||
+    Number(manifest.schema_version) !== 2 ||
     typeof manifest.run_id !== 'string' ||
     manifest.run_id.length === 0 ||
     typeof manifest.rules_file !== 'string' ||
@@ -602,7 +598,7 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
     manifest.pipelines.length === 0
   ) {
     throw new StageCliError(
-      'Manifest must define schema_version=1, run_id, rules_file, rules_version and pipelines',
+      'Manifest must define schema_version=2, run_id, rules_file, rules_version and pipelines',
     );
   }
 
@@ -644,7 +640,7 @@ function assertManifest(value: unknown): asserts value is PipelineManifest {
     }
   }
   assertDependencyGraph(manifest.pipelines);
-  if (manifest.schema_version === 2) assertV2Manifest(manifest as PipelineManifest);
+  assertV2Manifest(manifest as PipelineManifest);
 }
 
 function stateDir(stateRoot: string, runId: string): string {
@@ -726,10 +722,6 @@ export async function initFromManifest(
   const manifestContent = await readFile(absoluteManifestPath, 'utf8');
   const manifest = JSON.parse(manifestContent) as unknown;
   assertManifest(manifest);
-  if ((manifest as PipelineManifest).schema_version !== 2) {
-    throw new StageCliError('NEW_PLAN_SCHEMA_V2_REQUIRED: stage-cli init creates schema v2 runs only; legacy v1 remains audit/read-only');
-  }
-
   const rules = await resolveEffectiveRules(manifest.rules_file, absoluteManifestPath);
   if (rules.metadata.rules_version !== manifest.rules_version) {
     throw new StageCliError('Manifest rules_version does not match effective rules file');
@@ -764,7 +756,6 @@ export async function initFromManifest(
     ...(manifest.source_type ? { source_type: manifest.source_type } : {}),
     ...(manifest.repository ? { repository: manifest.repository } : {}),
     ...(manifest.source_issues ? { source_issues: manifest.source_issues.map((issue) => ({ ...issue })) } : {}),
-    ...(manifest.source_snapshot_sha256 ? { source_snapshot_sha256: manifest.source_snapshot_sha256 } : {}),
     ...(manifest.source_requirements_sha256 ? { source_requirements_sha256: manifest.source_requirements_sha256 } : {}),
     ...(manifest.project_policy ? {
       project_policy_file: resolve(manifest.project_policy.path),
@@ -836,30 +827,19 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
     const manifest = JSON.parse(manifestContent) as unknown;
     assertManifest(manifest);
     assertStateMatchesManifest(state, manifest);
-    if ((manifest as PipelineManifest).schema_version === 2) {
-      const { validateManifestV2Policy } = await import('./manifest-v2-policy.mjs');
-      try {
-        validateManifestV2Policy(manifest as PipelineManifest, {
-          cwd: process.cwd(),
-          manifestPath: state.manifest_file,
-        });
-      } catch (error) {
-        throw new StageCliError(
-          `Frozen planning evidence validation failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+    const { validateManifestV2Policy } = await import('./manifest-v2-policy.mjs');
+    try {
+      validateManifestV2Policy(manifest as PipelineManifest, {
+        cwd: process.cwd(),
+        manifestPath: state.manifest_file,
+      });
+    } catch (error) {
+      throw new StageCliError(
+        `Frozen planning evidence validation failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
-  if (state.source_snapshot_sha256 && state.manifest_file) {
-    const snapshotPath = join(dirname(state.manifest_file), 'sources', 'github-issues.json');
-    const snapshot = await readFile(snapshotPath, 'utf8').catch(() => {
-      throw new StageCliError('Frozen GitHub Issue snapshot is missing');
-    });
-    if (sha256(snapshot) !== state.source_snapshot_sha256) {
-      throw new StageCliError('Frozen GitHub Issue snapshot changed since pipeline initialization');
-    }
-  }
   if (state.project_policy_file && state.project_policy_sha256) {
     const policy = await readFile(state.project_policy_file, 'utf8').catch(() => {
       throw new StageCliError('Frozen project policy is missing');
@@ -1820,9 +1800,6 @@ export async function supersedeRun(
   const oldState=await validateState(stateRoot,oldRunId);
   if(!oldState.manifest_file)throw new StageCliError('old run has no frozen manifest');
   const oldManifest=JSON.parse(await readFile(oldState.manifest_file,'utf8')) as PipelineManifest;
-  if(oldManifest.schema_version!==2) {
-    throw new StageCliError('LEGACY_V1_REPLAN_REQUIRED: v1 cannot be mechanically superseded; create a fresh v2 PLAN with lineage reason V1_TO_V2_MIGRATION');
-  }
   const oldRoot=dirname(resolve(oldState.manifest_file));
   const newRoot=join(dirname(oldRoot),newRunId);
   if(await fileExists(newRoot) || await fileExists(statePath(stateRoot,newRunId))) {
@@ -1830,14 +1807,11 @@ export async function supersedeRun(
   }
   await mkdir(newRoot,{recursive:true});
   try {
-    for(const directory of ['planning','stories','reviews','sources','work-items']){
+    for(const directory of ['planning','stories','reviews','work-items']){
       await copyIfPresent(join(oldRoot,directory),join(newRoot,directory),true);
     }
     await rm(join(newRoot,'planning','deployment-target.json'),{force:true});
-    for(const file of [
-      'decision-register.md','technology-evidence.md','contract-inventory.md',
-      'test-strategy.md','accepted-risks.md','work-items.json',
-    ]){
+    for(const file of ['decision-register.md','work-items.json']){
       await copyIfPresent(join(oldRoot,file),join(newRoot,file));
     }
     const cloned:PipelineManifest={...oldManifest,run_id:newRunId};
@@ -2074,10 +2048,6 @@ export async function runCli(args: string[]): Promise<void> {
     const rawState = await readState(options.stateRoot, runId);
     if (!rawState.manifest_file) throw new StageCliError('Frozen manifest is missing');
     const rawManifest = JSON.parse(await readFile(rawState.manifest_file, 'utf8')) as PipelineManifest;
-    if (rawManifest.schema_version !== 2) {
-      throw new StageCliError('LEGACY_V1_REPLAN_REQUIRED: schema v1 is audit/read-only for canonical RUN; create and approve a new schema v2 plan');
-    }
-
     const state = await validateState(options.stateRoot, runId);
     if (state.superseded_by) {
       throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
