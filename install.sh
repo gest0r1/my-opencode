@@ -107,16 +107,21 @@ tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
 STAGE_CONFIG="$(mktemp -d "$CONFIG_PARENT/.opencode-stage.XXXXXXXX")"
 STAGE_SKILLS="$(mktemp -d "$SKILLS_PARENT/.skills-stage.XXXXXXXX")"
 
-# Repo-managed config becomes the new baseline. agent/ is intentionally mapped
-# into the V2 canonical plural path agents/.
+# Repo-managed config becomes the new baseline. V1-compatible source mirrors
+# agent/ and command/ are mapped into V2 canonical plural runtime paths.
 shopt -s dotglob nullglob
 for entry in "$SRC/config/opencode/"*; do
-  [[ "$(basename "$entry")" == "agent" ]] && continue
+  case "$(basename "$entry")" in
+    agent|command) continue ;;
+  esac
   cp -a "$entry" "$STAGE_CONFIG/"
 done
 shopt -u dotglob nullglob
 
-mkdir -p "$STAGE_CONFIG/agents"
+mkdir -p "$STAGE_CONFIG/agents" "$STAGE_CONFIG/commands"
+if [[ -d "$SRC/config/opencode/command" ]]; then
+  cp -a "$SRC/config/opencode/command/." "$STAGE_CONFIG/commands/"
+fi
 
 # Preserve existing canonical user agents first; repo-managed agents overwrite
 # only their own names. Legacy roots are copied into staging but remain active
@@ -392,6 +397,14 @@ fi
 }
 [[ ! -e "$CONFIG_HOME/agent" ]] || {
   echo "Ошибка: legacy singular agent path still active." >&2
+  exit 1
+}
+[[ ! -e "$CONFIG_HOME/command" ]] || {
+  echo "Ошибка: legacy singular command path still active." >&2
+  exit 1
+}
+[[ -d "$CONFIG_HOME/commands" ]] || {
+  echo "Ошибка: canonical commands path missing after commit." >&2
   exit 1
 }
 
