@@ -5,6 +5,7 @@
 : "${OPENCHAMBER_RUNTIME_ROOT:=$HOME/.local/share/openchamber-v2}"
 : "${EXPECTED_OPENCHAMBER_VERSION:?EXPECTED_OPENCHAMBER_VERSION is required}"
 : "${BUN_INSTALL:=$HOME/.bun}"
+: "${LEGACY_BUN_INSTALL:=$HOME/.bun}"
 
 OPENCHAMBER_RELEASES="$OPENCHAMBER_RUNTIME_ROOT/releases"
 OPENCHAMBER_CURRENT="$OPENCHAMBER_RUNTIME_ROOT/current"
@@ -192,11 +193,12 @@ oc_commit_service() {
 }
 
 oc_remove_legacy_bun_global() {
-  # The immutable current runtime is healthy before this is called. Removing
-  # the old global package eliminates a competing CLI lookup path without
-  # risking the active service.
-  if [[ -x "$OPENCHAMBER_CURRENT_BIN" ]] && command -v bun >/dev/null 2>&1; then
-    BUN_INSTALL="$BUN_INSTALL" bun remove -g @openchamber/web >/dev/null 2>&1 || true
+  # The immutable current runtime is healthy before this is called. Remove only
+  # the historical ~/.bun global package; never point Bun at the active
+  # immutable release prefix.
+  if [[ -x "$OPENCHAMBER_CURRENT_BIN" && "$LEGACY_BUN_INSTALL" != "$OPENCHAMBER_RUNTIME_ROOT"/* ]] &&
+     command -v bun >/dev/null 2>&1; then
+    BUN_INSTALL="$LEGACY_BUN_INSTALL" bun remove -g @openchamber/web >/dev/null 2>&1 || true
   fi
 }
 
