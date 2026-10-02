@@ -61,16 +61,34 @@ Check the smallest useful architecture surface:
 - public/private route classification and tenant boundaries;
 - state/consistency/migration compatibility, rerun and rollback;
 - security/reliability/performance and deployment/runtime risks;
+- explicit test strategy: deterministic local checks, independent CI, runtime/smoke and owner acceptance when applicable;
+- accepted/residual risks, rollback expectation and operational failure modes;
 - implementation ordering, overlap/conflict metadata and release implications;
 - conformance to owner decisions and affected contracts.
+
+For the final PLAN architecture artifact, include an explicit machine-readable-looking risk summary with:
+- `security_boundary_changed`;
+- `auth_changed`;
+- `permissions_changed`;
+- `secrets_touched`;
+- `deployment_changed`;
+- `migration_required`;
+- `destructive_change`;
+- `risk_level: low | medium | high`.
+
+These flags describe the planned change; they do not authorize it. A true owner/security boundary decision remains a blocker.
 
 Distinguish observed constraints from design choices. Owner choices remain explicit.
 
 ## Evidence
 
 Write only the supplied artifact_path under .tmp/pipelines/{run-id}/planning/**,
-in artifact_language. Never overwrite an older architecture/review artifact on rerun;
-use a new versioned path.
+in artifact_language. The approved final architecture artifact is the canonical home
+for architecture, test strategy, rollback and accepted/residual risks. Technology
+evidence and contract inventory remain separate only when those conditional gates
+were actually triggered. Never overwrite an older review artifact; when the
+architecture gate is rerun, write the new supplied artifact path and let OpenStage
+freeze the final ready revision as planning_readiness.required_artifacts.architecture.
 
 Return only:
 
