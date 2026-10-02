@@ -5,18 +5,24 @@ on:
     paths:
       - install-openchamber.sh
       - install.sh
+      - scripts/install-openchamber-v2-core.sh
+      - scripts/openchamber-runtime-store.sh
       - scripts/install-opencode-agents.sh
       - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
+      - tests/test_openchamber_runtime_store.sh
       - tests/test_agent_path_migration.sh
       - .github/workflows/installer-contract.yml
   pull_request:
     paths:
       - install-openchamber.sh
       - install.sh
+      - scripts/install-openchamber-v2-core.sh
+      - scripts/openchamber-runtime-store.sh
       - scripts/install-opencode-agents.sh
       - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
+      - tests/test_openchamber_runtime_store.sh
       - tests/test_agent_path_migration.sh
 permissions:
   contents: read
@@ -31,7 +37,15 @@ jobs:
       - name: Validate canonical installer and config installer syntax
         run: |
           set -Eeuo pipefail
-          bash -n install-openchamber.sh install.sh scripts/install-opencode-agents.sh scripts/cleanup-openchamber-v1-before-v2.sh tests/test_agent_path_migration.sh
+          bash -n \
+            install-openchamber.sh \
+            install.sh \
+            scripts/install-openchamber-v2-core.sh \
+            scripts/openchamber-runtime-store.sh \
+            scripts/install-opencode-agents.sh \
+            scripts/cleanup-openchamber-v1-before-v2.sh \
+            tests/test_openchamber_runtime_store.sh \
+            tests/test_agent_path_migration.sh
           grep -Fq 'OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"' install.sh
           grep -Fq 'bash -s -- --version "$OPENCODE_INSTALL_VERSION"' install.sh
           git diff --check
@@ -45,7 +59,11 @@ jobs:
           source_count=$(find config/opencode/agent -type f -name '*.md' | wc -l)
           installed_count=$(find "$tmp/agents" -type f -name '*.md' | wc -l)
           test "$source_count" -eq "$installed_count"
-      - name: Verify thin OpenChamber/OpenCode v2 installer contract
+      - name: Verify immutable OpenChamber runtime activation
+        run: |
+          set -Eeuo pipefail
+          bash tests/test_openchamber_runtime_store.sh
+      - name: Verify OpenChamber/OpenCode v2 installer contract
         run: |
           set -Eeuo pipefail
           python3 tests/test_standard_installer.py
