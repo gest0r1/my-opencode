@@ -1,7 +1,5 @@
 {
   "dependencies": {
-    "@franlol/opencode-md-table-formatter": "^0.0.6",
-    "@opencode/plugin": "2.0.21",
-    "zod": "4.3.6"
+    "@opencode/plugin": "2.0.21"
   }
 }
