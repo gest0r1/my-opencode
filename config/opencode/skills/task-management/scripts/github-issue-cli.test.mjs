@@ -30,7 +30,7 @@ exit 2
   await writeFile(path.join(bin, 'gh'), `#!/bin/bash
 set -Eeuo pipefail
 if [[ "$1" == auth && "$2" == status ]]; then
-  [[ "${GH_AUTH_FAIL:-0}" != 1 ]]
+  [[ "\${GH_AUTH_FAIL:-0}" != 1 ]]
   exit
 fi
 if [[ "$1" != api ]]; then exit 2; fi
@@ -41,7 +41,7 @@ fi
 case "$*" in
   *"repos/gest0r1/sevami/issues/5/comments"*)
     body='requirement note'
-    if [[ "${PIPELINE_COMMENT:-0}" == 1 ]]; then
+    if [[ "\${PIPELINE_COMMENT:-0}" == 1 ]]; then
       printf '%s\\n' '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":502,"body":"<!-- pipeline-event:test:issue-5 -->\\nPipeline audit","user":{"login":"bot"}},{"id":503,"body":"<!-- pipeline-artifact:story:run-1:issue-5 -->\\nPipeline Story","user":{"login":"bot"}}]]'
     else
       printf '%s\\n' '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"}]]'
@@ -50,7 +50,7 @@ case "$*" in
   *"repos/gest0r1/sevami/issues/9/comments"*) echo '[[]]' ;;
   *"repos/gest0r1/sevami/issues/6/comments"*|*"repos/gest0r1/sevami/issues/7/comments"*|*"repos/gest0r1/sevami/issues/8/comments"*) echo '[[]]' ;;
   *"repos/gest0r1/sevami/issues/5"*)
-    body="${ISSUE_BODY:-body five}"
+    body="\${ISSUE_BODY:-body five}"
     printf '{"number":5,"html_url":"https://github.com/gest0r1/sevami/issues/5","title":"Issue five","body":"%s","state":"open","updated_at":"2026-09-26T10:00:00Z"}\\n' "$body"
     ;;
   *"repos/gest0r1/sevami/issues/9"*) echo '{"number":9,"html_url":"https://github.com/gest0r1/sevami/issues/9","title":"Issue nine","body":"","state":"open"}' ;;
