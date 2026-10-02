@@ -24,7 +24,7 @@ if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
   echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
 else
   echo "Устанавливаю/обновляю OpenCode до $OPENCODE_INSTALL_VERSION официальным установщиком..."
-  curl -fsSL https://opencode.ai/install | bash -s -- --version "$OPENCODE_INSTALL_VERSION"
+  curl -fsSL https://opencode.ai/v2/install | bash -s -- --version "$OPENCODE_INSTALL_VERSION"
 fi
 
 if [[ ! -x "$OPENCODE_BIN" ]]; then
