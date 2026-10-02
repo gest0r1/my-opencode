@@ -77,7 +77,7 @@ def main():
     require(config_installer, 'CONFIG_HOME="$HOME/.config/opencode"', "canonical config root")
     require(config_installer, 'mkdir -p "$STAGE_CONFIG/agents"', "canonical plural agent path")
     require(config_installer, '"$STAGE_CONFIG/commands"', "canonical plural command path")
-    require(config_installer, 'agent|command) continue', "legacy source roots remapped")
+    require(config_installer, 'agent|command|tool) continue', "legacy source roots remapped")
     require(config_installer, 'legacy singular command path still active', "legacy command invariant")
     require(config_installer, 'STAGE_CONFIG=', "staged config tree")
     require(config_installer, 'mv "$STAGE_CONFIG" "$CONFIG_HOME"', "atomic config commit")
@@ -91,6 +91,8 @@ def main():
     require(config_installer, 'bun install --production', "local plugin dependency install")
     require(config_installer, 'pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export',
             "plugin entrypoint validation")
+    require(config_installer, 'github_handoff.ts did not export any custom tool definitions',
+            "custom tool import validation")
     require(config_installer, 'shell-strategy must not live under plugins/ in V2',
             "retired plugin location rejection")
     require(config_installer, 'global AGENTS.md missing from staged OpenCode V2 config',
