@@ -561,6 +561,28 @@ PASSWORD_SOURCE=''
 NEW_PASSWORD=''
 sanitize_native_startup_env
 
+PERSISTED_DATA_DIR=''
+PERSISTED_API_ONLY=''
+if [[ -f "$NATIVE_STARTUP_ENV" ]]; then
+  PERSISTED_DATA_DIR="$(
+    set +u
+    unset OPENCHAMBER_DATA_DIR
+    # shellcheck disable=SC1090
+    source "$NATIVE_STARTUP_ENV" >/dev/null 2>&1 || true
+    printf '%s' "${OPENCHAMBER_DATA_DIR:-}"
+  )"
+  PERSISTED_API_ONLY="$(
+    set +u
+    unset OPENCHAMBER_API_ONLY
+    # shellcheck disable=SC1090
+    source "$NATIVE_STARTUP_ENV" >/dev/null 2>&1 || true
+    printf '%s' "${OPENCHAMBER_API_ONLY:-}"
+  )"
+fi
+if [[ -z "${OPENCHAMBER_DATA_DIR:-}" && -n "$PERSISTED_DATA_DIR" ]]; then
+  export OPENCHAMBER_DATA_DIR="$PERSISTED_DATA_DIR"
+fi
+
 if [[ "$HOST" != 127.0.0.1 && "$HOST" != localhost ]]; then
   if [[ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
     PASSWORD_SOURCE='environment'
@@ -615,6 +637,9 @@ elif (( service_needs_reconcile == 1 || prev_service_pending == 1 )); then
   if [[ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
     startup_args+=(--ui-password "$OPENCHAMBER_UI_PASSWORD")
   fi
+  case "${OPENCHAMBER_API_ONLY:-$PERSISTED_API_ONLY}" in
+    1|true|TRUE|yes|YES|on|ON) startup_args+=(--api-only) ;;
+  esac
 
   if [[ "$effective_restart_mode" == defer ]]; then
     if openchamber startup --help 2>/dev/null | grep -Fq -- '--no-start'; then
