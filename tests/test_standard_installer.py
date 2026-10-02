@@ -65,6 +65,8 @@ def main():
     require(wrapper, 'scripts/install-openchamber-v2-core.sh', "wrapper delegates to versioned core")
     require(wrapper, 'scripts/openchamber-runtime-store.sh', "wrapper loads runtime transaction helper")
     require(wrapper, 'BUN_INSTALL="$RELEASE_DIR"', "Bun writes only inactive immutable release")
+    require(wrapper, 'bash +h "$CORE"', "disable stale CLI command hashing")
+    require(wrapper, 'grep -Fq "$RELEASE_DIR/" "$UNIT"', "systemd unit pinned to immutable generation")
     require(wrapper, 'oc_snapshot_service', "service generation snapshot")
     require(wrapper, 'oc_rollback_service', "service/runtime rollback")
     require(wrapper, 'oc_activate_release', "atomic runtime activation")
