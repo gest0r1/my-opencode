@@ -69,6 +69,8 @@ def main():
     require(cleanup, '$HOME/.opencode/skills', "legacy plural global skill root")
     require(cleanup, '$HOME/.opencode/skill', "legacy singular global skill root")
     require(cleanup, 'LEGACY_COMMAND_ROOT="$HOME/.config/opencode/command"', "legacy singular command root")
+    require(cleanup, 'LEGACY_TOOL_ROOT="$HOME/.config/opencode/tool"', "legacy singular tool root")
+    require(cleanup, 'archive_lookup_root "$LEGACY_TOOL_ROOT"', "legacy tool root retirement")
     require(cleanup, 'OPENCHAMBER_CLEANUP_RUNTIME_MODE', "console-safe cleanup mode")
     require(cleanup, 'local pid="$$"', "cleanup process ancestry starts from current shell PID")
     forbid(cleanup, 'local pid="$"', "broken embedded-terminal PID detection")
