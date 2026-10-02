@@ -84,12 +84,8 @@ preserve_ui_password_only() {
     echo "Preserved OpenChamber UI password only."
   fi
 
-  if [[ -f "$NATIVE_STARTUP_ENV" ]]; then
-    rm -f -- "$NATIVE_STARTUP_ENV"
-    echo "Removed stale native startup environment snapshot: $NATIVE_STARTUP_ENV"
-  fi
 }
-
+ 
 archive_lookup_root() {
   local root=$1 label=$2 destination
   [[ -e "$root" ]] || return 0
@@ -207,6 +203,10 @@ remove_legacy_launcher() {
 
 if [[ "$effective_runtime_mode" == now ]]; then
   echo "Stopping OpenChamber/OpenCode legacy services..."
+  if [[ -f "$NATIVE_STARTUP_ENV" ]]; then
+    rm -f -- "$NATIVE_STARTUP_ENV"
+    echo "Removed stale native startup environment snapshot: $NATIVE_STARTUP_ENV"
+  fi
   if command -v openchamber >/dev/null 2>&1; then
     openchamber startup disable >/dev/null 2>&1 || true
   fi
@@ -234,6 +234,7 @@ if [[ "$effective_runtime_mode" == now ]]; then
   fi
 else
   echo "Active OpenChamber service/runtime preserved to keep the current console alive."
+  echo "Native startup.env is also retained until installer reconcile to survive an unexpected service restart."
   echo "Runtime cleanup can be completed later from SSH with:"
   echo "  OPENCHAMBER_CLEANUP_RUNTIME_MODE=now <same cleanup command>"
 fi
