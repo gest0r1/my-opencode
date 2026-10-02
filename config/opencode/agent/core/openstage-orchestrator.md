@@ -212,7 +212,7 @@ CoderAgent/TestEngineer/BuildAgent automatic repair loops (`technical_fix` or bo
 {run_id, pipeline_id, stage, role, work_item_id}
 ```
 
-Never reuse planning/review sessions. Never manually supply `task_id`.
+Never reuse planning/review sessions. OpenCode 2.0.21 resumes a child through `subagent.sessionID`; never manually supply `sessionID`. The pipeline runtime removes model-supplied values and injects only the session registered for the exact work-item identity.
 
 ## Stop conditions
 
