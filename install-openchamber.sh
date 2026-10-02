@@ -202,7 +202,7 @@ EOF
 write_state() {
   local restart_pending=$1 package_source=$2 package_fingerprint=$3
   local tmp="${STATE}.tmp.${BASHPID}"
-  printf '%s\\n' \
+  printf '%s\n' \
     "config_sha=$CONFIG_SHA" \
     "openchamber_sha=$APP_SHA" \
     "package_source_sha=$package_source" \
@@ -343,7 +343,7 @@ console.log([
   m.package_tag,
   m.asset,
   m.sha256,
-].join('\\n'));
+].join('\n'));
 NODE
   )
   [[ "${#meta[@]}" -eq 5 ]] || return 1
@@ -389,7 +389,7 @@ fi
 
 cache_package_from_release() {
   local cache="$CACHE_ROOT/$PACKAGE_ASSET"
-  if [[ -f "$cache" ]] && printf '%s  %s\\n' "$PACKAGE_SHA256" "$cache" | sha256sum -c - >/dev/null 2>&1; then
+  if [[ -f "$cache" ]] && printf '%s  %s\n' "$PACKAGE_SHA256" "$cache" | sha256sum -c - >/dev/null 2>&1; then
     echo "Using cached verified OpenChamber package: $cache"
     PACKAGE_FILE="$cache"
     return 0
@@ -402,7 +402,7 @@ cache_package_from_release() {
     --pattern "$PACKAGE_ASSET" \
     --dir "$dir" \
     --clobber
-  printf '%s  %s\\n' "$PACKAGE_SHA256" "$dir/$PACKAGE_ASSET" | sha256sum -c -
+  printf '%s  %s\n' "$PACKAGE_SHA256" "$dir/$PACKAGE_ASSET" | sha256sum -c -
   cp -f "$dir/$PACKAGE_ASSET" "$cache"
   PACKAGE_FILE="$cache"
 }
