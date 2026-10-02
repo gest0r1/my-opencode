@@ -70,6 +70,8 @@ def main():
     require(cleanup, '$HOME/.opencode/skill', "legacy singular global skill root")
     require(cleanup, 'LEGACY_COMMAND_ROOT="$HOME/.config/opencode/command"', "legacy singular command root")
     require(cleanup, 'OPENCHAMBER_CLEANUP_RUNTIME_MODE', "console-safe cleanup mode")
+    require(cleanup, 'local pid="$$"', "cleanup process ancestry starts from current shell PID")
+    forbid(cleanup, 'local pid="$"', "broken embedded-terminal PID detection")
 
     # Canonical OpenCode locations and atomic managed-config replacement.
     require(config_installer, 'CONFIG_HOME="$HOME/.config/opencode"', "canonical config root")
