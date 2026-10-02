@@ -42,8 +42,8 @@ jobs:
           version="$(opencode --version | sed -E 's/^opencode[[:space:]]+v?//; s/^v//')"
           test "$version" = "2.0.21"
 
-          timeout 45s opencode --standalone debug config > /tmp/opencode-config.json
-          timeout 45s opencode --standalone debug agents > /tmp/opencode-agents.txt
+          timeout 45s opencode debug config > /tmp/opencode-config.json
+          timeout 45s opencode debug agents > /tmp/opencode-agents.txt
 
           test -s /tmp/opencode-config.json
           test -s /tmp/opencode-agents.txt
