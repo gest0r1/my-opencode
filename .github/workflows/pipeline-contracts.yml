@@ -16,6 +16,7 @@ on:
     branches:
       - main
       - 'audit/**'
+      - 'upgrade/opencode-v2'
     paths:
       - 'config/opencode/agent/**'
       - 'config/opencode/opencode.json'
