@@ -107,20 +107,28 @@ tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
 STAGE_CONFIG="$(mktemp -d "$CONFIG_PARENT/.opencode-stage.XXXXXXXX")"
 STAGE_SKILLS="$(mktemp -d "$SKILLS_PARENT/.skills-stage.XXXXXXXX")"
 
-# Repo-managed config becomes the new baseline. V1-compatible source mirrors
-# agent/ and command/ are mapped into V2 canonical plural runtime paths.
+# Repo source mirrors still use some V1 singular names. Never expose those
+# singular roots to OpenCode V2; map them into canonical plural runtime paths.
 shopt -s dotglob nullglob
 for entry in "$SRC/config/opencode/"*; do
   case "$(basename "$entry")" in
-    agent|command) continue ;;
+    agent|command|tool) continue ;;
   esac
   cp -a "$entry" "$STAGE_CONFIG/"
 done
 shopt -u dotglob nullglob
 
-mkdir -p "$STAGE_CONFIG/agents" "$STAGE_CONFIG/commands"
+mkdir -p "$STAGE_CONFIG/agents" "$STAGE_CONFIG/commands" "$STAGE_CONFIG/tools"
 if [[ -d "$SRC/config/opencode/command" ]]; then
   cp -a "$SRC/config/opencode/command/." "$STAGE_CONFIG/commands/"
+fi
+# Only direct tool definition files are activated. The old tool/env helper
+# subtree is not a callable tool definition and is intentionally retired.
+if [[ -d "$SRC/config/opencode/tool" ]]; then
+  find "$SRC/config/opencode/tool" -maxdepth 1 -type f \( -name '*.ts' -o -name '*.js' \) -print0 |
+    while IFS= read -r -d '' tool_file; do
+      cp -a "$tool_file" "$STAGE_CONFIG/tools/"
+    done
 fi
 
 # Preserve existing canonical user agents first; repo-managed agents overwrite
@@ -174,6 +182,17 @@ NODE
     const mod = await import("./plugins/pipeline-runtime.ts");
     if (!mod.default || typeof mod.default.id !== "string" || typeof mod.default.setup !== "function") {
       throw new Error("pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export");
+    }
+  '
+)
+
+(
+  cd "$STAGE_CONFIG"
+  bun -e '
+    const mod = await import("./tools/github_handoff.ts");
+    const definitions = Object.values(mod).filter((value) => value && typeof value === "object");
+    if (definitions.length < 1) {
+      throw new Error("github_handoff.ts did not export any custom tool definitions");
     }
   '
 )
@@ -397,6 +416,10 @@ fi
   echo "Ошибка: @opencode/plugin dependency missing after commit." >&2
   exit 1
 }
+[[ -f "$CONFIG_HOME/node_modules/@opencode-ai/plugin/package.json" ]] || {
+  echo "Ошибка: @opencode-ai/plugin custom-tool helper missing after commit." >&2
+  exit 1
+}
 [[ ! -e "$CONFIG_HOME/plugins/shell-strategy" ]] || {
   echo "Ошибка: legacy shell-strategy plugin path still active." >&2
   exit 1
@@ -411,6 +434,18 @@ fi
 }
 [[ -d "$CONFIG_HOME/commands" ]] || {
   echo "Ошибка: canonical commands path missing after commit." >&2
+  exit 1
+}
+[[ ! -e "$CONFIG_HOME/tool" ]] || {
+  echo "Ошибка: legacy singular tool path still active." >&2
+  exit 1
+}
+[[ -d "$CONFIG_HOME/tools" ]] || {
+  echo "Ошибка: canonical tools path missing after commit." >&2
+  exit 1
+}
+[[ -f "$CONFIG_HOME/tools/github_handoff.ts" ]] || {
+  echo "Ошибка: github_handoff custom tool missing after commit." >&2
   exit 1
 }
 
