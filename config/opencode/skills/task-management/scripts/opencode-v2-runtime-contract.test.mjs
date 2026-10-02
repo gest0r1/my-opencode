@@ -53,4 +53,8 @@ test('V2 global config is portable and has no active legacy home skill roots', (
     config.mcp?.servers?.yadisk?.command?.[0],
     '{env:HOME}/.local/bin/yadisk-mcp',
   );
+
+  assert.equal(typeof config.model, 'string');
+  assert.match(config.model, /^[^/]+\/.+/);
+  assert.equal(typeof config.agents?.title?.model, 'string');
 });
