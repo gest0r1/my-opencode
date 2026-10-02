@@ -131,6 +131,39 @@ read_ui_password_from_env_file() {
   printf '%s' "$value"
 }
 
+sanitize_native_startup_env() {
+  [[ -f "$NATIVE_STARTUP_ENV" ]] || return 0
+
+  local password='' data_dir='' api_only=''
+  password="$(read_ui_password_from_env_file "$NATIVE_STARTUP_ENV" 2>/dev/null || true)"
+  data_dir="$(
+    set +u
+    unset OPENCHAMBER_DATA_DIR
+    # shellcheck disable=SC1090
+    source "$NATIVE_STARTUP_ENV" >/dev/null 2>&1 || true
+    printf '%s' "${OPENCHAMBER_DATA_DIR:-}"
+  )"
+  api_only="$(
+    set +u
+    unset OPENCHAMBER_API_ONLY
+    # shellcheck disable=SC1090
+    source "$NATIVE_STARTUP_ENV" >/dev/null 2>&1 || true
+    printf '%s' "${OPENCHAMBER_API_ONLY:-}"
+  )"
+
+  local tmp="${NATIVE_STARTUP_ENV}.tmp.${BASHPID}"
+  umask 077
+  : > "$tmp"
+  [[ -z "$password" ]] || printf 'OPENCHAMBER_UI_PASSWORD=%q\n' "$password" >> "$tmp"
+  [[ -z "$data_dir" ]] || printf 'OPENCHAMBER_DATA_DIR=%q\n' "$data_dir" >> "$tmp"
+  [[ -z "$api_only" ]] || printf 'OPENCHAMBER_API_ONLY=%q\n' "$api_only" >> "$tmp"
+  printf 'OPENCODE_BINARY=%q\n' "$OPENCODE_BIN" >> "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$NATIVE_STARTUP_ENV"
+
+  echo "Sanitized OpenChamber startup environment: removed transient/session variables."
+}
+
 inside_openchamber_terminal() {
   [[ "${OPENCHAMBER_EMBEDDED_TERMINAL:-}" == 1 ]] && return 0
 
@@ -486,6 +519,8 @@ fi
 
 PASSWORD_SOURCE=''
 NEW_PASSWORD=''
+sanitize_native_startup_env
+
 if [[ "$HOST" != 127.0.0.1 && "$HOST" != localhost ]]; then
   if [[ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
     PASSWORD_SOURCE='environment'
