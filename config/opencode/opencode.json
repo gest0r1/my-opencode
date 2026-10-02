@@ -767,12 +767,10 @@
     "buffer": 10000
   },
   "instructions": [
-    "./plugins/shell-strategy/shell_strategy.md",
+    "./context/shell-strategy/shell_strategy.md",
     "/home/guber/.agents/skills/caveman/SKILL.md"
   ],
-  "plugins": [
-    "@franlol/opencode-md-table-formatter@0.0.6"
-  ],
+  "plugins": [],
   "providers": {
     "openai": {
       "settings": {
