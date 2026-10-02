@@ -42,11 +42,15 @@ jobs:
           version="$(opencode --version | sed -E 's/^opencode[[:space:]]+v?//; s/^v//')"
           test "$version" = "2.0.21"
 
-          timeout 45s opencode debug config > /tmp/opencode-config.json
-          timeout 45s opencode debug agents > /tmp/opencode-agents.txt
+          timeout 45s opencode debug config > /tmp/opencode-config.json 2> /tmp/opencode-config.err
+          timeout 45s opencode debug agents > /tmp/opencode-agents.txt 2> /tmp/opencode-agents.err
 
           test -s /tmp/opencode-config.json
           test -s /tmp/opencode-agents.txt
+          if grep -Fq 'Failed to load plugin' /tmp/opencode-config.err /tmp/opencode-agents.err; then
+            cat /tmp/opencode-config.err /tmp/opencode-agents.err >&2
+            exit 1
+          fi
           node - <<'NODE'
           const fs = require('fs');
           const text = fs.readFileSync('/tmp/opencode-config.json', 'utf8');
@@ -56,6 +60,9 @@ jobs:
             throw new Error(`unexpected agent catalog: ${Array.isArray(agents) ? agents.length : 'not-array'}`);
           }
           const serialized = JSON.stringify(config);
+          for (const forbidden of ['/tmp/openchamber-v2-install', '/home/guber/', '.opencode/skills/']) {
+            if (serialized.includes(forbidden)) throw new Error(`stale/host-specific config path: ${forbidden}`);
+          }
           for (const required of ['CoderAgent', 'CodeReviewer']) {
             if (!serialized.includes(required)) throw new Error(`missing configured agent: ${required}`);
           }
