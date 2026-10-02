@@ -33,7 +33,7 @@ esac
 inside_openchamber_terminal() {
   [[ "${OPENCHAMBER_EMBEDDED_TERMINAL:-}" == 1 ]] && return 0
 
-  local pid="$" parent='' args='' depth=0
+  local pid="$$" parent='' args='' depth=0
   while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$depth" -lt 12 ]]; do
     parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
     [[ "$parent" =~ ^[0-9]+$ && "$parent" -gt 1 ]] || break
@@ -84,9 +84,8 @@ preserve_ui_password_only() {
     chmod 600 "$LEGACY_PASSWORD_ENV"
     echo "Preserved OpenChamber UI password only."
   fi
-
 }
- 
+
 archive_lookup_root() {
   local root=$1 label=$2 destination
   [[ -e "$root" ]] || return 0
@@ -260,7 +259,9 @@ for root in "${LEGACY_SKILL_ROOTS[@]}"; do
 done
 
 # Force exact-SHA install logic to run again.
-rm -f --   "$STATE_ROOT/openchamber-install.state"   "$STATE_ROOT/openchamber-v2-install.state"
+rm -f -- \
+  "$STATE_ROOT/openchamber-install.state" \
+  "$STATE_ROOT/openchamber-v2-install.state"
 
 # Retire the old reboot helper if it was deployed by the legacy distribution.
 if [[ -e "$HOME/Opencode/scripts/opencode-web-reboot" ]]; then
