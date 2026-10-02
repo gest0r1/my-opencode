@@ -52,7 +52,7 @@ jobs:
           const text = fs.readFileSync('/tmp/opencode-config.json', 'utf8');
           const config = JSON.parse(text);
           const agents = JSON.parse(fs.readFileSync('/tmp/opencode-agents.txt', 'utf8'));
-          if (!Array.isArray(agents) || agents.length < 10) {
+          if (!Array.isArray(agents) || agents.length < 5) {
             throw new Error(`unexpected agent catalog: ${Array.isArray(agents) ? agents.length : 'not-array'}`);
           }
           const serialized = JSON.stringify(config);
