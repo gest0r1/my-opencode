@@ -67,7 +67,8 @@ shopt -u dotglob nullglob
 
 # OpenCode V2 читает Markdown-агентов из ~/.config/opencode/agents/**/*.md.
 # Устанавливаем управляемые файлы в канонический plural-путь. Legacy-корни
-# передаём мигратору только для сохранения пользовательских дополнений; installer их не удаляет.
+# передаём мигратору для переноса пользовательских дополнений; после успешной
+# установки они убираются из active lookup path в state-backup.
 bash "$SRC/scripts/install-opencode-agents.sh" \
   "$SRC/config/opencode/agent" \
   "$HOME/.config/opencode/agents" \
