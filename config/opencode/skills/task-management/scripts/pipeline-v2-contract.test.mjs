@@ -1356,11 +1356,11 @@ test('manifest v1 is rejected everywhere by the canonical pipeline', async () =>
 
   let result = run(root, ['plan-run-preflight', manifestPath, '--environment']);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /(?:schema[_ ]version|schema)\s*(?:=|is|must be|version)?\s*v?2|NEW_PLAN_SCHEMA_V2_REQUIRED/i);
+  assert.match(result.stderr, /schema_version must be exactly 2|NEW_PLAN_SCHEMA_V2_REQUIRED|schema v2/i);
 
   result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /(?:schema[_ ]version|schema)\s*(?:=|is|must be|version)?\s*v?2|NEW_PLAN_SCHEMA_V2_REQUIRED/i);
+  assert.match(result.stderr, /schema_version must be exactly 2|NEW_PLAN_SCHEMA_V2_REQUIRED|schema v2/i);
 });
 
 test('automatic repair counter permits exactly five default cycles and blocks the sixth', async () => {
