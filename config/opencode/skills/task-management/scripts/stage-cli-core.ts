@@ -506,15 +506,13 @@ function assertV2PlanningShape(manifest: PipelineManifest): void {
   if (!required || typeof required !== 'object' || Array.isArray(required)) {
     throw new StageCliError('planning_readiness.required_artifacts is required');
   }
-  for (const key of [
-    'decision_register',
-    'technology_evidence',
-    'contract_inventory',
-    'test_strategy',
-    'accepted_risks',
-    'work_items',
-  ]) {
+  for (const key of ['decision_register', 'work_items']) {
     assertFrozenArtifactShape(required[key], `planning_readiness.required_artifacts.${key}`);
+  }
+  for (const key of ['technology_evidence', 'contract_inventory']) {
+    if (required[key] !== undefined) {
+      assertFrozenArtifactShape(required[key], `planning_readiness.required_artifacts.${key}`);
+    }
   }
   if (!Array.isArray(manifest.open_decisions) || manifest.open_decisions.length !== 0) {
     throw new StageCliError('schema_version=2 requires open_decisions=[] before init');
