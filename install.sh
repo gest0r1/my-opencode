@@ -5,10 +5,20 @@ REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 REF="${OPENCODE_CONFIG_REF:-main}"
 OPENCODE_BIN="$HOME/.opencode/bin/opencode"
 OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"
+
+CONFIG_HOME="$HOME/.config/opencode"
+CONFIG_PARENT="$HOME/.config"
+SKILLS_HOME="$HOME/.agents/skills"
+SKILLS_PARENT="$HOME/.agents"
 ENV_FILE="$HOME/.config/opencode.env"
 LEGACY_ENV_FILE="$HOME/.config/opencode-web.env"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode"
 
-for cmd in gh curl tar mktemp; do
+BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+export BUN_INSTALL
+export PATH="$HOME/.opencode/bin:$BUN_INSTALL/bin:$PATH"
+
+for cmd in gh curl tar mktemp mv cp node grep; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "Ошибка: требуется команда '$cmd'." >&2
     exit 1
@@ -19,6 +29,20 @@ if ! gh auth status >/dev/null 2>&1; then
   echo "Ошибка: GitHub CLI не авторизован. Выполни: gh auth login" >&2
   exit 1
 fi
+
+ensure_bun() {
+  if command -v bun >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "Устанавливаю Bun для зависимостей локальных OpenCode V2 plugins..."
+  curl -fsSL https://bun.sh/install | bash
+  export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+  export PATH="$BUN_INSTALL/bin:$PATH"
+  command -v bun >/dev/null 2>&1 || {
+    echo "Ошибка: Bun не установлен." >&2
+    exit 1
+  }
+}
 
 if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
   echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
@@ -32,74 +56,210 @@ if [[ ! -x "$OPENCODE_BIN" ]]; then
   exit 1
 fi
 
-echo "OpenCode установлен: $($OPENCODE_BIN --version)"
+installed_version="$("$OPENCODE_BIN" --version | sed -E 's/^opencode[[:space:]]+v?//')"
+if [[ "$installed_version" != "$OPENCODE_INSTALL_VERSION" ]]; then
+  echo "Ошибка версии OpenCode: expected=$OPENCODE_INSTALL_VERSION actual=$installed_version" >&2
+  exit 1
+fi
+echo "OpenCode установлен: $installed_version"
 
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+STAGE_CONFIG=''
+STAGE_SKILLS=''
+cleanup() {
+  [[ -z "$STAGE_CONFIG" || ! -e "$STAGE_CONFIG" ]] || rm -rf -- "$STAGE_CONFIG"
+  [[ -z "$STAGE_SKILLS" || ! -e "$STAGE_SKILLS" ]] || rm -rf -- "$STAGE_SKILLS"
+  rm -rf -- "$TMP_DIR"
+}
+trap cleanup EXIT
+
 ARCHIVE="$TMP_DIR/repo.tar.gz"
 SRC="$TMP_DIR/src"
-mkdir -p "$SRC"
+mkdir -p "$SRC" "$CONFIG_PARENT" "$SKILLS_PARENT" "$STATE_ROOT"
 
 echo "Скачиваю конфигурацию $REPO@$REF..."
 gh api "repos/$REPO/tarball/$REF" > "$ARCHIVE"
 tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
 
-mkdir -p \
-  "$HOME/.config/opencode" \
-  "$HOME/.config/opencode/agents" \
-  "$HOME/.agents/skills"
+[[ -f "$SRC/config/opencode/opencode.json" ]] || {
+  echo "Ошибка: config/opencode/opencode.json отсутствует в $REPO@$REF" >&2
+  exit 1
+}
+[[ -d "$SRC/config/opencode/agent" ]] || {
+  echo "Ошибка: config/opencode/agent отсутствует в $REPO@$REF" >&2
+  exit 1
+}
 
-# Remove retired managed artifacts that an overlay copy cannot delete.
-# These paths were previously distributed by my-opencode and remain active/stale
-# on existing installations unless explicitly removed.
-rm -f -- "$HOME/.config/opencode/env.example"
-rm -rf -- "$HOME/.config/opencode/skills/bitrix24"
+# ---- Build complete candidate trees outside active lookup paths ------------
 
-# Глобальная конфигурация OpenCode, включая скрытые файлы. Каталог agent/
-# из репозитория ставится отдельно в канонический upstream-путь agents/, поэтому
-# не копируем его как ~/.config/opencode/agent и не удаляем существующий legacy.
+STAGE_CONFIG="$(mktemp -d "$CONFIG_PARENT/.opencode-stage.XXXXXXXX")"
+STAGE_SKILLS="$(mktemp -d "$SKILLS_PARENT/.skills-stage.XXXXXXXX")"
+
+# Repo-managed config becomes the new baseline. agent/ is intentionally mapped
+# into the V2 canonical plural path agents/.
 shopt -s dotglob nullglob
 for entry in "$SRC/config/opencode/"*; do
   [[ "$(basename "$entry")" == "agent" ]] && continue
-  cp -a "$entry" "$HOME/.config/opencode/"
+  cp -a "$entry" "$STAGE_CONFIG/"
 done
 shopt -u dotglob nullglob
 
-# OpenCode V2 читает Markdown-агентов из ~/.config/opencode/agents/**/*.md.
-# Устанавливаем управляемые файлы в канонический plural-путь. Legacy-корни
-# передаём мигратору для переноса пользовательских дополнений; после успешной
-# установки они убираются из active lookup path в state-backup.
-bash "$SRC/scripts/install-opencode-agents.sh" \
+mkdir -p "$STAGE_CONFIG/agents"
+
+# Preserve existing canonical user agents first; repo-managed agents overwrite
+# only their own names. Legacy roots are copied into staging but remain active
+# until the whole config transaction commits successfully.
+if [[ -d "$CONFIG_HOME/agents" ]]; then
+  cp -a "$CONFIG_HOME/agents/." "$STAGE_CONFIG/agents/"
+fi
+OPENCODE_ARCHIVE_LEGACY=0 bash "$SRC/scripts/install-opencode-agents.sh" \
   "$SRC/config/opencode/agent" \
-  "$HOME/.config/opencode/agents" \
+  "$STAGE_CONFIG/agents" \
   "$HOME/.opencode/agent" \
-  "$HOME/.config/opencode/agent"
+  "$CONFIG_HOME/agent"
 
-cp -a "$SRC/config/agents/skills/." "$HOME/.agents/skills/"
+# Skills preserve the previous overlay semantics, but are prepared as a full
+# tree and swapped atomically together with the config.
+if [[ -d "$SKILLS_HOME" ]]; then
+  cp -a "$SKILLS_HOME/." "$STAGE_SKILLS/"
+fi
+cp -a "$SRC/config/agents/skills/." "$STAGE_SKILLS/"
+rm -rf -- "$STAGE_SKILLS/bitrix24"
 
-# Единый runtime env для OpenCode CLI и OpenChamber.
-# Старый opencode-web.env мигрируется один раз и затем удаляется, чтобы не было
-# двух конкурирующих источников настроек.
+# Remove known retired managed artifacts from the candidate tree.
+rm -f -- "$STAGE_CONFIG/env.example"
+rm -rf -- "$STAGE_CONFIG/skills/bitrix24"
+
+# V2 local plugins resolve external dependencies from the config directory.
+# Install them before commit so an unavailable/incompatible dependency cannot
+# corrupt the active configuration.
+ensure_bun
+(
+  cd "$STAGE_CONFIG"
+  bun install --production
+)
+
+# Validate config and local V2 plugin entrypoints before touching active paths.
+node - "$STAGE_CONFIG/opencode.json" <<'NODE'
+const fs = require("node:fs");
+const file = process.argv[2];
+const config = JSON.parse(fs.readFileSync(file, "utf8"));
+if ("plugin" in config) throw new Error("V1 key 'plugin' is not allowed in OpenCode V2 config");
+if (config.plugins != null && !Array.isArray(config.plugins)) throw new Error("'plugins' must be an array");
+if (!Array.isArray(config.instructions)) throw new Error("'instructions' must be an array");
+NODE
+
+(
+  cd "$STAGE_CONFIG"
+  bun -e '
+    const mod = await import("./plugins/pipeline-runtime.ts");
+    if (!mod.default || typeof mod.default.id !== "string" || typeof mod.default.setup !== "function") {
+      throw new Error("pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export");
+    }
+  '
+)
+
+[[ -f "$STAGE_CONFIG/context/shell-strategy/shell_strategy.md" ]] || {
+  echo "Ошибка: shell-strategy instruction missing from staged context." >&2
+  exit 1
+}
+[[ ! -e "$STAGE_CONFIG/plugins/shell-strategy" ]] || {
+  echo "Ошибка: shell-strategy must not live under plugins/ in V2." >&2
+  exit 1
+}
+
+# ---- Atomic commit ---------------------------------------------------------
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+CONFIG_BACKUP="$CONFIG_PARENT/.opencode-prev-$STAMP-${BASHPID}"
+SKILLS_BACKUP="$SKILLS_PARENT/.skills-prev-$STAMP-${BASHPID}"
+had_config=0
+had_skills=0
+config_committed=0
+skills_committed=0
+
+rollback_transaction() {
+  set +e
+  if (( skills_committed == 1 )); then
+    rm -rf -- "$SKILLS_HOME"
+    if (( had_skills == 1 )) && [[ -e "$SKILLS_BACKUP" ]]; then
+      mv "$SKILLS_BACKUP" "$SKILLS_HOME"
+    fi
+  elif (( had_skills == 1 )) && [[ -e "$SKILLS_BACKUP" && ! -e "$SKILLS_HOME" ]]; then
+    mv "$SKILLS_BACKUP" "$SKILLS_HOME"
+  fi
+
+  if (( config_committed == 1 )); then
+    rm -rf -- "$CONFIG_HOME"
+    if (( had_config == 1 )) && [[ -e "$CONFIG_BACKUP" ]]; then
+      mv "$CONFIG_BACKUP" "$CONFIG_HOME"
+    fi
+  elif (( had_config == 1 )) && [[ -e "$CONFIG_BACKUP" && ! -e "$CONFIG_HOME" ]]; then
+    mv "$CONFIG_BACKUP" "$CONFIG_HOME"
+  fi
+  set -e
+}
+
+if [[ -e "$CONFIG_HOME" ]]; then
+  mv "$CONFIG_HOME" "$CONFIG_BACKUP"
+  had_config=1
+fi
+if ! mv "$STAGE_CONFIG" "$CONFIG_HOME"; then
+  rollback_transaction
+  echo "Ошибка: atomic config commit failed; previous config restored." >&2
+  exit 1
+fi
+STAGE_CONFIG=''
+config_committed=1
+
+if [[ -e "$SKILLS_HOME" ]]; then
+  mv "$SKILLS_HOME" "$SKILLS_BACKUP"
+  had_skills=1
+fi
+if ! mv "$STAGE_SKILLS" "$SKILLS_HOME"; then
+  rollback_transaction
+  echo "Ошибка: atomic skills commit failed; previous config/skills restored." >&2
+  exit 1
+fi
+STAGE_SKILLS=''
+skills_committed=1
+
+# Commit is complete. Old active trees are no longer in any OpenCode lookup
+# path; remove them instead of leaving duplicate config/plugin/agent locations.
+rm -rf -- "$CONFIG_BACKUP" "$SKILLS_BACKUP"
+
+# ~/.config/opencode/agent was inside the old tree and disappeared with the
+# atomic swap. ~/.opencode/agent is outside it, so archive that one now, only
+# after successful commit.
+if [[ -d "$HOME/.opencode/agent" ]]; then
+  LEGACY_AGENT_BACKUP="$STATE_ROOT/legacy-agent-roots/$STAMP"
+  mkdir -p "$LEGACY_AGENT_BACKUP"
+  mv "$HOME/.opencode/agent" "$LEGACY_AGENT_BACKUP/home__opencode__agent"
+  echo "Legacy agent root archived: $HOME/.opencode/agent"
+fi
+
+# ---- Persistent env --------------------------------------------------------
+
 if [[ ! -f "$ENV_FILE" ]]; then
+  ENV_NEW="$(mktemp "$CONFIG_PARENT/.opencode.env.XXXXXXXX")"
   if [[ -f "$LEGACY_ENV_FILE" ]]; then
-    cp "$LEGACY_ENV_FILE" "$ENV_FILE"
+    cp "$LEGACY_ENV_FILE" "$ENV_NEW"
     echo "Мигрирован $LEGACY_ENV_FILE -> $ENV_FILE"
   else
-    cp "$SRC/config/opencode.env.example" "$ENV_FILE"
+    cp "$SRC/config/opencode.env.example" "$ENV_NEW"
     echo "Создан $ENV_FILE — добавь необходимые MCP/интеграционные секреты."
   fi
+  chmod 600 "$ENV_NEW"
+  mv -f "$ENV_NEW" "$ENV_FILE"
 else
   echo "$ENV_FILE уже существует — не перезаписываю."
 fi
 
-# LLM credentials являются каноничными в `opencode auth login` / auth.json.
-# Удаляем старые env-переопределения и секреты retired MCP, чтобы CLI и
-# OpenChamber использовали только актуальные runtime credentials.
 if [[ -f "$ENV_FILE" ]]; then
-  ENV_TMP="$TMP_DIR/opencode.env"
+  ENV_TMP="$(mktemp "$CONFIG_PARENT/.opencode.env.clean.XXXXXXXX")"
   grep -Ev '^[[:space:]]*(OPENAI_API_KEY|OPENCODE_API_KEY|YONOTE_API_KEY|YANDEX_METRIKA_TOKEN)=' "$ENV_FILE" > "$ENV_TMP" || true
-  mv "$ENV_TMP" "$ENV_FILE"
-  chmod 600 "$ENV_FILE"
+  chmod 600 "$ENV_TMP"
+  mv -f "$ENV_TMP" "$ENV_FILE"
 fi
 
 if [[ -f "$LEGACY_ENV_FILE" ]]; then
@@ -107,16 +267,21 @@ if [[ -f "$LEGACY_ENV_FILE" ]]; then
   echo "Удалён legacy runtime-файл: $LEGACY_ENV_FILE"
 fi
 
-# Интерактивные shell должны получать тот же env даже если официальный installer
-# поставил ~/.opencode/bin раньше /usr/local/bin в PATH и CLI обходит launcher.
+# ---- Shell env + managed launcher -----------------------------------------
+
 ensure_shell_env_loader() {
   local rc_file="$1"
   local marker_begin="# >>> my-opencode env >>>"
-  local marker_end="# <<< my-opencode env <<<"
+  local tmp
 
   touch "$rc_file"
-  if ! grep -Fq "$marker_begin" "$rc_file"; then
-    cat >> "$rc_file" <<'EOF'
+  if grep -Fq "$marker_begin" "$rc_file"; then
+    return 0
+  fi
+
+  tmp="$(mktemp "${rc_file}.tmp.XXXXXXXX")"
+  cat "$rc_file" > "$tmp"
+  cat >> "$tmp" <<'EOF'
 
 # >>> my-opencode env >>>
 set -a
@@ -126,15 +291,14 @@ fi
 set +a
 # <<< my-opencode env <<<
 EOF
-    echo "Добавлена загрузка opencode.env: $rc_file"
-  fi
+  chmod --reference="$rc_file" "$tmp" 2>/dev/null || chmod 600 "$tmp"
+  mv -f "$tmp" "$rc_file"
+  echo "Добавлена загрузка opencode.env: $rc_file"
 }
 
 ensure_shell_env_loader "$HOME/.bashrc"
 ensure_shell_env_loader "$HOME/.profile"
 
-# Управляемый launcher гарантирует тот же env и для non-interactive вызовов,
-# если opencode разрешается через /usr/local/bin.
 if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
   LAUNCHER="/usr/local/bin/opencode"
   manage_launcher=0
@@ -143,16 +307,14 @@ if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
     manage_launcher=1
   elif [[ -L "$LAUNCHER" ]]; then
     launcher_target="$(readlink -f "$LAUNCHER" 2>/dev/null || true)"
-    if [[ "$launcher_target" == "$OPENCODE_BIN" ]]; then
-      manage_launcher=1
-    fi
+    [[ "$launcher_target" == "$OPENCODE_BIN" ]] && manage_launcher=1
   elif grep -q '^# managed-by: my-opencode$' "$LAUNCHER" 2>/dev/null; then
     manage_launcher=1
   fi
 
   if (( manage_launcher == 1 )); then
-    rm -f "$LAUNCHER"
-    cat > "$LAUNCHER" <<'EOF'
+    LAUNCHER_TMP="$(mktemp /usr/local/bin/.opencode.XXXXXXXX)"
+    cat > "$LAUNCHER_TMP" <<'EOF'
 #!/usr/bin/env bash
 # managed-by: my-opencode
 set -a
@@ -163,14 +325,15 @@ fi
 set +a
 exec "$HOME/.opencode/bin/opencode" "$@"
 EOF
-    chmod 755 "$LAUNCHER"
+    chmod 755 "$LAUNCHER_TMP"
+    mv -f "$LAUNCHER_TMP" "$LAUNCHER"
     echo "Установлен launcher: $LAUNCHER (единый opencode.env)"
   else
     echo "Не изменяю существующий $LAUNCHER: он не управляется my-opencode." >&2
   fi
 fi
 
-# Внутри текущего installer shell тоже применяем env для корректной проверки.
+# Apply env in this installer shell only after the transaction committed.
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
@@ -178,11 +341,20 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
-echo "Готово: OpenCode и конфигурация $REPO@$REF установлены."
+# Final invariants: no active legacy plugin/agent paths and local V2 plugin
+# dependencies are present in the committed tree.
+[[ -f "$CONFIG_HOME/node_modules/@opencode/plugin/package.json" ]] || {
+  echo "Ошибка: @opencode/plugin dependency missing after commit." >&2
+  exit 1
+}
+[[ ! -e "$CONFIG_HOME/plugins/shell-strategy" ]] || {
+  echo "Ошибка: legacy shell-strategy plugin path still active." >&2
+  exit 1
+}
+[[ ! -e "$CONFIG_HOME/agent" ]] || {
+  echo "Ошибка: legacy singular agent path still active." >&2
+  exit 1
+}
 
-if command -v opencode >/dev/null 2>&1; then
-  echo "Проверка: $(command -v opencode) --version -> $(opencode --version)"
-else
-  echo "OpenCode установлен, но текущий shell ещё не видит ~/.opencode/bin." >&2
-  echo "Выполни: export PATH=\"$HOME/.opencode/bin:$PATH\"" >&2
-fi
+echo "Готово: OpenCode и конфигурация $REPO@$REF установлены атомарно."
+echo "Проверка: $OPENCODE_BIN --version -> $("$OPENCODE_BIN" --version)"
