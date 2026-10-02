@@ -7,9 +7,6 @@ import { validateManifestV2Policy, validatePackageManagerContract } from './mani
 
 export class ManifestPreflightError extends Error {}
 
-// Only stages executed by gate-runner require profiles. Implementation, human review,
-// Git scope verification and candidate publication use their own deterministic tools.
-const MACHINE_STAGE = /(?:^|[-_])(test|tests|pytest|build|lint|typecheck|type-check|runtime|deploy|release|smoke|install|unit|e2e|scan|gates?|docs?|validate)(?:$|[-_])/i;
 const RUNTIME_GATE = /(runtime|deploy|release|smoke|install)/i;
 const SAFE_SHA = /^[0-9a-f]{40}$/i;
 
@@ -127,9 +124,10 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
   const invocations = [];
   for (const pipeline of manifest.pipelines) {
     const stages = (pipeline.stages ?? []).filter((stage) => typeof stage === 'string');
-    const machineStages = manifest.schema_version === 2
-      ? stages.filter((stage) => pipeline.executors?.[stage] === 'local_gate')
-      : stages.filter((stage) => MACHINE_STAGE.test(stage));
+    if (manifest.schema_version !== 2) {
+      throw new ManifestPreflightError('pipeline manifest schema_version must be exactly 2');
+    }
+    const machineStages = stages.filter((stage) => pipeline.executors?.[stage] === 'local_gate');
     if (machineStages.length && (!pipeline.profile || typeof pipeline.profile !== 'string')) {
       throw new ManifestPreflightError(`pipeline has no gate profile: ${pipeline.id} (local machine stages: ${machineStages.join(', ')})`);
     }
@@ -165,13 +163,11 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
   }
   const used = new Set(manifest.pipelines.map((pipeline) => pipeline.profile).filter(Boolean));
   const usedInvocations = invocations.filter(({ profile }) => used.has(profile));
-  if (manifest.schema_version === 2) {
-    try {
-      validateManifestV2Policy(manifest, { cwd, manifestPath });
-      validatePackageManagerContract(usedInvocations, { cwd, environment, executableOnPath });
-    } catch (error) {
-      throw new ManifestPreflightError(error instanceof Error ? error.message : String(error));
-    }
+  try {
+    validateManifestV2Policy(manifest, { cwd, manifestPath });
+    validatePackageManagerContract(usedInvocations, { cwd, environment, executableOnPath });
+  } catch (error) {
+    throw new ManifestPreflightError(error instanceof Error ? error.message : String(error));
   }
   if (environment) {
     for (const { profile, gate, tokens } of usedInvocations) {
