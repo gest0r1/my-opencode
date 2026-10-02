@@ -301,44 +301,126 @@ env_after="$(file_sha256 "$COMMON_ENV")"
 env_changed=0
 [[ "$env_after" == "$prev_env_sha" ]] || env_changed=1
 
-previous_app_sha=''
-[[ ! -f "$STATE" ]] || previous_app_sha="$(sed -n 's/^openchamber_sha=//p' "$STATE" | head -1)"
-installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
+# ---- OpenChamber package decision ----------------------------------------
 
-install_release_package() {
-  local tag="v$EXPECTED_OPENCHAMBER_VERSION"
-  local tag_sha=''
-  tag_sha="$(ref_sha "$APP_REPO" "$tag" 2>/dev/null || true)"
-  [[ -n "$tag_sha" && "$tag_sha" == "$APP_SHA" ]] || return 1
+manifest_available=0
+PACKAGE_SOURCE_SHA=''
+PACKAGE_FINGERPRINT=''
+PACKAGE_TAG=''
+PACKAGE_ASSET=''
+PACKAGE_SHA256=''
 
-  mkdir -p "$TMP/release"
+fetch_package_manifest() {
+  local tag="v2-web-package-$APP_SHA"
+  local dir="$TMP/manifest"
+  mkdir -p "$dir"
   if ! gh release download "$tag" \
       --repo "$APP_REPO" \
-      --pattern "openchamber-web-$EXPECTED_OPENCHAMBER_VERSION.tgz" \
-      --dir "$TMP/release" \
-      --clobber; then
+      --pattern manifest.json \
+      --dir "$dir" \
+      --clobber >/dev/null 2>&1; then
     return 1
   fi
 
-  shopt -s nullglob
-  local packages=("$TMP"/release/openchamber-web-"$EXPECTED_OPENCHAMBER_VERSION".tgz)
-  shopt -u nullglob
-  [[ "${#packages[@]}" -eq 1 ]] || return 1
-  bun add -g "${packages[0]}"
-  echo "Installed OpenChamber from $APP_REPO release $tag at exact SHA $APP_SHA"
+  mapfile -t meta < <(node - "$dir/manifest.json" "$APP_SHA" "$EXPECTED_OPENCHAMBER_VERSION" <<'NODE'
+const fs = require('node:fs');
+const [file, expectedSource, expectedVersion] = process.argv.slice(2);
+const m = JSON.parse(fs.readFileSync(file, 'utf8'));
+if (m.schema_version !== 1 ||
+    m.platform !== 'linux-x64' ||
+    m.source_sha !== expectedSource ||
+    !/^[a-f0-9]{40}$/.test(String(m.package_source_sha || '')) ||
+    m.package_tag !== `v2-web-package-${m.package_source_sha}` ||
+    m.asset !== `openchamber-web-${m.package_source_sha}.tgz` ||
+    !/^[a-f0-9]{64}$/.test(String(m.sha256 || '')) ||
+    !/^[a-f0-9]{64}$/.test(String(m.runtime_fingerprint || '')) ||
+    m.openchamber_version !== expectedVersion) {
+  process.exit(1);
+}
+console.log([
+  m.package_source_sha,
+  m.runtime_fingerprint,
+  m.package_tag,
+  m.asset,
+  m.sha256,
+].join('\\n'));
+NODE
+  )
+  [[ "${#meta[@]}" -eq 5 ]] || return 1
+  PACKAGE_SOURCE_SHA="${meta[0]}"
+  PACKAGE_FINGERPRINT="${meta[1]}"
+  PACKAGE_TAG="${meta[2]}"
+  PACKAGE_ASSET="${meta[3]}"
+  PACKAGE_SHA256="${meta[4]}"
+  manifest_available=1
 }
 
-install_source_package() {
-  echo "Building OpenChamber fork $APP_REPO@$APP_SHA"
+case "$OPENCHAMBER_PACKAGE_MODE" in
+  auto|release)
+    fetch_package_manifest || true
+    ;;
+  source) ;;
+esac
+
+if [[ "$OPENCHAMBER_PACKAGE_MODE" == release && "$manifest_available" != 1 ]]; then
+  echo "Verified exact-SHA OpenChamber web package manifest is unavailable for $APP_REPO@$APP_SHA" >&2
+  exit 1
+fi
+
+installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
+package_changed=0
+runtime_needs_apply=0
+
+if (( manifest_available == 1 )); then
+  if [[ "$installed_openchamber" != "$EXPECTED_OPENCHAMBER_VERSION" ||
+        "$prev_package_source" != "$PACKAGE_SOURCE_SHA" ||
+        "$prev_restart_pending" == 1 ]]; then
+    runtime_needs_apply=1
+  fi
+else
+  PACKAGE_SOURCE_SHA="$APP_SHA"
+  PACKAGE_FINGERPRINT="source-$APP_SHA"
+  if [[ "$installed_openchamber" != "$EXPECTED_OPENCHAMBER_VERSION" ||
+        "$prev_app" != "$APP_SHA" ||
+        "$prev_restart_pending" == 1 ]]; then
+    runtime_needs_apply=1
+  fi
+fi
+
+cache_package_from_release() {
+  local cache="$CACHE_ROOT/$PACKAGE_ASSET"
+  if [[ -f "$cache" ]] && printf '%s  %s\\n' "$PACKAGE_SHA256" "$cache" | sha256sum -c - >/dev/null 2>&1; then
+    echo "Using cached verified OpenChamber package: $cache"
+    PACKAGE_FILE="$cache"
+    return 0
+  fi
+
+  local dir="$TMP/package"
+  mkdir -p "$dir"
+  gh release download "$PACKAGE_TAG" \
+    --repo "$APP_REPO" \
+    --pattern "$PACKAGE_ASSET" \
+    --dir "$dir" \
+    --clobber
+  printf '%s  %s\\n' "$PACKAGE_SHA256" "$dir/$PACKAGE_ASSET" | sha256sum -c -
+  cp -f "$dir/$PACKAGE_ASSET" "$cache"
+  PACKAGE_FILE="$cache"
+}
+
+build_source_package() {
+  ensure_bun
+  echo "Building OpenChamber fork $APP_REPO@$APP_SHA (release package unavailable)"
   gh api "repos/$APP_REPO/tarball/$APP_SHA" > "$TMP/openchamber.tar.gz"
   mkdir -p "$TMP/src"
   tar -xzf "$TMP/openchamber.tar.gz" -C "$TMP/src" --strip-components=1
+
   local actual_version
   actual_version="$(node -e 'const p=require(process.argv[1]); process.stdout.write(String(p.version))' "$TMP/src/packages/web/package.json")"
   [[ "$actual_version" == "$EXPECTED_OPENCHAMBER_VERSION" ]] || {
     echo "OpenChamber package version mismatch: expected=$EXPECTED_OPENCHAMBER_VERSION actual=$actual_version" >&2
     exit 1
   }
+
   (
     cd "$TMP/src"
     bun install --frozen-lockfile
@@ -350,36 +432,56 @@ install_source_package() {
   shopt -s nullglob
   local packages=("$TMP"/pack/*.tgz)
   shopt -u nullglob
-  [[ "${#packages[@]}" -eq 1 ]] || { echo 'Expected exactly one packed OpenChamber web package' >&2; exit 1; }
-  bun add -g "${packages[0]}"
+  [[ "${#packages[@]}" -eq 1 ]] || {
+    echo 'Expected exactly one packed OpenChamber web package' >&2
+    exit 1
+  }
+
+  local cache="$CACHE_ROOT/openchamber-web-$APP_SHA.tgz"
+  cp -f "${packages[0]}" "$cache"
+  PACKAGE_FILE="$cache"
 }
 
-if [[ "$previous_app_sha" != "$APP_SHA" || "$installed_openchamber" != "$EXPECTED_OPENCHAMBER_VERSION" ]]; then
-  case "$OPENCHAMBER_PACKAGE_MODE" in
-    release)
-      install_release_package || {
-        echo "Exact release package unavailable for $APP_REPO@$APP_SHA (v$EXPECTED_OPENCHAMBER_VERSION)" >&2
-        exit 1
-      }
-      ;;
-    source)
-      install_source_package
-      ;;
-    auto)
-      if ! install_release_package; then
-        echo "Exact release package is not available yet; falling back to source build"
-        install_source_package
-      fi
-      ;;
-  esac
+PACKAGE_FILE=''
+if (( runtime_needs_apply == 1 )); then
+  if (( manifest_available == 1 )); then
+    cache_package_from_release
+  else
+    build_source_package
+  fi
+
+  if [[ "$effective_restart_mode" == defer && -n "$installed_openchamber" ]]; then
+    echo "OpenChamber runtime update cached but not activated to preserve the current terminal:"
+    echo "  $PACKAGE_FILE"
+  else
+    ensure_bun
+    bun add -g "$PACKAGE_FILE"
+    package_changed=1
+    installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
+    [[ "$installed_openchamber" == "$EXPECTED_OPENCHAMBER_VERSION" ]] || {
+      echo "OpenChamber version mismatch after package install: expected=$EXPECTED_OPENCHAMBER_VERSION actual=$installed_openchamber" >&2
+      exit 1
+    }
+  fi
+else
+  echo "OpenChamber runtime fingerprint/package unchanged: package download skipped"
 fi
 
-export PATH="${BUN_INSTALL:-$HOME/.bun}/bin:$PATH"
-command -v openchamber >/dev/null 2>&1 || { echo 'openchamber is not on PATH after install' >&2; exit 1; }
-installed_openchamber="$(openchamber --version | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//')"
+# Fresh install: there is no running OpenChamber runtime to preserve.
+if [[ -z "$installed_openchamber" && -n "$PACKAGE_FILE" ]]; then
+  ensure_bun
+  bun add -g "$PACKAGE_FILE"
+  package_changed=1
+  installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
+fi
+
 [[ "$installed_openchamber" == "$EXPECTED_OPENCHAMBER_VERSION" ]] || {
-  echo "OpenChamber version mismatch: expected=$EXPECTED_OPENCHAMBER_VERSION actual=$installed_openchamber" >&2
-  exit 1
+  if [[ "$effective_restart_mode" == defer && -n "$PACKAGE_FILE" ]]; then
+    echo "Current OpenChamber remains $installed_openchamber; $EXPECTED_OPENCHAMBER_VERSION is staged for external apply."
+  else
+    echo "OpenChamber $EXPECTED_OPENCHAMBER_VERSION is not installed." >&2
+    exit 1
+  fi
 }
 
 PASSWORD_SOURCE=''
