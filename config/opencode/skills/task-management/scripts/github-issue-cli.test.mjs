@@ -141,8 +141,12 @@ test('check rejects changed requirements and publish-plan posts frozen Story/Arc
     source_issues: [{ repository: 'gest0r1/sevami', number: 5, url: 'x', title: 'Issue five' }],
     source_requirements_sha256: requirements,
     planning_readiness: {
-      required_artifacts: {
-        architecture: { path: 'planning/architecture.md', sha256: sha(architecture) },
+      gates: {
+        architecture: {
+          required: true,
+          status: 'ready',
+          artifact: { path: 'planning/architecture.md', sha256: sha(architecture) },
+        },
       },
     },
   }, null, 2));
