@@ -51,6 +51,19 @@ jobs:
             cat /tmp/opencode-config.err /tmp/opencode-agents.err >&2
             exit 1
           fi
+          test -f "$HOME/.config/opencode/plugins/pipeline-runtime.ts"
+          test -f "$HOME/.config/opencode/context/shell-strategy/shell_strategy.md"
+          test ! -e "$HOME/.config/opencode/plugins/shell-strategy"
+          ! grep -Fq '@franlol/opencode-md-table-formatter' "$HOME/.config/opencode/opencode.json"
+          (
+            cd "$HOME/.config/opencode"
+            bun -e '
+              const mod = await import("./plugins/pipeline-runtime.ts");
+              if (!mod.default || typeof mod.default.id !== "string" || typeof mod.default.setup !== "function") {
+                throw new Error("pipeline-runtime local plugin failed V2 import contract");
+              }
+            '
+          )
           node - <<'NODE'
           const fs = require('fs');
           const text = fs.readFileSync('/tmp/opencode-config.json', 'utf8');
