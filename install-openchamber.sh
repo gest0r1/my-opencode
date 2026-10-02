@@ -282,8 +282,8 @@ if [[ -f "$LEGACY_PASSWORD_ENV" && -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
 fi
 
 printf 'config_sha=%s\nopenchamber_sha=%s\nopenchamber_version=%s\nopencode_version=%s\nbind_host=%s\nbind_port=%s\n' \
-  "$CONFIG_SHA" "$APP_SHA" "$installed_openchamber" "$installed_opencode" "$HOST" "$PORT" > "${STATE}.tmp.$"
-mv -f "${STATE}.tmp.$" "$STATE"
+  "$CONFIG_SHA" "$APP_SHA" "$installed_openchamber" "$installed_opencode" "$HOST" "$PORT" > "${STATE}.tmp.${BASHPID}"
+mv -f "${STATE}.tmp.${BASHPID}" "$STATE"
 
 echo "SUCCESS: OpenChamber $installed_openchamber ($APP_SHA) + OpenCode $installed_opencode"
 echo "Native startup service: http://$HOST:$PORT"
