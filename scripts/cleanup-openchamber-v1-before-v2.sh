@@ -18,6 +18,7 @@ AUTH_FILE="$HOME/.local/share/opencode/auth.json"
 COMMON_ENV="$HOME/.config/opencode.env"
 LEGACY_PLUGIN_ROOT="$HOME/.config/opencode/plugin"
 PLUGIN_ROOT="$HOME/.config/opencode/plugins"
+LEGACY_COMMAND_ROOT="$HOME/.config/opencode/command"
 LEGACY_SKILL_ROOTS=(
   "$HOME/.opencode/skill"
   "$HOME/.opencode/skills"
@@ -249,6 +250,7 @@ done
 # an overlay update and producing duplicate/broken loads.
 archive_lookup_root "$PLUGIN_ROOT" "opencode-plugins"
 archive_lookup_root "$LEGACY_PLUGIN_ROOT" "opencode-plugin-legacy"
+archive_lookup_root "$LEGACY_COMMAND_ROOT" "opencode-command-legacy"
 mkdir -p "$PLUGIN_ROOT"
 
 for root in "${LEGACY_SKILL_ROOTS[@]}"; do
@@ -277,6 +279,7 @@ echo "Removed/rebuilt on reinstall:"
 echo "  $NATIVE_STARTUP_ENV"
 echo "  $PLUGIN_ROOT"
 echo "  $LEGACY_PLUGIN_ROOT"
+echo "  $LEGACY_COMMAND_ROOT"
 echo "  ${LEGACY_SKILL_ROOTS[*]}"
 echo
 echo "Legacy backup (if anything was migrated): $BACKUP_ROOT"
