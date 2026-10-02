@@ -33,3 +33,24 @@ test('V2 permissions expose subagent, not legacy task routing', () => {
   assert.ok(rules.some((rule) => rule.action === 'subagent'));
   assert.equal(rules.some((rule) => rule.action === 'task'), false);
 });
+
+
+test('V2 global config is portable and has no active legacy home skill roots', () => {
+  const config = JSON.parse(read('config/opencode/opencode.json'));
+  const serialized = JSON.stringify(config);
+
+  assert.doesNotMatch(serialized, /\/home\/guber\//);
+  assert.doesNotMatch(serialized, /\.opencode\/skills\//);
+
+  const rules = Object.values(config.agents ?? {}).flatMap((agent) => agent.permissions ?? []);
+  const externalResources = rules
+    .filter((rule) => rule.action === 'external_directory')
+    .map((rule) => rule.resource);
+  assert.ok(externalResources.includes('$HOME/.local/share/opencode/tool-output/*'));
+  assert.ok(externalResources.includes('$HOME/.config/opencode/skills/task-management/*'));
+
+  assert.equal(
+    config.mcp?.servers?.yadisk?.command?.[0],
+    '{env:HOME}/.local/bin/yadisk-mcp',
+  );
+});
