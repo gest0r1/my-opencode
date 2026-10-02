@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# One-time cleanup before reinstalling the OpenCode/OpenChamber 2.x migration.
+# Removes legacy runtime/lookup locations without deleting credentials.
+set -Eeuo pipefail
+
+CANONICAL_AGENTS="$HOME/.config/opencode/agents"
+LEGACY_AGENT_ROOTS=(
+  "$HOME/.opencode/agent"
+  "$HOME/.config/opencode/agent"
+)
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP_ROOT="$STATE_ROOT/legacy-cleanup-$STAMP"
+LEGACY_RUNTIME="$HOME/.local/share/openchamber"
+LEGACY_PASSWORD_ENV="$HOME/.config/openchamber-live.env"
+NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
+AUTH_FILE="$HOME/.local/share/opencode/auth.json"
+COMMON_ENV="$HOME/.config/opencode.env"
+
+mkdir -p "$BACKUP_ROOT" "$CANONICAL_AGENTS"
+
+frontmatter_name() {
+  local file=$1
+  awk '
+    NR == 1 {
+      sub(/\r$/, "", $0)
+      if ($0 != "---") exit
+      in_frontmatter = 1
+      next
+    }
+    in_frontmatter {
+      line = $0
+      sub(/\r$/, "", line)
+      if (line == "---") exit
+      if (line ~ /^[[:space:]]*name[[:space:]]*:/) {
+        sub(/^[[:space:]]*name[[:space:]]*:[[:space:]]*/, "", line)
+        sub(/[[:space:]]+#.*$/, "", line)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        if ((substr(line, 1, 1) == "\"" && substr(line, length(line), 1) == "\"") ||
+            (substr(line, 1, 1) == "\047" && substr(line, length(line), 1) == "\047")) {
+          line = substr(line, 2, length(line) - 2)
+        }
+        print line
+        exit
+      }
+    }
+  ' "$file"
+}
+
+valid_component() {
+  local value=$1
+  [[ -n "$value" && "$value" != "." && "$value" != ".." && "$value" != */* && "$value" != *\\* ]]
+}
+
+migrate_and_archive_agent_root() {
+  local root=$1 file relative name base category destination relative_root backup_destination
+  [[ -d "$root" ]] || return 0
+
+  echo "Migrating legacy agents from: $root"
+  while IFS= read -r -d '' file; do
+    relative=${file#"$root/"}
+    name="$(frontmatter_name "$file")"
+    if [[ -z "$name" ]]; then
+      base=${relative##*/}
+      name=${base%.md}
+    fi
+
+    if ! valid_component "$name"; then
+      echo "WARNING: cannot activate legacy agent with unsafe name: $file" >&2
+      echo "It will remain available in the cleanup backup." >&2
+      continue
+    fi
+
+    if [[ "$relative" == subagents/*/* ]]; then
+      category=${relative#subagents/}
+      category=${category%%/*}
+      if ! valid_component "$category"; then
+        echo "WARNING: unsafe legacy agent category: $file" >&2
+        continue
+      fi
+      destination="$CANONICAL_AGENTS/$category/$name.md"
+    else
+      destination="$CANONICAL_AGENTS/$name.md"
+    fi
+
+    mkdir -p "$(dirname "$destination")"
+    if [[ -e "$destination" ]]; then
+      echo "Canonical agent already exists, keeping it: $destination"
+    else
+      cp -p "$file" "$destination"
+      echo "Migrated: $file -> $destination"
+    fi
+  done < <(find "$root" -type f -name '*.md' -print0 | sort -z)
+
+  relative_root=${root#"$HOME/"}
+  relative_root=${relative_root//\//__}
+  relative_root=${relative_root//./_}
+  backup_destination="$BACKUP_ROOT/$relative_root"
+  [[ ! -e "$backup_destination" ]] || backup_destination="$backup_destination-$$"
+  mv "$root" "$backup_destination"
+  echo "Removed active legacy agent root: $root"
+  echo "Backup: $backup_destination"
+}
+
+remove_legacy_launcher() {
+  local launcher=$1 target=''
+  [[ -e "$launcher" || -L "$launcher" ]] || return 0
+
+  if [[ -L "$launcher" ]]; then
+    target="$(readlink -f "$launcher" 2>/dev/null || true)"
+    if [[ "$target" == "$LEGACY_RUNTIME/"* ]]; then
+      rm -f -- "$launcher"
+      echo "Removed legacy launcher: $launcher"
+      return 0
+    fi
+  elif grep -Fq '.local/share/openchamber' "$launcher" 2>/dev/null; then
+    rm -f -- "$launcher"
+    echo "Removed legacy launcher: $launcher"
+    return 0
+  fi
+
+  echo "WARNING: not removing unmanaged launcher: $launcher" >&2
+}
+
+echo "Stopping OpenChamber/OpenCode legacy services..."
+if command -v openchamber >/dev/null 2>&1; then
+  openchamber startup disable >/dev/null 2>&1 || true
+fi
+systemctl --user disable --now openchamber.service >/dev/null 2>&1 || true
+systemctl --user disable --now opencode-web.service >/dev/null 2>&1 || true
+
+rm -f --   "$HOME/.config/systemd/user/openchamber.service"   "$HOME/.config/systemd/user/opencode-web.service"
+rm -rf -- "$HOME/.config/systemd/user/openchamber.service.d"
+systemctl --user daemon-reload
+
+for root in "${LEGACY_AGENT_ROOTS[@]}"; do
+  migrate_and_archive_agent_root "$root"
+done
+
+remove_legacy_launcher "/usr/local/bin/openchamber"
+remove_legacy_launcher "$HOME/.local/bin/openchamber"
+
+if [[ -d "$LEGACY_RUNTIME" ]]; then
+  rm -rf -- "$LEGACY_RUNTIME"
+  echo "Removed OpenChamber 1.x runtime: $LEGACY_RUNTIME"
+fi
+
+# Remove the failed/test 2.x global package so the next install is a real reinstall.
+# Keep ~/.config/openchamber because it may contain the native startup password/settings
+# that the fixed installer can reuse.
+if command -v bun >/dev/null 2>&1; then
+  bun remove -g @openchamber/web >/dev/null 2>&1 || true
+fi
+
+# Force exact-SHA install logic to run again.
+rm -f --   "$STATE_ROOT/openchamber-install.state"   "$STATE_ROOT/openchamber-v2-install.state"
+
+# Retire the old reboot helper if it was deployed by the legacy distribution.
+if [[ -e "$HOME/Opencode/scripts/opencode-web-reboot" ]]; then
+  mv "$HOME/Opencode/scripts/opencode-web-reboot" "$BACKUP_ROOT/opencode-web-reboot"
+  echo "Archived legacy opencode-web reboot helper."
+fi
+
+echo
+echo "Cleanup complete."
+echo "Preserved credentials/settings:"
+echo "  $AUTH_FILE"
+echo "  $COMMON_ENV"
+echo "  $LEGACY_PASSWORD_ENV"
+echo "  $NATIVE_STARTUP_ENV"
+echo "  $HOME/.opencode/bin/opencode"
+echo
+echo "Legacy backup (if anything was migrated): $BACKUP_ROOT"
