@@ -43,10 +43,10 @@ fail-closed.
 - Scope preflight happens before `technical_fix` is counted. A path discovered by Git verify after a cycle starts is resolved inside the same cycle; never edit manifest/state manually to bypass scope.
 
 
-- New design-freeze PLANs use manifest schema v2. Schema v1 is legacy-read compatibility only. Before owner approval, `stage-cli plan-run-preflight` plus deterministic Git adopt/verify must prove that canonical RUN would accept the manifest; `stage-cli init` never creates new v1 state.
-- PLAN has no implicit backlog-file source. `/pipeline-plan` requires explicit text/file/`#N` input or GitHub Issue refs attached by the current OpenChamber session; missing source is an error.
-- GitHub Issue refs are restricted to the current worktree repository. OpenChamber supplies identifiers only; PLAN re-fetches authoritative Issue content/state from GitHub.
-- Each Issue story has one stable mutable planning file; review evidence is append-only.
+- Manifest schema version 2 is the only supported pipeline manifest format. Before owner approval, `stage-cli plan-run-preflight` plus deterministic Git adopt/verify must prove that canonical RUN would accept the manifest.
+- PLAN has no implicit backlog-file or OpenChamber linked-Issue source. `/pipeline-plan` requires explicit text/file/`#N` input; missing source is an error.
+- GitHub Issue refs are restricted to the current worktree repository and are selected explicitly as `#N`. PLAN reads authoritative Issue content/state from GitHub and freezes only the semantic requirements digest plus source metadata.
+- Each Issue story has one stable mutable planning file; story-review and architecture-review evidence are append-only. After design-freeze approval, the deterministic GitHub Issue CLI publishes the final Story and Architecture as idempotent Issue comments.
 - PLAN does not modify implementation source, Git history, runtime or secrets.
 - Decisions requiring owner judgement are explicit before design-freeze approval.
 - Open decisions prohibit initialization of an approved design-freeze run.
@@ -170,12 +170,11 @@ approved base/source -> final cumulative candidate SHA -> installed candidate SH
 
 ## Planning evidence integrity
 
-- For schema v2, `planning_readiness.design_freeze=true`, non-empty `required_gates[]`,
-  ready gate records, required planning artifacts, work-item hashes and (for Issue runs)
-  `source_snapshot_sha256` are mandatory before init.
-- Stage validation fails if a frozen Issue snapshot or project policy changes after init.
-- GitHub Issue snapshots are immutable evidence. Use the deterministic `github-issue-cli show`
-  reader; never temporarily rewrite the snapshot for readability.
+- `planning_readiness.design_freeze=true`, non-empty `required_gates[]`, ready gate records, the final architecture, decision register and frozen work-item hashes are mandatory before init.
+- `technology-evidence.md` is required only when external research was used; `contract-inventory.md` is required only when a material interface/data/CLI/event contract changed. Test strategy and accepted risks are sections of the final architecture artifact rather than separate mandatory files.
+- GitHub Issue runs require `source_requirements_sha256`. PLAN re-probes it before freeze; RUN and refresh re-check it against live GitHub content.
+- Pipeline-owned audit/planning comments (`pipeline-event` and `pipeline-artifact` markers) are excluded from the semantic requirements digest; human title/body/comment changes are not.
+- Stage validation still fails if frozen planning evidence or project policy changes after init.
 
 ## Completion
 
