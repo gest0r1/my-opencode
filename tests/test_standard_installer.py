@@ -19,7 +19,7 @@ def executable(path: Path, content: str):
 
 
 def source_archive(path: Path):
-    package = b'{"name":"@openchamber/web","version":"2.1.0"}\\n'
+    package = b'{"name":"@openchamber/web","version":"2.1.0"}\n'
     with tarfile.open(path, "w:gz") as archive:
         info = tarfile.TarInfo("repo/packages/web/package.json")
         info.size = len(package)
@@ -41,12 +41,12 @@ def fixture(tmp: Path):
     archive = tmp / "source.tar.gz"
     source_archive(archive)
 
-    executable(fake / "node", "#!/bin/sh\\nexec /usr/bin/node \\"$@\\"\\n")
-    executable(fake / "curl", "#!/bin/sh\\nexit 97\\n")
-    executable(fake / "systemctl", "#!/bin/sh\\nprintf 'systemctl %s\\\\n' \\"$*\\" >> \\"$TEST_LOG\\"\\nexit 0\\n")
+    executable(fake / "node", "#!/bin/sh\nexec /usr/bin/node \"$@\"\n")
+    executable(fake / "curl", "#!/bin/sh\nexit 97\n")
+    executable(fake / "systemctl", "#!/bin/sh\nprintf 'systemctl %s\\\n' \"$*\" >> \"$TEST_LOG\"\nexit 0\n")
     executable(fake / "gh", r'''#!/bin/bash
 set -Eeuo pipefail
-printf 'gh %s\\n' "$*" >> "$TEST_LOG"
+printf 'gh %s\n' "$*" >> "$TEST_LOG"
 if [[ "$1 $2" == "auth status" ]]; then exit 0; fi
 if [[ "$1" != api ]]; then exit 90; fi
 shift
@@ -73,7 +73,7 @@ esac
 ''')
     executable(fake / "bun", r'''#!/bin/bash
 set -Eeuo pipefail
-printf 'bun %s\\n' "$*" >> "$TEST_LOG"
+printf 'bun %s\n' "$*" >> "$TEST_LOG"
 case "$1 $2" in
   "install --frozen-lockfile") exit 0 ;;
   "run --cwd") exit 0 ;;
@@ -93,7 +93,7 @@ case "$1 $2" in
 case "${1:-}" in
   --version) echo 2.1.0 ;;
   startup)
-    printf 'openchamber %s\\n' "$*" >> "$TEST_LOG"
+    printf 'openchamber %s\n' "$*" >> "$TEST_LOG"
     exit 0
     ;;
   *) exit 0 ;;
@@ -127,7 +127,7 @@ def main():
         home, log, env = fixture(tmp)
 
         result = run(env)
-        assert result.returncode == 0, result.stdout + "\\n" + result.stderr
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
         assert "SUCCESS: OpenChamber 2.1.0" in result.stdout
         calls = log.read_text()
         assert "bun install --frozen-lockfile" in calls
@@ -145,7 +145,7 @@ def main():
 
         log.write_text("")
         result = run(env)
-        assert result.returncode == 0, result.stdout + "\\n" + result.stderr
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
         calls = log.read_text()
         assert "bun install --frozen-lockfile" not in calls
         assert "bun pm pack --destination" not in calls
@@ -154,7 +154,7 @@ def main():
 
         legacy = home / ".config/systemd/user/openchamber.service.d/90-openchamber-runtime.conf"
         legacy.parent.mkdir(parents=True, exist_ok=True)
-        legacy.write_text("[Service]\\nExecStart=/usr/local/bin/openchamber\\n")
+        legacy.write_text("[Service]\nExecStart=/usr/local/bin/openchamber\n")
         before = legacy.read_text()
         result = run(env)
         assert result.returncode == 3
