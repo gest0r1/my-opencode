@@ -67,10 +67,18 @@ def main():
     require(cleanup, 'archive_lookup_root "$LEGACY_PLUGIN_ROOT"', "legacy plugin root retirement")
     require(cleanup, 'OPENCHAMBER_CLEANUP_RUNTIME_MODE', "console-safe cleanup mode")
 
-    # Canonical OpenCode locations.
-    require(config_installer, '$HOME/.config/opencode/agents', "canonical agent path")
+    # Canonical OpenCode locations and atomic managed-config replacement.
+    require(config_installer, 'CONFIG_HOME="$HOME/.config/opencode"', "canonical config root")
+    require(config_installer, 'mkdir -p "$STAGE_CONFIG/agents"', "canonical plural agent path")
+    require(config_installer, 'STAGE_CONFIG=', "staged config tree")
+    require(config_installer, 'mv "$STAGE_CONFIG" "$CONFIG_HOME"', "atomic config commit")
+    require(config_installer, 'rollback_transaction()', "atomic rollback")
+    require(config_installer, 'bun install --production', "local plugin dependency install")
+    require(config_installer, 'pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export',
+            "plugin entrypoint validation")
+    require(config_installer, 'shell-strategy must not live under plugins/ in V2',
+            "retired plugin location rejection")
     require(config_installer, 'OPENCODE_SKIP_BINARY_INSTALL', "config-only install support")
-    require(config_installer, '$HOME/.local/share/opencode/auth.json', "canonical auth path")
     forbid(config_installer, 'Legacy agent directories were retained for rollback.',
            "active legacy agent roots must not remain")
 
