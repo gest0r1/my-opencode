@@ -16,6 +16,41 @@ LEGACY_PASSWORD_ENV="$HOME/.config/openchamber-live.env"
 NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
 AUTH_FILE="$HOME/.local/share/opencode/auth.json"
 COMMON_ENV="$HOME/.config/opencode.env"
+CLEANUP_RUNTIME_MODE="${OPENCHAMBER_CLEANUP_RUNTIME_MODE:-auto}"
+
+case "$CLEANUP_RUNTIME_MODE" in
+  auto|now|defer) ;;
+  *) echo 'OPENCHAMBER_CLEANUP_RUNTIME_MODE must be auto, now or defer' >&2; exit 2 ;;
+esac
+
+inside_openchamber_terminal() {
+  [[ "${OPENCHAMBER_EMBEDDED_TERMINAL:-}" == 1 ]] && return 0
+
+  local pid="$" parent='' args='' depth=0
+  while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$depth" -lt 12 ]]; do
+    parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ "$parent" =~ ^[0-9]+$ && "$parent" -gt 1 ]] || break
+    args="$(ps -o args= -p "$parent" 2>/dev/null || true)"
+    case "$args" in
+      *openchamber*serve*|*openchamber*/server/*|*packages/web/server/*|*packages/web/bin/cli.js*)
+        return 0
+        ;;
+    esac
+    pid="$parent"
+    depth=$((depth + 1))
+  done
+  return 1
+}
+
+effective_runtime_mode="$CLEANUP_RUNTIME_MODE"
+if [[ "$effective_runtime_mode" == auto ]]; then
+  if inside_openchamber_terminal; then
+    effective_runtime_mode=defer
+    echo "Embedded OpenChamber terminal detected: active runtime cleanup will be deferred."
+  else
+    effective_runtime_mode=now
+  fi
+fi
 
 mkdir -p "$BACKUP_ROOT" "$CANONICAL_AGENTS"
 
@@ -122,35 +157,42 @@ remove_legacy_launcher() {
   echo "WARNING: not removing unmanaged launcher: $launcher" >&2
 }
 
-echo "Stopping OpenChamber/OpenCode legacy services..."
-if command -v openchamber >/dev/null 2>&1; then
-  openchamber startup disable >/dev/null 2>&1 || true
-fi
-systemctl --user disable --now openchamber.service >/dev/null 2>&1 || true
-systemctl --user disable --now opencode-web.service >/dev/null 2>&1 || true
+if [[ "$effective_runtime_mode" == now ]]; then
+  echo "Stopping OpenChamber/OpenCode legacy services..."
+  if command -v openchamber >/dev/null 2>&1; then
+    openchamber startup disable >/dev/null 2>&1 || true
+  fi
+  systemctl --user disable --now openchamber.service >/dev/null 2>&1 || true
+  systemctl --user disable --now opencode-web.service >/dev/null 2>&1 || true
 
-rm -f --   "$HOME/.config/systemd/user/openchamber.service"   "$HOME/.config/systemd/user/opencode-web.service"
-rm -rf -- "$HOME/.config/systemd/user/openchamber.service.d"
-systemctl --user daemon-reload
+  rm -f -- \
+    "$HOME/.config/systemd/user/openchamber.service" \
+    "$HOME/.config/systemd/user/opencode-web.service"
+  rm -rf -- "$HOME/.config/systemd/user/openchamber.service.d"
+  systemctl --user daemon-reload
+
+  remove_legacy_launcher "/usr/local/bin/openchamber"
+  remove_legacy_launcher "$HOME/.local/bin/openchamber"
+
+  if [[ -d "$LEGACY_RUNTIME" ]]; then
+    rm -rf -- "$LEGACY_RUNTIME"
+    echo "Removed OpenChamber 1.x runtime: $LEGACY_RUNTIME"
+  fi
+
+  # Remove a failed/test 2.x global package only when no embedded OpenChamber
+  # terminal depends on the currently loaded runtime.
+  if command -v bun >/dev/null 2>&1; then
+    bun remove -g @openchamber/web >/dev/null 2>&1 || true
+  fi
+else
+  echo "Active OpenChamber service/runtime preserved to keep the current console alive."
+  echo "Runtime cleanup can be completed later from SSH with:"
+  echo "  OPENCHAMBER_CLEANUP_RUNTIME_MODE=now <same cleanup command>"
+fi
 
 for root in "${LEGACY_AGENT_ROOTS[@]}"; do
   migrate_and_archive_agent_root "$root"
 done
-
-remove_legacy_launcher "/usr/local/bin/openchamber"
-remove_legacy_launcher "$HOME/.local/bin/openchamber"
-
-if [[ -d "$LEGACY_RUNTIME" ]]; then
-  rm -rf -- "$LEGACY_RUNTIME"
-  echo "Removed OpenChamber 1.x runtime: $LEGACY_RUNTIME"
-fi
-
-# Remove the failed/test 2.x global package so the next install is a real reinstall.
-# Keep ~/.config/openchamber because it may contain the native startup password/settings
-# that the fixed installer can reuse.
-if command -v bun >/dev/null 2>&1; then
-  bun remove -g @openchamber/web >/dev/null 2>&1 || true
-fi
 
 # Force exact-SHA install logic to run again.
 rm -f --   "$STATE_ROOT/openchamber-install.state"   "$STATE_ROOT/openchamber-v2-install.state"
