@@ -397,19 +397,36 @@ NODE
   manifest_available=1
 }
 
-case "$OPENCHAMBER_PACKAGE_MODE" in
-  auto|release)
-    fetch_package_manifest || true
-    ;;
-  source) ;;
-esac
+installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
+
+# Fast path from the 1.x installer: if the exact source SHA, installed version
+# and previous package metadata already agree, do not even download the small
+# release manifest again.
+if [[ "$OPENCHAMBER_PACKAGE_MODE" != source &&
+      "$prev_app" == "$APP_SHA" &&
+      "$installed_openchamber" == "$EXPECTED_OPENCHAMBER_VERSION" &&
+      "$prev_runtime_pending" == 0 &&
+      -n "$prev_package_source" &&
+      -n "$prev_package_fingerprint" ]]; then
+  PACKAGE_SOURCE_SHA="$prev_package_source"
+  PACKAGE_FINGERPRINT="$prev_package_fingerprint"
+  PACKAGE_SHA256="$prev_package_sha256"
+  manifest_available=1
+  echo "OpenChamber source/runtime metadata unchanged: release lookup skipped"
+else
+  case "$OPENCHAMBER_PACKAGE_MODE" in
+    auto|release)
+      fetch_package_manifest || true
+      ;;
+    source) ;;
+  esac
+fi
 
 if [[ "$OPENCHAMBER_PACKAGE_MODE" == release && "$manifest_available" != 1 ]]; then
   echo "Verified exact-SHA OpenChamber web package manifest is unavailable for $APP_REPO@$APP_SHA" >&2
   exit 1
 fi
 
-installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
 package_changed=0
 runtime_needs_apply=0
 
