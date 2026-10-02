@@ -85,7 +85,7 @@ test('rejects wrong profile shape and stage-to-gate mismatch', async () => {
   fx.spec.gate_profiles = { pytest: { legacy: ['pytest -q'] } };
   assert.throws(() => validateGateManifest(fx.spec, { cwd: fx.root, manifestPath: fx.manifestPath }), /MACHINE_GATE_MISSING/);
   fx.spec.gate_profiles = { pytest: { 'test-rule-actions': { commands: ['pytest -q'] } } };
-  assert.throws(() => validateGateManifest(fx.spec, { cwd: fx.root, manifestPath: fx.manifestPath }), /nonempty command array/);
+  assert.throws(() => validateGateManifest(fx.spec, { cwd: fx.root, manifestPath: fx.manifestPath }), /must contain commands/);
 });
 
 test('rejects shell composition and disallowed executable before runner dispatch', async () => {
