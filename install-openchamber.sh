@@ -11,12 +11,14 @@ APP_REF="${OPENCHAMBER_REF:-main}"
 OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"
 EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.0}"
 OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}"
-HOST="${OPENCHAMBER_BIND_HOST:-127.0.0.1}"
+HOST="${OPENCHAMBER_BIND_HOST:-172.18.0.1}"
 PORT="${OPENCHAMBER_BIND_PORT:-3000}"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode/openchamber-v2-install.state"
 LEGACY_DROP_DIR="$HOME/.config/systemd/user/openchamber.service.d"
 LEGACY_DROP_A="$LEGACY_DROP_DIR/90-openchamber-runtime.conf"
 LEGACY_DROP_B="$LEGACY_DROP_DIR/90-integration-bundle.conf"
+LEGACY_PASSWORD_ENV="$HOME/.config/openchamber-live.env"
+NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
 
 case "${1:-}" in
   ''|--opencode-update) ;;
@@ -29,7 +31,7 @@ Environment:
   OPENCODE_INSTALL_VERSION (default: 2.0.21)
   OPENCHAMBER_EXPECTED_VERSION (default: 2.1.0)
   OPENCHAMBER_PACKAGE_MODE (auto|release|source; default: auto)
-  OPENCHAMBER_BIND_HOST (default: 127.0.0.1)
+  OPENCHAMBER_BIND_HOST (default: 172.18.0.1)
   OPENCHAMBER_BIND_PORT (default: 3000)
 EOF
     exit 0
@@ -37,7 +39,7 @@ EOF
   *) echo "Unknown option: $1" >&2; exit 2 ;;
 esac
 
-for cmd in gh curl tar node mktemp systemctl; do
+for cmd in gh curl tar node mktemp systemctl ip ss; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing prerequisite: $cmd" >&2; exit 1; }
 done
 gh auth status --hostname github.com >/dev/null 2>&1 || {
@@ -88,9 +90,35 @@ ref_sha() {
   gh api "repos/$1/commits/$2" --jq .sha
 }
 
+read_ui_password_from_env_file() {
+  local file=$1 value=''
+  [[ -f "$file" ]] || return 1
+  value="$(
+    set +u
+    # shellcheck disable=SC1090
+    source "$file" >/dev/null 2>&1 || true
+    printf '%s' "${OPENCHAMBER_UI_PASSWORD:-}"
+  )"
+  [[ -n "$value" ]] || return 1
+  printf '%s' "$value"
+}
+
+validate_bind_host() {
+  # For an explicit IPv4 address, fail before touching startup if the address is
+  # not assigned to this host. This catches a changed Docker bridge cleanly.
+  if [[ "$HOST" =~ ^[0-9]+(\.[0-9]+){3}$ && "$HOST" != "0.0.0.0" && "$HOST" != 127.* ]]; then
+    if ! ip -4 -o addr show | grep -Fq " $HOST/"; then
+      echo "OPENCHAMBER_BIND_HOST=$HOST is not assigned to this host." >&2
+      echo "Check the NPM Docker bridge address or override OPENCHAMBER_BIND_HOST explicitly." >&2
+      exit 1
+    fi
+  fi
+}
+
 ensure_node22
 ensure_bun
 legacy_service_guard
+validate_bind_host
 mkdir -p "$(dirname "$STATE")"
 TMP="$(mktemp -d /tmp/openchamber-v2-install.XXXXXXXX)"
 trap 'rm -rf -- "$TMP"' EXIT
@@ -191,20 +219,71 @@ installed_openchamber="$(openchamber --version | sed -E 's/^OpenChamber[[:space:
   exit 1
 }
 
+PASSWORD_SOURCE=''
 NEW_PASSWORD=''
-if [[ "$HOST" != 127.0.0.1 && "$HOST" != localhost && -z "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
-  NEW_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("hex"))')"
-  export OPENCHAMBER_UI_PASSWORD="$NEW_PASSWORD"
+if [[ "$HOST" != 127.0.0.1 && "$HOST" != localhost ]]; then
+  if [[ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
+    PASSWORD_SOURCE='environment'
+  elif existing_password="$(read_ui_password_from_env_file "$LEGACY_PASSWORD_ENV" 2>/dev/null)"; then
+    export OPENCHAMBER_UI_PASSWORD="$existing_password"
+    PASSWORD_SOURCE='legacy-openchamber-live'
+    echo "Reusing existing OpenChamber UI password from $LEGACY_PASSWORD_ENV"
+  elif existing_password="$(read_ui_password_from_env_file "$NATIVE_STARTUP_ENV" 2>/dev/null)"; then
+    export OPENCHAMBER_UI_PASSWORD="$existing_password"
+    PASSWORD_SOURCE='native-startup-env'
+    echo "Reusing existing OpenChamber UI password from $NATIVE_STARTUP_ENV"
+  else
+    NEW_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("hex"))')"
+    export OPENCHAMBER_UI_PASSWORD="$NEW_PASSWORD"
+    PASSWORD_SOURCE='generated'
+  fi
 fi
 export OPENCODE_BINARY="$(command -v opencode)"
 
 # Native OpenChamber owns the systemd --user unit and its environment snapshot.
-openchamber startup enable --host "$HOST" --port "$PORT"
+startup_args=(startup enable --host "$HOST" --port "$PORT")
+if [[ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
+  startup_args+=(--ui-password "$OPENCHAMBER_UI_PASSWORD")
+fi
+openchamber "${startup_args[@]}"
 openchamber startup status
 
-printf 'config_sha=%s\nopenchamber_sha=%s\nopenchamber_version=%s\nopencode_version=%s\n'   "$CONFIG_SHA" "$APP_SHA" "$installed_openchamber" "$installed_opencode" > "$STATE.tmp.$$"
-mv -f "$STATE.tmp.$$" "$STATE"
+systemctl --user is-active --quiet openchamber.service || {
+  echo "OpenChamber startup service is not active." >&2
+  exit 1
+}
+
+if ! ss -H -lnt | awk -v target="$HOST:$PORT" '$4 == target { found=1 } END { exit(found ? 0 : 1) }'; then
+  echo "OpenChamber is active but is not listening on $HOST:$PORT." >&2
+  ss -H -lnt >&2 || true
+  exit 1
+fi
+
+http_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "http://$HOST:$PORT/" || true)"
+case "$http_code" in
+  200|301|302|303|307|308|401|403) ;;
+  *)
+    echo "OpenChamber HTTP health check failed on http://$HOST:$PORT/ (status=$http_code)." >&2
+    exit 1
+    ;;
+esac
+
+# Only after the native service has persisted and passed health checks may the
+# 1.x password file be removed. The password itself remains in startup.env.
+if [[ -f "$LEGACY_PASSWORD_ENV" && -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
+  persisted_password="$(read_ui_password_from_env_file "$NATIVE_STARTUP_ENV" 2>/dev/null || true)"
+  if [[ -n "$persisted_password" && "$persisted_password" == "$OPENCHAMBER_UI_PASSWORD" ]]; then
+    rm -f -- "$LEGACY_PASSWORD_ENV"
+    echo "Removed migrated legacy password file: $LEGACY_PASSWORD_ENV"
+  else
+    echo "Legacy password file retained because native password persistence could not be verified." >&2
+  fi
+fi
+
+printf 'config_sha=%s\nopenchamber_sha=%s\nopenchamber_version=%s\nopencode_version=%s\nbind_host=%s\nbind_port=%s\n' \
+  "$CONFIG_SHA" "$APP_SHA" "$installed_openchamber" "$installed_opencode" "$HOST" "$PORT" > "$STATE.tmp.$"
+mv -f "$STATE.tmp.$" "$STATE"
 
 echo "SUCCESS: OpenChamber $installed_openchamber ($APP_SHA) + OpenCode $installed_opencode"
-echo "Native startup service: $HOST:$PORT"
+echo "Native startup service: http://$HOST:$PORT"
 [[ -z "$NEW_PASSWORD" ]] || echo "NEW UI PASSWORD (store securely): $NEW_PASSWORD"
