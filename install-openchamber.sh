@@ -251,17 +251,55 @@ elif [[ "$effective_restart_mode" == auto ]]; then
   effective_restart_mode=now
 fi
 
-# Install OpenCode/config first. The config installer is authoritative for
-# OpenCode 2.0.21 and does not remove legacy OpenCode files.
-gh api -H 'Accept: application/vnd.github.raw'   "repos/$CONFIG_REPO/contents/install.sh?ref=$CONFIG_REF" > "$TMP/install-opencode.sh"
-OPENCODE_CONFIG_REPO="$CONFIG_REPO" OPENCODE_CONFIG_REF="$CONFIG_REF" OPENCODE_INSTALL_VERSION="$OPENCODE_VERSION"   bash "$TMP/install-opencode.sh"
-export PATH="$HOME/.opencode/bin:${BUN_INSTALL:-$HOME/.bun}/bin:$PATH"
-command -v opencode >/dev/null 2>&1 || { echo 'OpenCode binary is not on PATH after install' >&2; exit 1; }
-installed_opencode="$(opencode --version | sed -E 's/^opencode[[:space:]]+v?//')"
+# ---- OpenCode binary/config decisions -------------------------------------
+
+installed_opencode=''
+if [[ -x "$OPENCODE_BIN" ]]; then
+  installed_opencode="$("$OPENCODE_BIN" --version 2>/dev/null | sed -E 's/^opencode[[:space:]]+v?//' || true)"
+fi
+
+opencode_binary_changed=0
+if [[ "$installed_opencode" != "$OPENCODE_VERSION" || "$FORCE_OPENCODE_UPDATE" == 1 ]]; then
+  opencode_binary_changed=1
+fi
+
+config_changed=0
+if [[ "$CONFIG_SHA" != "$prev_config" || ! -f "$HOME/.config/opencode/opencode.json" || ! -d "$HOME/.config/opencode/agents" ]]; then
+  config_changed=1
+fi
+
+if (( opencode_binary_changed == 1 || config_changed == 1 )); then
+  gh api -H 'Accept: application/vnd.github.raw' \
+    "repos/$CONFIG_REPO/contents/install.sh?ref=$CONFIG_REF" > "$TMP/install-opencode.sh"
+
+  if (( opencode_binary_changed == 1 )); then
+    echo "Installing/updating OpenCode binary to $OPENCODE_VERSION"
+    OPENCODE_CONFIG_REPO="$CONFIG_REPO" \
+    OPENCODE_CONFIG_REF="$CONFIG_REF" \
+    OPENCODE_INSTALL_VERSION="$OPENCODE_VERSION" \
+      bash "$TMP/install-opencode.sh"
+  else
+    echo "Config-only update: OpenCode binary $OPENCODE_VERSION is unchanged"
+    OPENCODE_CONFIG_REPO="$CONFIG_REPO" \
+    OPENCODE_CONFIG_REF="$CONFIG_REF" \
+    OPENCODE_INSTALL_VERSION="$OPENCODE_VERSION" \
+    OPENCODE_SKIP_BINARY_INSTALL=1 \
+      bash "$TMP/install-opencode.sh"
+  fi
+else
+  echo "OpenCode binary/config unchanged: downloads skipped"
+fi
+
+[[ -x "$OPENCODE_BIN" ]] || { echo "OpenCode binary missing: $OPENCODE_BIN" >&2; exit 1; }
+installed_opencode="$("$OPENCODE_BIN" --version | sed -E 's/^opencode[[:space:]]+v?//')"
 [[ "$installed_opencode" == "$OPENCODE_VERSION" ]] || {
   echo "OpenCode version mismatch: expected=$OPENCODE_VERSION actual=$installed_opencode" >&2
   exit 1
 }
+
+env_after="$(file_sha256 "$COMMON_ENV")"
+env_changed=0
+[[ "$env_after" == "$prev_env_sha" ]] || env_changed=1
 
 previous_app_sha=''
 [[ ! -f "$STATE" ]] || previous_app_sha="$(sed -n 's/^openchamber_sha=//p' "$STATE" | head -1)"
