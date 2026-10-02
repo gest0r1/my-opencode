@@ -44,32 +44,44 @@ ensure_bun() {
   }
 }
 
-if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
-  echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
-else
-  echo "Устанавливаю/обновляю OpenCode до $OPENCODE_INSTALL_VERSION официальным установщиком..."
-  curl -fsSL https://opencode.ai/v2/install | bash -s -- --version "$OPENCODE_INSTALL_VERSION"
-fi
-
-if [[ ! -x "$OPENCODE_BIN" ]]; then
-  echo "Ошибка: OpenCode не найден после установки: $OPENCODE_BIN" >&2
-  exit 1
-fi
-
-installed_version="$("$OPENCODE_BIN" --version | sed -E 's/^opencode[[:space:]]+v?//')"
-if [[ "$installed_version" != "$OPENCODE_INSTALL_VERSION" ]]; then
-  echo "Ошибка версии OpenCode: expected=$OPENCODE_INSTALL_VERSION actual=$installed_version" >&2
-  exit 1
-fi
-echo "OpenCode установлен: $installed_version"
-
 TMP_DIR="$(mktemp -d)"
 STAGE_CONFIG=''
 STAGE_SKILLS=''
+BINARY_BACKUP="$TMP_DIR/opencode.previous"
+HAD_BINARY=0
+BINARY_UPDATE_ATTEMPTED=0
+INSTALL_TRANSACTION_COMMITTED=0
+
+if [[ -x "$OPENCODE_BIN" ]]; then
+  cp -p "$OPENCODE_BIN" "$BINARY_BACKUP"
+  HAD_BINARY=1
+fi
+
+rollback_binary() {
+  (( BINARY_UPDATE_ATTEMPTED == 1 )) || return 0
+  (( INSTALL_TRANSACTION_COMMITTED == 0 )) || return 0
+
+  if (( HAD_BINARY == 1 )) && [[ -f "$BINARY_BACKUP" ]]; then
+    mkdir -p "$(dirname "$OPENCODE_BIN")"
+    local tmp="${OPENCODE_BIN}.rollback.${BASHPID}"
+    cp -p "$BINARY_BACKUP" "$tmp"
+    mv -f "$tmp" "$OPENCODE_BIN"
+    echo "OpenCode binary rollback: restored previous executable." >&2
+  else
+    rm -f -- "$OPENCODE_BIN"
+    echo "OpenCode binary rollback: removed incomplete new executable." >&2
+  fi
+}
+
 cleanup() {
+  local status=$?
+  if (( status != 0 )); then
+    rollback_binary || true
+  fi
   [[ -z "$STAGE_CONFIG" || ! -e "$STAGE_CONFIG" ]] || rm -rf -- "$STAGE_CONFIG"
   [[ -z "$STAGE_SKILLS" || ! -e "$STAGE_SKILLS" ]] || rm -rf -- "$STAGE_SKILLS"
   rm -rf -- "$TMP_DIR"
+  return "$status"
 }
 trap cleanup EXIT
 
@@ -168,6 +180,28 @@ NODE
   exit 1
 }
 
+# ---- Binary phase: only after config/plugin validation --------------------
+
+if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
+  echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
+else
+  BINARY_UPDATE_ATTEMPTED=1
+  echo "Устанавливаю/обновляю OpenCode до $OPENCODE_INSTALL_VERSION официальным установщиком..."
+  curl -fsSL https://opencode.ai/v2/install | bash -s -- --version "$OPENCODE_INSTALL_VERSION"
+fi
+
+if [[ ! -x "$OPENCODE_BIN" ]]; then
+  echo "Ошибка: OpenCode не найден после binary phase: $OPENCODE_BIN" >&2
+  exit 1
+fi
+
+installed_version="$("$OPENCODE_BIN" --version | sed -E 's/^opencode[[:space:]]+v?//')"
+if [[ "$installed_version" != "$OPENCODE_INSTALL_VERSION" ]]; then
+  echo "Ошибка версии OpenCode: expected=$OPENCODE_INSTALL_VERSION actual=$installed_version" >&2
+  exit 1
+fi
+echo "OpenCode binary validated: $installed_version"
+
 # ---- Atomic commit ---------------------------------------------------------
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -223,6 +257,11 @@ if ! mv "$STAGE_SKILLS" "$SKILLS_HOME"; then
 fi
 STAGE_SKILLS=''
 skills_committed=1
+
+# Binary + config + skills now form one validated generation. From this point
+# onward a failure in optional env/launcher housekeeping must not roll the
+# executable back to a generation that no longer matches the active config.
+INSTALL_TRANSACTION_COMMITTED=1
 
 # Commit is complete. Old active trees are no longer in any OpenCode lookup
 # path; remove them instead of leaving duplicate config/plugin/agent locations.
