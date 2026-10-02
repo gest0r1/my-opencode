@@ -41,7 +41,6 @@ def fixture(tmp: Path):
     archive = tmp / "source.tar.gz"
     source_archive(archive)
 
-    executable(fake / "node", "#!/bin/sh\nexec /usr/bin/node \"$@\"\n")
     executable(fake / "curl", "#!/bin/sh\nexit 97\n")
     executable(fake / "systemctl", "#!/bin/sh\nprintf 'systemctl %s\\\n' \"$*\" >> \"$TEST_LOG\"\nexit 0\n")
     executable(fake / "gh", r'''#!/bin/bash
@@ -109,7 +108,7 @@ esac
     env.update({
         "HOME": str(home),
         "XDG_STATE_HOME": str(home / ".local/state"),
-        "PATH": f"{fake}:/usr/bin:/bin",
+        "PATH": f"{fake}:{env['PATH']}",
         "BUN_INSTALL": str(home / ".bun"),
         "TEST_LOG": str(log),
         "TEST_ARCHIVE": str(archive),
