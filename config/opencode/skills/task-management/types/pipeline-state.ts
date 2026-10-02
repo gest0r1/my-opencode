@@ -95,11 +95,10 @@ export interface PlanningReadinessV2 {
   gates: Record<string, PlanningGateEvidence>;
   required_artifacts: {
     decision_register: FrozenArtifact;
-    technology_evidence: FrozenArtifact;
-    contract_inventory: FrozenArtifact;
-    test_strategy: FrozenArtifact;
-    accepted_risks: FrozenArtifact;
+    architecture: FrozenArtifact;
     work_items: FrozenArtifact;
+    technology_evidence?: FrozenArtifact;
+    contract_inventory?: FrozenArtifact;
   };
 }
 
@@ -174,7 +173,6 @@ export interface PreservedBaseline {
 }
 
 export type PipelineSupersedeReason =
-  | 'V1_TO_V2_MIGRATION'
   | 'MANIFEST_CONTRACT_CORRECTION'
   | 'BASELINE_SCOPE_MISMATCH'
   | 'PLANNING_EVIDENCE_CORRECTION'
@@ -215,7 +213,6 @@ export interface PipelineManifest {
   source_type?: PipelineSourceType;
   repository?: string;
   source_issues?: PipelineIssueSource[];
-  source_snapshot_sha256?: string;
   source_requirements_sha256?: string;
   planning_base_sha?: string;
   planning_inputs?: Record<string, string[]>;
@@ -348,7 +345,6 @@ export interface PipelineState {
   source_type?: PipelineSourceType;
   repository?: string;
   source_issues?: PipelineIssueSource[];
-  source_snapshot_sha256?: string;
   source_requirements_sha256?: string;
   planning_base_sha?: string;
   run_base_sha?: string;
