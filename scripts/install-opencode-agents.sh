@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install repository-managed OpenCode agents into the upstream global agents directory.
-# Existing legacy agent roots are migrated without deleting them, so rollback remains possible.
+# Existing legacy agent roots are migrated, then moved out of active lookup paths so OpenCode sees only the canonical agents tree.
 set -Eeuo pipefail
 
 if (( $# < 2 )); then
@@ -12,6 +12,7 @@ SOURCE_ROOT=$1
 TARGET_ROOT=$2
 shift 2
 LEGACY_ROOTS=("$@")
+LEGACY_BACKUP_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode/legacy-agent-roots/$(date -u +%Y%m%dT%H%M%SZ)"
 
 [[ -d "$SOURCE_ROOT" ]] || { echo "Agent source directory not found: $SOURCE_ROOT" >&2; exit 1; }
 mkdir -p "$TARGET_ROOT"
@@ -128,7 +129,26 @@ while IFS= read -r -d '' file; do
   install_managed "$file"
 done < <(find "$SOURCE_ROOT" -type f -name '*.md' -print0 | sort -z)
 
+archive_legacy_root() {
+  local root=$1 relative safe_name destination
+  [[ -d "$root" ]] || return 0
+
+  relative=${root#"$HOME/"}
+  safe_name=${relative//\//__}
+  safe_name=${safe_name//./_}
+  mkdir -p "$LEGACY_BACKUP_ROOT"
+  destination="$LEGACY_BACKUP_ROOT/$safe_name"
+  [[ ! -e "$destination" ]] || destination="$destination-$"
+
+  mv "$root" "$destination"
+  echo "Removed legacy agent lookup root: $root"
+  echo "Legacy agent backup: $destination"
+}
+
+# Managed files are installed successfully at this point. Remove the old lookup
+# roots from OpenCode discovery while keeping a rollback copy outside config.
+for legacy_root in "${LEGACY_ROOTS[@]}"; do
+  archive_legacy_root "$legacy_root"
+done
+
 echo "Installed ${#managed_names[@]} managed agents into $TARGET_ROOT"
-if (( ${#LEGACY_ROOTS[@]} > 0 )); then
-  echo "Legacy agent directories were retained for rollback."
-fi
