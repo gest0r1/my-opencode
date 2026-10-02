@@ -1,5 +1,4 @@
 import { Plugin } from "@opencode/plugin"
-import { z } from "zod"
 import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
@@ -69,21 +68,29 @@ type SessionStats = {
   first_meaningful_at?: number
 }
 
-const prepareInput = z.object({
-  run_id: z.string(),
-  pipeline_id: z.string(),
-  stage: z.string(),
-  role: z.string(),
-  work_item_id: z.string(),
-  loop: z.number().int().nonnegative(),
-  technical_fix: z.boolean(),
-  state_revision: z.string(),
-  previous_state_revision: z.string().optional(),
-  evidence_path: z.string().optional(),
-  changed_files: z.array(z.string()).optional(),
-  diff_path: z.string().optional(),
-  required_reread: z.array(z.string()).optional(),
-})
+const prepareInput = {
+  type: "object",
+  properties: {
+    run_id: { type: "string" },
+    pipeline_id: { type: "string" },
+    stage: { type: "string" },
+    role: { type: "string" },
+    work_item_id: { type: "string" },
+    loop: { type: "integer", minimum: 0 },
+    technical_fix: { type: "boolean" },
+    state_revision: { type: "string" },
+    previous_state_revision: { type: "string" },
+    evidence_path: { type: "string" },
+    changed_files: { type: "array", items: { type: "string" } },
+    diff_path: { type: "string" },
+    required_reread: { type: "array", items: { type: "string" } },
+  },
+  required: [
+    "run_id", "pipeline_id", "stage", "role", "work_item_id",
+    "loop", "technical_fix", "state_revision",
+  ],
+  additionalProperties: false,
+} as const
 
 function safeJson(file: string): any | undefined {
   try { return JSON.parse(fs.readFileSync(file, "utf8")) } catch { return undefined }
