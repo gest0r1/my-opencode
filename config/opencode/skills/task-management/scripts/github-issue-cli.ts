@@ -333,7 +333,7 @@ export async function publishPlanningArtifacts(
     );
   }
 
-  const architectureRef = manifest.planning_readiness?.required_artifacts?.architecture;
+  const architectureRef = manifest.planning_readiness?.gates?.architecture?.artifact;
   const architecture = await readFrozenArtifact(runRoot, architectureRef, 'architecture');
   let published = 0;
   let existing = 0;
