@@ -265,6 +265,43 @@ function renderArtifactComment(
   return body;
 }
 
+export async function checkFrozenRequirements(
+  runId: string,
+  options: { stateRoot?: string; cwd?: string } = {},
+): Promise<Record<string, unknown>> {
+  if (!RUN_ID.test(runId)) throw new GitHubIssueCliError('run-id must be path-safe');
+  const cwd = options.cwd ?? process.cwd();
+  const runRoot = path.resolve(options.stateRoot ?? '.tmp/pipelines', runId);
+  const manifestPath = path.join(runRoot, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8').catch(() => {
+    throw new GitHubIssueCliError(`manifest not found: ${manifestPath}`);
+  })) as Record<string, any>;
+  if (manifest.schema_version !== 2) throw new GitHubIssueCliError('pipeline manifest schema_version must be exactly 2');
+  if (manifest.source_type !== 'github_issues') {
+    return { status: 'PASS', run_id: runId, source_type: manifest.source_type ?? null, changed: false };
+  }
+  const frozen = String(manifest.source_requirements_sha256 ?? '');
+  if (!SHA256.test(frozen)) throw new GitHubIssueCliError('manifest source_requirements_sha256 is missing or invalid');
+  const issueNumbers = Array.isArray(manifest.source_issues)
+    ? manifest.source_issues.map((issue: any) => Number(issue.number)).filter((n: number) => Number.isInteger(n) && n > 0)
+    : [];
+  if (!issueNumbers.length) throw new GitHubIssueCliError('github_issues manifest has no source issue numbers');
+  const live = await probeRequirements(issueNumbers, { cwd });
+  const liveSha = String(live.requirements_sha256 ?? '');
+  if (!SHA256.test(liveSha)) throw new GitHubIssueCliError('live source requirements digest is invalid');
+  if (liveSha.toLowerCase() !== frozen.toLowerCase()) {
+    throw new GitHubIssueCliError(`SOURCE_REQUIREMENTS_CHANGED: frozen=${frozen.toLowerCase()} live=${liveSha.toLowerCase()}`);
+  }
+  return {
+    status: 'PASS',
+    run_id: runId,
+    repository: live.repository,
+    issue_numbers: live.issue_numbers,
+    requirements_sha256: frozen.toLowerCase(),
+    changed: false,
+  };
+}
+
 export async function publishPlanningArtifacts(
   runId: string,
   options: { stateRoot?: string; cwd?: string } = {},
@@ -338,19 +375,19 @@ export async function publishPlanningArtifacts(
 }
 
 function parseArgs(args: string[]): {
-  commandName: 'probe' | 'show' | 'publish-plan';
+  commandName: 'probe' | 'show' | 'check' | 'publish-plan';
   issueNumbers: number[];
   runId?: string;
   stateRoot?: string;
 } {
   const [commandName, ...rest] = args;
-  if (commandName === 'publish-plan') {
+  if (commandName === 'check' || commandName === 'publish-plan') {
     const runId = rest[0];
-    if (!runId) throw new GitHubIssueCliError('publish-plan requires run-id');
+    if (!runId) throw new GitHubIssueCliError(`${commandName} requires run-id`);
     let stateRoot: string | undefined;
     for (let i = 1; i < rest.length; i += 1) {
       if (rest[i] !== '--state-root' || !rest[i + 1]) {
-        throw new GitHubIssueCliError('usage: github-issue-cli.ts publish-plan <run-id> [--state-root <path>]');
+        throw new GitHubIssueCliError('usage: github-issue-cli.ts check|publish-plan <run-id> [--state-root <path>]');
       }
       stateRoot = rest[++i];
     }
@@ -358,7 +395,7 @@ function parseArgs(args: string[]): {
   }
   if (commandName !== 'probe' && commandName !== 'show') {
     throw new GitHubIssueCliError(
-      'usage: github-issue-cli.ts probe <issue-number>... | show <issue-number>... | publish-plan <run-id> [--state-root <path>]',
+      'usage: github-issue-cli.ts probe <issue-number>... | show <issue-number>... | check <run-id> [--state-root <path>] | publish-plan <run-id> [--state-root <path>]',
     );
   }
   const issueNumbers = rest.map(parseIssueNumber);
@@ -367,6 +404,10 @@ function parseArgs(args: string[]): {
 }
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
+  if (parsed.commandName === 'check') {
+    console.log(JSON.stringify(await checkFrozenRequirements(parsed.runId!, { stateRoot: parsed.stateRoot }), null, 2));
+    return;
+  }
   if (parsed.commandName === 'publish-plan') {
     console.log(JSON.stringify(await publishPlanningArtifacts(parsed.runId!, { stateRoot: parsed.stateRoot }), null, 2));
     return;
