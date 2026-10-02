@@ -4,7 +4,7 @@ set -Eeuo pipefail
 REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 REF="${OPENCODE_CONFIG_REF:-main}"
 OPENCODE_BIN="$HOME/.opencode/bin/opencode"
-OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-1.18.31}"
+OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"
 ENV_FILE="$HOME/.config/opencode.env"
 LEGACY_ENV_FILE="$HOME/.config/opencode-web.env"
 
@@ -65,9 +65,9 @@ for entry in "$SRC/config/opencode/"*; do
 done
 shopt -u dotglob nullglob
 
-# OpenCode 1.18.x штатно читает ~/.config/opencode/agent(s)/**/*.md.
-# Устанавливаем управляемые файлы в plural-путь и мигрируем оба прежних корня
-# без удаления: rollback остаётся возможным до фактической проверки runtime.
+# OpenCode V2 читает Markdown-агентов из ~/.config/opencode/agents/**/*.md.
+# Устанавливаем управляемые файлы в канонический plural-путь. Legacy-корни
+# передаём мигратору только для сохранения пользовательских дополнений; installer их не удаляет.
 bash "$SRC/scripts/install-opencode-agents.sh" \
   "$SRC/config/opencode/agent" \
   "$HOME/.config/opencode/agents" \
