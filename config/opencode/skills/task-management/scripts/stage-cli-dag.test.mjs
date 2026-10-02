@@ -258,7 +258,7 @@ test('validate fails closed when approved manifest changes', async () => {
 
 
 test('github issue source freezes mapping and queues status audit events', async () => {
-  const root=await tempProject(),stateRoot=path.join(root,'.tmp','pipelines');const manifest={...(await baseManifest(root,'github-issue-run',[{id:'app',stages:['implementation'],issue_numbers:[51,47]}])),source_type:'github_issues',repository:'owner/repo',source_issues:[{repository:'owner/repo',number:51,url:'https://github.com/owner/repo/issues/51',title:'One'},{repository:'owner/repo',number:47,url:'https://github.com/owner/repo/issues/47',title:'Two'}]};const snapshot=JSON.stringify({issues:manifest.source_issues});await mkdir(path.join(root,'sources'),{recursive:true});await writeFile(path.join(root,'sources','github-issues.json'),snapshot);manifest.source_snapshot_sha256=sha(snapshot);const manifestPath=await writeManifest(root,manifest);let result=run(root,['init',manifestPath,'--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);result=run(root,['approve',manifest.run_id,'--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);result=run(root,['start',manifest.run_id,'implementation','--pipeline','app','--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);const state=JSON.parse(result.stdout);assert.deepEqual(state.pipelines.app.issue_numbers,[51,47]);assert.deepEqual(state.github_outbox.map(e=>[e.from_status??'created',e.to_status]),[['created','planned'],['planned','approved'],['approved','in_progress']]);assert.equal(new Set(state.github_outbox.map(e=>e.id)).size,state.github_outbox.length);
+  const root=await tempProject(),stateRoot=path.join(root,'.tmp','pipelines');const manifest={...(await baseManifest(root,'github-issue-run',[{id:'app',stages:['implementation'],issue_numbers:[51,47]}])),source_type:'github_issues',repository:'owner/repo',source_issues:[{repository:'owner/repo',number:51,url:'https://github.com/owner/repo/issues/51',title:'One'},{repository:'owner/repo',number:47,url:'https://github.com/owner/repo/issues/47',title:'Two'}]};manifest.source_requirements_sha256='1'.repeat(64);const manifestPath=await writeManifest(root,manifest);let result=run(root,['init',manifestPath,'--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);result=run(root,['approve',manifest.run_id,'--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);result=run(root,['start',manifest.run_id,'implementation','--pipeline','app','--state-root',stateRoot,'--json']);assert.equal(result.status,0,result.stderr);const state=JSON.parse(result.stdout);assert.deepEqual(state.pipelines.app.issue_numbers,[51,47]);assert.deepEqual(state.github_outbox.map(e=>[e.from_status??'created',e.to_status]),[['created','planned'],['planned','approved'],['approved','in_progress']]);assert.equal(new Set(state.github_outbox.map(e=>e.id)).size,state.github_outbox.length);
 });
 test('github issue source rejects an unmapped issue', async () => {
   const root = await tempProject();
@@ -274,10 +274,7 @@ test('github issue source rejects an unmapped issue', async () => {
       { repository: 'owner/repo', number: 47, url: 'https://github.com/owner/repo/issues/47', title: 'Two' },
     ],
   };
-  const snapshot = JSON.stringify({ issues: manifest.source_issues });
-  await mkdir(path.join(root, 'sources'), { recursive: true });
-  await writeFile(path.join(root, 'sources', 'github-issues.json'), snapshot);
-  manifest.source_snapshot_sha256 = sha(snapshot);
+  manifest.source_requirements_sha256 = '1'.repeat(64);
   const manifestPath = await writeManifest(root, manifest);
   const result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
   assert.notEqual(result.status, 0);
