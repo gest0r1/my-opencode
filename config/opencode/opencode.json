@@ -680,10 +680,6 @@
     "auto": true,
     "buffer": 10000
   },
-  "instructions": [
-    "./context/shell-strategy/shell_strategy.md",
-    "$HOME/.agents/skills/caveman/SKILL.md"
-  ],
   "plugins": [],
   "providers": {
     "openai": {
