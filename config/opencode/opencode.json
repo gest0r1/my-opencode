@@ -1,9 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": {
-    "providerID": "opencode-go",
-    "model": "qwen3.7-plus"
-  },
+  "model": "opencode-go/qwen3.7-plus",
   "permissions": [
     {
       "action": "subagent",
@@ -629,10 +626,7 @@
       ]
     },
     "title": {
-      "model": {
-        "providerID": "opencode-go",
-        "model": "mimo-v2.5"
-      }
+      "model": "opencode-go/mimo-v2.5"
     }
   },
   "mcp": {
