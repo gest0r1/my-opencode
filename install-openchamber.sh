@@ -95,6 +95,7 @@ read_ui_password_from_env_file() {
   [[ -f "$file" ]] || return 1
   value="$(
     set +u
+    unset OPENCHAMBER_UI_PASSWORD
     # shellcheck disable=SC1090
     source "$file" >/dev/null 2>&1 || true
     printf '%s' "${OPENCHAMBER_UI_PASSWORD:-}"
@@ -281,8 +282,8 @@ if [[ -f "$LEGACY_PASSWORD_ENV" && -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
 fi
 
 printf 'config_sha=%s\nopenchamber_sha=%s\nopenchamber_version=%s\nopencode_version=%s\nbind_host=%s\nbind_port=%s\n' \
-  "$CONFIG_SHA" "$APP_SHA" "$installed_openchamber" "$installed_opencode" "$HOST" "$PORT" > "$STATE.tmp.$"
-mv -f "$STATE.tmp.$" "$STATE"
+  "$CONFIG_SHA" "$APP_SHA" "$installed_openchamber" "$installed_opencode" "$HOST" "$PORT" > "${STATE}.tmp.$"
+mv -f "${STATE}.tmp.$" "$STATE"
 
 echo "SUCCESS: OpenChamber $installed_openchamber ($APP_SHA) + OpenCode $installed_opencode"
 echo "Native startup service: http://$HOST:$PORT"
