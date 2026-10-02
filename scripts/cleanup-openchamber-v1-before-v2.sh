@@ -228,11 +228,10 @@ if [[ "$effective_runtime_mode" == now ]]; then
     echo "Removed OpenChamber 1.x runtime: $LEGACY_RUNTIME"
   fi
 
-  # Remove a failed/test 2.x global package only when no embedded OpenChamber
-  # terminal depends on the currently loaded runtime.
-  if command -v bun >/dev/null 2>&1; then
-    bun remove -g @openchamber/web >/dev/null 2>&1 || true
-  fi
+  # Keep a previously installed Bun-global OpenChamber 2.x package until the
+  # atomic installer commits a healthy immutable runtime + service generation.
+  # The wrapper removes this competing CLI only after successful health-check.
+  echo "Legacy Bun-global OpenChamber 2.x runtime retained as rollback source until atomic commit."
 else
   echo "Active OpenChamber service/runtime preserved to keep the current console alive."
   echo "Native startup.env is also retained until installer reconcile to survive an unexpected service restart."
