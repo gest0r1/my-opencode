@@ -503,52 +503,95 @@ if [[ "$HOST" != 127.0.0.1 && "$HOST" != localhost ]]; then
     PASSWORD_SOURCE='generated'
   fi
 fi
-export OPENCODE_BINARY="$(command -v opencode)"
+export OPENCODE_BINARY="$OPENCODE_BIN"
 
-# Native OpenChamber owns the systemd --user unit and its environment snapshot.
-startup_args=(startup enable --host "$HOST" --port "$PORT")
-if [[ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
-  startup_args+=(--ui-password "$OPENCHAMBER_UI_PASSWORD")
+drop_before="$(file_sha256 "$ENV_DROP")"
+write_env_dropin
+drop_after="$(file_sha256 "$ENV_DROP")"
+drop_changed=0
+[[ "$drop_before" == "$drop_after" ]] || drop_changed=1
+
+service_active=0
+systemctl --user is-active --quiet openchamber.service && service_active=1 || true
+
+service_needs_reconcile=0
+[[ -f "$UNIT" ]] || service_needs_reconcile=1
+[[ "$prev_host" == "$HOST" ]] || service_needs_reconcile=1
+[[ "$prev_port" == "$PORT" ]] || service_needs_reconcile=1
+(( package_changed == 0 )) || service_needs_reconcile=1
+(( opencode_binary_changed == 0 )) || service_needs_reconcile=1
+(( env_changed == 0 )) || service_needs_reconcile=1
+(( drop_changed == 0 )) || service_needs_reconcile=1
+[[ -f "$NATIVE_STARTUP_ENV" ]] || service_needs_reconcile=1
+
+restart_pending=0
+if (( runtime_needs_apply == 1 && package_changed == 0 )); then
+  restart_pending=1
 fi
-openchamber "${startup_args[@]}"
-openchamber startup status
 
-systemctl --user is-active --quiet openchamber.service || {
-  echo "OpenChamber startup service is not active." >&2
-  exit 1
-}
+if [[ "$restart_pending" == 1 && "$package_changed" == 0 ]]; then
+  # The desired package is staged, but activating it would replace the runtime
+  # currently serving this terminal. Do not invoke startup through the old CLI.
+  echo "OpenChamber package/service activation deferred; current console remains alive."
+elif (( service_needs_reconcile == 1 )); then
+  startup_args=(startup enable --host "$HOST" --port "$PORT" --no-env-snapshot)
+  if [[ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
+    startup_args+=(--ui-password "$OPENCHAMBER_UI_PASSWORD")
+  fi
 
-if ! ss -H -lnt | awk -v target="$HOST:$PORT" '$4 == target { found=1 } END { exit(found ? 0 : 1) }'; then
-  echo "OpenChamber is active but is not listening on $HOST:$PORT." >&2
-  ss -H -lnt >&2 || true
-  exit 1
+  if [[ "$effective_restart_mode" == defer ]]; then
+    startup_args+=(--no-start)
+    openchamber "${startup_args[@]}"
+    restart_pending=1
+    echo "OpenChamber service restart deferred; current console remains alive."
+  else
+    openchamber "${startup_args[@]}"
+    systemctl --user restart openchamber.service
+    wait_for_service
+    restart_pending=0
+  fi
+elif (( service_active == 0 )); then
+  if [[ "$effective_restart_mode" == defer ]]; then
+    systemctl --user enable openchamber.service >/dev/null
+    restart_pending=1
+    echo "OpenChamber service is installed but start is deferred."
+  else
+    systemctl --user enable --now openchamber.service
+    wait_for_service
+  fi
+else
+  echo "OpenChamber service unchanged and active: restart skipped"
 fi
 
-http_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "http://$HOST:$PORT/" || true)"
-case "$http_code" in
-  200|301|302|303|307|308|401|403) ;;
-  *)
-    echo "OpenChamber HTTP health check failed on http://$HOST:$PORT/ (status=$http_code)." >&2
-    exit 1
-    ;;
-esac
-
-# Only after the native service has persisted and passed health checks may the
-# 1.x password file be removed. The password itself remains in startup.env.
-if [[ -f "$LEGACY_PASSWORD_ENV" && -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
+# Remove legacy password only after native persistence is verified and no apply
+# is pending. Until then it remains the migration fallback.
+if [[ "$restart_pending" == 0 && -f "$LEGACY_PASSWORD_ENV" && -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
   persisted_password="$(read_ui_password_from_env_file "$NATIVE_STARTUP_ENV" 2>/dev/null || true)"
   if [[ -n "$persisted_password" && "$persisted_password" == "$OPENCHAMBER_UI_PASSWORD" ]]; then
     rm -f -- "$LEGACY_PASSWORD_ENV"
     echo "Removed migrated legacy password file: $LEGACY_PASSWORD_ENV"
-  else
-    echo "Legacy password file retained because native password persistence could not be verified." >&2
   fi
 fi
 
-printf 'config_sha=%s\nopenchamber_sha=%s\nopenchamber_version=%s\nopencode_version=%s\nbind_host=%s\nbind_port=%s\n' \
-  "$CONFIG_SHA" "$APP_SHA" "$installed_openchamber" "$installed_opencode" "$HOST" "$PORT" > "${STATE}.tmp.${BASHPID}"
-mv -f "${STATE}.tmp.${BASHPID}" "$STATE"
+# Retire obsolete 1.x overrides only after the new managed environment drop-in
+# exists. They must not be allowed to override the V2 native unit later.
+rm -f -- "$LEGACY_DROP_A" "$LEGACY_DROP_B"
+systemctl --user daemon-reload
 
-echo "SUCCESS: OpenChamber $installed_openchamber ($APP_SHA) + OpenCode $installed_opencode"
-echo "Native startup service: http://$HOST:$PORT"
+write_state "$restart_pending" "$PACKAGE_SOURCE_SHA" "$PACKAGE_FINGERPRINT"
+
+echo
+echo "SUCCESS: config=$CONFIG_SHA OpenChamber=$APP_SHA OpenCode=$installed_opencode"
+if [[ "$restart_pending" == 1 ]]; then
+  echo "PENDING APPLY: current OpenChamber terminal was preserved."
+  if [[ -n "$PACKAGE_FILE" && "$package_changed" == 0 ]]; then
+    echo "Run the same installer from SSH/external console with:"
+    echo "  OPENCHAMBER_RESTART_MODE=now"
+  else
+    echo "Run from SSH/external console:"
+    echo "  systemctl --user restart openchamber.service"
+  fi
+else
+  echo "OpenChamber service: http://$HOST:$PORT"
+fi
 [[ -z "$NEW_PASSWORD" ]] || echo "NEW UI PASSWORD (store securely): $NEW_PASSWORD"
