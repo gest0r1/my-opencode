@@ -13,18 +13,38 @@ EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.0}"
 OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}"
 HOST="${OPENCHAMBER_BIND_HOST:-172.18.0.1}"
 PORT="${OPENCHAMBER_BIND_PORT:-3000}"
-STATE="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode/openchamber-v2-install.state"
-LEGACY_DROP_DIR="$HOME/.config/systemd/user/openchamber.service.d"
-LEGACY_DROP_A="$LEGACY_DROP_DIR/90-openchamber-runtime.conf"
-LEGACY_DROP_B="$LEGACY_DROP_DIR/90-integration-bundle.conf"
+RESTART_MODE="${OPENCHAMBER_RESTART_MODE:-auto}"
+
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode"
+STATE="$STATE_ROOT/openchamber-v2-install.state"
+CACHE_ROOT="$STATE_ROOT/openchamber-v2-cache"
+LOCK="$STATE_ROOT/openchamber-v2-install.lock"
+
+OPENCODE_BIN="$HOME/.opencode/bin/opencode"
+COMMON_ENV="$HOME/.config/opencode.env"
 LEGACY_PASSWORD_ENV="$HOME/.config/openchamber-live.env"
 NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
 
+UNIT_DIR="$HOME/.config/systemd/user"
+UNIT="$UNIT_DIR/openchamber.service"
+DROP_DIR="$UNIT_DIR/openchamber.service.d"
+ENV_DROP="$DROP_DIR/95-my-opencode-env.conf"
+LEGACY_DROP_A="$DROP_DIR/90-openchamber-runtime.conf"
+LEGACY_DROP_B="$DROP_DIR/90-integration-bundle.conf"
+
+BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+export BUN_INSTALL
+export PATH="$HOME/.opencode/bin:$BUN_INSTALL/bin:$PATH"
+
+FORCE_OPENCODE_UPDATE=0
+
 case "${1:-}" in
-  ''|--opencode-update) ;;
+  '') ;;
+  --opencode-update) FORCE_OPENCODE_UPDATE=1 ;;
   --help)
     cat <<EOF
 Usage: install-openchamber.sh [--opencode-update]
+
 Environment:
   OPENCODE_CONFIG_REF / MY_OPENCODE_REF
   OPENCHAMBER_REF
@@ -33,13 +53,19 @@ Environment:
   OPENCHAMBER_PACKAGE_MODE (auto|release|source; default: auto)
   OPENCHAMBER_BIND_HOST (default: 172.18.0.1)
   OPENCHAMBER_BIND_PORT (default: 3000)
+  OPENCHAMBER_RESTART_MODE (auto|now|defer; default: auto)
+
+Restart modes:
+  auto   Never restart OpenChamber from its own embedded terminal.
+  now    Apply package/service changes immediately. Use from SSH/CD.
+  defer  Stage runtime/config changes without restarting OpenChamber.
 EOF
     exit 0
     ;;
   *) echo "Unknown option: $1" >&2; exit 2 ;;
 esac
 
-for cmd in gh curl tar node mktemp systemctl ip ss; do
+for cmd in gh curl tar node mktemp systemctl ip ss sha256sum flock ps awk sed grep; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing prerequisite: $cmd" >&2; exit 1; }
 done
 gh auth status --hostname github.com >/dev/null 2>&1 || {
@@ -47,11 +73,15 @@ gh auth status --hostname github.com >/dev/null 2>&1 || {
   exit 1
 }
 [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1 && "$PORT" -le 65535 ]] || {
-  echo 'OPENCHAMBER_BIND_PORT must be 1..65535' >&2; exit 1;
+  echo 'OPENCHAMBER_BIND_PORT must be 1..65535' >&2; exit 2;
 }
 case "$OPENCHAMBER_PACKAGE_MODE" in
   auto|release|source) ;;
-  *) echo 'OPENCHAMBER_PACKAGE_MODE must be auto, release or source' >&2; exit 1 ;;
+  *) echo 'OPENCHAMBER_PACKAGE_MODE must be auto, release or source' >&2; exit 2 ;;
+esac
+case "$RESTART_MODE" in
+  auto|now|defer) ;;
+  *) echo 'OPENCHAMBER_RESTART_MODE must be auto, now or defer' >&2; exit 2 ;;
 esac
 
 ensure_node22() {
