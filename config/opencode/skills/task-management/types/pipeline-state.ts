@@ -95,7 +95,6 @@ export interface PlanningReadinessV2 {
   gates: Record<string, PlanningGateEvidence>;
   required_artifacts: {
     decision_register: FrozenArtifact;
-    architecture: FrozenArtifact;
     work_items: FrozenArtifact;
     technology_evidence?: FrozenArtifact;
     contract_inventory?: FrozenArtifact;
