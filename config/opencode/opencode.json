@@ -230,12 +230,12 @@
         },
         {
           "action": "shell",
-          "resource": "bash .opencode/skills/task-management/router.sh complete*",
+          "resource": "bash $HOME/.config/opencode/skills/task-management/router.sh complete*",
           "effect": "allow"
         },
         {
           "action": "shell",
-          "resource": "bash .opencode/skills/task-management/router.sh status*",
+          "resource": "bash $HOME/.config/opencode/skills/task-management/router.sh status*",
           "effect": "allow"
         },
         {
