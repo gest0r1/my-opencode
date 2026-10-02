@@ -6,6 +6,7 @@ on:
       - install-openchamber.sh
       - install.sh
       - scripts/install-opencode-agents.sh
+      - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
       - tests/test_agent_path_migration.sh
       - .github/workflows/installer-contract.yml
@@ -14,6 +15,7 @@ on:
       - install-openchamber.sh
       - install.sh
       - scripts/install-opencode-agents.sh
+      - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
       - tests/test_agent_path_migration.sh
 permissions:
@@ -29,7 +31,7 @@ jobs:
       - name: Validate canonical installer and config installer syntax
         run: |
           set -Eeuo pipefail
-          bash -n install-openchamber.sh install.sh scripts/install-opencode-agents.sh tests/test_agent_path_migration.sh
+          bash -n install-openchamber.sh install.sh scripts/install-opencode-agents.sh scripts/cleanup-openchamber-v1-before-v2.sh tests/test_agent_path_migration.sh
           grep -Fq 'OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"' install.sh
           grep -Fq 'bash -s -- --version "$OPENCODE_INSTALL_VERSION"' install.sh
           git diff --check
