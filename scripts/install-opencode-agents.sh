@@ -13,6 +13,7 @@ TARGET_ROOT=$2
 shift 2
 LEGACY_ROOTS=("$@")
 LEGACY_BACKUP_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode/legacy-agent-roots/$(date -u +%Y%m%dT%H%M%SZ)"
+ARCHIVE_LEGACY="${OPENCODE_ARCHIVE_LEGACY:-1}"
 
 [[ -d "$SOURCE_ROOT" ]] || { echo "Agent source directory not found: $SOURCE_ROOT" >&2; exit 1; }
 mkdir -p "$TARGET_ROOT"
@@ -147,8 +148,13 @@ archive_legacy_root() {
 
 # Managed files are installed successfully at this point. Remove the old lookup
 # roots from OpenCode discovery while keeping a rollback copy outside config.
-for legacy_root in "${LEGACY_ROOTS[@]}"; do
-  archive_legacy_root "$legacy_root"
-done
+if [[ "$ARCHIVE_LEGACY" == "1" ]]; then
+  for legacy_root in "${LEGACY_ROOTS[@]}"; do
+    archive_legacy_root "$legacy_root"
+  done
+elif [[ "$ARCHIVE_LEGACY" != "0" ]]; then
+  echo "OPENCODE_ARCHIVE_LEGACY must be 0 or 1" >&2
+  exit 2
+fi
 
 echo "Installed ${#managed_names[@]} managed agents into $TARGET_ROOT"
