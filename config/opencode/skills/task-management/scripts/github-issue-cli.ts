@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 
 const ISSUE_NUMBER = /^[1-9][0-9]*$/;
 
@@ -210,18 +212,165 @@ export async function showIssues(
   return output.join('\n');
 }
 
-function parseArgs(args: string[]): { commandName: 'probe' | 'show'; issueNumbers: number[] } {
+const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SHA256 = /^[0-9a-f]{64}$/i;
+
+async function readFrozenArtifact(
+  runRoot: string,
+  ref: { path?: unknown; sha256?: unknown },
+  label: string,
+): Promise<{ content: string; sha256: string; path: string }> {
+  if (!ref || typeof ref.path !== 'string' || typeof ref.sha256 !== 'string' || !SHA256.test(ref.sha256)) {
+    throw new GitHubIssueCliError(`${label} must define path + SHA-256`);
+  }
+  if (ref.path.startsWith('/') || ref.path.includes('..') || ref.path.includes('\\')) {
+    throw new GitHubIssueCliError(`unsafe ${label} path`);
+  }
+  const absolute = path.resolve(runRoot, ref.path);
+  if (!absolute.startsWith(`${path.resolve(runRoot)}${path.sep}`)) {
+    throw new GitHubIssueCliError(`${label} path escapes run root`);
+  }
+  const content = await readFile(absolute, 'utf8').catch(() => {
+    throw new GitHubIssueCliError(`${label} is missing: ${ref.path}`);
+  });
+  const actual = sha256(content);
+  if (actual !== ref.sha256.toLowerCase()) throw new GitHubIssueCliError(`${label} SHA-256 mismatch`);
+  return { content, sha256: actual, path: ref.path };
+}
+
+function artifactMarker(kind: 'story' | 'architecture', runId: string, issueNumber: number): string {
+  return `<!-- pipeline-artifact:${kind}:${runId}:issue-${issueNumber} -->`;
+}
+
+function renderArtifactComment(
+  kind: 'story' | 'architecture',
+  runId: string,
+  issueNumber: number,
+  requirementsSha: string,
+  artifact: { content: string; sha256: string },
+): string {
+  const title = kind === 'story' ? 'Pipeline Story' : 'Pipeline Architecture';
+  const body = [
+    artifactMarker(kind, runId, issueNumber),
+    `## ${title}`,
+    `Run: \`${runId}\``,
+    `Requirements SHA-256: \`${requirementsSha}\``,
+    `Artifact SHA-256: \`${artifact.sha256}\``,
+    '',
+    artifact.content.trim(),
+  ].join('\n');
+  if (Buffer.byteLength(body, 'utf8') > 60_000) {
+    throw new GitHubIssueCliError(`${kind} comment for issue #${issueNumber} exceeds safe GitHub comment size`);
+  }
+  return body;
+}
+
+export async function publishPlanningArtifacts(
+  runId: string,
+  options: { stateRoot?: string; cwd?: string } = {},
+): Promise<Record<string, unknown>> {
+  if (!RUN_ID.test(runId)) throw new GitHubIssueCliError('run-id must be path-safe');
+  const cwd = options.cwd ?? process.cwd();
+  const runRoot = path.resolve(options.stateRoot ?? '.tmp/pipelines', runId);
+  const manifestPath = path.join(runRoot, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8').catch(() => {
+    throw new GitHubIssueCliError(`manifest not found: ${manifestPath}`);
+  })) as Record<string, any>;
+  if (manifest.schema_version !== 2) throw new GitHubIssueCliError('pipeline manifest schema_version must be exactly 2');
+  if (manifest.source_type !== 'github_issues') {
+    return { status: 'PASS', run_id: runId, source_type: manifest.source_type ?? null, published: 0 };
+  }
+  if (!SHA256.test(String(manifest.source_requirements_sha256 ?? ''))) {
+    throw new GitHubIssueCliError('manifest source_requirements_sha256 is missing or invalid');
+  }
+  const issueNumbers = Array.isArray(manifest.source_issues)
+    ? manifest.source_issues.map((issue: any) => Number(issue.number)).filter((n: number) => Number.isInteger(n) && n > 0)
+    : [];
+  if (!issueNumbers.length) throw new GitHubIssueCliError('github_issues manifest has no source issue numbers');
+
+  const live = await readIssues(issueNumbers, { cwd });
+  const frozenRequirements = String(manifest.source_requirements_sha256).toLowerCase();
+  if (String(live.requirements_sha256).toLowerCase() !== frozenRequirements) {
+    throw new GitHubIssueCliError(
+      `SOURCE_REQUIREMENTS_CHANGED: frozen=${frozenRequirements} live=${String(live.requirements_sha256)}`,
+    );
+  }
+
+  const architectureRef = manifest.planning_readiness?.required_artifacts?.architecture;
+  const architecture = await readFrozenArtifact(runRoot, architectureRef, 'architecture');
+  let published = 0;
+  let existing = 0;
+
+  for (const number of issueNumbers) {
+    const sourceIssue = live.issues.find((issue: any) => Number(issue.number) === number);
+    const comments = Array.isArray(sourceIssue?.comments) ? sourceIssue.comments : [];
+    const storyPath = path.join(runRoot, 'stories', `issue-${number}.md`);
+    const storyContent = await readFile(storyPath, 'utf8').catch(() => undefined);
+    const artifacts: Array<{ kind: 'story' | 'architecture'; content: string; sha256: string }> = [];
+    if (storyContent !== undefined) {
+      artifacts.push({ kind: 'story', content: storyContent, sha256: sha256(storyContent) });
+    }
+    artifacts.push({ kind: 'architecture', content: architecture.content, sha256: architecture.sha256 });
+
+    for (const artifact of artifacts) {
+      const marker = artifactMarker(artifact.kind, runId, number);
+      if (comments.some((comment: any) => typeof comment.body === 'string' && comment.body.includes(marker))) {
+        existing += 1;
+        continue;
+      }
+      const body = renderArtifactComment(
+        artifact.kind,
+        runId,
+        number,
+        frozenRequirements,
+        artifact,
+      );
+      gh([
+        'api', '--method', 'POST',
+        `repos/${live.repository}/issues/${number}/comments`,
+        '-H', 'X-GitHub-Api-Version: 2022-11-28',
+        '-f', `body=${body}`,
+      ], cwd);
+      published += 1;
+    }
+  }
+  return { status: 'PASS', run_id: runId, repository: live.repository, published, existing };
+}
+
+function parseArgs(args: string[]): {
+  commandName: 'probe' | 'show' | 'publish-plan';
+  issueNumbers: number[];
+  runId?: string;
+  stateRoot?: string;
+} {
   const [commandName, ...rest] = args;
+  if (commandName === 'publish-plan') {
+    const runId = rest[0];
+    if (!runId) throw new GitHubIssueCliError('publish-plan requires run-id');
+    let stateRoot: string | undefined;
+    for (let i = 1; i < rest.length; i += 1) {
+      if (rest[i] !== '--state-root' || !rest[i + 1]) {
+        throw new GitHubIssueCliError('usage: github-issue-cli.ts publish-plan <run-id> [--state-root <path>]');
+      }
+      stateRoot = rest[++i];
+    }
+    return { commandName, runId, issueNumbers: [], stateRoot };
+  }
   if (commandName !== 'probe' && commandName !== 'show') {
-    throw new GitHubIssueCliError('usage: github-issue-cli.ts probe <issue-number>... | show <issue-number>...');
+    throw new GitHubIssueCliError(
+      'usage: github-issue-cli.ts probe <issue-number>... | show <issue-number>... | publish-plan <run-id> [--state-root <path>]',
+    );
   }
   const issueNumbers = rest.map(parseIssueNumber);
   if (!issueNumbers.length) throw new GitHubIssueCliError(`${commandName} requires at least one issue number`);
   return { commandName, issueNumbers };
 }
-
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
+  if (parsed.commandName === 'publish-plan') {
+    console.log(JSON.stringify(await publishPlanningArtifacts(parsed.runId!, { stateRoot: parsed.stateRoot }), null, 2));
+    return;
+  }
   if (parsed.commandName === 'show') {
     console.log(await showIssues(parsed.issueNumbers));
     return;
