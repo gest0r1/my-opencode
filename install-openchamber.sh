@@ -102,22 +102,19 @@ ensure_bun() {
   command -v bun >/dev/null 2>&1 || { echo 'Bun installation failed' >&2; exit 1; }
 }
 
-legacy_service_guard() {
-  if [[ -e "$LEGACY_DROP_A" || -e "$LEGACY_DROP_B" ]]; then
-    cat >&2 <<EOF
-LEGACY_SERVICE_DETECTED
-OpenChamber 1.x service overrides are still installed:
-  $LEGACY_DROP_A
-  $LEGACY_DROP_B
-This installer will not delete them. Disable the old service and remove only
-those legacy overrides explicitly, then run this installer again.
-EOF
-    exit 3
-  fi
-}
-
 ref_sha() {
   gh api "repos/$1/commits/$2" --jq .sha
+}
+
+state_value() {
+  [[ -f "$STATE" ]] || return 0
+  sed -n "s/^$1=//p" "$STATE" | head -1
+}
+
+file_sha256() {
+  local file=$1
+  [[ -f "$file" ]] || { printf 'missing'; return 0; }
+  sha256sum "$file" | awk '{print $1}'
 }
 
 read_ui_password_from_env_file() {
@@ -134,28 +131,125 @@ read_ui_password_from_env_file() {
   printf '%s' "$value"
 }
 
+inside_openchamber_terminal() {
+  [[ "${OPENCHAMBER_EMBEDDED_TERMINAL:-}" == 1 ]] && return 0
+
+  # Fallback for the migration from an older OpenChamber that did not export
+  # OPENCHAMBER_EMBEDDED_TERMINAL yet.
+  local pid="$$" parent='' args='' depth=0
+  while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$depth" -lt 12 ]]; do
+    parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ "$parent" =~ ^[0-9]+$ && "$parent" -gt 1 ]] || break
+    args="$(ps -o args= -p "$parent" 2>/dev/null || true)"
+    case "$args" in
+      *openchamber*serve*|*openchamber*/server/*|*packages/web/server/*|*packages/web/bin/cli.js*)
+        return 0
+        ;;
+    esac
+    pid="$parent"
+    depth=$((depth + 1))
+  done
+  return 1
+}
+
 validate_bind_host() {
-  # For an explicit IPv4 address, fail before touching startup if the address is
-  # not assigned to this host. This catches a changed Docker bridge cleanly.
-  if [[ "$HOST" =~ ^[0-9]+(\.[0-9]+){3}$ && "$HOST" != "0.0.0.0" && "$HOST" != 127.* ]]; then
+  if [[ "$HOST" =~ ^[0-9]+(\\.[0-9]+){3}$ && "$HOST" != "0.0.0.0" && "$HOST" != 127.* ]]; then
     if ! ip -4 -o addr show | grep -Fq " $HOST/"; then
       echo "OPENCHAMBER_BIND_HOST=$HOST is not assigned to this host." >&2
-      echo "Check the NPM Docker bridge address or override OPENCHAMBER_BIND_HOST explicitly." >&2
+      echo "Check the NPM Docker bridge address or override OPENCHAMBER_BIND_HOST." >&2
       exit 1
     fi
   fi
 }
 
+wait_for_service() {
+  local probe_host="$HOST" code='' attempt
+  [[ "$probe_host" != "0.0.0.0" ]] || probe_host="127.0.0.1"
+
+  for attempt in {1..45}; do
+    if systemctl --user is-active --quiet openchamber.service &&
+       ss -H -lnt | awk -v target="$HOST:$PORT" '$4 == target { found=1 } END { exit(found ? 0 : 1) }'; then
+      code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "http://$probe_host:$PORT/" || true)"
+      case "$code" in
+        200|301|302|303|307|308|401|403)
+          echo "OpenChamber ready: http://$probe_host:$PORT/ ($code)"
+          return 0
+          ;;
+      esac
+    fi
+    sleep 1
+  done
+
+  echo "OpenChamber did not become ready on $HOST:$PORT." >&2
+  systemctl --user status openchamber.service --no-pager -l >&2 || true
+  journalctl --user -u openchamber.service -n 80 --no-pager >&2 || true
+  return 1
+}
+
+write_env_dropin() {
+  mkdir -p "$DROP_DIR"
+  local tmp="$ENV_DROP.tmp.${BASHPID}"
+  cat > "$tmp" <<EOF
+# managed-by: my-opencode
+[Service]
+EnvironmentFile=-$COMMON_ENV
+Environment="OPENCODE_BINARY=$OPENCODE_BIN"
+EOF
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$ENV_DROP"
+}
+
+write_state() {
+  local restart_pending=$1 package_source=$2 package_fingerprint=$3
+  local tmp="${STATE}.tmp.${BASHPID}"
+  printf '%s\\n' \
+    "config_sha=$CONFIG_SHA" \
+    "openchamber_sha=$APP_SHA" \
+    "package_source_sha=$package_source" \
+    "package_fingerprint=$package_fingerprint" \
+    "openchamber_version=$EXPECTED_OPENCHAMBER_VERSION" \
+    "opencode_version=$OPENCODE_VERSION" \
+    "bind_host=$HOST" \
+    "bind_port=$PORT" \
+    "common_env_sha=$(file_sha256 "$COMMON_ENV")" \
+    "restart_pending=$restart_pending" \
+    > "$tmp"
+  mv -f "$tmp" "$STATE"
+}
+
 ensure_node22
-ensure_bun
-legacy_service_guard
 validate_bind_host
-mkdir -p "$(dirname "$STATE")"
+mkdir -p "$STATE_ROOT" "$CACHE_ROOT" "$UNIT_DIR"
+exec 9>"$LOCK"
+flock -x 9
+
 TMP="$(mktemp -d /tmp/openchamber-v2-install.XXXXXXXX)"
 trap 'rm -rf -- "$TMP"' EXIT
 
 CONFIG_SHA="$(ref_sha "$CONFIG_REPO" "$CONFIG_REF")"
 APP_SHA="$(ref_sha "$APP_REPO" "$APP_REF")"
+
+prev_config="$(state_value config_sha)"
+prev_app="$(state_value openchamber_sha)"
+prev_package_source="$(state_value package_source_sha)"
+prev_package_fingerprint="$(state_value package_fingerprint)"
+prev_host="$(state_value bind_host)"
+prev_port="$(state_value bind_port)"
+prev_env_sha="$(state_value common_env_sha)"
+prev_restart_pending="$(state_value restart_pending)"
+
+embedded_terminal=0
+if inside_openchamber_terminal; then
+  embedded_terminal=1
+fi
+
+effective_restart_mode="$RESTART_MODE"
+if [[ "$effective_restart_mode" == auto && "$embedded_terminal" == 1 ]]; then
+  effective_restart_mode=defer
+  echo "Embedded OpenChamber terminal detected: runtime/service restart will be deferred."
+elif [[ "$effective_restart_mode" == auto ]]; then
+  effective_restart_mode=now
+fi
 
 # Install OpenCode/config first. The config installer is authoritative for
 # OpenCode 2.0.21 and does not remove legacy OpenCode files.
