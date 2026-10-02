@@ -68,11 +68,15 @@ def main():
     require(cleanup, 'LEGACY_SKILL_ROOTS=(', "legacy global skill roots")
     require(cleanup, '$HOME/.opencode/skills', "legacy plural global skill root")
     require(cleanup, '$HOME/.opencode/skill', "legacy singular global skill root")
+    require(cleanup, 'LEGACY_COMMAND_ROOT="$HOME/.config/opencode/command"', "legacy singular command root")
     require(cleanup, 'OPENCHAMBER_CLEANUP_RUNTIME_MODE', "console-safe cleanup mode")
 
     # Canonical OpenCode locations and atomic managed-config replacement.
     require(config_installer, 'CONFIG_HOME="$HOME/.config/opencode"', "canonical config root")
     require(config_installer, 'mkdir -p "$STAGE_CONFIG/agents"', "canonical plural agent path")
+    require(config_installer, '"$STAGE_CONFIG/commands"', "canonical plural command path")
+    require(config_installer, 'agent|command) continue', "legacy source roots remapped")
+    require(config_installer, 'legacy singular command path still active', "legacy command invariant")
     require(config_installer, 'STAGE_CONFIG=', "staged config tree")
     require(config_installer, 'mv "$STAGE_CONFIG" "$CONFIG_HOME"', "atomic config commit")
     require(config_installer, 'rollback_transaction()', "atomic config rollback")
