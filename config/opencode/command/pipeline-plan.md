@@ -6,11 +6,14 @@ tags:
   - design-freeze
 ---
 
+Before creating or starting any PLAN/RUN, call `pipeline_runtime_preflight`. Require PASS from live tools, skills, exact subagent IDs and delegation permissions. `PIPELINE_CAPABILITY_UNAVAILABLE` stops execution with its concrete missing capability. Never implement inline or widen write permissions to bypass unavailable delegation.
+
+
 # Pipeline Planning — manually selected worktree
 
 Build a design-freeze PLAN only. Never implement source changes, create a worktree/branch/session, switch checkout, rebase, merge, clean, reset or invoke `openchamber session.create`. Owner opens an existing worktree-session and invokes this command inside that session. Other worktrees may PLAN concurrently; only one RUN executes at a time.
 
-`$ARGUMENTS` selects exactly one source mode: `--refresh <run-id>` for a CLI-created bounded refresh draft; same-repository Issue refs such as `#51 #47`; an existing task/plan file path; or free task text. Empty arguments are allowed only when OpenChamber attached synthetic context contains `Linked GitHub issues for this session:` with at least one `owner/repo#N` ref. There is NO fallback to `docs/plan.md`. Explicit `#N` arguments override linked refs. `docs/pipeline-rules.md` remains the rules path; project rules take precedence and invalid rules BLOCK. PLAN and all delegated agents must never edit project or distribution rules.
+`$ARGUMENTS` selects exactly one source mode: `--refresh <run-id>` for a CLI-created bounded refresh draft; same-repository Issue refs such as `#51 #47`; an existing task/plan file path; or free task text. Empty arguments are invalid. There is NO fallback to `docs/plan.md` and no OpenChamber linked-Issue source: GitHub Issues are selected explicitly with `#N`. `docs/pipeline-rules.md` remains the rules path; project rules take precedence and invalid rules BLOCK. PLAN and all delegated agents must never edit project or distribution rules.
 
 For `--refresh <run-id>`, require an existing schema-v2 draft created by `pipeline-refresh-cli` with `refresh_revalidation.classification="BOUNDED_IMPACT"` and lineage `MAIN_DRIFT_REPLAN`. Do **not** fetch a new source snapshot, create another run-id, copy artifacts, or rerun unaffected planning gates. Treat the inherited artifacts as draft context only; rerun exactly the gates in `refresh_revalidation.affected_gates`, recompile TaskManager work items when `rebuild_work_items=true`, refresh any execution/GitHub contracts those gates own, then complete the normal manifest/preflight/owner-approval sequence. If the draft or impact evidence is missing/inconsistent, BLOCK instead of falling back to a full PLAN.
 
@@ -19,16 +22,11 @@ For `--refresh <run-id>`, require an existing schema-v2 draft created by `pipeli
 0. Resolve source first. For GitHub Issue mode use only:
 
 ```text
-npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts fetch {run-id} <issue-number>...
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts probe <issue-number>...
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts show <issue-number>...
 ```
 
-The persisted `.tmp/pipelines/{run-id}/sources/github-issues.json` is authoritative. Record both returned `snapshot_sha256` and `requirements_sha256` in the v2 manifest as `source_snapshot_sha256` and `source_requirements_sha256`. Raw snapshot SHA protects local file integrity; semantic requirements SHA ignores fetch time and pipeline-owned audit comments so refresh can distinguish real requirement changes from pipeline bookkeeping. To read full bodies/comments use the non-mutating reader:
-
-```text
-npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts show {run-id} [issue-number...]
-```
-
-Never split, rewrite, normalize or temporarily edit the authoritative snapshot. OpenChamber refs are identifiers only. Do not substitute anonymous GitHub HTML/API requests, `webfetch`, free-form `curl` or `github_handoff_probe`.
+The GitHub Issue itself is authoritative; PLAN does not persist a raw Issue snapshot. Freeze the returned repository/source Issue metadata and semantic `requirements_sha256` as `source_requirements_sha256`. The digest covers Issue title/body and human comments while excluding pipeline-owned audit/planning comments. Immediately before design freeze, run the same `probe` again and require the digest to equal the value used for planning. Do not substitute anonymous GitHub HTML/API requests, `webfetch`, free-form `curl` or `github_handoff_probe`.
 
 1. `git-worktree-cli.ts inspect`: require owner-created linked worktree, non-default branch, valid local main and clean tracked checkout. Verify `.tmp/pipelines/` is ignored; tracked pipeline state BLOCKS.
 2. Record exact worktree directory, branch, HEAD and local main SHA in `git_setup.base_sha`; require main ancestor of HEAD. `stage-cli.ts rules docs/pipeline-rules.md --json` must PASS. PLAN never mutates Git.
@@ -120,13 +118,22 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
 
    Release packaging is separate from candidate CI/CD. If the target project already produces a releasable package/container/binary, preserve its release workflow and run it only for the actual release/tag/explicit release event; publish deliverables directly as GitHub Release/package-registry assets rather than using Actions artifacts as durable storage. Do not invent a universal release workflow when the project has no release product.
 9. Before manifest freeze call TaskManager. It writes atomic work items under `.tmp/pipelines/{run-id}/work-items/**`; freeze every work-item ID, path and SHA-256 in the manifest. Each pipeline maps its own work-item IDs and defines `decision_ids`, `research_ids`, `contract_ids`. A candidate CI bootstrap/adaptation work item and any deferred future stateful DEV workflow work item must be mapped to the same pipeline and their exact workflow paths must be inside `allowed_change_paths`; prefer narrow paths over `.github/workflows/**`. An **active** trusted stateful DEV workflow must remain outside candidate change scope. A `future_github_gates` workflow is allowed in change scope only because it cannot execute in the current run.
-10. Canonical planning artifacts are `decision-register.md`, `technology-evidence.md`, `contract-inventory.md`, `test-strategy.md`, `accepted-risks.md` and the work-item index. Obtain hashes only through:
+10. Mandatory planning artifacts are `decision-register.md` and the work-item index; the final architecture is already frozen as the required `architecture` gate artifact and is not duplicated in `required_artifacts`. `technology-evidence.md` is frozen only when external research was actually required; `contract-inventory.md` is frozen only when an interface/data/CLI/event contract was materially changed. Test strategy and accepted risks live inside the final architecture artifact rather than separate mandatory files. Obtain hashes only through:
 
 ```text
 stage-cli.ts artifacts {run-id} <run-relative-path>... --json
 ```
 
 Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum` or model-computed hashes.
+
+
+For GitHub Issue sourced PLANs, after all required planning gates and deterministic preflight pass and the owner explicitly approves the design freeze, publish the frozen Story/Architecture comments idempotently:
+
+```text
+npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts publish-plan {run-id}
+```
+
+A publish failure BLOCKS initialization/handoff; it must not alter the requirements digest because pipeline-owned artifact comments are excluded.
 
 ## Manifest schema v2
 
@@ -143,9 +150,7 @@ New PLANs MUST use `schema_version: 2`, `planning_mode: "design-freeze"` and:
 - optional frozen `project_policy` reference when repository policy exists;
 - frozen `deployment_target_check` evidence only for GitHub-initiated `opencode_host` CD.
 
-GitHub Issue mode additionally freezes `repository`, `source_issues[]`, `planning_base_sha`, per-pipeline `issue_numbers[]`, raw `source_snapshot_sha256` and semantic `source_requirements_sha256`.
-
-Schema v1 is legacy-read compatibility only; never create a new v1 PLAN.
+GitHub Issue mode additionally freezes `repository`, `source_issues[]`, `planning_base_sha`, per-pipeline `issue_numbers[]` and semantic `source_requirements_sha256`. Manifest schema version 2 is the only supported pipeline manifest format.
 
 ## Mandatory execution-gate contract
 
@@ -179,7 +184,7 @@ git-worktree-cli.ts adopt .tmp/pipelines/{run-id}/manifest.json
 git-worktree-cli.ts verify .tmp/pipelines/{run-id}/manifest.json
 ```
 
-All three must PASS. `plan-run-preflight` rejects schema v1 before the owner can approve it. `verify` must prove that the complete current branch diff is either the frozen preserved baseline or inside writable `allowed_change_paths`; do not defer a baseline/scope mismatch until RUN. V2 preflight verifies planning evidence hashes, source snapshot, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Before `init`, deterministic manifest corrections remain the same draft/run-id and are simply revalidated; after `init`, never mutate that manifest.
+All three must PASS. `plan-run-preflight` accepts only schema version 2. `verify` must prove that the complete current branch diff is either the frozen preserved baseline or inside writable `allowed_change_paths`; do not defer a baseline/scope mismatch until RUN. Preflight verifies planning evidence hashes, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Before `init`, deterministic manifest corrections remain the same draft/run-id and are simply revalidated; after `init`, never mutate that manifest.
 
 ## Preservation, migration, supersede and refresh
 
@@ -247,3 +252,6 @@ Available options:
 ```
 
 If the owner has said they will be away or wants a larger autonomous repair window, recommend a concrete higher ceiling, for example `/pipeline-run {run-id} --unattended --fix-cycles 10`. Do not choose a higher ceiling without that context. Never invoke RUN automatically.
+
+
+PR CI requires an existing PR number frozen as `github_gates.<stage>.pr_number` with `trigger: pull_request`. Use authenticated GitHub/CLI to inspect private PRs. The PR head must equal the published candidate; head/merge mapping is verified by the deterministic gate. Workflow bootstrap uses push.

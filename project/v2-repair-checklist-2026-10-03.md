@@ -1,0 +1,71 @@
+# V2 repair checklist — 2026-10-03
+
+Branches: `my-opencode:upgrade/opencode-v2`; `openchamber-ru:upgrade/openchamber-2.1.0`. No merge to main. Chat width 80% excluded; no UI edits.
+
+## Cycle 1 — permissions/delegation
+
+- Changed: source Markdown/config normalization; exact flat agent IDs; catch-all ordering; installation materializes `$HOME`, `${HOME}` and the installation user's absolute trusted CLI path without general shell allows.
+- Checks: all 38 source agents normalize with `markdown_changed=0 / config_changes=0`; protected-path and migration tests pass; GitHub installer contract and real V2 catalog/permissions smoke pass.
+- Commit: `330fa1fefae76ffad25c9ec609ed9d231eacfa3f`.
+- Remaining: cycles 2–3.
+
+## Cycle 2 — frozen RUN and PR CI
+
+- Changed: effective-view legacy schema-v2 migration from a SHA-authenticated snapshot; explicit repair error if recovery is impossible; refresh no longer requires the retired snapshot for a modern RUN; PR/head/base/merge mapping and stage evidence validation; existing push strictness retained.
+- Checks: 193 local tests pass; GitHub Pipeline contracts and real V2 smoke pass for the commit below.
+- Commit: `7ef71a9fe50c1f219e61509b7ec0796e97c1d698`.
+- Remaining: cycle 3.
+
+## Cycle 3 — capabilities/native tools/no-op
+
+- Changed: live capability preflight checks tools, exact worker IDs, skills and delegation permissions; no permission fallback. Handoff tools register through native V2 Plugin API; legacy dependency removed. Managed-source fingerprint plus installed-file receipt protects no-op decisions for standalone and OpenChamber installation.
+- Checks: native V2 plugin/tool registration and missing-delegation negative check; local regression suite; binary-only, no-op, config-only, immutable-runtime and installer checks. Exact repeat installation is additionally tested by real V2 live smoke.
+- Commit: `9de9352c5ff724e5a71f80a2b14f1f4b87b1110b`; final prompt correction is included in code SHA `cff7f28e74b3834a771fa7d9cebb8e539a6c1bfb`.
+- Final correction: agent examples now use `subagent(agent=...)`; StageOrchestrator no longer recommends invalid metadata aliases or a primary-agent target. Added regression check over all installed agent prompts.
+- Checks: 198 local tests pass. All 38 agents normalize with `markdown_changed=0 / config_changes=0`. Pipeline CI and real V2 live smoke, including identical no-op installation, pass for final code SHA `cff7f28e74b3834a771fa7d9cebb8e539a6c1bfb`. Installer CI passed for `9de9352` (installer code unchanged by the final prompt correction).
+- CI evidence: [Pipeline contracts](https://github.com/gest0r1/my-opencode/actions/runs/37117271639), [V2 live smoke + no-op](https://github.com/gest0r1/my-opencode/actions/runs/37117271642), [Installer contract](https://github.com/gest0r1/my-opencode/actions/runs/37117012636).
+- Remaining functional changes: none. Real model-driven worker turns and user-host upgrade are not performed by these registration/permission smoke tests.
+
+## Installation
+
+```bash
+gh api -H 'Accept: application/vnd.github.raw' 'repos/gest0r1/my-opencode/contents/install-openchamber.sh?ref=upgrade/opencode-v2' | OPENCODE_CONFIG_REF=upgrade/opencode-v2 OPENCHAMBER_REF=upgrade/openchamber-2.1.0 bash
+```
+
+Existing V2 installations need no cleanup. V1 cleanup stays a separate explicit command and is not embedded in the installer.
+
+## Cycle 4 — always refresh settings; bounded dependency installation
+
+- Supersedes the config no-op policy in cycle 3 by explicit owner decision: every invocation downloads the exact config SHA, stages the full settings/skills tree and validates plugins. No source fingerprint or installed-file receipt controls a config skip. Unchanged OpenCode binary and OpenChamber runtime packages remain reusable.
+- Changed: committed `config/opencode/bun.lock`; dependency installation uses `--production --frozen-lockfile`. Default total deadline 300 seconds (`OPENCODE_DEPENDENCY_TIMEOUT_SECONDS`), force termination grace 5 seconds, progress every 15 seconds. Detailed log is overwritten at `~/.local/state/my-opencode/opencode-dependency-install.log` (XDG_STATE_HOME honored). Cancellation is diagnosed separately from activation failure.
+- Checks: all 195 pipeline tests pass locally using the installed tsx loader (CLI IPC sockets are unavailable in this environment); 3 helper tests and installer/runtime/agent regressions pass. Real Bun 1.4.2 installs the frozen dependency graph and imports both V2 plugins. Negative tests cover dependency failure, timeout, cancellation and log replacement; full generation timeout preserves active config/skills/binary and removes both staging directories. Updated live CI verifies repeat full config installation with binary reuse.
+- Code commit: `c485190cccf95f730f8d10a2da0199f2c7fa219e`.
+- GitHub CI: [installer contracts](https://github.com/gest0r1/my-opencode/actions/runs/37119242418) and [real V2 install, 38 agents/permissions and repeat full config refresh with binary reuse](https://github.com/gest0r1/my-opencode/actions/runs/37119242353) passed.
+- Remaining: execution on the user's server. A deadline bounds waiting, but cannot guarantee registry/network availability.
+
+## Cycle 5 — approved agent model redistribution
+
+- Changed: 3 GPT Sol agents use `openai/gpt-6.1-sol` with `reasoningEffort: low`; SeniorStoryReviewer already uses GPT 6 Luna. Six remaining MiMo agents use `opencode-go/mimo-v2.6-flash` (build, BuildAgent, BatchExecutor, ContextManager, ContextScout, ADRManager). WebResearcher, ExternalScout, Context Retriever and OpenDataAnalyst use `opencode-go/longcat-2.5-preview-free`. OpenCopywriter, OpenTechnicalWriter, DocWriter and Simple Responder use `opencode-go/muse-spark-1.3-contributor`. Service `title` uses LongCat by explicit owner correction. Other models, permissions and model inheritance are preserved.
+- Checks: 8 model assignment tests pass; all 38 agents install and normalize with `markdown_changed=0 / config_changes=0`; permission/protected-path regressions pass. Exact MiMo, LongCat and Muse IDs confirmed against the live official Go `/models` endpoint. Model config and changes inspected locally.
+- Code commit: `216ad3853bf6c9b98ae9f932d2dd4187156f6226`. CI explicitly skipped by owner instruction for this model-only change.
+- Remaining: real model-driven turns on the user's authenticated server; registration/config tests do not measure model quality.
+
+## Cycle 6 — apply updated agent catalog to running service
+
+- Found: config-only updates replaced the config tree but did not participate in service restart decisions. This allows a running OpenCode to retain startup-cached configuration; the fork's native lifecycle explicitly restarts managed OpenCode on config changes. CI is not a distribution prerequisite: installer fetches source tarballs directly from immutable GitHub SHAs. The user's exact host cause remains unverified without its install log/on-disk/live catalog.
+- Changed: every successful config generation requires managed service reconciliation/restart. Embedded/defer mode keeps its console alive and records `service_restart_pending=1` with an explicit apply command. Existing binary/runtime download reuse remains intact.
+- Checks: local dynamic installer tests cover identical config install, changed config-only install and deferred config activation. Model assignment tests and installer syntax/contracts pass. CI now compares model choices source->installed->live, verifies reasoningEffort and native title model; previous live smoke verified catalog IDs/modes/permissions only.
+- Code commit: `660182874df353ef1ba8ebab0174637a9f6e3d68`.
+- CI passed: [installer contracts](https://github.com/gest0r1/my-opencode/actions/runs/37121760139) and [real V2 source/installed/live model + reasoning + title verification](https://github.com/gest0r1/my-opencode/actions/runs/37121760102).
+- Remaining: user's host confirmation; project-level overrides or an external OpenCode server need separate diagnosis if the discrepancy persists.
+
+
+## Cycle 7 — one canonical agent source and legacy-copy retirement
+
+- Confirmed from host diagnostics: current flat distribution files coexist with old nested files (code/CodeReviewer, code/BuildAgent). These are separate upstream IDs, not a proven subdirectory-priority rule.
+- Changed: before installing current files, candidate-tree cleanup removes distribution identities found by frontmatter name or current/source basename, at any depth, including edited copies. Independent user agents remain. Singular legacy roots migrate and are retired after atomic commit.
+- Changed: all distribution agent declarations use Markdown under the single upstream runtime agents/ root. build permissions and title model moved out of opencode.json; duplicate JSON agent keys are rejected before activation. Repository category directories remain source organization only.
+- Checks: old nested and renamed edited copies, user preservation, repeat installation, permission normalization, eight model tests, standard installer contracts and incremental/binary-only behavior passed locally. Real V2 CI seeded with previous nested/singular definitions checks live IDs, models, reasoning and absence of duplicate JSON definitions.
+- Final code/model commit: `85caf22019462141f6de61b4d30331daae040572`; contract tests updated through `6b91f83e8c59ae7f10d861a0666a4485311a4235`.
+- CI passed: [installer migration contracts](https://github.com/gest0r1/my-opencode/actions/runs/37123196446), [final real V2 catalog/models/reasoning/permissions and repeat update](https://github.com/gest0r1/my-opencode/actions/runs/37123548606), [all pipeline contracts](https://github.com/gest0r1/my-opencode/actions/runs/37123548624). The native title prompt/hidden primary behavior is preserved; build uses the V1 Markdown scalar doom_loop permission syntax.
+- Remaining: confirmation on the user's host. Project-local overrides remain upstream behavior; the global installer does not rewrite project trees.

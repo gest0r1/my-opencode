@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Install repository-managed OpenCode agents into the upstream global agents directory.
-# Existing legacy agent roots are migrated without deleting them, so rollback remains possible.
+# Existing legacy agent roots are migrated, then moved out of active lookup paths so OpenCode sees only the canonical agents tree.
+# OpenCode 2.x derives an agent ID from the path relative to agents/. Therefore
+# managed agents MUST be installed flat: agents/CoderAgent.md, not
+# agents/code/CoderAgent.md (which would register as code/CoderAgent).
 set -Eeuo pipefail
 
 if (( $# < 2 )); then
@@ -12,6 +15,11 @@ SOURCE_ROOT=$1
 TARGET_ROOT=$2
 shift 2
 LEGACY_ROOTS=("$@")
+LEGACY_BACKUP_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode/legacy-agent-roots/$(date -u +%Y%m%dT%H%M%SZ)"
+ARCHIVE_LEGACY="${OPENCODE_ARCHIVE_LEGACY:-1}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+NORMALIZER="$SCRIPT_DIR/normalize-opencode-agent-permissions.mjs"
+TARGET_CONFIG="$(dirname "$TARGET_ROOT")/opencode.json"
 
 [[ -d "$SOURCE_ROOT" ]] || { echo "Agent source directory not found: $SOURCE_ROOT" >&2; exit 1; }
 mkdir -p "$TARGET_ROOT"
@@ -45,15 +53,7 @@ frontmatter_name() {
 }
 
 validate_component() {
-  local kind=$1 value=$2
-  if [[ "$kind" == "category" ]]; then
-    [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
-      echo "Invalid agent category '$value'" >&2
-      return 1
-    }
-    return 0
-  fi
-
+  local value=$1
   [[ -n "$value" && "$value" != "." && "$value" != ".." && "$value" != */* && "$value" != *\\* ]] || {
     echo "Invalid agent name '$value'" >&2
     return 1
@@ -61,15 +61,10 @@ validate_component() {
 }
 
 destination_for() {
-  local relative=$1 name=$2
-  if [[ "$relative" == subagents/*/* ]]; then
-    local rest=${relative#subagents/}
-    local category=${rest%%/*}
-    validate_component category "$category"
-    printf '%s/%s/%s.md\n' "$TARGET_ROOT" "$category" "$name"
-  else
-    printf '%s/%s.md\n' "$TARGET_ROOT" "$name"
-  fi
+  local name=$1
+  # Do not preserve source categories here. OpenCode 2.0.21 recursively scans
+  # agents/**/*.md and includes subdirectories in the registered agent ID.
+  printf '%s/%s.md\n' "$TARGET_ROOT" "$name"
 }
 
 declare -A managed_names=()
@@ -80,7 +75,7 @@ install_managed() {
   relative=${file#"$SOURCE_ROOT/"}
   name=$(frontmatter_name "$file")
   [[ -n "$name" ]] || { echo "Managed agent has no frontmatter name: $relative" >&2; exit 1; }
-  validate_component name "$name"
+  validate_component "$name"
 
   if [[ -n "${managed_names[$name]+x}" ]]; then
     echo "Duplicate managed agent name '$name': ${managed_names[$name]} and $relative" >&2
@@ -88,8 +83,7 @@ install_managed() {
   fi
   managed_names[$name]=$relative
 
-  destination=$(destination_for "$relative" "$name")
-  mkdir -p "$(dirname "$destination")"
+  destination=$(destination_for "$name")
   cp -p "$file" "$destination"
 }
 
@@ -104,13 +98,12 @@ migrate_legacy() {
       basename=${relative##*/}
       name=${basename%.md}
     fi
-    if ! validate_component name "$name" 2>/dev/null; then
+    if ! validate_component "$name" 2>/dev/null; then
       echo "Skipping legacy agent with unsafe name: $file" >&2
       continue
     fi
 
-    destination=$(destination_for "$relative" "$name")
-    mkdir -p "$(dirname "$destination")"
+    destination=$(destination_for "$name")
     if [[ -e "$destination" ]]; then
       echo "Legacy agent already has a standard-path counterpart, keeping existing file: $destination"
       continue
@@ -124,11 +117,55 @@ for legacy_root in "${LEGACY_ROOTS[@]}"; do
   migrate_legacy "$legacy_root"
 done
 
+# Remove every previous distribution copy, including edited nested files.
+node "$SCRIPT_DIR/retire-opencode-agent-copies.mjs" "$SOURCE_ROOT" "$TARGET_ROOT"
+
 while IFS= read -r -d '' file; do
   install_managed "$file"
 done < <(find "$SOURCE_ROOT" -type f -name '*.md' -print0 | sort -z)
 
-echo "Installed ${#managed_names[@]} managed agents into $TARGET_ROOT"
-if (( ${#LEGACY_ROOTS[@]} > 0 )); then
-  echo "Legacy agent directories were retained for rollback."
+# During the full config staging path, normalize legacy delegation aliases and
+# make Markdown the single permission source for agents that declare their own
+# permission: block. Restrict mutation to repository-managed agents: preserved
+# user agents may participate in the catalog but must not be rewritten.
+if [[ -f "$TARGET_CONFIG" ]]; then
+  [[ -f "$NORMALIZER" ]] || {
+    echo "Agent permission normalizer missing: $NORMALIZER" >&2
+    exit 1
+  }
+  command -v node >/dev/null 2>&1 || {
+    echo "Node.js is required for agent permission normalization." >&2
+    exit 1
+  }
+  node "$NORMALIZER" "$TARGET_CONFIG" "$TARGET_ROOT" "$SOURCE_ROOT"
 fi
+
+archive_legacy_root() {
+  local root=$1 relative safe_name destination
+  [[ -d "$root" ]] || return 0
+
+  relative=${root#"$HOME/"}
+  safe_name=${relative//\//__}
+  safe_name=${safe_name//./_}
+  mkdir -p "$LEGACY_BACKUP_ROOT"
+  destination="$LEGACY_BACKUP_ROOT/$safe_name"
+  [[ ! -e "$destination" ]] || destination="${destination}-${BASHPID}"
+
+  mv "$root" "$destination"
+  echo "Removed legacy agent lookup root: $root"
+  echo "Legacy agent backup: $destination"
+}
+
+# Managed files are installed successfully at this point. Remove the old lookup
+# roots from OpenCode discovery while keeping a rollback copy outside config.
+if [[ "$ARCHIVE_LEGACY" == "1" ]]; then
+  for legacy_root in "${LEGACY_ROOTS[@]}"; do
+    archive_legacy_root "$legacy_root"
+  done
+elif [[ "$ARCHIVE_LEGACY" != "0" ]]; then
+  echo "OPENCODE_ARCHIVE_LEGACY must be 0 or 1" >&2
+  exit 2
+fi
+
+echo "Installed ${#managed_names[@]} managed agents into $TARGET_ROOT"
+

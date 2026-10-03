@@ -30,15 +30,12 @@ async function fixture(runId = 'v2-run') {
     return { path: relative, sha256: sha(content) };
   };
 
+  const architecture = await frozen('planning/architecture-1.md', '# architecture\n');
   const artifacts = {
     decision_register: await frozen('decision-register.md', '# decisions\n'),
-    technology_evidence: await frozen('technology-evidence.md', '# evidence\n'),
-    contract_inventory: await frozen('contract-inventory.md', '# contracts\n'),
-    test_strategy: await frozen('test-strategy.md', '# tests\n'),
-    accepted_risks: await frozen('accepted-risks.md', '# risks\n'),
+    architecture,
     work_items: await frozen('work-items/index.json', '{"items":["wi-1"]}\n'),
   };
-  const architecture = await frozen('planning/architecture-1.md', '# architecture\n');
   const review = await frozen('reviews/architecture-review-1.md', '# review\n');
   const item = await frozen('work-items/wi-1.json', '{"id":"wi-1"}\n');
 
@@ -299,6 +296,8 @@ test('schema v2 protects stateful DEV behind trusted default-branch workflow', a
       concurrency_group: 'development',
       target_id: 'opencode-development-host',
       source_ci_stage: 'tests',
+      artifact: 'dev-evidence',
+      evidence_file: 'dev-evidence.json',
     },
   };
 
@@ -449,24 +448,24 @@ test('schema v2 rejects source-mutating agent stages after source-ready boundary
   );
 });
 
-test('schema v2 freezes authoritative GitHub Issue snapshot hash', async () => {
+test('schema v2 requires semantic GitHub Issue digest without a local snapshot', async () => {
   const fx = await fixture('v2-github');
-  const snapshot = await fx.frozen('sources/github-issues.json', '{"issues":[5]}\n');
   fx.manifest.source_type = 'github_issues';
   fx.manifest.repository = 'owner/repo';
   fx.manifest.source_issues = [{ repository: 'owner/repo', number: 5, url: 'https://github.com/owner/repo/issues/5', title: 'Five' }];
   fx.manifest.pipelines[0].issue_numbers = [5];
   fx.manifest.planning_base_sha = 'a'.repeat(40);
   fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/v2' };
-  fx.manifest.source_snapshot_sha256 = snapshot.sha256;
+
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /source_requirements_sha256/,
+  );
+
+  fx.manifest.source_requirements_sha256 = '1'.repeat(64);
   assert.equal(
     validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
     'PASS',
-  );
-  await writeFile(path.join(fx.runRoot, 'sources', 'github-issues.json'), '{"issues":[6]}\n');
-  assert.throws(
-    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
-    /snapshot SHA-256 mismatch/,
   );
 });
 
@@ -487,29 +486,23 @@ test('schema v2 validates optional planning read-sets for incremental refresh', 
   );
 });
 
-test('schema v2 validates semantic GitHub Issue requirements digest when frozen', async () => {
+test('schema v2 validates semantic GitHub Issue requirements digest shape', async () => {
   const fx = await fixture('v2-github-semantic');
-  const semantic = '1'.repeat(64);
-  const snapshot = await fx.frozen(
-    'sources/github-issues.json',
-    JSON.stringify({ requirements_sha256: semantic, issues: [{ number: 5 }] }) + '\n',
-  );
   fx.manifest.source_type = 'github_issues';
   fx.manifest.repository = 'owner/repo';
   fx.manifest.source_issues = [{ repository: 'owner/repo', number: 5, url: 'https://github.com/owner/repo/issues/5', title: 'Five' }];
   fx.manifest.pipelines[0].issue_numbers = [5];
   fx.manifest.planning_base_sha = 'a'.repeat(40);
   fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/v2' };
-  fx.manifest.source_snapshot_sha256 = snapshot.sha256;
-  fx.manifest.source_requirements_sha256 = semantic;
+  fx.manifest.source_requirements_sha256 = '1'.repeat(64);
   assert.equal(
     validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }).status,
     'PASS',
   );
-  fx.manifest.source_requirements_sha256 = '2'.repeat(64);
+  fx.manifest.source_requirements_sha256 = 'not-a-sha';
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
-    /semantic GitHub Issue requirements SHA-256 mismatch/,
+    /source_requirements_sha256/,
   );
 });
 
@@ -1348,66 +1341,6 @@ test('technical fix after publish reopens verify and publish before GitHub CI', 
   result = invoke(['next', fx.manifest.run_id, '--json']);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).runnable, [{ pipeline_id: 'app', stage: 'git-verify' }]);
-});
-
-test('new init and pre-approval checks reject v1 while historical v1 status remains readable', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'pipeline-v1-readonly-'));
-  const stateRoot = path.join(root, '.tmp', 'pipelines');
-  const manifestPath = path.join(root, 'manifest.json');
-  const manifest = {
-    schema_version: 1,
-    run_id: 'legacy-v1',
-    rules_file: 'docs/pipeline-rules.md',
-    rules_version: 2,
-    pipelines: [{ id: 'app', stages: ['implementation'] }],
-    gate_profiles: {},
-  };
-  const manifestText = JSON.stringify(manifest, null, 2);
-  await writeFile(manifestPath, manifestText);
-
-  let result = run(root, ['plan-run-preflight', manifestPath, '--environment']);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /NEW_PLAN_SCHEMA_V2_REQUIRED/);
-
-  result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /NEW_PLAN_SCHEMA_V2_REQUIRED/);
-
-  const rulesPath = path.join(HERE, '..', 'pipeline-rules.default.md');
-  const rulesText = await readFile(rulesPath, 'utf8');
-  const rulesVersion = Number(rulesText.match(/rules_version:\s*(\d+)/)?.[1]);
-  const legacyRoot = path.join(stateRoot, manifest.run_id);
-  await mkdir(legacyRoot, { recursive: true });
-  await writeFile(path.join(legacyRoot, 'state.json'), JSON.stringify({
-    schema_version: 1,
-    run_id: manifest.run_id,
-    manifest_file: manifestPath,
-    manifest_sha256: sha(manifestText),
-    rules_file: rulesPath,
-    rules_source: 'opencode_default',
-    rules_version: rulesVersion,
-    rules_sha256: sha(rulesText),
-    status: 'approved',
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    active_stages: [],
-    pipelines: {
-      app: {
-        id: 'app',
-        status: 'approved',
-        stages: { implementation: { status: 'pending' } },
-        stage_order: ['implementation'],
-        depends_on: [],
-      },
-    },
-    history: [],
-  }, null, 2));
-
-  result = run(root, ['status', manifest.run_id, '--state-root', stateRoot, '--json']);
-  assert.equal(result.status, 0, result.stderr);
-  result = run(root, ['run-preflight', manifest.run_id, '--state-root', stateRoot]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /LEGACY_V1_REPLAN_REQUIRED/);
 });
 
 test('automatic repair counter permits exactly five default cycles and blocks the sixth', async () => {

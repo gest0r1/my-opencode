@@ -95,7 +95,7 @@ A **new owner approval** is required for the bounded run before `/pipeline-run`.
 
 ### `STRUCTURAL_IMPACT`
 
-Use when semantic Issue requirements changed, project/distribution rules or frozen project policy changed, schema v1 is involved, history diverged, or deterministic impact cannot prove a bounded revalidation is safe.
+Use when semantic Issue requirements changed, project/distribution rules or frozen project policy changed, history diverged, or deterministic impact cannot prove a bounded revalidation is safe.
 
 No new run is copied automatically. Preserve the old run as history and require a normal new `/pipeline-plan` from the authoritative source.
 
@@ -117,19 +117,9 @@ New schema-v2 PLANs freeze `planning_inputs`:
 
 Keys should correspond to actual planning gate IDs where practical; `work_items` is reserved for TaskManager recompilation. Paths use the same exact-path or `directory/**` syntax as other pipeline scopes.
 
-Legacy v2 manifests without `planning_inputs` use a conservative fallback from their frozen freshness/change scopes, so they remain safe but may require more bounded revalidation than newly planned runs.
+## Live Issue requirements semantics
 
-## Source snapshot semantics
-
-Raw `source_snapshot_sha256` still protects the local authoritative snapshot file from mutation.
-
-New PLANs also freeze `source_requirements_sha256`, derived from Issue title/body and human comments. The semantic digest excludes:
-
-- `fetched_at`;
-- pipeline-generated comments containing `<!-- pipeline-event:... -->`;
-- Issue `updated_at` changes caused only by those audit comments.
-
-A human edit to title/body or a human comment still changes the semantic digest and forces `STRUCTURAL_IMPACT`.
+GitHub Issue PLANs freeze only `source_requirements_sha256`; no raw local Issue snapshot is authoritative. Refresh reads the current Issue title/body/comments from GitHub and compares the live semantic digest with the frozen value. The digest excludes pipeline-generated comments containing `<!-- pipeline-event:... -->` or `<!-- pipeline-artifact:... -->`. A human edit to title/body or a human comment changes the digest and forces `STRUCTURAL_IMPACT`.
 
 ## Stop conditions
 

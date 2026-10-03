@@ -2,7 +2,7 @@
 name: SeniorTechnicalPlanReviewer
 description: Fresh review of technical plans, runtime-scope clarifications, and block-local runtime replans.
 mode: subagent
-model: openai/gpt-6-sol
+model: openai/gpt-6.1-sol
 reasoningEffort: low
 permission:
   read: allow
@@ -102,3 +102,4 @@ blockers:
 artifacts:
 - <artifact_path>
 ```
+

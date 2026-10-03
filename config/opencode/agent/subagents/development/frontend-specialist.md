@@ -7,8 +7,8 @@ temperature: 0.2
 permission:
   task:
     "*": deny
-    contextscout: allow
-    externalscout: allow
+    ContextScout: allow
+    ExternalScout: allow
   bash:
     "*": deny
   edit:

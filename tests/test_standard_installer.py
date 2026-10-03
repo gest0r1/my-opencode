@@ -1,132 +1,127 @@
 #!/usr/bin/env python3
-"""Contract tests for cached installs, wildcard bind and explicit rollback host."""
-import os
+"""Static contracts for the incremental OpenCode/OpenChamber V2 installer."""
 from pathlib import Path
-import subprocess
-import tempfile
 
-SHA = "a" * 40
-BUNDLE_SHA = "b" * 40
-VERSION = "1.18.31"
-ROOT_REPO = Path(__file__).resolve().parents[1]
-
-
-def executable(path: Path, content: str):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
-    path.chmod(0o755)
+ROOT = Path(__file__).resolve().parents[1]
+wrapper = (ROOT / "install-openchamber.sh").read_text()
+core = (ROOT / "scripts/install-openchamber-v2-core.sh").read_text()
+runtime_store = (ROOT / "scripts/openchamber-runtime-store.sh").read_text()
+config_bootstrap = (ROOT / "install.sh").read_text()
+config_generation = (ROOT / "scripts/install-opencode-generation.sh").read_text()
+cleanup = (ROOT / "scripts/cleanup-openchamber-v1-before-v2.sh").read_text()
+installer = wrapper + "\n" + core
+config_installer = config_bootstrap + "\n" + config_generation
 
 
-def run_installer(env):
-    result = subprocess.run(["bash", str(ROOT_REPO / "install-openchamber.sh")],
-                            env=env, text=True, capture_output=True)
-    assert result.returncode == 0, result.stdout + "\n" + result.stderr
-    assert "Already current:" in result.stdout, result.stdout
+def require(text: str, needle: str, label: str):
+    assert needle in text, f"missing contract: {label}: {needle}"
+
+
+def forbid(text: str, needle: str, label: str):
+    assert needle not in text, f"forbidden regression: {label}: {needle}"
 
 
 def main():
-    installer_source = (ROOT_REPO / "install-openchamber.sh").read_text()
-    assert '"$STATE.tmp.$"' not in installer_source
-    assert '"$ROOT/.current-new.$"' not in installer_source
+    # Version/network contract.
+    require(core, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"', "OpenCode pin")
+    require(core, 'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.0}"',
+            "OpenChamber pin")
+    require(core, 'HOST="${OPENCHAMBER_BIND_HOST:-172.18.0.1}"', "NPM bridge default")
+    require(core, 'PORT="${OPENCHAMBER_BIND_PORT:-3000}"', "default port")
+    require(wrapper, 'attempt<30', "bounded readiness retry")
+    forbid(installer, '2.0.22', "unapproved OpenCode version bump")
 
-    with tempfile.TemporaryDirectory(prefix="opencode-install-test-") as directory:
-        tmp = Path(directory)
-        home = tmp / "home"
-        root = home / ".local/share/openchamber"
-        release = root / "releases" / BUNDLE_SHA
-        (release / "packages/web/bin").mkdir(parents=True)
-        (release / "packages/sdk/dist").mkdir(parents=True)
-        (release / "packages/web/bin/cli.js").write_text("// existing bundle\n")
-        (release / "packages/sdk/dist/index.js").write_text("// existing sdk\n")
-        executable(release / "opencode-cli/node_modules/.bin/opencode", f"#!/bin/sh\necho {VERSION}\n")
-        (root / "bin").mkdir(parents=True)
-        (root / "current").symlink_to("releases/" + BUNDLE_SHA)
-        executable(root / "bin/openchamber", "#!/bin/sh\nexit 0\n")
-        (root / "bin/opencode").symlink_to("../current/opencode-cli/node_modules/.bin/opencode")
-        executable(home / ".opencode/bin/opencode", f"#!/bin/sh\necho {VERSION}\n")
-        state = home / ".local/state/my-opencode/openchamber-install.state"
-        state.parent.mkdir(parents=True)
-        state.write_text(
-            f"config_sha={SHA}\nopenchamber_sha={SHA}\nbundle_source_sha={BUNDLE_SHA}\nopencode_version={VERSION}\n"
-        )
-        unit_dir = home / ".config/systemd/user"
-        drop_dir = unit_dir / "openchamber.service.d"
-        drop_dir.mkdir(parents=True)
-        (unit_dir / "openchamber.service").write_text("[Service]\nExecStart=/usr/local/bin/openchamber\n")
-        drop = drop_dir / "90-openchamber-runtime.conf"
-        drop.write_text(
-            "[Service]\nExecStart=/usr/local/bin/openchamber serve --foreground --host 127.0.0.1 --port 3000\n"
-        )
-        fake = tmp / "fake-bin"
-        fake.mkdir()
-        log = tmp / "gh.log"
-        executable(fake / "gh", """#!/bin/bash
-set -Eeuo pipefail
-printf '%s\\n' "$*" >> "$TEST_GH_LOG"
-if [[ "$1 $2" == 'auth status' ]]; then exit 0; fi
-if [[ "$1" == api ]]; then echo "$TEST_SHA"; exit 0; fi
-if [[ "$1 $2" == 'release download' ]]; then
-  dir=''
-  while (( $# )); do
-    if [[ "$1" == --dir ]]; then dir="$2"; break; fi
-    shift
-  done
-  [[ -n "$dir" ]]
-  printf '{"schema_version":3,"platform":"linux-x64","source_sha":"%s","bundle_source_sha":"%s","bundle_tag":"linux-bundle-%s","asset":"openchamber-integration-linux-x64-%s.tar.gz","sha256":"%s","opencode_version":"1.18.31","bundle_fingerprint":"%s"}\\n' "$TEST_SHA" "$TEST_BUNDLE_SHA" "$TEST_BUNDLE_SHA" "$TEST_BUNDLE_SHA" "$(printf '%064d' 0)" "$(printf 'c%.0s' {1..64})" > "$dir/manifest.json"
-  exit 0
-fi
-exit 96
-""")
-        executable(fake / "ip", "#!/bin/sh\nexit 0\n")
-        executable(fake / "ss", "#!/bin/sh\nexit 0\n")
-        executable(fake / "systemctl", "#!/bin/sh\nexit 0\n")
-        env = os.environ.copy()
-        env.update({
-            "HOME": str(home), "XDG_DATA_HOME": str(home / ".local/share"),
-            "XDG_STATE_HOME": str(home / ".local/state"),
-            "PATH": str(fake) + ":" + env["PATH"],
-            "OPENCODE_CONFIG_REF": "integration/test", "OPENCHAMBER_REF": "integration/test",
-            "OPENCHAMBER_BIND_HOST": "127.0.0.1", "TEST_SHA": SHA,
-            "TEST_BUNDLE_SHA": BUNDLE_SHA, "TEST_GH_LOG": str(log),
-        })
-        run_installer(env)
-        assert sum("release download" in line for line in log.read_text().splitlines()) == 1
-        print("PASS: repeat install fetched only manifest, no binary/archive/config downloads")
+    # Outer transaction resolves branch refs once and all children use immutable SHAs.
+    require(wrapper, 'CONFIG_SHA="$(gh api "repos/$CONFIG_REPO/commits/$CONFIG_REF" --jq .sha)"',
+            "exact config SHA resolution")
+    require(wrapper, 'APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"',
+            "exact OpenChamber SHA resolution")
+    require(wrapper, 'install-openchamber-v2-core.sh openchamber-runtime-store.sh', "exact core fetch")
+    require(wrapper, 'contents/scripts/$file?ref=$CONFIG_SHA', "exact runtime helper fetch")
+    require(wrapper, 'export OPENCODE_CONFIG_REF="$CONFIG_SHA"', "pinned config ref")
+    require(wrapper, 'OPENCHAMBER_REF="$APP_SHA"', "pinned app ref")
+    assert wrapper.index('OPENCHAMBER_REF="$APP_SHA"') < wrapper.index('bash +h "$TMP/install-openchamber-v2-core.sh"')
 
-        # A new main SHA may point to the same verified bundle. Advancing source
-        # identity must not download or restart an unchanged runtime.
-        old_source = "d" * 40
-        state.write_text(
-            f"config_sha={SHA}\nopenchamber_sha={old_source}\nbundle_source_sha={BUNDLE_SHA}\nopencode_version={VERSION}\n"
-        )
-        result = subprocess.run(["bash", str(ROOT_REPO / "install-openchamber.sh")],
-                                env=env, text=True, capture_output=True)
-        assert result.returncode == 0, result.stdout + "\n" + result.stderr
-        assert f"Advanced OpenChamber source to {SHA} using cached bundle {BUNDLE_SHA}" in result.stdout
-        assert f"openchamber_sha={SHA}" in state.read_text()
-        assert f"bundle_source_sha={BUNDLE_SHA}" in state.read_text()
-        assert sum("release download" in line for line in log.read_text().splitlines()) == 2
-        print("PASS: new source SHA reused cached verified bundle without large download")
+    # 1.x-style independent incremental decisions.
+    require(core, 'opencode_binary_changed=0', "OpenCode binary decision")
+    forbid(core, 'GENERATION_RECEIPT=', 'no fingerprint config skip')
+    require(core, 'OPENCODE_SKIP_BINARY_INSTALL=1', "config-only binary skip")
+    require(core, 'Config-only update:', 'always refresh config')
+    require(core, 'write_state "$runtime_pending" 1', 'configuration activation pending native startup')
+    require(core, 'v2-web-package-$APP_SHA', "exact-SHA OpenChamber manifest")
+    require(core, 'runtime_fingerprint', "runtime fingerprint")
+    require(core, 'package_source_sha', "reusable package source")
+    require(core, 'OpenChamber source/runtime metadata unchanged: release lookup skipped',
+            "manifest lookup fast path")
+    require(core, 'OpenChamber runtime fingerprint/package unchanged: package download skipped',
+            "runtime package fast path")
+    require(core, 'Using cached verified OpenChamber package', "verified package cache")
+    require(core, 'sha256sum -c -', "package integrity")
+    require(core, 'bun run --cwd packages/web build', "explicit source fallback")
 
-        # A Docker bridge now selects the upstream-compatible wildcard listener.
-        executable(fake / "ip", "#!/bin/sh\necho '    inet 172.18.0.1/16 scope global br-test'\n")
-        drop.write_text(
-            "[Service]\nExecStart=/usr/local/bin/openchamber serve --foreground --host 0.0.0.0 --port 3000\n"
-        )
-        env.pop("OPENCHAMBER_BIND_HOST")
-        run_installer(env)
-        assert sum("release download" in line for line in log.read_text().splitlines()) == 3
-        print("PASS: Docker bridge selects wildcard bind with no unnecessary archive download")
+    # Always refresh settings; unchanged binary remains independently reusable.
+    require(config_bootstrap, 'GENERATION_PATH="scripts/install-opencode-generation.sh"', 'generation installer split')
+    require(config_bootstrap, 'export OPENCODE_SKIP_BINARY_INSTALL=1', 'unchanged binary skip')
+    require(config_bootstrap, 'contents/$GENERATION_PATH?ref=$CONFIG_SHA', 'exact generation fetch')
+    forbid(config_bootstrap, 'generation_unchanged=', 'no fingerprint config skip')
 
-        # The operator can explicitly restore the old interface-only bind.
-        drop.write_text(
-            "[Service]\nExecStart=/usr/local/bin/openchamber serve --foreground --host 172.18.0.1 --port 3000\n"
-        )
-        env["OPENCHAMBER_BIND_HOST"] = "172.18.0.1"
-        run_installer(env)
-        assert sum("release download" in line for line in log.read_text().splitlines()) == 4
-        print("PASS: explicit bind override remains available for rollback")
+    # Full generation installer remains the standalone/config-change path.
+    require(config_generation, 'CONFIG_HOME="$HOME/.config/opencode"', "canonical config root")
+    require(config_generation, 'mkdir -p "$STAGE_CONFIG/agents"', "canonical plural agents")
+    require(config_generation, '"$STAGE_CONFIG/commands"', "canonical plural commands")
+    require(config_generation, 'OPENCODE_SKIP_BINARY_INSTALL', "config-only support")
+    require(config_generation, 'https://opencode.ai/v2/install', "full install official binary path")
+    require(config_generation, 'rollback_transaction()', "config rollback")
+    require(config_generation, 'rollback_binary()', "full-install binary rollback")
+    require(config_generation, 'mv "$STAGE_CONFIG" "$CONFIG_HOME"', "atomic config commit")
+    require(config_generation, 'install-opencode-dependencies.sh', 'bounded locked dependencies')
+    require(config_generation, 'pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export',
+            "plugin validation")
+    require(config_generation, 'github-handoff.ts is not a native V2 plugin',
+            "custom tool validation")
+    require(config_generation, 'OpenCode V2 does not load config.instructions; use global AGENTS.md',
+            "V2 instruction contract")
+    require(config_generation, 'legacy singular command path still active', "legacy command rejection")
+
+    # Atomic binary transaction and self-preserving embedded-terminal mode.
+    require(wrapper, 'exec 8>"$STATE_ROOT/openchamber-v2-atomic.lock"',
+            "outer transaction lock")
+    require(wrapper, 'flock -x 8', "outer serialization")
+    require(core, 'flock -x 9', "core lock")
+    require(core, 'OPENCHAMBER_EMBEDDED_TERMINAL', "embedded terminal marker")
+    require(core, 'effective_restart_mode=defer', "self-preserving defer")
+    require(wrapper, 'PENDING APPLY:', "pending apply handoff")
+    forbid(core, 'systemctl --user restart', "core does not control services")
+    forbid(core, 'write_env_dropin', "core does not write dropins")
+    forbid(wrapper, 'oc_snapshot_service', "binary-only transaction")
+    require(wrapper, 'oc_rollback_activation', "binary rollback")
+    require(wrapper, 'oc_activate_release', "runtime activation")
+    require(wrapper, 'OPENCHAMBER_STARTUP_LAUNCHER=', "native stable launcher")
+    require(wrapper, 'native_startup', "native service ownership")
+    require(wrapper, 'readiness', "commit readiness")
+    require(wrapper, 'oc_prune_releases', "bounded runtime retention")
+
+    require(runtime_store, 'OPENCHAMBER_RELEASES="$OPENCHAMBER_RUNTIME_ROOT/releases"',
+            "immutable releases root")
+    require(runtime_store, 'OPENCHAMBER_CURRENT="$OPENCHAMBER_RUNTIME_ROOT/current"',
+            "current symlink")
+    require(runtime_store, 'mv -Tf "$link_tmp" "$OPENCHAMBER_CURRENT"', "atomic current publish")
+    require(runtime_store, 'oc_rollback_activation()', "runtime rollback")
+    require(runtime_store, 'oc_remove_legacy_bun_global()', "post-commit legacy Bun retirement")
+
+    # Migration cleanup remains explicit/separate and keeps credentials/rollback source.
+    require(cleanup, 'preserve_ui_password_only', "UI password migration")
+    require(cleanup, 'OPENCHAMBER_CLEANUP_RUNTIME_MODE', "console-safe cleanup mode")
+    require(cleanup, 'LEGACY_AGENT_ROOTS=(', "legacy agents")
+    require(cleanup, 'LEGACY_SKILL_ROOTS=(', "legacy skills")
+    require(cleanup, 'archive_lookup_root "$PLUGIN_ROOT"', "plugin lookup retirement")
+    require(cleanup, 'archive_lookup_root "$LEGACY_TOOL_ROOT"', "tool lookup retirement")
+    require(cleanup, 'retained as rollback source until atomic commit', "rollback source retention")
+    forbid(cleanup, 'bun remove -g @openchamber/web', "pre-migration runtime destruction")
+
+    print("PASS: V2 installer contract is incremental, ref-pinned, atomic and migration-safe")
 
 
 if __name__ == "__main__":
     main()
+
