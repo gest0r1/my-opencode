@@ -7,6 +7,7 @@ on:
     paths:
       - 'install.sh'
       - 'scripts/install-opencode-agents.sh'
+      - 'scripts/retire-opencode-agent-copies.mjs'
       - 'scripts/normalize-opencode-agent-permissions.mjs'
       - 'scripts/materialize-opencode-trusted-paths.mjs'
       - 'scripts/install-opencode-generation.sh'
@@ -37,6 +38,10 @@ jobs:
           OPENCODE_INSTALL_VERSION: 2.0.21
         run: |
           set -Eeuo pipefail
+          # Reproduce the previous installation: nested edited distribution copies.
+          mkdir -p "$HOME/.config/opencode/agents/code" "$HOME/.config/opencode/agent"
+          printf '%s\n' '---' 'name: CodeReviewer' 'model: openai/gpt-6-sol' '---' > "$HOME/.config/opencode/agents/code/CodeReviewer.md"
+          printf '%s\n' '---' 'name: BuildAgent' 'model: opencode-go/mimo-v2.5' '---' > "$HOME/.config/opencode/agent/BuildAgent.md"
           bash install.sh
 
       - name: Validate real V2 config, agents and permissions
@@ -101,6 +106,12 @@ jobs:
           const agents = JSON.parse(fs.readFileSync('/tmp/opencode-agents.txt', 'utf8'));
           const idOf = (agent) => agent.id ?? agent.name;
           const byID = new Map(agents.map((agent) => [idOf(agent), agent]));
+          for (const agent of agents) {
+            const id = idOf(agent);
+            if (id.includes('/') && byID.has(id.split('/').at(-1))) throw new Error(`Obsolete distribution ID: ${id}`);
+          }
+          if (fs.existsSync(path.join(os.homedir(), '.config/opencode/agent'))) throw new Error('Legacy agent root active');
+          if (JSON.parse(fs.readFileSync(path.join(os.homedir(), '.config/opencode/opencode.json'), 'utf8')).agents) throw new Error('Duplicate JSON agent definitions');
           console.error('Resolved agent catalog:', agents.map((agent) => `${idOf(agent)}:${agent.mode}`).join(', '));
 
           const serialized = JSON.stringify(config);
@@ -128,7 +139,7 @@ jobs:
             const installedModel = /^model:\s*(\S+)\s*$/m.exec(installed)?.[1];
             if (expectedModel !== installedModel) throw new Error(`${name}: installed model differs from source`);
           }
-          const titleExpected = JSON.parse(fs.readFileSync('config/opencode/opencode.json', 'utf8')).agents.title.model;
+          const titleExpected = /^model:\s*(\S+)\s*$/m.exec(fs.readFileSync('config/opencode/agent/core/title.md', 'utf8'))[1];
           const title = byID.get('title');
           if (`${title?.model?.providerID}/${title?.model?.id}` !== titleExpected) {
             throw new Error(`title: expected=${titleExpected}, live=${JSON.stringify(title?.model)}`);
@@ -350,6 +361,10 @@ jobs:
           set -Eeuo pipefail
           cp "$HOME/.config/opencode/opencode.json" /tmp/opencode-config-before.json
           binary_before=$(sha256sum "$HOME/.opencode/bin/opencode")
+          # Reproduce the previous installation: nested edited distribution copies.
+          mkdir -p "$HOME/.config/opencode/agents/code" "$HOME/.config/opencode/agent"
+          printf '%s\n' '---' 'name: CodeReviewer' 'model: openai/gpt-6-sol' '---' > "$HOME/.config/opencode/agents/code/CodeReviewer.md"
+          printf '%s\n' '---' 'name: BuildAgent' 'model: opencode-go/mimo-v2.5' '---' > "$HOME/.config/opencode/agent/BuildAgent.md"
           bash install.sh > /tmp/opencode-repeat.log 2>&1
           cat /tmp/opencode-repeat.log
           grep -Fq 'Скачиваю конфигурацию' /tmp/opencode-repeat.log

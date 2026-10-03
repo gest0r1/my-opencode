@@ -58,3 +58,12 @@ Existing V2 installations need no cleanup. V1 cleanup stays a separate explicit 
 - Code commit: `660182874df353ef1ba8ebab0174637a9f6e3d68`.
 - CI passed: [installer contracts](https://github.com/gest0r1/my-opencode/actions/runs/37121760139) and [real V2 source/installed/live model + reasoning + title verification](https://github.com/gest0r1/my-opencode/actions/runs/37121760102).
 - Remaining: user's host confirmation; project-level overrides or an external OpenCode server need separate diagnosis if the discrepancy persists.
+
+
+## Cycle 7 — one canonical agent source and legacy-copy retirement
+
+- Confirmed from host diagnostics: current flat distribution files coexist with old nested files (code/CodeReviewer, code/BuildAgent). These are separate upstream IDs, not a proven subdirectory-priority rule.
+- Changed: before installing current files, candidate-tree cleanup removes distribution identities found by frontmatter name or current/source basename, at any depth, including edited copies. Independent user agents remain. Singular legacy roots migrate and are retired after atomic commit.
+- Changed: all distribution agent declarations use Markdown under the single upstream runtime agents/ root. build permissions and title model moved out of opencode.json; duplicate JSON agent keys are rejected before activation. Repository category directories remain source organization only.
+- Checks: old nested and renamed edited copies, user preservation, repeat installation, permission normalization, eight model tests, standard installer contracts and incremental/binary-only behavior passed locally. Real V2 CI seeded with previous nested/singular definitions checks live IDs, models, reasoning and absence of duplicate JSON definitions.
+- Remaining: CI completion and confirmation on the user's host. Project-local overrides remain upstream behavior; the global installer does not rewrite project trees.

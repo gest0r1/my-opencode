@@ -117,6 +117,9 @@ for legacy_root in "${LEGACY_ROOTS[@]}"; do
   migrate_legacy "$legacy_root"
 done
 
+# Remove every previous distribution copy, including edited nested files.
+node "$SCRIPT_DIR/retire-opencode-agent-copies.mjs" "$SOURCE_ROOT" "$TARGET_ROOT"
+
 while IFS= read -r -d '' file; do
   install_managed "$file"
 done < <(find "$SOURCE_ROOT" -type f -name '*.md' -print0 | sort -z)
@@ -165,3 +168,4 @@ elif [[ "$ARCHIVE_LEGACY" != "0" ]]; then
 fi
 
 echo "Installed ${#managed_names[@]} managed agents into $TARGET_ROOT"
+

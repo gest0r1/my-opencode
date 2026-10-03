@@ -108,5 +108,6 @@ test('Muse Contributor for text and simple responses', () => {
 
 test('title uses unlimited LongCat instead of Muse or MiMo', () => {
   const config = JSON.parse(readFileSync('config/opencode/opencode.json', 'utf8'));
-  assert.equal(config.agents.title.model, 'opencode-go/longcat-2.5-preview-free');
+  assert.ok(!config.agents, 'agent definitions must live only in Markdown');
+  assert.match(readFileSync('config/opencode/agent/core/title.md', 'utf8'), /model: opencode-go\/longcat-2\.5-preview-free/);
 });
