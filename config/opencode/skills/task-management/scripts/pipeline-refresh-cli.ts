@@ -1,4 +1,3 @@
-import { migrateLegacyManifest } from './manifest-migration.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
@@ -153,7 +152,10 @@ async function readManifest(stateRoot: string, runId: string): Promise<{ manifes
   const raw = await readFile(path, 'utf8').catch(() => {
     throw new RefreshError(`manifest not found: ${path}`);
   });
-  const manifest = migrateLegacyManifest(JSON.parse(raw), { manifestPath: path }) as Manifest;
+  const manifest = JSON.parse(raw) as Manifest;
+  if (manifest.schema_version !== 2) {
+    throw new RefreshError('pipeline manifest schema_version must be exactly 2');
+  }
   if (manifest.run_id !== runId) throw new RefreshError('manifest run_id does not match selected run');
   return { manifest, path, raw };
 }
@@ -305,7 +307,7 @@ function computeAffected(manifest: Manifest, changed: string[]): {
       addGate(affected, manifest, 'architecture');
       addGate(affected, manifest, 'technical');
       rebuildWorkItems = true;
-      reasons.add('legacy_freshness_scope');
+      reasons.add('fallback_freshness_scope');
     }
   }
 
@@ -561,9 +563,6 @@ async function createBoundedRun(
 }
 
 async function inspectContext(manifest: Manifest, cwd: string): Promise<{ main: string; head: string; branch: string }> {
-  if (manifest.schema_version !== 2) {
-    throw new RefreshError('LEGACY_V1_FULL_REPLAN_REQUIRED');
-  }
   const branch = currentBranch(cwd);
   if (!branch || branch === 'main' || branch === 'master') {
     throw new RefreshError('refresh must run in a non-default linked worktree branch');
@@ -596,10 +595,6 @@ async function analyzeAndApply(
   if (state?.manifest_sha256 &&
       String(state.manifest_sha256).toLowerCase() !== sha256(manifestRaw).toLowerCase()) {
     throw new RefreshError('frozen manifest integrity mismatch');
-  }
-
-  if (manifest.schema_version !== 2) {
-    throw new RefreshError('pipeline manifest schema_version must be exactly 2');
   }
 
   const context = await inspectContext(manifest, cwd);
@@ -752,4 +747,3 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
-
