@@ -607,6 +607,11 @@ service_needs_reconcile=0
 [[ "$prev_port" == "$PORT" ]] || service_needs_reconcile=1
 (( package_changed == 0 )) || service_needs_reconcile=1
 (( opencode_binary_changed == 0 )) || service_needs_reconcile=1
+# Every successful invocation atomically replaces the config directory. A
+# running OpenCode can keep cached entries/watchers for the previous tree.
+# Reload the managed service even when binary and runtime package are reused.
+service_needs_reconcile=1
+echo "OpenCode configuration installed: service restart required to reload agents/models."
 (( env_changed == 0 )) || service_needs_reconcile=1
 (( drop_changed == 0 )) || service_needs_reconcile=1
 [[ -f "$NATIVE_STARTUP_ENV" ]] || service_needs_reconcile=1
