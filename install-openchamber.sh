@@ -15,12 +15,13 @@ OPENCHAMBER_RUNTIME_ROOT="${OPENCHAMBER_RUNTIME_ROOT:-$HOME/.local/share/opencha
 LEGACY_BUN_INSTALL="${LEGACY_BUN_INSTALL:-$HOME/.bun}"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode"
 STATE="$STATE_ROOT/openchamber-v2-install.state"
+TRANSACTION_LOCK="$STATE_ROOT/openchamber-v2-atomic.lock"
 UNIT_DIR="$HOME/.config/systemd/user"
 UNIT="$UNIT_DIR/openchamber.service"
 DROP_DIR="$UNIT_DIR/openchamber.service.d"
 NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
 
-for cmd in gh mktemp systemctl readlink ln mv cp rm sed grep; do
+for cmd in gh mktemp systemctl readlink ln mv cp rm sed grep flock; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "Missing prerequisite: $cmd" >&2
     exit 1
@@ -66,11 +67,18 @@ export EXPECTED_OPENCHAMBER_VERSION OPENCHAMBER_RUNTIME_ROOT LEGACY_BUN_INSTALL
 source "$RUNTIME_HELPER"
 oc_runtime_init
 
+# The core has its own execution lock, but the outer transaction starts earlier:
+# it snapshots current/state/systemd before invoking the core. Serialize that
+# whole interval as well so two installers cannot snapshot each other's partial
+# generation and later roll back to inconsistent states.
+mkdir -p "$STATE_ROOT" "$UNIT_DIR"
+exec 8>"$TRANSACTION_LOCK"
+flock -x 8
+
 RELEASE_DIR="$OPENCHAMBER_RELEASES/$APP_SHA"
 CURRENT_BEFORE="$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)"
 [[ -e "$RELEASE_DIR" ]] && RELEASE_EXISTED=1 || true
 
-mkdir -p "$STATE_ROOT" "$UNIT_DIR"
 if [[ -f "$STATE" ]]; then
   cp -a "$STATE" "$STATE_BACKUP"
   STATE_EXISTED=1
@@ -188,6 +196,11 @@ if [[ "$runtime_pending" == 0 && "$service_restart_pending" == 0 ]]; then
     echo "OpenChamber service is not active after atomic apply." >&2
     false
   fi
+
+  # While rollback metadata still knows the previous current target, prune all
+  # older generations but retain both current and immediate previous. This keeps
+  # one post-commit rollback generation without accumulating historical runtimes.
+  oc_prune_releases
 fi
 
 # The core already performs bounded listener + HTTP readiness before returning
@@ -199,7 +212,6 @@ trap - ERR INT TERM
 
 if [[ "$runtime_pending" == 0 && "$service_restart_pending" == 0 ]]; then
   oc_remove_legacy_bun_global
-  oc_prune_releases
   echo "Atomic OpenChamber runtime committed: $(readlink -f "$OPENCHAMBER_CURRENT")"
 elif [[ "$runtime_pending" == 0 && -x "$OPENCHAMBER_CURRENT_BIN" ]]; then
   echo "Atomic OpenChamber runtime staged/current; service restart remains deferred."
