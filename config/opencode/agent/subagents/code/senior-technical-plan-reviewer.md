@@ -45,11 +45,37 @@ Use `status: "blocked"` or set the relevant boolean true when any boundary is cr
 
 ## Owner amendment review mode
 
-Review explicit owner feedback independently after ArchitectureAnalyzer classifies it as bounded. Local requirements/acceptance changes are allowed and do not by themselves require full replan. New runtime work items and paths are also allowed; do not require them to exist in the frozen PLAN.
+Review explicit owner feedback independently after ArchitectureAnalyzer classifies it as bounded. Local requirements/acceptance changes and bounded path expansion are allowed and do not by themselves require full replan, but the amendment MUST remain owned by one existing frozen work item.
 
-The machine evidence consumed by `owner-amend-apply` must use `kind: "owner_amendment"`, `status: "ready"`, `bounded: true`, identify `target_stage`, exact `paths`, and hashed `work_items`. Set `business_intent_changed`, `external_contract_changed`, `security_boundary_changed`, and `destructive_change` explicitly. Any of those true requires full replan. `requirements_changed` and `acceptance_criteria_changed` may be true.
+A new file, shared component, extraction/refactor or additional touched module does not itself create a new work item. Require a new work item only when the owner feedback introduces a new independently scoped responsibility/deliverable that should be planned, assigned, reviewed or accepted separately.
 
-Do not approve an amendment merely because the owner requested it: verify that its implementation impact is bounded and that it does not hide a structural decision. The original manifest remains immutable.
+The machine evidence consumed by `owner-amend-apply` must use:
+
+```json
+{
+  "kind": "owner_amendment",
+  "status": "ready",
+  "bounded": true,
+  "pipeline_id": "pipeline-id",
+  "source_stage": "owner-accept-stage",
+  "target_stage": "existing-agent-stage",
+  "work_item_id": "existing-frozen-work-item-id",
+  "new_work_item_required": false,
+  "summary": "bounded owner clarification",
+  "paths": ["exact/or/directory/**"],
+  "work_items": [],
+  "requirements_changed": true,
+  "acceptance_criteria_changed": true,
+  "business_intent_changed": false,
+  "external_contract_changed": false,
+  "security_boundary_changed": false,
+  "destructive_change": false
+}
+```
+
+Verify that `work_item_id` is already frozen for the pipeline. `work_items` MUST remain empty. If `new_work_item_required=true`, or if a proposed amendment contains a new runtime work item, classify it `replan`/`FULL_REPLAN_REQUIRED`. The same applies to changed business intent, external contract, security/trust boundary, destructive/migration semantics or another structural PLAN-level decision.
+
+Do not approve an amendment merely because the owner requested it: verify that its implementation impact is bounded and still belongs to the existing frozen work item. The original manifest remains immutable.
 
 ## Runtime replan review mode
 
