@@ -313,17 +313,13 @@ test('pipeline agents cannot edit project or distribution rules', async () => {
     'config/opencode/agent/subagents/development/devops-specialist.md',
   ]) {
     const yaml = frontmatter(await text(file));
-    assert.match(yaml, /["']docs\/pipeline-rules\.md["']:\s*deny/, file);
+    assert.match(yaml, /["']?docs\/pipeline-rules\.md["']?:\s*deny/, file);
     assert.match(yaml, /["']\*\*\/pipeline-rules\.default\.md["']:\s*deny/, file);
   }
 
-  const config = JSON.parse(await text('config/opencode/opencode.json'));
-  const coderRules = config.agents.CoderAgent.permissions;
-  const denies = (resource) => coderRules.some(
-    (rule) => rule.action === 'edit' && rule.resource === resource && rule.effect === 'deny',
-  );
-  assert.equal(denies('docs/pipeline-rules.md'), true);
-  assert.equal(denies('**/pipeline-rules.default.md'), true);
+  const yaml = frontmatter(await text('config/opencode/agent/subagents/code/coder-agent.md'));
+  assert.match(yaml, /["']?docs\/pipeline-rules\.md["']?:\s*deny/);
+  assert.match(yaml, /["']\*\*\/pipeline-rules\.default\.md["']:\s*deny/);
 });
 
 
@@ -346,3 +342,4 @@ test('RUN authorizes bounded runtime scope before consuming technical-fix cycles
   assert.match(rules, /machine-owned effective scope/i);
   assert.match(reviewer, /runtime-scope-review-<n>\.json/);
 });
+

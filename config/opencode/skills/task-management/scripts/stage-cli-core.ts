@@ -1,3 +1,4 @@
+import { migrateLegacyManifest } from './manifest-migration.mjs';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { access, cp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -718,7 +719,7 @@ export async function initFromManifest(
 ): Promise<PipelineState> {
   const absoluteManifestPath = resolve(manifestPath);
   const manifestContent = await readFile(absoluteManifestPath, 'utf8');
-  const manifest = JSON.parse(manifestContent) as unknown;
+  const manifest = migrateLegacyManifest(JSON.parse(manifestContent), { manifestPath: absoluteManifestPath }) as unknown;
   assertManifest(manifest);
   const rules = await resolveEffectiveRules(manifest.rules_file, absoluteManifestPath);
   if (rules.metadata.rules_version !== manifest.rules_version) {
@@ -822,7 +823,7 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
     if (sha256(manifestContent) !== state.manifest_sha256) {
       throw new StageCliError('Manifest changed since pipeline initialization');
     }
-    const manifest = JSON.parse(manifestContent) as unknown;
+    const manifest = migrateLegacyManifest(JSON.parse(manifestContent), { manifestPath: state.manifest_file }) as unknown;
     assertManifest(manifest);
     assertStateMatchesManifest(state, manifest);
     const { validateManifestV2Policy } = await import('./manifest-v2-policy.mjs');
@@ -2185,3 +2186,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     process.exitCode = 1;
   });
 }
+

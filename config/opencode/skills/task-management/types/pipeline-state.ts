@@ -25,7 +25,7 @@ export type StageExecutor =
   | 'github_dev'
   | 'owner_acceptance';
 
-export type GithubGateTrigger = 'push' | 'workflow_dispatch';
+export type GithubGateTrigger = 'push' | 'pull_request' | 'workflow_dispatch';
 export type GithubDevMode = 'disposable' | 'stateful';
 
 export interface GithubGateContract {
@@ -33,6 +33,7 @@ export interface GithubGateContract {
   terminal_job: string;
   required_jobs?: string[];
   trigger: GithubGateTrigger;
+  pr_number?: number;
   artifact?: string;
   environment?: string;
   mode?: GithubDevMode;
@@ -361,3 +362,4 @@ export interface PipelineState {
     message?: string;
   }>;
 }
+

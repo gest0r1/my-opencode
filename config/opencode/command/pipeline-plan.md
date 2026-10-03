@@ -249,3 +249,6 @@ Available options:
 ```
 
 If the owner has said they will be away or wants a larger autonomous repair window, recommend a concrete higher ceiling, for example `/pipeline-run {run-id} --unattended --fix-cycles 10`. Do not choose a higher ceiling without that context. Never invoke RUN automatically.
+
+
+PR CI requires an existing PR number frozen as `github_gates.<stage>.pr_number` with `trigger: pull_request`. Use authenticated GitHub/CLI to inspect private PRs. The PR head must equal the published candidate; head/merge mapping is verified by the deterministic gate. Workflow bootstrap uses push.

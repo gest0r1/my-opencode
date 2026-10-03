@@ -23,7 +23,8 @@ type GateContract = {
   workflow: string;
   terminal_job: string;
   required_jobs?: string[];
-  trigger: 'push' | 'workflow_dispatch';
+  trigger: 'push' | 'pull_request' | 'workflow_dispatch';
+  pr_number?: number;
   artifact?: string;
   environment?: string;
   mode?: 'disposable' | 'stateful';
@@ -331,6 +332,7 @@ async function inspectCommand(args: string[]): Promise<void> {
     workflow,
     terminal_job: terminalJob,
     trigger,
+    ...(option(args, '--pr-number') ? { pr_number: Number(option(args, '--pr-number')) } : {}),
     ...(option(args, '--artifact') ? { artifact: option(args, '--artifact') } : {}),
     ...(options(args, '--required-job').length ? { required_jobs: options(args, '--required-job') } : {}),
     ...(option(args, '--mode') ? { mode: option(args, '--mode') as GateContract['mode'] } : {}),
@@ -589,6 +591,9 @@ async function waitForRun(
         candidateSha: candidate!.candidate_sha,
         branch: candidate!.branch,
         event: contract.trigger,
+        repository: repo,
+        prNumber: contract.pr_number,
+        pullRequest: contract.trigger === 'pull_request' ? ghJson(['api', `repos/${repo}/pulls/${contract.pr_number}`]) : undefined,
         excludeIds: dispatchExistingIds,
       });
       if (selected) {
@@ -769,6 +774,9 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
       requiredJobNames: validation.required_job_names ?? [],
       executor,
       sourceCiRunId: sourceCi?.workflow_run_id,
+      repository: repo,
+      branch: candidate!.branch,
+      pullRequest: contract.trigger === 'pull_request' ? ghJson(['api', `repos/${repo}/pulls/${contract.pr_number}`]) : undefined,
     });
 
     devEvidence = executor === 'github_dev'
@@ -953,7 +961,7 @@ async function logCommand(
 function usage(): string {
   return [
     'usage:',
-    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|workflow_dispatch] [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--concurrency-group <group>] [--target-id <id>] [--evidence-file <file>]',
+    '  github-actions-gate-cli.ts inspect <workflow> <terminal-job> [--trigger push|pull_request|workflow_dispatch] [--pr-number <number>] [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode disposable|stateful] [--environment <name>] [--trusted-ref <ref>] [--concurrency-group <group>] [--target-id <id>] [--evidence-file <file>]',
     '  github-actions-gate-cli.ts validate <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
     '  github-actions-gate-cli.ts validate-future <run-id> <pipeline-id> <gate-name> [--state-root <path>]',
     '  github-actions-gate-cli.ts run <run-id> <pipeline-id> <stage-id> [--state-root <path>]',
@@ -1021,3 +1029,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     process.exitCode = 1;
   });
 }
+

@@ -95,6 +95,30 @@ async function baseManifest(root, runId, pipelines) {
   };
 }
 
+test('old schema-v2 RUN survives init and validation with frozen semantic backfill', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp/pipelines');
+  const manifest = await baseManifest(root, 'legacy-hash-run', [{ id: 'app', stages: ['implementation'], issue_numbers: [7] }]);
+  const snapshot = { repository: 'owner/repo', issues: [{ repository: 'owner/repo', number: 7, title: 'story', body: 'requirements', state: 'open', comments: [] }] };
+  const bytes = JSON.stringify(snapshot);
+  await frozen(root, 'sources/github-issues.json', bytes);
+  Object.assign(manifest, { source_type: 'github_issues', repository: 'owner/repo', source_issues: [{ repository: 'owner/repo', number: 7, url: 'https://github.com/owner/repo/issues/7', title: 'story' }], source_snapshot_sha256: sha(bytes) });
+  const file = await writeManifest(root, manifest);
+  const before = await readFile(file, 'utf8');
+  let result = run(root, ['init', file, '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout);
+  assert.match(state.source_requirements_sha256, /^[a-f0-9]{64}$/);
+  assert.equal(state.manifest_sha256, sha(before));
+  result = run(root, ['validate', manifest.run_id, '--state-root', stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(await readFile(file, 'utf8'), before);
+  await writeFile(path.join(root, 'sources/github-issues.json'), '{}');
+  result = run(root, ['validate', manifest.run_id, '--state-root', stateRoot, '--json']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /MANIFEST_MIGRATION_REQUIRED/);
+});
+
 test('next exposes only dependency-ready stages and supports independent parallel roots', async () => {
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
