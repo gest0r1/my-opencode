@@ -20,6 +20,7 @@ UNIT_DIR="$HOME/.config/systemd/user"
 UNIT="$UNIT_DIR/openchamber.service"
 DROP_DIR="$UNIT_DIR/openchamber.service.d"
 NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
+LEGACY_PASSWORD_ENV="$HOME/.config/openchamber-live.env"
 
 for cmd in gh mktemp systemctl readlink ln mv cp rm sed grep flock; do
   command -v "$cmd" >/dev/null 2>&1 || {
@@ -128,11 +129,39 @@ on_interrupt() {
   rollback_all "$rc"
 }
 
+read_password_from_env_file() {
+  local file=$1 value=''
+  [[ -f "$file" ]] || return 1
+  value="$(
+    set +u
+    unset OPENCHAMBER_UI_PASSWORD
+    # shellcheck disable=SC1090
+    source "$file" >/dev/null 2>&1 || true
+    printf '%s' "${OPENCHAMBER_UI_PASSWORD:-}"
+  )"
+  [[ -n "$value" ]] || return 1
+  printf '%s' "$value"
+}
+
 oc_snapshot_service "$UNIT" "$NATIVE_STARTUP_ENV" "$DROP_DIR" "$SERVICE_SNAPSHOT"
 TRANSACTION_STARTED=1
 trap on_error ERR
 trap 'on_interrupt 130' INT
 trap 'on_interrupt 143' TERM
+
+# Preserve the currently active UI credential. Explicit caller configuration
+# wins; otherwise native V2 persistence wins over the V1 migration bridge.
+# This prevents a stale legacy bridge file from reverting an already-migrated
+# password while still allowing a first V1 -> V2 install to reuse its password.
+if [[ -z "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
+  if persisted_password="$(read_password_from_env_file "$NATIVE_STARTUP_ENV" 2>/dev/null)"; then
+    export OPENCHAMBER_UI_PASSWORD="$persisted_password"
+    echo "Preserving OpenChamber UI password from native startup environment."
+  elif persisted_password="$(read_password_from_env_file "$LEGACY_PASSWORD_ENV" 2>/dev/null)"; then
+    export OPENCHAMBER_UI_PASSWORD="$persisted_password"
+    echo "Preserving OpenChamber UI password from legacy migration bridge."
+  fi
+fi
 
 # Recover the only uncatchable crash window. If a previous process was SIGKILLed
 # after native startup had already pinned the unit to a complete immutable
