@@ -344,17 +344,17 @@ subagent(
          3. **Execute Batch 1** (Parallel - all at once):
             ```javascript
             // Delegate ALL simultaneously - these run in parallel
-            subagent(agent="CoderAgent", description="Task 01", 
+            subagent(agent="CoderAgent", description="Task 01",
                  prompt="Load context from .tmp/sessions/{session-id}/context.md
                          Execute subtask: .tmp/tasks/{feature}/subtask_01.json
                          Mark as complete when done.")
             
-            subagent(agent="CoderAgent", description="Task 02", 
+            subagent(agent="CoderAgent", description="Task 02",
                  prompt="Load context from .tmp/sessions/{session-id}/context.md
                          Execute subtask: .tmp/tasks/{feature}/subtask_02.json
                          Mark as complete when done.")
             
-            subagent(agent="CoderAgent", description="Task 03", 
+            subagent(agent="CoderAgent", description="Task 03",
                  prompt="Load context from .tmp/sessions/{session-id}/context.md
                          Execute subtask: .tmp/tasks/{feature}/subtask_03.json
                          Mark as complete when done.")
