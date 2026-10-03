@@ -72,6 +72,11 @@ name: LegacyFlat
 legacy singular config agent
 EOF
 
+mkdir -p "$TARGET/code" "$TARGET/custom"
+printf '%s\n' '---' 'name: CoderAgent' 'model: user-edited-old-model' '---' > "$TARGET/code/CoderAgent.md"
+printf '%s\n' '---' 'name: CoderAgent' '---' > "$TARGET/custom/renamed.md"
+printf '%s\n' '---' 'name: Independent' '---' > "$TARGET/custom/Independent.md"
+
 bash scripts/install-opencode-agents.sh \
   "$SRC" \
   "$TARGET" \
@@ -90,6 +95,8 @@ test -f "$TARGET/LegacyFlat.md"
 test ! -e "$TARGET/primary-agent.md"
 test ! -d "$TARGET/subagents"
 test ! -d "$TARGET/code"
+test ! -f "$TARGET/custom/renamed.md"
+test -f "$TARGET/custom/Independent.md"
 test ! -d "$TARGET/planning"
 test ! -d "$TARGET/utils"
 
@@ -113,3 +120,4 @@ bash scripts/install-opencode-agents.sh \
 grep -Fq 'managed primary v2' "$TARGET/PrimaryAgent.md"
 
 printf 'PASS: flat canonical agent IDs, legacy lookup retirement, rollback backup, repeat install\n'
+

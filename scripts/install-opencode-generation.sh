@@ -178,6 +178,7 @@ node - "$STAGE_CONFIG/opencode.json" <<'NODE'
 const fs = require("node:fs");
 const file = process.argv[2];
 const config = JSON.parse(fs.readFileSync(file, "utf8"));
+if ("agent" in config || "agents" in config) throw new Error("Agent definitions must live only in agents/*.md");
 if ("plugin" in config) throw new Error("V1 key 'plugin' is not allowed in OpenCode V2 config");
 if (config.plugins != null && !Array.isArray(config.plugins)) throw new Error("'plugins' must be an array");
 if (config.instructions != null && (!Array.isArray(config.instructions) || config.instructions.length > 0)) {
