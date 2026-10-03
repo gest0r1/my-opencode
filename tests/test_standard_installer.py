@@ -45,7 +45,12 @@ def main():
     require(installer, 'bun run --cwd packages/web build', "source fallback remains available")
 
     # Concurrency and terminal self-preservation.
-    require(installer, 'flock -x 9', "installer lock")
+    require(installer, 'flock -x 9', "core installer lock")
+    require(wrapper, 'TRANSACTION_LOCK="$STATE_ROOT/openchamber-v2-atomic.lock"',
+            "outer transaction lock path")
+    require(wrapper, 'flock -x 8', "outer transaction serialization")
+    assert wrapper.index('flock -x 8') < wrapper.index('CURRENT_BEFORE='), \
+        "outer transaction lock must precede current/state snapshot"
     require(installer, 'OPENCHAMBER_EMBEDDED_TERMINAL', "embedded terminal marker")
     require(installer, 'effective_restart_mode=defer', "automatic deferred restart")
     require(installer, '--no-start', "native startup staging without restart")
@@ -77,6 +82,9 @@ def main():
     require(wrapper, "trap 'on_interrupt 143' TERM", "termination rollback")
     require(wrapper, 'TRANSACTION_COMMITTED=1', "transaction commit boundary")
     require(wrapper, 'trap - ERR INT TERM', "failure traps disabled after commit")
+    require(wrapper, 'oc_prune_releases', "bounded immutable release retention")
+    assert wrapper.index('oc_prune_releases') < wrapper.index('oc_commit_service'), \
+        "previous generation must still be known while pruning"
     require(wrapper, 'Atomic OpenChamber runtime committed:', "atomic commit audit output")
     require(runtime_store, 'OPENCHAMBER_RELEASES="$OPENCHAMBER_RUNTIME_ROOT/releases"',
             "immutable releases root")
