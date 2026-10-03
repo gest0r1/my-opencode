@@ -2,7 +2,7 @@
 name: BuildAgent
 description: Read-only build/typecheck diagnostic agent; canonical pipeline PASS comes from gate-runner evidence.
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/mimo-v2.6-flash
 temperature: 0.1
 permission:
   bash:

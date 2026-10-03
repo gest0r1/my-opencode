@@ -2,7 +2,7 @@
 name: build
 mode: primary
 description: The default agent. Executes tools based on configured permissions.
-model: opencode-go/mimo-v2.5
+model: opencode-go/mimo-v2.6-flash
 ---
 
 ## Caveman Delegation Requirement

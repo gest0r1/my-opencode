@@ -1,10 +1,9 @@
 ---
 name: ADRManager
 description: "Architecture Decision Record specialist capturing decisions,
-  context, alternatives, and consequences in lightweight ADR format. Model:
-  opencode-go/deepseek-v4-pro → opencode-go/deepseek-v4-flash"
+  context, alternatives, and consequences in lightweight ADR format."
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/mimo-v2.6-flash
 temperature: 0.2
 permission:
   bash:

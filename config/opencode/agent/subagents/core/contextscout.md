@@ -2,7 +2,7 @@
 name: ContextScout
 description: Read-only discovery of relevant project and OpenCode context files.
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/mimo-v2.6-flash
 permission:
   read: allow
   glob: allow
@@ -45,3 +45,4 @@ priority | verified path | why it matters
 ```
 
 No implementation advice beyond identifying applicable context and gaps.
+

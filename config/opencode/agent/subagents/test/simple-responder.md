@@ -6,7 +6,7 @@
 name: Simple Responder
 description: "Test agent that responds with 'AWESOME TESTING' - for eval framework testing"
 mode: subagent
-model: opencode-go/deepseek-v4.1-flash
+model: opencode-go/muse-spark-1.3-contributor
 temperature: 0.0
 ---
 
@@ -36,3 +36,4 @@ That's it. No explanations, no additional tool calls, no additional text. Just t
 4. **ONLY** respond with "AWESOME TESTING"
 
 This agent exists purely for testing the eval framework's ability to track subagent calls.
+

@@ -42,3 +42,10 @@ Existing V2 installations need no cleanup. V1 cleanup stays a separate explicit 
 - Code commit: `c485190cccf95f730f8d10a2da0199f2c7fa219e`.
 - GitHub CI: [installer contracts](https://github.com/gest0r1/my-opencode/actions/runs/37119242418) and [real V2 install, 38 agents/permissions and repeat full config refresh with binary reuse](https://github.com/gest0r1/my-opencode/actions/runs/37119242353) passed.
 - Remaining: execution on the user's server. A deadline bounds waiting, but cannot guarantee registry/network availability.
+
+## Cycle 5 — approved agent model redistribution
+
+- Changed: 3 GPT Sol agents use `openai/gpt-6.1-sol` with `reasoningEffort: low`; SeniorStoryReviewer already uses GPT 6 Luna. Six remaining MiMo agents use `opencode-go/mimo-v2.6-flash` (build, BuildAgent, BatchExecutor, ContextManager, ContextScout, ADRManager). WebResearcher, ExternalScout, Context Retriever and OpenDataAnalyst use `opencode-go/longcat-2.5-preview-free`. OpenCopywriter, OpenTechnicalWriter, DocWriter and Simple Responder use `opencode-go/muse-spark-1.3-contributor`. Service `title` uses LongCat by explicit owner correction. Other models, permissions and model inheritance are preserved.
+- Checks: 8 model assignment tests pass; all 38 agents install and normalize with `markdown_changed=0 / config_changes=0`; permission/protected-path regressions pass. Exact MiMo, LongCat and Muse IDs confirmed against the live official Go `/models` endpoint. Model config and changes inspected locally.
+- Commit: the commit containing this cycle (see branch history). CI explicitly skipped by owner instruction for this model-only change.
+- Remaining: real model-driven turns on the user's authenticated server; registration/config tests do not measure model quality.

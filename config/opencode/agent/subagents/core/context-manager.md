@@ -4,7 +4,7 @@ description: Context organization and lifecycle management specialist -
   discovers, catalogs, validates, and maintains project context structure with
   dependency tracking
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/mimo-v2.6-flash
 temperature: 0.1
 permission:
   read:

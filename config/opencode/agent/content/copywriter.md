@@ -6,7 +6,7 @@
 name: OpenCopywriter
 description: "Expert in persuasive writing, marketing copy, and brand messaging"
 mode: primary
-model: opencode-go/deepseek-v4.1-flash
+model: opencode-go/muse-spark-1.3-contributor
 temperature: 0.3
 permission:
   task:

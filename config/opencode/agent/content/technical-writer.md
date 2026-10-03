@@ -6,7 +6,7 @@
 name: OpenTechnicalWriter
 description: "Expert in documentation, API docs, and technical communication"
 mode: primary
-model: opencode-go/deepseek-v4.1-flash
+model: opencode-go/muse-spark-1.3-contributor
 temperature: 0.2
 permission:
   task:
