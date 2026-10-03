@@ -2,7 +2,7 @@
 name: ExternalScout
 description: Fetch live version-specific external documentation and persist compact evidence.
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/longcat-2.5-preview-free
 temperature: 0.1
 permission:
   external_directory:
@@ -67,3 +67,4 @@ blockers:
 artifacts:
 - <artifact_path>
 ```
+

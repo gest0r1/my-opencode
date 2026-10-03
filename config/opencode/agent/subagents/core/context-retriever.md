@@ -3,7 +3,7 @@ name: Context Retriever
 description: Generic context search and retrieval specialist for finding
   relevant context files, standards, and guides in any repository
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/longcat-2.5-preview-free
 temperature: 0.1
 permission:
   bash:

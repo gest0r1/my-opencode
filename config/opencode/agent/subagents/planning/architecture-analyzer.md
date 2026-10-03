@@ -2,8 +2,8 @@
 name: ArchitectureAnalyzer
 description: Analyzes architecture boundaries during PLAN, runtime-scope clarification, and block-local runtime replanning.
 mode: subagent
-model: openai/gpt-6-sol
-reasoningEffort: medium
+model: openai/gpt-6.1-sol
+reasoningEffort: low
 permission:
   bash: deny
   edit:
@@ -102,3 +102,4 @@ artifacts:
 
 ready means no material unresolved decision blocks this architecture gate. OpenStage
 must rerun this gate after owner decisions; it may not reinterpret needs_revision as ready.
+

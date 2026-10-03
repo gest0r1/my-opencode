@@ -2,7 +2,7 @@
 name: BatchExecutor
 description: Execute multiple tasks in parallel batches, managing simultaneous CoderAgent delegations and tracking batch completion
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/mimo-v2.6-flash
 temperature: 0.1
 permission:
   bash:
