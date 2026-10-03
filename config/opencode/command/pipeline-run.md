@@ -57,6 +57,14 @@ Before each stage:
 
 Pending GitHub outbox events must be zero before publish/PR handoff.
 
+## Compact dispatch and reuse
+
+When calling `stage-cli fix-cycle`, include `--evidence <fresh-review-artifact>` for the repair that follows that review. The CLI freezes its hash and the scope preflight paths. The runtime uses this verified delta; absent evidence safely starts a fresh worker.
+
+For each frozen agent/review work item, call `stage-cli dispatch <run-id> --pipeline <id> --stage <stage> --work-item <id> --role <registered-role> --json` after stage start. Pass its paths and the markers `<pipeline_work_item id="ID"/>` and `<pipeline_dispatch run="RUN" pipeline="PIPELINE" stage="STAGE"/>` to `subagent`. The runtime hook validates fresh machine state, automatically prepares baseline/repair identity and injects the dispatch packet. `pipeline_runtime_prepare` is optional compatibility tooling, not an LLM-dependent prerequisite. Never invent `sessionID`.
+
+The worker reads authoritative paths itself. OpenStage reads compact state, blockers and evidence paths. `--no-session-reuse` disables resume in runtime; reviewer/planning sessions remain fresh. Export metrics with `reuse-report.mjs`; see `project/reuse-analysis.md` in the distribution README. Missing/unavailable child sessions fall back fresh before execution; worker failures retain normal repair semantics.
+
 ## Dispatch and machine gates
 
 Dispatch strictly by the frozen `executors[stage_id]`; never infer executor from a stage name.

@@ -59,39 +59,8 @@ oc_rollback_activation
 test "$(readlink -f "$OPENCHAMBER_CURRENT")" = "$r1"
 test "$("$OPENCHAMBER_MANAGED_BIN" --version)" = 'OpenChamber 2.1.0'
 
-# Full service generation rollback: unit, startup env, drop-ins and current
-# must return to the exact pre-transaction generation. The fake systemctl also
-# verifies that an active old service is stopped, daemon-reloaded and restarted.
-unit="$HOME/.config/systemd/user/openchamber.service"
-startup_env="$HOME/.config/openchamber/startup.env"
-drop_dir="$HOME/.config/systemd/user/openchamber.service.d"
-snapshot="$TMP/service-snapshot"
-mkdir -p "$(dirname "$unit")" "$(dirname "$startup_env")" "$drop_dir"
-printf 'OLD-UNIT\n' > "$unit"
-printf 'OLD-ENV\n' > "$startup_env"
-printf 'OLD-DROPIN\n' > "$drop_dir/10-old.conf"
-
-oc_snapshot_service "$unit" "$startup_env" "$drop_dir" "$snapshot"
-test "$OPENCHAMBER_SERVICE_WAS_ACTIVE" -eq 1
-
-oc_activate_release "$r2"
-printf 'NEW-UNIT\n' > "$unit"
-printf 'NEW-ENV\n' > "$startup_env"
-rm -rf -- "$drop_dir"
-mkdir -p "$drop_dir"
-printf 'NEW-DROPIN\n' > "$drop_dir/99-new.conf"
-
-oc_rollback_service "$unit" "$startup_env" "$drop_dir"
-
-test "$(readlink -f "$OPENCHAMBER_CURRENT")" = "$r1"
-test "$(cat "$unit")" = 'OLD-UNIT'
-test "$(cat "$startup_env")" = 'OLD-ENV'
-test "$(cat "$drop_dir/10-old.conf")" = 'OLD-DROPIN'
-test ! -e "$drop_dir/99-new.conf"
-grep -Fxq -- '--user stop openchamber.service' "$SYSTEMCTL_LOG"
-grep -Fxq -- '--user daemon-reload' "$SYSTEMCTL_LOG"
-grep -Fxq -- '--user restart openchamber.service' "$SYSTEMCTL_LOG"
-
+# Binary activation never writes service units/env or controls systemd.
+test ! -s "$SYSTEMCTL_LOG"
 # Retention contract: keep current + immediate previous only.
 r3="$(make_release release-three)"
 oc_commit_activation
@@ -105,4 +74,4 @@ test ! -d "$r1"
 oc_rollback_activation
 test "$(readlink -f "$OPENCHAMBER_CURRENT")" = "$r2"
 
-echo 'PASS: immutable OpenChamber runtime, service rollback and bounded retention'
+echo 'PASS: immutable OpenChamber runtime, binary rollback and bounded retention'

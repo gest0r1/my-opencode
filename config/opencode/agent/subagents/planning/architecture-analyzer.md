@@ -31,13 +31,13 @@ A ready runtime clarification means all six flags are false.
 
 ## Runtime replan mode
 
-Run this mode only after the current technical-fix budget is exhausted and the owner explicitly chose a local runtime replan for one pipeline/stage/work-item. Re-evaluate the failed block using current machine evidence and the frozen requirements, decisions, acceptance criteria, contracts and project policy.
+Run this mode only when the owner explicitly chose a local runtime replan for one pipeline/stage/work-item. Re-evaluate the failed block using current machine evidence and the frozen requirements, decisions, acceptance criteria, contracts and project policy.
 
 The purpose is to change the **technical approach of this block**, not to reopen the whole PLAN. You may identify different implementation sequencing, module boundaries, test strategy, migration mechanics, configuration approach or source paths, but must explicitly detect whether the new approach crosses a frozen PLAN boundary.
 
 Write a new versioned architecture artifact under `.tmp/pipelines/{run-id}/planning/**`. Include:
 - exact pipeline/stage/work-item;
-- failure pattern across exhausted cycles and why the previous approach is not converging;
+- failure pattern across observed cycles and why the previous approach is not converging;
 - proposed revised technical approach;
 - affected implementation/test paths and runtime-scope implications;
 - owner questions, if a decision/clarification is needed before the local plan can be finalized;

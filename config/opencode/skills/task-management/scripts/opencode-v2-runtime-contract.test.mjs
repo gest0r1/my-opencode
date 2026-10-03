@@ -17,7 +17,7 @@ test('installed agent prompts use native V2 delegation fields', () => {
     }
   }
   walk('config/opencode/agent');
-  assert.match(read('config/opencode/agent/subagents/core/stage-orchestrator.md'), /exact\nregistered name/);
+  assert.match(read('config/opencode/agent/subagents/core/stage-orchestrator.md'), /retired|retirement|canonical/i);
 });
 
 test('OpenCode 2.0.21 runtime contract uses native subagent session resume', () => {

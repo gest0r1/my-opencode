@@ -28,7 +28,7 @@ def main():
             "OpenChamber pin")
     require(core, 'HOST="${OPENCHAMBER_BIND_HOST:-172.18.0.1}"', "NPM bridge default")
     require(core, 'PORT="${OPENCHAMBER_BIND_PORT:-3000}"', "default port")
-    require(core, 'for attempt in {1..45}', "bounded readiness retry")
+    require(wrapper, 'attempt<30', "bounded readiness retry")
     forbid(installer, '2.0.22', "unapproved OpenCode version bump")
 
     # Outer transaction resolves branch refs once and all children use immutable SHAs.
@@ -36,18 +36,18 @@ def main():
             "exact config SHA resolution")
     require(wrapper, 'APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"',
             "exact OpenChamber SHA resolution")
-    require(wrapper, 'install-openchamber-v2-core.sh?ref=$CONFIG_SHA', "exact core fetch")
-    require(wrapper, 'openchamber-runtime-store.sh?ref=$CONFIG_SHA', "exact runtime helper fetch")
+    require(wrapper, 'install-openchamber-v2-core.sh openchamber-runtime-store.sh', "exact core fetch")
+    require(wrapper, 'contents/scripts/$file?ref=$CONFIG_SHA', "exact runtime helper fetch")
     require(wrapper, 'export OPENCODE_CONFIG_REF="$CONFIG_SHA"', "pinned config ref")
-    require(wrapper, 'export OPENCHAMBER_REF="$APP_SHA"', "pinned app ref")
-    assert wrapper.index('export OPENCHAMBER_REF="$APP_SHA"') < wrapper.index('bash +h "$CORE"')
+    require(wrapper, 'OPENCHAMBER_REF="$APP_SHA"', "pinned app ref")
+    assert wrapper.index('OPENCHAMBER_REF="$APP_SHA"') < wrapper.index('bash +h "$TMP/install-openchamber-v2-core.sh"')
 
     # 1.x-style independent incremental decisions.
     require(core, 'opencode_binary_changed=0', "OpenCode binary decision")
     forbid(core, 'GENERATION_RECEIPT=', 'no fingerprint config skip')
     require(core, 'OPENCODE_SKIP_BINARY_INSTALL=1', "config-only binary skip")
     require(core, 'Config-only update:', 'always refresh config')
-    require(core, 'service restart required to reload agents/models.', 'configuration activation')
+    require(core, 'write_state "$runtime_pending" 1', 'configuration activation pending native startup')
     require(core, 'v2-web-package-$APP_SHA', "exact-SHA OpenChamber manifest")
     require(core, 'runtime_fingerprint', "runtime fingerprint")
     require(core, 'package_source_sha', "reusable package source")
@@ -83,19 +83,22 @@ def main():
             "V2 instruction contract")
     require(config_generation, 'legacy singular command path still active', "legacy command rejection")
 
-    # Atomic runtime/service transaction and self-preserving embedded-terminal mode.
-    require(wrapper, 'TRANSACTION_LOCK="$STATE_ROOT/openchamber-v2-atomic.lock"',
+    # Atomic binary transaction and self-preserving embedded-terminal mode.
+    require(wrapper, 'exec 8>"$STATE_ROOT/openchamber-v2-atomic.lock"',
             "outer transaction lock")
     require(wrapper, 'flock -x 8', "outer serialization")
     require(core, 'flock -x 9', "core lock")
     require(core, 'OPENCHAMBER_EMBEDDED_TERMINAL', "embedded terminal marker")
     require(core, 'effective_restart_mode=defer', "self-preserving defer")
-    require(core, '--no-start', "deferred unit staging")
-    require(core, 'PENDING APPLY: current OpenChamber terminal was preserved.', "pending apply handoff")
-    require(wrapper, 'oc_snapshot_service', "service snapshot")
-    require(wrapper, 'oc_rollback_service', "service rollback")
+    require(wrapper, 'PENDING APPLY:', "pending apply handoff")
+    forbid(core, 'systemctl --user restart', "core does not control services")
+    forbid(core, 'write_env_dropin', "core does not write dropins")
+    forbid(wrapper, 'oc_snapshot_service', "binary-only transaction")
+    require(wrapper, 'oc_rollback_activation', "binary rollback")
     require(wrapper, 'oc_activate_release', "runtime activation")
-    require(wrapper, 'TRANSACTION_COMMITTED=1', "commit boundary")
+    require(wrapper, 'OPENCHAMBER_STARTUP_LAUNCHER=', "native stable launcher")
+    require(wrapper, 'native_startup', "native service ownership")
+    require(wrapper, 'readiness', "commit readiness")
     require(wrapper, 'oc_prune_releases', "bounded runtime retention")
 
     require(runtime_store, 'OPENCHAMBER_RELEASES="$OPENCHAMBER_RUNTIME_ROOT/releases"',

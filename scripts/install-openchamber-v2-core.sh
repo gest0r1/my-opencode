@@ -25,12 +25,6 @@ COMMON_ENV="$HOME/.config/opencode.env"
 LEGACY_PASSWORD_ENV="$HOME/.config/openchamber-live.env"
 NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
 
-UNIT_DIR="$HOME/.config/systemd/user"
-UNIT="$UNIT_DIR/openchamber.service"
-DROP_DIR="$UNIT_DIR/openchamber.service.d"
-ENV_DROP="$DROP_DIR/95-my-opencode-env.conf"
-LEGACY_DROP_A="$DROP_DIR/90-openchamber-runtime.conf"
-LEGACY_DROP_B="$DROP_DIR/90-integration-bundle.conf"
 
 BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 export BUN_INSTALL
@@ -131,39 +125,6 @@ read_ui_password_from_env_file() {
   printf '%s' "$value"
 }
 
-sanitize_native_startup_env() {
-  [[ -f "$NATIVE_STARTUP_ENV" ]] || return 0
-
-  local password='' data_dir='' api_only=''
-  password="$(read_ui_password_from_env_file "$NATIVE_STARTUP_ENV" 2>/dev/null || true)"
-  data_dir="$(
-    set +u
-    unset OPENCHAMBER_DATA_DIR
-    # shellcheck disable=SC1090
-    source "$NATIVE_STARTUP_ENV" >/dev/null 2>&1 || true
-    printf '%s' "${OPENCHAMBER_DATA_DIR:-}"
-  )"
-  api_only="$(
-    set +u
-    unset OPENCHAMBER_API_ONLY
-    # shellcheck disable=SC1090
-    source "$NATIVE_STARTUP_ENV" >/dev/null 2>&1 || true
-    printf '%s' "${OPENCHAMBER_API_ONLY:-}"
-  )"
-
-  local tmp="${NATIVE_STARTUP_ENV}.tmp.${BASHPID}"
-  umask 077
-  : > "$tmp"
-  [[ -z "$password" ]] || printf 'OPENCHAMBER_UI_PASSWORD=%q\n' "$password" >> "$tmp"
-  [[ -z "$data_dir" ]] || printf 'OPENCHAMBER_DATA_DIR=%q\n' "$data_dir" >> "$tmp"
-  [[ -z "$api_only" ]] || printf 'OPENCHAMBER_API_ONLY=%q\n' "$api_only" >> "$tmp"
-  printf 'OPENCODE_BINARY=%q\n' "$OPENCODE_BIN" >> "$tmp"
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$NATIVE_STARTUP_ENV"
-
-  echo "Sanitized OpenChamber startup environment: removed transient/session variables."
-}
-
 inside_openchamber_terminal() {
   [[ "${OPENCHAMBER_EMBEDDED_TERMINAL:-}" == 1 ]] && return 0
 
@@ -195,43 +156,6 @@ validate_bind_host() {
   fi
 }
 
-wait_for_service() {
-  local probe_host="$HOST" code='' attempt
-  [[ "$probe_host" != "0.0.0.0" ]] || probe_host="127.0.0.1"
-
-  for attempt in {1..45}; do
-    if systemctl --user is-active --quiet openchamber.service &&
-       ss -H -lnt | awk -v target="$HOST:$PORT" '$4 == target { found=1 } END { exit(found ? 0 : 1) }'; then
-      code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "http://$probe_host:$PORT/" || true)"
-      case "$code" in
-        200|301|302|303|307|308|401|403)
-          echo "OpenChamber ready: http://$probe_host:$PORT/ ($code)"
-          return 0
-          ;;
-      esac
-    fi
-    sleep 1
-  done
-
-  echo "OpenChamber did not become ready on $HOST:$PORT." >&2
-  systemctl --user status openchamber.service --no-pager -l >&2 || true
-  journalctl --user -u openchamber.service -n 80 --no-pager >&2 || true
-  return 1
-}
-
-write_env_dropin() {
-  mkdir -p "$DROP_DIR"
-  local tmp="$ENV_DROP.tmp.${BASHPID}"
-  cat > "$tmp" <<EOF
-# managed-by: my-opencode
-[Service]
-EnvironmentFile=-$COMMON_ENV
-Environment="OPENCODE_BINARY=$OPENCODE_BIN"
-EOF
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$ENV_DROP"
-}
-
 write_state() {
   local runtime_pending=$1 service_pending=$2 package_source=$3 package_fingerprint=$4 package_sha256=$5
   local tmp="${STATE}.tmp.${BASHPID}"
@@ -248,13 +172,14 @@ write_state() {
     "common_env_sha=$(file_sha256 "$COMMON_ENV")" \
     "runtime_pending=$runtime_pending" \
     "service_restart_pending=$service_pending" \
+    "effective_restart_mode=$effective_restart_mode" \
     > "$tmp"
   mv -f "$tmp" "$STATE"
 }
 
 ensure_node22
 validate_bind_host
-mkdir -p "$STATE_ROOT" "$CACHE_ROOT" "$UNIT_DIR"
+mkdir -p "$STATE_ROOT" "$CACHE_ROOT"
 exec 9>"$LOCK"
 flock -x 9
 
@@ -547,155 +472,11 @@ fi
   fi
 }
 
-PASSWORD_SOURCE=''
-NEW_PASSWORD=''
-sanitize_native_startup_env
-
-PERSISTED_DATA_DIR=''
-PERSISTED_API_ONLY=''
-if [[ -f "$NATIVE_STARTUP_ENV" ]]; then
-  PERSISTED_DATA_DIR="$(
-    set +u
-    unset OPENCHAMBER_DATA_DIR
-    # shellcheck disable=SC1090
-    source "$NATIVE_STARTUP_ENV" >/dev/null 2>&1 || true
-    printf '%s' "${OPENCHAMBER_DATA_DIR:-}"
-  )"
-  PERSISTED_API_ONLY="$(
-    set +u
-    unset OPENCHAMBER_API_ONLY
-    # shellcheck disable=SC1090
-    source "$NATIVE_STARTUP_ENV" >/dev/null 2>&1 || true
-    printf '%s' "${OPENCHAMBER_API_ONLY:-}"
-  )"
-fi
-if [[ -z "${OPENCHAMBER_DATA_DIR:-}" && -n "$PERSISTED_DATA_DIR" ]]; then
-  export OPENCHAMBER_DATA_DIR="$PERSISTED_DATA_DIR"
-fi
-
-if [[ "$HOST" != 127.0.0.1 && "$HOST" != localhost ]]; then
-  if [[ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
-    PASSWORD_SOURCE='environment'
-  elif existing_password="$(read_ui_password_from_env_file "$LEGACY_PASSWORD_ENV" 2>/dev/null)"; then
-    export OPENCHAMBER_UI_PASSWORD="$existing_password"
-    PASSWORD_SOURCE='legacy-openchamber-live'
-    echo "Reusing existing OpenChamber UI password from $LEGACY_PASSWORD_ENV"
-  elif existing_password="$(read_ui_password_from_env_file "$NATIVE_STARTUP_ENV" 2>/dev/null)"; then
-    export OPENCHAMBER_UI_PASSWORD="$existing_password"
-    PASSWORD_SOURCE='native-startup-env'
-    echo "Reusing existing OpenChamber UI password from $NATIVE_STARTUP_ENV"
-  else
-    NEW_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("hex"))')"
-    export OPENCHAMBER_UI_PASSWORD="$NEW_PASSWORD"
-    PASSWORD_SOURCE='generated'
-  fi
-fi
-export OPENCODE_BINARY="$OPENCODE_BIN"
-
-drop_before="$(file_sha256 "$ENV_DROP")"
-write_env_dropin
-drop_after="$(file_sha256 "$ENV_DROP")"
-drop_changed=0
-[[ "$drop_before" == "$drop_after" ]] || drop_changed=1
-
-service_active=0
-systemctl --user is-active --quiet openchamber.service && service_active=1 || true
-
-service_needs_reconcile=0
-[[ -f "$UNIT" ]] || service_needs_reconcile=1
-[[ "$prev_host" == "$HOST" ]] || service_needs_reconcile=1
-[[ "$prev_port" == "$PORT" ]] || service_needs_reconcile=1
-(( package_changed == 0 )) || service_needs_reconcile=1
-(( opencode_binary_changed == 0 )) || service_needs_reconcile=1
-# Every successful invocation atomically replaces the config directory. A
-# running OpenCode can keep cached entries/watchers for the previous tree.
-# Reload the managed service even when binary and runtime package are reused.
-service_needs_reconcile=1
-echo "OpenCode configuration installed: service restart required to reload agents/models."
-(( env_changed == 0 )) || service_needs_reconcile=1
-(( drop_changed == 0 )) || service_needs_reconcile=1
-[[ -f "$NATIVE_STARTUP_ENV" ]] || service_needs_reconcile=1
-
+# The binary wrapper owns activation and invokes native startup afterwards.
+# This core only delivers verified packages/config and records pending delivery.
 runtime_pending=0
-service_pending=0
-if (( runtime_needs_apply == 1 && package_changed == 0 )); then
+if [[ "$effective_restart_mode" == defer && "$runtime_needs_apply" == 1 && "$package_changed" == 0 ]]; then
   runtime_pending=1
-  service_pending=1
 fi
-
-if [[ "$runtime_pending" == 1 ]]; then
-  # The desired package is staged, but activating it would replace the runtime
-  # currently serving this terminal. Do not invoke startup through the old CLI.
-  echo "OpenChamber package/service activation deferred; current console remains alive."
-elif (( service_needs_reconcile == 1 || prev_service_pending == 1 )); then
-  startup_args=(startup enable --host "$HOST" --port "$PORT" --no-env-snapshot)
-  if [[ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
-    startup_args+=(--ui-password "$OPENCHAMBER_UI_PASSWORD")
-  fi
-  case "${OPENCHAMBER_API_ONLY:-$PERSISTED_API_ONLY}" in
-    1|true|TRUE|yes|YES|on|ON) startup_args+=(--api-only) ;;
-  esac
-
-  if [[ "$effective_restart_mode" == defer ]]; then
-    if openchamber startup --help 2>/dev/null | grep -Fq -- '--no-start'; then
-      startup_args+=(--no-start)
-      openchamber "${startup_args[@]}"
-      echo "OpenChamber native unit updated without restarting the service."
-    else
-      echo "Installed OpenChamber CLI does not support --no-start; unit rewrite is deferred too."
-    fi
-    service_pending=1
-    echo "OpenChamber service restart deferred; current console remains alive."
-  else
-    openchamber "${startup_args[@]}"
-    systemctl --user restart openchamber.service
-    wait_for_service
-    service_pending=0
-  fi
-elif (( service_active == 0 )); then
-  if [[ "$effective_restart_mode" == defer ]]; then
-    systemctl --user enable openchamber.service >/dev/null
-    service_pending=1
-    echo "OpenChamber service is installed but start is deferred."
-  else
-    systemctl --user enable --now openchamber.service
-    wait_for_service
-    service_pending=0
-  fi
-else
-  echo "OpenChamber service unchanged and active: restart skipped"
-fi
-
-# Remove legacy password only after native persistence is verified and no apply
-# is pending. Until then it remains the migration fallback.
-if [[ "$runtime_pending" == 0 && "$service_pending" == 0 &&
-      -f "$LEGACY_PASSWORD_ENV" && -n "${OPENCHAMBER_UI_PASSWORD:-}" ]]; then
-  persisted_password="$(read_ui_password_from_env_file "$NATIVE_STARTUP_ENV" 2>/dev/null || true)"
-  if [[ -n "$persisted_password" && "$persisted_password" == "$OPENCHAMBER_UI_PASSWORD" ]]; then
-    rm -f -- "$LEGACY_PASSWORD_ENV"
-    echo "Removed migrated legacy password file: $LEGACY_PASSWORD_ENV"
-  fi
-fi
-
-# Retire obsolete 1.x overrides only after the new managed environment drop-in
-# exists. They must not be allowed to override the V2 native unit later.
-rm -f -- "$LEGACY_DROP_A" "$LEGACY_DROP_B"
-systemctl --user daemon-reload
-
-write_state "$runtime_pending" "$service_pending" "$PACKAGE_SOURCE_SHA" "$PACKAGE_FINGERPRINT" "$PACKAGE_SHA256"
-
-echo
-echo "SUCCESS: config=$CONFIG_SHA OpenChamber=$APP_SHA OpenCode=$installed_opencode"
-if [[ "$runtime_pending" == 1 || "$service_pending" == 1 ]]; then
-  echo "PENDING APPLY: current OpenChamber terminal was preserved."
-  if [[ "$runtime_pending" == 1 ]]; then
-    echo "Run the same installer from SSH/external console with:"
-    echo "  OPENCHAMBER_RESTART_MODE=now"
-  else
-    echo "Run from SSH/external console:"
-    echo "  systemctl --user restart openchamber.service"
-  fi
-else
-  echo "OpenChamber service: http://$HOST:$PORT"
-fi
-[[ -z "$NEW_PASSWORD" ]] || echo "NEW UI PASSWORD (store securely): $NEW_PASSWORD"
+write_state "$runtime_pending" 1 "$PACKAGE_SOURCE_SHA" "$PACKAGE_FINGERPRINT" "$PACKAGE_SHA256"
+echo "Delivery prepared: config=$CONFIG_SHA OpenChamber=$APP_SHA OpenCode=$installed_opencode"

@@ -5,6 +5,7 @@
 ## Документация
 
 - [Pipeline разработки: Issue → PLAN → RUN → PR](project/pipeline.md)
+- [Анализ reuse: сбор, выгрузка и решение о развитии/отключении](project/reuse-analysis.md)
 
 ## Целевые версии ветки 2.x
 
@@ -14,8 +15,8 @@
 
 `main` не обновляется до завершения проверки. Рабочие upgrade-ветки:
 
-- `gest0r1/my-opencode@upgrade/opencode-v2`
-- `gest0r1/openchamber-ru@upgrade/openchamber-2.1.0`
+- `gest0r1/my-opencode@main`
+- `gest0r1/openchamber-ru@main`
 
 ## Канонические пути OpenCode 2.x
 
@@ -82,8 +83,8 @@ gh api -H 'Accept: application/vnd.github.raw' \
 
 ```bash
 gh api -H 'Accept: application/vnd.github.raw' \
-  'repos/gest0r1/my-opencode/contents/install.sh?ref=upgrade/opencode-v2' \
-  | OPENCODE_CONFIG_REF=upgrade/opencode-v2 bash
+  'repos/gest0r1/my-opencode/contents/install.sh?ref=main' \
+  | OPENCODE_CONFIG_REF=main bash
 ```
 
 Standalone `install.sh` делегирует полную установку в `scripts/install-opencode-generation.sh`: устанавливает OpenCode `2.0.21`, атомарно подготавливает и переключает config/skills generation, нормализует OpenCode 2.x paths и сохраняет существующие credentials/runtime secrets. Binary-only fast path используется только из pinned OpenChamber orchestration, когда state подтверждает, что exact config SHA уже активен.
@@ -99,7 +100,7 @@ Standalone `install.sh` делегирует полную установку в 
 ~/.local/share/openchamber-v2/current -> releases/<source-sha>/
 ```
 
-Systemd unit привязывается к проверенной immutable generation. Переключение `current` атомарное; при ошибке activation восстанавливаются предыдущие runtime/service state.
+Native OpenChamber управляет systemd unit и startup env; unit запускает стабильный managed launcher. Переключение `current` атомарное. При ошибке возвращается предыдущий бинарник, затем native startup повторно применяет сервис. Installer не восстанавливает unit/env вручную.
 
 По умолчанию OpenChamber слушает:
 
@@ -140,9 +141,9 @@ Canonical `install-openchamber.sh` независимо определяет и�
 
 | Состояние | Действие |
 |---|---|
-| Ничего не изменилось | config archive, OpenCode installer, release lookup, OpenChamber package download и service restart пропускаются |
+| Ничего не изменилось | config обновляется атомарно с сохранением пользовательских plugins; OpenCode binary, release lookup и OpenChamber package переиспользуются; native startup перезапускает сервис для загрузки config |
 | Изменился только private config, OpenCode `2.0.21` уже установлен | запускается config-only install с `OPENCODE_SKIP_BINARY_INSTALL=1`; официальный binary installer не вызывается |
-| Требуется обновить только OpenCode binary, а pinned `config_sha` уже активен | вызывается только официальный OpenCode installer; config archive не скачивается, binary имеет backup/rollback и version validation |
+| Требуется обновить только OpenCode binary, а pinned `config_sha` уже активен | config обновляется; официальный OpenCode installer обновляет binary с backup/rollback и version validation |
 | Изменился OpenChamber source SHA, но `runtime_fingerprint/package_source_sha` прежние | скачивается только маленький exact-SHA manifest; OpenChamber package не скачивается и не переустанавливается |
 | Изменился runtime package | используется verified local cache либо скачивается новый `.tgz`, затем проверяется SHA-256 |
 | Изменился только host/port/env/service state | runtime package не трогается; выполняется только service reconciliation |
@@ -157,7 +158,7 @@ Canonical `install-openchamber.sh` независимо определяет и�
 
 ```bash
 CONFIG_SHA="$(gh api \
-  'repos/gest0r1/my-opencode/commits/upgrade/opencode-v2' --jq .sha)"
+  'repos/gest0r1/my-opencode/commits/main' --jq .sha)"
 
 gh api -H 'Accept: application/vnd.github.raw' \
   "repos/gest0r1/my-opencode/contents/scripts/cleanup-openchamber-v1-before-v2.sh?ref=$CONFIG_SHA" \
@@ -172,9 +173,9 @@ gh api -H 'Accept: application/vnd.github.raw' \
 
 ```bash
 CONFIG_SHA="$(gh api \
-  'repos/gest0r1/my-opencode/commits/upgrade/opencode-v2' --jq .sha)"
+  'repos/gest0r1/my-opencode/commits/main' --jq .sha)"
 OPENCHAMBER_SHA="$(gh api \
-  'repos/gest0r1/openchamber-ru/commits/upgrade/openchamber-2.1.0' --jq .sha)"
+  'repos/gest0r1/openchamber-ru/commits/main' --jq .sha)"
 
 gh api -H 'Accept: application/vnd.github.raw' \
   "repos/gest0r1/my-opencode/contents/install-openchamber.sh?ref=$CONFIG_SHA" \
@@ -242,3 +243,7 @@ cp -a config/agents/skills/. ~/.agents/skills/
 chmod 600 ~/.config/opencode.env
 rm -f ~/.config/opencode-web.env
 ```
+
+### Пользовательские плагины
+
+При обновлении `scripts/merge-user-plugins.mjs` переносит пользовательские plugin entries из JSON/JSONC и локальные файлы `plugins/` в staging до проверки зависимостей. V1 tuples нормализуются в V2 objects; дубли по package ID устраняются, обязательная запись репозитория имеет приоритет. Явные исключения задаёт `config/opencode/plugin-policy.json`. Некорректный config прерывает staging, активное поколение остаётся прежним.

@@ -1,8 +1,11 @@
 name: Canonical OpenChamber and OpenCode installer contract
 on:
   push:
-    branches: [upgrade/opencode-v2]
+    branches: [main]
     paths:
+      - scripts/merge-user-plugins.mjs
+      - config/opencode/plugin-policy.json
+      - tests/test_user_plugins.mjs
       - install-openchamber.sh
       - install.sh
       - scripts/install-opencode-generation.sh
@@ -19,12 +22,16 @@ on:
       - tests/test_standard_installer.py
       - tests/test_incremental_installer.sh
       - tests/test_binary_only_installer.sh
+      - tests/test_native_activation.sh
       - tests/test_openchamber_runtime_store.sh
       - tests/test_agent_path_migration.sh
       - tests/test_agent_permission_normalization.sh
       - .github/workflows/installer-contract.yml
   pull_request:
     paths:
+      - scripts/merge-user-plugins.mjs
+      - config/opencode/plugin-policy.json
+      - tests/test_user_plugins.mjs
       - install-openchamber.sh
       - install.sh
       - scripts/install-opencode-generation.sh
@@ -41,6 +48,7 @@ on:
       - tests/test_standard_installer.py
       - tests/test_incremental_installer.sh
       - tests/test_binary_only_installer.sh
+      - tests/test_native_activation.sh
       - tests/test_openchamber_runtime_store.sh
       - tests/test_agent_path_migration.sh
       - tests/test_agent_permission_normalization.sh
@@ -89,11 +97,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/test_agent_permission_normalization.sh
-          node --test tests/trusted-paths.test.mjs tests/generation-state.test.mjs
+          node --test tests/trusted-paths.test.mjs tests/generation-state.test.mjs tests/test_user_plugins.mjs
       - name: Verify immutable OpenChamber runtime activation
         run: |
           set -Eeuo pipefail
           bash tests/test_openchamber_runtime_store.sh
+          bash tests/test_native_activation.sh
       - name: Verify full configuration bootstrap and dependency timeout
         run: |
           set -Eeuo pipefail
