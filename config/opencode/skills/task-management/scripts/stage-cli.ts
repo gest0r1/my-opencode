@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { runCli } from './stage-cli-core.ts';
+import { applyOwnerAmendment, runCli } from './stage-cli-core.ts';
 import { preflightFile } from './manifest-preflight.mjs';
 
 function stateRootFromArgs(args: string[]): string {
@@ -203,7 +203,7 @@ async function ownerAcceptance(args: string[]): Promise<boolean> {
 
   const common = [runId, stage, '--pipeline', pipelineId, '--state-root', stateRoot, '--evidence', evidencePath];
   if (result === 'pass') await runCli(['complete', ...common, ...(message ? ['--message', message] : [])]);
-  else await runCli(['fail', ...common, ...(message ? ['--message', message] : [])]);
+  else await runCli(['block', ...common, ...(message ? ['--message', message] : [])]);
   return true;
 }
 
@@ -344,6 +344,17 @@ async function main(args: string[]): Promise<void> {
   }
   if (command === 'owner-accept') {
     await ownerAcceptance(args);
+    return;
+  }
+  if (command === 'owner-amend-apply') {
+    const stage = args[2];
+    const pipelineId = optionFromArgs(args, '--pipeline');
+    const evidence = optionFromArgs(args, '--evidence');
+    if (!identifier || !stage || !pipelineId || !evidence) {
+      throw new Error('usage: stage-cli owner-amend-apply <run-id> <owner-stage> --pipeline <id> --evidence <owner-amendment.json>');
+    }
+    const state = await applyOwnerAmendment(resolve(stateRootFromArgs(args)), identifier, stage, evidence, pipelineId);
+    console.log(JSON.stringify(state, null, 2));
     return;
   }
   if (command === 'preflight') {
