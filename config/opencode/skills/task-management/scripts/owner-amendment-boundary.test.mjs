@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, '../../../../..');
+const ROOT = path.resolve(HERE, '../../..');
 const read = (relative) => readFile(path.join(ROOT, relative), 'utf8');
 
 test('owner amendment stays inside an existing frozen work item', async () => {
