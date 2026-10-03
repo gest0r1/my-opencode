@@ -123,8 +123,8 @@ done < <(find "$SOURCE_ROOT" -type f -name '*.md' -print0 | sort -z)
 
 # During the full config staging path, normalize legacy delegation aliases and
 # make Markdown the single permission source for agents that declare their own
-# permission: block. This also synchronizes mode into opencode.json so a managed
-# subagent never exists temporarily as the default primary agent.
+# permission: block. Restrict mutation to repository-managed agents: preserved
+# user agents may participate in the catalog but must not be rewritten.
 if [[ -f "$TARGET_CONFIG" ]]; then
   [[ -f "$NORMALIZER" ]] || {
     echo "Agent permission normalizer missing: $NORMALIZER" >&2
@@ -134,7 +134,7 @@ if [[ -f "$TARGET_CONFIG" ]]; then
     echo "Node.js is required for agent permission normalization." >&2
     exit 1
   }
-  node "$NORMALIZER" "$TARGET_CONFIG" "$TARGET_ROOT"
+  node "$NORMALIZER" "$TARGET_CONFIG" "$TARGET_ROOT" "$SOURCE_ROOT"
 fi
 
 archive_legacy_root() {
