@@ -88,6 +88,7 @@ jobs:
 
           const idOf = (agent) => agent.id ?? agent.name;
           const byID = new Map(agents.map((agent) => [idOf(agent), agent]));
+          console.error('Resolved agent catalog:', agents.map((agent) => `${idOf(agent)}:${agent.mode}`).join(', '));
           for (const required of ['OpenStageOrchestrator', 'CoderAgent', 'ContextScout', 'Architect', 'Reviewer', 'DocWriterAgent', 'QA']) {
             if (!byID.has(required)) throw new Error(`missing exact agent ID: ${required}`);
           }
@@ -101,8 +102,6 @@ jobs:
             throw new Error('OpenStageOrchestrator unexpectedly became subagent-only');
           }
 
-          // OpenCode 2.0.21 derives IDs from the relative path below agents/.
-          // Any slash here means the installer leaked source categories into IDs.
           const nested = [...byID.keys()].filter((id) => typeof id === 'string' && id.includes('/'));
           if (nested.length) throw new Error(`nested/non-canonical agent IDs: ${nested.join(', ')}`);
 
@@ -136,9 +135,6 @@ jobs:
             }
           }
 
-          // The pipeline orchestrator must retain its scoped write policy while
-          // delegation is available. Do not widen edit merely to work around a
-          // broken subagent catalog.
           const orchestrator = byID.get('OpenStageOrchestrator');
           const orchestratorRules = orchestrator.permissions ?? [];
           if (evaluate(orchestratorRules, 'edit', 'packages/example.ts') !== 'deny') {
