@@ -4,8 +4,7 @@ mode: primary
 description: The default agent. Executes tools based on configured permissions.
 model: opencode-go/mimo-v2.6-flash
 permission:
-  doom_loop:
-    "*": ask
+  doom_loop: ask
   external_directory:
     "$HOME/.local/share/opencode/tool-output/*": allow
     "/tmp/opencode/*": allow
