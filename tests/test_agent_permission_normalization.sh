@@ -116,11 +116,11 @@ test "$count" -eq 1
 mapfile -t wildcard_lines < <(grep -n '"\*": deny' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
 test "${#wildcard_lines[@]}" -eq 3
 
-task_allow=$(grep -n 'ContextScout: allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+task_allow=$(grep -nF 'ContextScout: allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
 test "${wildcard_lines[0]}" -lt "$task_allow"
-edit_allow=$(grep -n 'safe/\*\*: allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+edit_allow=$(grep -nF '"safe/**": allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
 test "${wildcard_lines[1]}" -lt "$edit_allow"
-bash_allow=$(grep -n 'echo ok: allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+bash_allow=$(grep -nF '"echo ok": allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
 test "${wildcard_lines[2]}" -lt "$bash_allow"
 
 grep -Fq 'contextscout: "allow"' "$tmp/agents/UserCustom.md"
