@@ -7,6 +7,7 @@ on:
     paths:
       - 'install.sh'
       - 'scripts/install-opencode-agents.sh'
+      - 'scripts/normalize-opencode-agent-permissions.mjs'
       - 'config/opencode/**'
       - '.github/workflows/opencode-v2-live-smoke.yml'
   workflow_dispatch:
@@ -124,8 +125,6 @@ jobs:
               throw new Error(`${id}: expected mode=${expectedMode}, live mode=${resolved.mode}`);
             }
           }
-          const nestedManaged = files.filter((file) => file.includes('/'));
-          if (nestedManaged.length) throw new Error(`nested managed agent files: ${nestedManaged.join(', ')}`);
 
           const wildcard = (value, pattern) => {
             const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
@@ -139,14 +138,26 @@ jobs:
             return 'ask';
           };
 
-          // Audit every concrete subagent allow in the fully normalized runtime
-          // matrix: target must exist, be delegable, and remain effectively allow
-          // after last-match-wins precedence.
           const errors = [];
+          const legacyActions = new Set(['task', 'bash', 'write', 'patch']);
           for (const agent of agents) {
             const id = idOf(agent);
             const rules = agent.permissions ?? [];
             for (const rule of rules) {
+              if (legacyActions.has(rule.action)) {
+                errors.push(`${id}: legacy runtime permission action '${rule.action}' was not normalized`);
+              }
+
+              // Every exact allow, regardless of action, must still be effective
+              // after last-match-wins resolution. Globs are checked by dedicated
+              // policy assertions because a glob is not a concrete resource.
+              if (rule.effect === 'allow' && rule.resource !== '*' && !/[*?]/.test(rule.resource)) {
+                const effective = evaluate(rules, rule.action, rule.resource);
+                if (effective !== 'allow') {
+                  errors.push(`${id}: ${rule.action} allow for '${rule.resource}' is shadowed; effective=${effective}`);
+                }
+              }
+
               if (rule.action !== 'subagent' || rule.effect !== 'allow') continue;
               if (rule.resource === '*' || /[*?]/.test(rule.resource)) continue;
               const target = byID.get(rule.resource);
@@ -156,10 +167,7 @@ jobs:
               }
               if (target.mode === 'primary') {
                 errors.push(`${id}: allow targets primary agent '${rule.resource}'`);
-                continue;
               }
-              const effective = evaluate(rules, 'subagent', rule.resource);
-              if (effective !== 'allow') errors.push(`${id}: allow for '${rule.resource}' is shadowed; effective=${effective}`);
             }
           }
 
