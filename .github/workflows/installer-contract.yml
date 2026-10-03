@@ -8,10 +8,12 @@ on:
       - scripts/install-openchamber-v2-core.sh
       - scripts/openchamber-runtime-store.sh
       - scripts/install-opencode-agents.sh
+      - scripts/normalize-opencode-agent-permissions.mjs
       - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
       - tests/test_openchamber_runtime_store.sh
       - tests/test_agent_path_migration.sh
+      - tests/test_agent_permission_normalization.sh
       - .github/workflows/installer-contract.yml
   pull_request:
     paths:
@@ -20,10 +22,12 @@ on:
       - scripts/install-openchamber-v2-core.sh
       - scripts/openchamber-runtime-store.sh
       - scripts/install-opencode-agents.sh
+      - scripts/normalize-opencode-agent-permissions.mjs
       - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
       - tests/test_openchamber_runtime_store.sh
       - tests/test_agent_path_migration.sh
+      - tests/test_agent_permission_normalization.sh
 permissions:
   contents: read
 jobs:
@@ -45,7 +49,9 @@ jobs:
             scripts/install-opencode-agents.sh \
             scripts/cleanup-openchamber-v1-before-v2.sh \
             tests/test_openchamber_runtime_store.sh \
-            tests/test_agent_path_migration.sh
+            tests/test_agent_path_migration.sh \
+            tests/test_agent_permission_normalization.sh
+          node --check scripts/normalize-opencode-agent-permissions.mjs
           grep -Fq 'OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"' install.sh
           grep -Fq 'bash -s -- --version "$OPENCODE_INSTALL_VERSION"' install.sh
           git diff --check
@@ -59,6 +65,10 @@ jobs:
           source_count=$(find config/opencode/agent -type f -name '*.md' | wc -l)
           installed_count=$(find "$tmp/agents" -type f -name '*.md' | wc -l)
           test "$source_count" -eq "$installed_count"
+      - name: Verify managed agent permission normalization
+        run: |
+          set -Eeuo pipefail
+          bash tests/test_agent_permission_normalization.sh
       - name: Verify immutable OpenChamber runtime activation
         run: |
           set -Eeuo pipefail
