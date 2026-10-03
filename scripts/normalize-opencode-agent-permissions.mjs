@@ -43,6 +43,7 @@ const aliases = new Map(Object.entries({
 }))
 
 const builtinSubagents = new Set(['explore', 'general'])
+const managedSkillNames = new Set(['task-management', 'context7'])
 
 function walkMarkdown(root) {
   if (!root || !fs.existsSync(root)) return []
@@ -137,6 +138,31 @@ function renderPermissionEntry(entry) {
   return `${entry.indent}${safeKey}: ${entry.effect}${entry.suffix}`
 }
 
+function normalizeTrustedSkillResource(resource) {
+  let next = resource
+
+  // Old generated agents embedded either the build user's absolute home or a
+  // project-local .opencode/skills path. Both are wrong trust boundaries for a
+  // global managed installation: deterministic CLIs and Context7 data must be
+  // loaded from the installer-owned global config tree.
+  next = next.replace(
+    /\/(?:root|home\/[^/\s]+)\/\.config\/opencode\/skills\/(task-management|context7)\//g,
+    '$HOME/.config/opencode/skills/$1/',
+  )
+  for (const skill of managedSkillNames) {
+    next = next.split(`.opencode/skills/${skill}/`).join(`$HOME/.config/opencode/skills/${skill}/`)
+  }
+  return next
+}
+
+function hasUntrustedManagedSkillPath(resource) {
+  if (/\/(?:root|home\/[^/\s]+)\/\.config\/opencode\/skills\//.test(resource)) return true
+  for (const skill of managedSkillNames) {
+    if (resource.includes(`.opencode/skills/${skill}/`)) return true
+  }
+  return false
+}
+
 function permissionRange(info) {
   const start = info.lines.findIndex((line, index) => index > 0 && index < info.end && /^permission:\s*$/.test(line))
   if (start < 0) return undefined
@@ -189,6 +215,7 @@ function normalizePermissionBlocks(info) {
 
       const original = entry.resource
       if (action === 'task') entry.resource = aliases.get(entry.resource) ?? entry.resource
+      entry.resource = normalizeTrustedSkillResource(entry.resource)
 
       if (action === 'task' && entry.effect === 'allow') {
         const target = catalog.get(entry.resource)
@@ -212,7 +239,7 @@ function normalizePermissionBlocks(info) {
       seen.set(entry.resource, entry)
 
       if (entry.resource !== original) {
-        console.log(`Normalized subagent alias: ${path.basename(info.file)} ${original} -> ${entry.resource}`)
+        console.log(`Normalized permission resource: ${path.basename(info.file)} ${original} -> ${entry.resource}`)
         changed = true
       }
       normalized.push(renderPermissionEntry(entry))
@@ -324,7 +351,8 @@ for (const id of managedIDs) {
 
 if (configChanges) fs.writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`)
 
-// Fail closed on unresolved exact delegation mistakes in managed Markdown.
+// Fail closed on unresolved delegation mistakes and unsafe managed-skill trust
+// paths in managed Markdown.
 const errors = []
 for (const id of managedIDs) {
   const info = catalog.get(id)
@@ -348,6 +376,12 @@ for (const id of managedIDs) {
     const wildcardIndex = entries.findIndex((entry) => entry.resource === '*')
     if (wildcardIndex > 0) {
       errors.push(`${id}: permission.${action} catch-all appears after specific rules`)
+    }
+
+    for (const entry of entries) {
+      if (entry.effect === 'allow' && hasUntrustedManagedSkillPath(entry.resource)) {
+        errors.push(`${id}: permission.${action} allows non-canonical managed skill path '${entry.resource}'`)
+      }
     }
 
     if (action === 'task') {
