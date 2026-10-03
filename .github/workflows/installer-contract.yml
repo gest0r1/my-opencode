@@ -11,6 +11,7 @@ on:
       - scripts/normalize-opencode-agent-permissions.mjs
       - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
+      - tests/test_incremental_installer.sh
       - tests/test_openchamber_runtime_store.sh
       - tests/test_agent_path_migration.sh
       - tests/test_agent_permission_normalization.sh
@@ -25,6 +26,7 @@ on:
       - scripts/normalize-opencode-agent-permissions.mjs
       - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
+      - tests/test_incremental_installer.sh
       - tests/test_openchamber_runtime_store.sh
       - tests/test_agent_path_migration.sh
       - tests/test_agent_permission_normalization.sh
@@ -48,6 +50,7 @@ jobs:
             scripts/openchamber-runtime-store.sh \
             scripts/install-opencode-agents.sh \
             scripts/cleanup-openchamber-v1-before-v2.sh \
+            tests/test_incremental_installer.sh \
             tests/test_openchamber_runtime_store.sh \
             tests/test_agent_path_migration.sh \
             tests/test_agent_permission_normalization.sh
@@ -73,6 +76,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/test_openchamber_runtime_store.sh
+      - name: Verify incremental installer execution
+        run: |
+          set -Eeuo pipefail
+          bash tests/test_incremental_installer.sh
       - name: Verify OpenChamber/OpenCode v2 installer contract
         run: |
           set -Eeuo pipefail
