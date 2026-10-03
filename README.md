@@ -86,7 +86,7 @@ gh api -H 'Accept: application/vnd.github.raw' \
   | OPENCODE_CONFIG_REF=upgrade/opencode-v2 bash
 ```
 
-`install.sh` устанавливает OpenCode `2.0.21`, атомарно подготавливает и переключает config/skills generation, нормализует OpenCode 2.x paths и сохраняет существующие credentials/runtime secrets.
+Standalone `install.sh` делегирует полную установку в `scripts/install-opencode-generation.sh`: устанавливает OpenCode `2.0.21`, атомарно подготавливает и переключает config/skills generation, нормализует OpenCode 2.x paths и сохраняет существующие credentials/runtime secrets. Binary-only fast path используется только из pinned OpenChamber orchestration, когда state подтверждает, что exact config SHA уже активен.
 
 ## OpenCode + OpenChamber RU 2.x
 
@@ -142,7 +142,7 @@ Canonical `install-openchamber.sh` независимо определяет и�
 |---|---|
 | Ничего не изменилось | config archive, OpenCode installer, release lookup, OpenChamber package download и service restart пропускаются |
 | Изменился только private config, OpenCode `2.0.21` уже установлен | запускается config-only install с `OPENCODE_SKIP_BINARY_INSTALL=1`; официальный binary installer не вызывается |
-| Требуется обновить OpenCode binary | `install.sh` валидирует совместимую config generation и обновляет binary; это редкий путь и намеренно сохраняет atomic binary+config validation |
+| Требуется обновить только OpenCode binary, а pinned `config_sha` уже активен | вызывается только официальный OpenCode installer; config archive не скачивается, binary имеет backup/rollback и version validation |
 | Изменился OpenChamber source SHA, но `runtime_fingerprint/package_source_sha` прежние | скачивается только маленький exact-SHA manifest; OpenChamber package не скачивается и не переустанавливается |
 | Изменился runtime package | используется verified local cache либо скачивается новый `.tgz`, затем проверяется SHA-256 |
 | Изменился только host/port/env/service state | runtime package не трогается; выполняется только service reconciliation |
