@@ -50,19 +50,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Resolve both moving refs exactly once at the transaction boundary. Everything
+# fetched or executed below is pinned to these immutable commits, so a branch
+# update during installation cannot mix wrapper/core/config or runtime SHAs.
+CONFIG_SHA="$(gh api "repos/$CONFIG_REPO/commits/$CONFIG_REF" --jq .sha)"
+[[ "$CONFIG_SHA" =~ ^[a-f0-9]{40}$ ]] || {
+  echo "Could not resolve exact config SHA for $CONFIG_REPO@$CONFIG_REF" >&2
+  exit 1
+}
 APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"
 [[ "$APP_SHA" =~ ^[a-f0-9]{40}$ ]] || {
   echo "Could not resolve exact OpenChamber SHA for $APP_REPO@$APP_REF" >&2
   exit 1
 }
 
-# Fetch both scripts from the same config ref. This prevents mixing an old
-# wrapper with a newer transaction helper/core during branch-based testing.
+# Fetch transaction scripts from the exact resolved config commit. The child
+# receives those same exact refs, preventing a moving branch from being
+# re-resolved to a different commit after the immutable release path is chosen.
 gh api -H 'Accept: application/vnd.github.raw' \
-  "repos/$CONFIG_REPO/contents/scripts/install-openchamber-v2-core.sh?ref=$CONFIG_REF" > "$CORE"
+  "repos/$CONFIG_REPO/contents/scripts/install-openchamber-v2-core.sh?ref=$CONFIG_SHA" > "$CORE"
 gh api -H 'Accept: application/vnd.github.raw' \
-  "repos/$CONFIG_REPO/contents/scripts/openchamber-runtime-store.sh?ref=$CONFIG_REF" > "$RUNTIME_HELPER"
+  "repos/$CONFIG_REPO/contents/scripts/openchamber-runtime-store.sh?ref=$CONFIG_SHA" > "$RUNTIME_HELPER"
 
+export OPENCODE_CONFIG_REF="$CONFIG_SHA"
+export MY_OPENCODE_REF="$CONFIG_SHA"
+export OPENCHAMBER_REF="$APP_SHA"
 export EXPECTED_OPENCHAMBER_VERSION OPENCHAMBER_RUNTIME_ROOT LEGACY_BUN_INSTALL
 # shellcheck disable=SC1090
 source "$RUNTIME_HELPER"

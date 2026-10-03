@@ -37,6 +37,28 @@ def main():
     require(installer, 'OpenCode binary/config unchanged: downloads skipped', "no-op fast path")
     require(installer, 'FORCE_OPENCODE_UPDATE=1', "explicit OpenCode update")
 
+    # The outer transaction must resolve moving refs once and pin every child
+    # fetch/execution to those immutable SHAs. Otherwise a branch move between
+    # wrapper and core can install APP_SHA B into release directory APP_SHA A.
+    require(wrapper, 'CONFIG_SHA="$(gh api "repos/$CONFIG_REPO/commits/$CONFIG_REF" --jq .sha)"',
+            "exact config SHA resolution")
+    require(wrapper, 'APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"',
+            "exact OpenChamber SHA resolution")
+    require(wrapper, 'install-openchamber-v2-core.sh?ref=$CONFIG_SHA',
+            "core fetched from exact config SHA")
+    require(wrapper, 'openchamber-runtime-store.sh?ref=$CONFIG_SHA',
+            "runtime helper fetched from exact config SHA")
+    require(wrapper, 'export OPENCODE_CONFIG_REF="$CONFIG_SHA"',
+            "core config ref pinned to exact SHA")
+    require(wrapper, 'export MY_OPENCODE_REF="$CONFIG_SHA"',
+            "legacy config ref alias pinned to exact SHA")
+    require(wrapper, 'export OPENCHAMBER_REF="$APP_SHA"',
+            "core OpenChamber ref pinned to exact SHA")
+    assert wrapper.index('export OPENCHAMBER_REF="$APP_SHA"') < wrapper.index('bash +h "$CORE"'), \
+        "exact refs must be exported before the core executes"
+    assert wrapper.index('CONFIG_SHA="$(gh api') < wrapper.index('RELEASE_DIR="$OPENCHAMBER_RELEASES/$APP_SHA"'), \
+        "transaction refs must be pinned before immutable release selection"
+
     # Immutable/fingerprinted OpenChamber package behavior.
     require(installer, 'v2-web-package-$APP_SHA', "exact-SHA package manifest")
     require(installer, 'runtime_fingerprint', "runtime fingerprint validation")
@@ -161,7 +183,7 @@ def main():
     forbid(config_installer, 'Legacy agent directories were retained for rollback.',
            "active legacy agent roots must not remain")
 
-    print("PASS: V2 installer contract is incremental, console-safe, atomic per component, and legacy-clean")
+    print("PASS: V2 installer contract is incremental, console-safe, atomic per component, ref-pinned, and legacy-clean")
 
 
 if __name__ == "__main__":
