@@ -28,6 +28,9 @@ def main():
     require(installer, 'for attempt in {1..45}', "bounded startup readiness retry")
 
     # Incremental OpenCode behavior restored from 1.x.
+    require(installer, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"',
+            "OpenCode 2.0.21 migration pin")
+    forbid(installer, '2.0.22', "unapproved OpenCode version bump")
     require(installer, 'opencode_binary_changed=0', "OpenCode binary decision")
     require(installer, 'config_changed=0', "config decision")
     require(installer, 'OPENCODE_SKIP_BINARY_INSTALL=1', "config-only binary skip")
@@ -64,6 +67,13 @@ def main():
     require(installer, 'removed transient/session variables', "sanitizer audit output")
     require(installer, 'OPENCHAMBER_UI_PASSWORD', "password preservation")
     require(installer, 'OPENCHAMBER_DATA_DIR', "data-dir preservation")
+    require(wrapper, 'read_password_from_env_file "$NATIVE_STARTUP_ENV"',
+            "native password recovery")
+    require(wrapper, 'read_password_from_env_file "$LEGACY_PASSWORD_ENV"',
+            "legacy password migration fallback")
+    assert wrapper.index('read_password_from_env_file "$NATIVE_STARTUP_ENV"') < \
+        wrapper.index('read_password_from_env_file "$LEGACY_PASSWORD_ENV"'), \
+        "native V2 password must win over legacy migration bridge"
 
     # OpenChamber runtime activation is a separate transaction: immutable
     # release prefix, service snapshot, atomic current switch, rollback.
@@ -82,6 +92,11 @@ def main():
     require(wrapper, "trap 'on_interrupt 143' TERM", "termination rollback")
     require(wrapper, 'TRANSACTION_COMMITTED=1', "transaction commit boundary")
     require(wrapper, 'trap - ERR INT TERM', "failure traps disabled after commit")
+    require(wrapper, 'Recovering interrupted OpenChamber activation from immutable runtime:',
+            "SIGKILL crash-window recovery")
+    assert wrapper.index('oc_validate_release "$RELEASE_DIR"') < \
+        wrapper.index('rm -f -- "$STATE"'), \
+        "valid interrupted immutable release must be recovered before pre-atomic state reset"
     require(wrapper, 'oc_prune_releases', "bounded immutable release retention")
     assert wrapper.index('oc_prune_releases') < wrapper.index('oc_commit_service'), \
         "previous generation must still be known while pruning"
@@ -91,6 +106,8 @@ def main():
     require(runtime_store, 'OPENCHAMBER_CURRENT="$OPENCHAMBER_RUNTIME_ROOT/current"',
             "atomic current link")
     require(runtime_store, 'mv -Tf "$link_tmp" "$OPENCHAMBER_CURRENT"', "atomic symlink publish")
+    require(runtime_store, 'printf \'exec %q "$@"\\n\' "$OPENCHAMBER_CURRENT_BIN"',
+            "managed launcher honors configured runtime root")
     require(runtime_store, 'oc_rollback_activation()', "runtime rollback helper")
     require(runtime_store, 'LEGACY_BUN_INSTALL', "legacy Bun rollback source separation")
 
