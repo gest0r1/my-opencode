@@ -6,21 +6,21 @@ model: opencode-go/mimo-v2.5
 temperature: 0.1
 permission:
   bash:
-    "*": "deny"
-    "npx ts-node*task-cli*": "allow"
-    "bash .opencode/skills/task-management/router.sh*": "allow"
+    "*": deny
+    "npx ts-node*task-cli*": allow
+    "bash $HOME/.config/opencode/skills/task-management/router.sh*": allow
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
-    "node_modules/**": "deny"
-    ".git/**": "deny"
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
+    "node_modules/**": deny
+    ".git/**": deny
   task:
-    "*": "deny"
-    contextscout: "allow"
-    externalscout: "allow"
-    coderagent: "allow"
-    OpenFrontendSpecialist: "allow"
+    "*": deny
+    ContextScout: allow
+    ExternalScout: allow
+    CoderAgent: allow
+    OpenFrontendSpecialist: allow
 ---
 
 ## Mandatory Caveman Skill

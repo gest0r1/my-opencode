@@ -10,15 +10,11 @@ model: opencode-go/deepseek-v4.1-flash
 temperature: 0.3
 permission:
   task:
-    "*": "deny"
-    contextscout: "allow"
-    ContextScout: "allow"
-    externalscout: "allow"
-    ExternalScout: "allow"
-    DocWriter: "allow"
-    docwriter: "allow"
-    WebResearcher: "allow"
-    webresearcher: "allow"
+    "*": deny
+    ContextScout: allow
+    ExternalScout: allow
+    DocWriter: allow
+    WebResearcher: allow
 ---
 
 # Copywriter

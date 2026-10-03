@@ -8,6 +8,8 @@ on:
       - 'install.sh'
       - 'scripts/install-opencode-agents.sh'
       - 'scripts/normalize-opencode-agent-permissions.mjs'
+      - 'scripts/materialize-opencode-trusted-paths.mjs'
+      - 'scripts/install-opencode-generation.sh'
       - 'config/opencode/**'
       - '.github/workflows/opencode-v2-live-smoke.yml'
   workflow_dispatch:
@@ -160,7 +162,7 @@ jobs:
               }
 
               if (rule.effect === 'allow') {
-                if (rule.resource.includes('/root/.config/opencode/skills/')) {
+                if (rule.resource.includes('/root/.config/opencode/skills/') && os.homedir() !== '/root') {
                   errors.push(`${id}: permission still trusts root-specific managed skill path '${rule.resource}'`);
                 }
                 if (/(^|\s)\.opencode\/skills\/(task-management|context7)\//.test(rule.resource)) {
@@ -205,7 +207,7 @@ jobs:
             if (!rule.resource.includes('.config/opencode/skills/')) {
               errors.push(`${id}: ${label} is not under global config: ${rule.resource}`);
             }
-            if (rule.resource.includes('/root/.config/opencode/skills/') || /(^|\s)\.opencode\/skills\//.test(rule.resource)) {
+            if ((rule.resource.includes('/root/.config/opencode/skills/') && os.homedir() !== '/root') || /(^|\s)\.opencode\/skills\//.test(rule.resource)) {
               errors.push(`${id}: ${label} uses unsafe path: ${rule.resource}`);
             }
             const sample = sampleFromPattern(rule.resource);
@@ -233,9 +235,13 @@ jobs:
             'OpenStageOrchestrator',
             'shell',
             'npx tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts validate fixture',
-            'deny',
-            'root-specific stage-cli',
+            os.homedir() === '/root' ? 'allow' : 'deny',
+            'foreign-home stage-cli',
           );
+
+          for (const home of [os.homedir(), '$HOME', '${HOME}']) {
+            expectEffect('OpenStageOrchestrator', 'shell', `npx tsx ${home}/.config/opencode/skills/task-management/scripts/stage-cli.ts validate fixture`, 'allow', 'equivalent trusted CLI spelling');
+          }
 
           // Implementation worker: source edits are allowed, secrets/git are not,
           // delegation is discovery-only, arbitrary shell stays closed.
@@ -305,3 +311,4 @@ jobs:
 
           if (errors.length) throw new Error(`permission audit failed:\n- ${errors.join('\n- ')}`);
           NODE
+

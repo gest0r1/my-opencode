@@ -6,12 +6,12 @@ model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   task:
-    contextscout: "allow"
-    "*": "deny"
+    "*": deny
+    ContextScout: allow
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
 ---
 
 ## Mandatory Caveman Skill

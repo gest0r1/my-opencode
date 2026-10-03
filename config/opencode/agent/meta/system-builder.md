@@ -10,21 +10,14 @@ model: opencode-go/deepseek-v4-pro
 temperature: 0.2
 permission:
   task:
-    "*": "deny"
-    contextscout: "allow"
-    ContextScout: "allow"
-    AgentGenerator: "allow"
-    agentgenerator: "allow"
-    CommandCreator: "allow"
-    commandcreator: "allow"
-    DomainAnalyzer: "allow"
-    domainanalyzer: "allow"
-    WorkflowDesigner: "allow"
-    workflowdesigner: "allow"
-    ContextOrganizer: "allow"
-    contextorganizer: "allow"
-    TaskManager: "allow"
-    taskmanager: "allow"
+    "*": deny
+    ContextScout: allow
+    AgentGenerator: allow
+    CommandCreator: allow
+    DomainAnalyzer: allow
+    WorkflowDesigner: allow
+    ContextOrganizer: allow
+    TaskManager: allow
 ---
 
 ## Caveman Delegation Requirement

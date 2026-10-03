@@ -7,11 +7,11 @@ temperature: 0
 permission:
   bash:
     "*": deny
-    "bash .opencode/skills/task-management/router.sh complete*": allow
-    "bash .opencode/skills/task-management/router.sh status*": allow
+    "bash $HOME/.config/opencode/skills/task-management/router.sh complete*": allow
+    "bash $HOME/.config/opencode/skills/task-management/router.sh status*": allow
   edit:
     "*": allow
-    ".env": deny
+    .env: deny
     "*.env": deny
     "**/*.env": deny
     "**/.env": deny
@@ -23,16 +23,14 @@ permission:
     "**/*.secret": deny
     "node_modules/**": deny
     "**/node_modules/**": deny
-    "docs/pipeline-rules.md": deny
-    "pipeline-rules.default.md": deny
+    docs/pipeline-rules.md: deny
+    pipeline-rules.default.md: deny
     "**/pipeline-rules.default.md": deny
     ".git/**": deny
     "**/.git/**": deny
   task:
     "*": deny
-    contextscout: allow
     ContextScout: allow
-    externalscout: allow
     ExternalScout: allow
   gh_grep_*: allow
 ---

@@ -7,38 +7,28 @@ temperature: 0.2
 permission:
   bash:
     "*": ask
-    rm -rf *: ask
-    rm -rf /*: deny
-    sudo *: ask
+    "rm -rf *": ask
+    "rm -rf /*": deny
+    "sudo *": ask
     "> /dev/*": ask
   edit:
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
-    node_modules/**: deny
-    .git/**: deny
+    "node_modules/**": deny
+    ".git/**": deny
   task:
     "*": deny
-    contextscout: allow
     ContextScout: allow
-    externalscout: allow
     ExternalScout: allow
     TaskManager: allow
-    taskmanager: allow
     DocWriter: allow
-    docwriter: allow
     CoderAgent: allow
-    coderagent: allow
     TestEngineer: allow
-    testengineer: allow
     CodeReviewer: allow
-    codereviewer: allow
     BuildAgent: allow
-    buildagent: allow
     BatchExecutor: allow
-    batchexecutor: allow
     WebResearcher: allow
-    webresearcher: allow
 ---
 
 ## Caveman Delegation Requirement

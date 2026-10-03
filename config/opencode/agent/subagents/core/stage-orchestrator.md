@@ -5,40 +5,30 @@ mode: subagent
 temperature: 0.1
 permission:
   bash:
-    "*": "deny"
-    "corepack pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*": "allow"
-    "pnpm exec tsx .opencode/skills/task-management/scripts/stage-cli.ts*": "allow"
+    "*": deny
+    "corepack pnpm exec tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "pnpm exec tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
-    "node_modules/**": "deny"
-    "docs/pipeline-rules.md": deny
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
+    "node_modules/**": deny
+    docs/pipeline-rules.md: deny
     "**/pipeline-rules.default.md": deny
-    ".git/**": "deny"
+    ".git/**": deny
   task:
-    "*": "deny"
-    contextscout: "allow"
-    externalscout: "allow"
-    taskmanager: "allow"
-    batchexecutor: "allow"
-    coderagent: "allow"
-    buildagent: "allow"
-    testengineer: "allow"
-    reviewer: "allow"
-    documentation: "allow"
-    CoderAgent: "allow"
-    TaskManager: "allow"
-    BatchExecutor: "allow"
-    BuildAgent: "allow"
-    TestEngineer: "allow"
-    CodeReviewer: "allow"
-    DocWriter: "allow"
-    build-agent: "allow"
-    devops-specialist: "allow"
-    test-engineer: "allow"
-    OpenDevopsSpecialist: "allow"
-    OpenFrontendSpecialist: "allow"
+    "*": deny
+    ContextScout: allow
+    ExternalScout: allow
+    TaskManager: allow
+    BatchExecutor: allow
+    CoderAgent: allow
+    BuildAgent: allow
+    TestEngineer: allow
+    CodeReviewer: allow
+    DocWriter: allow
+    OpenDevopsSpecialist: allow
+    OpenFrontendSpecialist: allow
 ---
 
 # StageOrchestrator
