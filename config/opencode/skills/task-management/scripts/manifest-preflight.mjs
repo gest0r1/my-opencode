@@ -1,4 +1,3 @@
-import { migrateLegacyManifest } from './manifest-migration.mjs';
 import { readFileSync, accessSync, constants } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
@@ -115,7 +114,6 @@ function checkPython(tokens, cwd) {
 
 
 export function validateGateManifest(manifest, { environment = false, cwd = process.cwd(), manifestPath } = {}) {
-  manifest = migrateLegacyManifest(manifest, { manifestPath, cwd });
   if (!manifest || typeof manifest !== 'object' || !Array.isArray(manifest.pipelines)) {
     throw new ManifestPreflightError('manifest.pipelines must be an array');
   }
@@ -187,4 +185,3 @@ export async function preflightFile(path, options = {}) {
   const raw = await readFile(path, 'utf8');
   return validateGateManifest(JSON.parse(raw), { ...options, manifestPath: path });
 }
-

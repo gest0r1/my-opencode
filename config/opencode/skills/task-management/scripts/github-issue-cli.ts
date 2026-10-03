@@ -1,6 +1,3 @@
-import { requirementsSha256ForSnapshot, isPipelineOwnedComment } from './source-requirements.mjs';
-import { migrateLegacyManifest } from './manifest-migration.mjs';
-export { requirementsSha256ForSnapshot, isPipelineOwnedComment } from './source-requirements.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -88,6 +85,40 @@ function normalizeComment(value: unknown): Record<string, unknown> {
   };
 }
 function sha256(value: string): string { return createHash('sha256').update(value).digest('hex'); }
+
+export function isPipelineOwnedComment(comment: Record<string, unknown>): boolean {
+  const body = typeof comment.body === 'string' ? comment.body : '';
+  return /<!--\s*pipeline-(?:event|artifact):[^>]+-->/i.test(body);
+}
+
+function canonicalRequirements(snapshot: Record<string, any>): Record<string, unknown> {
+  const issues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
+  return {
+    schema_version: 2,
+    source_type: 'github_issues',
+    repository: String(snapshot.repository ?? ''),
+    issues: issues.map((issue: any) => ({
+      repository: String(issue.repository ?? snapshot.repository ?? ''),
+      number: Number(issue.number),
+      title: typeof issue.title === 'string' ? issue.title : '',
+      body: typeof issue.body === 'string' ? issue.body : '',
+      state: String(issue.state ?? ''),
+      comments: (Array.isArray(issue.comments) ? issue.comments : [])
+        .filter((comment: Record<string, unknown>) => !isPipelineOwnedComment(comment))
+        .map((comment: Record<string, unknown>) => ({
+          id: comment.id ?? null,
+          user: comment.user ?? null,
+          body: typeof comment.body === 'string' ? comment.body : '',
+          created_at: comment.created_at ?? null,
+          updated_at: comment.updated_at ?? null,
+        })),
+    })),
+  };
+}
+
+export function requirementsSha256ForSnapshot(snapshot: Record<string, any>): string {
+  return sha256(JSON.stringify(canonicalRequirements(snapshot)));
+}
 
 export async function readIssues(
   issueNumbers: number[],
@@ -242,9 +273,9 @@ export async function checkFrozenRequirements(
   const cwd = options.cwd ?? process.cwd();
   const runRoot = path.resolve(options.stateRoot ?? '.tmp/pipelines', runId);
   const manifestPath = path.join(runRoot, 'manifest.json');
-  const manifest = migrateLegacyManifest(JSON.parse(await readFile(manifestPath, 'utf8').catch(() => {
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8').catch(() => {
     throw new GitHubIssueCliError(`manifest not found: ${manifestPath}`);
-  })), { manifestPath }) as Record<string, any>;
+  })) as Record<string, any>;
   if (manifest.schema_version !== 2) throw new GitHubIssueCliError('pipeline manifest schema_version must be exactly 2');
   if (manifest.source_type !== 'github_issues') {
     return { status: 'PASS', run_id: runId, source_type: manifest.source_type ?? null, changed: false };
@@ -279,9 +310,9 @@ export async function publishPlanningArtifacts(
   const cwd = options.cwd ?? process.cwd();
   const runRoot = path.resolve(options.stateRoot ?? '.tmp/pipelines', runId);
   const manifestPath = path.join(runRoot, 'manifest.json');
-  const manifest = migrateLegacyManifest(JSON.parse(await readFile(manifestPath, 'utf8').catch(() => {
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8').catch(() => {
     throw new GitHubIssueCliError(`manifest not found: ${manifestPath}`);
-  })), { manifestPath }) as Record<string, any>;
+  })) as Record<string, any>;
   if (manifest.schema_version !== 2) throw new GitHubIssueCliError('pipeline manifest schema_version must be exactly 2');
   if (manifest.source_type !== 'github_issues') {
     return { status: 'PASS', run_id: runId, source_type: manifest.source_type ?? null, published: 0 };
@@ -394,4 +425,3 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
-
