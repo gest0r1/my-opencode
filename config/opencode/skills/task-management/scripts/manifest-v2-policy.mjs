@@ -324,7 +324,7 @@ function validateProjectPolicy(manifest, cwd) {
           !/\.ya?ml$/i.test(gate.workflow) || !GITHUB_JOB_ID.test(String(gate.terminal_job ?? ''))) {
         throw new ManifestV2PolicyError(`project_policy.github_actions.${kind} has invalid workflow/terminal_job`);
       }
-      if (gate.trigger !== undefined && !['push', 'workflow_dispatch'].includes(gate.trigger)) {
+      if (gate.trigger !== undefined && !['push', 'pull_request', 'workflow_dispatch'].includes(gate.trigger)) {
         throw new ManifestV2PolicyError(`project_policy.github_actions.${kind}.trigger is invalid`);
       }
       if (gate.required_jobs !== undefined &&
@@ -536,8 +536,11 @@ function validateGithubExecutionContract(manifest) {
              new Set(gate.required_jobs).size !== gate.required_jobs.length)) {
           throw new ManifestV2PolicyError(`GITHUB_REQUIRED_JOBS_INVALID: ${pipeline.id}/${stage}`);
         }
-        if (!['push', 'workflow_dispatch'].includes(gate.trigger)) {
+        if (!['push', 'pull_request', 'workflow_dispatch'].includes(gate.trigger)) {
           throw new ManifestV2PolicyError(`GITHUB_TRIGGER_INVALID: ${pipeline.id}/${stage}`);
+        }
+        if (gate.trigger === 'pull_request' && (!Number.isSafeInteger(gate.pr_number) || gate.pr_number < 1)) {
+          throw new ManifestV2PolicyError(`GITHUB_PR_NUMBER_REQUIRED: ${pipeline.id}/${stage}`);
         }
         if (gate.timeout_seconds !== undefined &&
             (!Number.isInteger(gate.timeout_seconds) || gate.timeout_seconds < 30 || gate.timeout_seconds > 7200)) {
@@ -797,3 +800,4 @@ export function validateManifestV2Policy(manifest, options = {}) {
   }
   return { checked_artifacts: true, project_policy: projectPolicy };
 }
+

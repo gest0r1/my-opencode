@@ -1,3 +1,4 @@
+import { candidateEvidenceMatches } from './github-actions-gate-core.mjs';
 // Stable CLI entry point. Keep core stage/DAG/state implementation untouched and
 // reject non-executable machine gates BEFORE init creates any state or approve mutates it.
 export * from './stage-cli-core.ts';
@@ -103,7 +104,7 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
       if (executor === 'github_ci') {
         const artifactValid = !contract?.artifact ||
           (evidence.artifact === contract.artifact && /^sha256:[0-9a-f]{64}$/i.test(String(evidence.artifact_digest ?? '')));
-        if (String(evidence.head_sha ?? '').toLowerCase() !== String(candidate.candidate_sha).toLowerCase() || !artifactValid) {
+        if (!candidateEvidenceMatches(evidence, contract, candidate.candidate_sha, manifest.repository, candidate.branch) || !artifactValid) {
           throw new Error('EVIDENCE_INVALID_OR_STALE: github_ci ' + pipeline.id + '/' + stage);
         }
         continue;
@@ -271,7 +272,7 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
           ? evidence.trusted_ref === contract?.trusted_ref &&
             String(evidence.head_branch ?? '').toLowerCase() === String(contract?.trusted_ref ?? '').toLowerCase()
           : String(evidence.head_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase())
-      : String(evidence.head_sha ?? '').toLowerCase() === String(candidate.candidate_sha).toLowerCase() &&
+      : candidateEvidenceMatches(evidence, contract, candidate.candidate_sha, manifest.repository, candidate.branch) &&
         (!contract?.artifact ||
           (evidence.artifact === contract.artifact && /^sha256:[0-9a-f]{64}$/i.test(String(evidence.artifact_digest ?? ''))));
     if (!commonValid || !executorSpecificValid) {
@@ -363,3 +364,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     process.exitCode = 1;
   });
 }
+

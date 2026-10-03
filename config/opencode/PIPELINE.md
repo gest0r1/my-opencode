@@ -363,3 +363,9 @@ Use different mechanisms for different changes:
 - no-impact main drift → same approved run with machine-owned effective base adoption.
 
 Supersede copies only planning/source/work-item artifacts. Runtime state, locks, candidate and machine evidence are never reused. The old state records `superseded_by` and `supersede_reason`, so every run-id has a deterministic ancestry instead of unexplained v2b/v2c/v2d generations.
+
+
+### V2 compatibility repairs (2026-10-03)
+
+- Old schema-v2 GitHub Issue RUNs missing `source_requirements_sha256` use an effective-view migration from `source_snapshot_file` (default `sources/github-issues.json`) authenticated by `source_snapshot_sha256`. Original manifest bytes and the state's frozen manifest digest remain unchanged. Missing, altered or mismatched evidence reports `MANIFEST_MIGRATION_REQUIRED`; live GitHub data cannot replace the historical source.
+- PR CI is explicit: `trigger: pull_request`, `pr_number: <existing PR number>`. The gate uses authenticated `gh api` and binds PR repository, head branch/head SHA, base SHA and Actions association to the exact frozen candidate. Both direct head SHA and that PR's current merge SHA are accepted. A foreign/stale/unassociated run fails closed. Push and DEV contracts keep their existing SHA/trust rules; workflow bootstrap still requires push.

@@ -141,16 +141,16 @@ test('unified env template contains placeholders only for runtime credentials', 
 
 
 test('installer purges retired managed MCP artifacts and env secrets', () => {
-  const installer = readFileSync(join(root, 'install.sh'), 'utf8');
+  const installer = readFileSync(join(root, 'scripts/install-opencode-generation.sh'), 'utf8');
 
   assert.match(
     installer,
-    /rm -f -- "\$HOME\/\.config\/opencode\/env\.example"/,
+    /rm -f -- "\$STAGE_CONFIG\/env\.example"/,
     'installer must remove the legacy secret-bearing env template from existing installs',
   );
   assert.match(
     installer,
-    /rm -rf -- "\$HOME\/\.config\/opencode\/skills\/bitrix24"/,
+    /rm -rf -- "\$STAGE_CONFIG\/skills\/bitrix24"/,
     'installer must remove the retired Bitrix24 skill from existing installs',
   );
   assert.match(
@@ -159,3 +159,4 @@ test('installer purges retired managed MCP artifacts and env secrets', () => {
     'installer must strip retired MCP secrets from the shared runtime env',
   );
 });
+

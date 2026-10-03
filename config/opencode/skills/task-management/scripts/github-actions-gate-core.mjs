@@ -211,8 +211,11 @@ export function assertGithubGateContract(contract, executor = 'github_ci') {
        new Set(contract.required_jobs).size !== contract.required_jobs.length)) {
     throw new GithubActionsGateError('GITHUB_REQUIRED_JOBS_INVALID');
   }
-  if (!['push', 'workflow_dispatch'].includes(contract.trigger)) {
+  if (!['push', 'pull_request', 'workflow_dispatch'].includes(contract.trigger)) {
     throw new GithubActionsGateError('GITHUB_TRIGGER_INVALID');
+  }
+  if (contract.trigger === 'pull_request' && (!Number.isSafeInteger(contract.pr_number) || contract.pr_number < 1)) {
+    throw new GithubActionsGateError('GITHUB_PR_NUMBER_REQUIRED');
   }
   if (contract.timeout_seconds !== undefined &&
       (!Number.isInteger(contract.timeout_seconds) || contract.timeout_seconds < 30 || contract.timeout_seconds > 7200)) {
@@ -305,6 +308,15 @@ export function inspectWorkflowText(text, contract, executor = 'github_ci', cont
     }
   }
 
+  if (executor === 'github_ci' && contract.trigger === 'pull_request') {
+    const pr = object(object(workflow.on)?.pull_request);
+    if (pr && (pr.paths !== undefined || pr['paths-ignore'] !== undefined)) {
+      issues.push('authoritative PR CI must not use paths/paths-ignore filters');
+    }
+    if (pr?.types && !pr.types.includes('synchronize')) {
+      issues.push('authoritative PR CI must include synchronize');
+    }
+  }
   const terminal = workflowJob(workflow, contract.terminal_job);
   if (!terminal) issues.push('terminal job not found: ' + contract.terminal_job);
   const terminalJobName = jobDisplayName(terminal, contract.terminal_job);
@@ -412,12 +424,40 @@ export function classifyMissingWorkflow(contract, executor = 'github_ci') {
   };
 }
 
-export function selectWorkflowRun(runs, { candidateSha, branch, event, excludeIds = [] }) {
+export function validatePullRequestRun(run, pr, { candidateSha, branch, repository, prNumber }) {
+  const sameSha = (a, b) => /^[a-f0-9]{40}$/i.test(String(a ?? '')) && String(a).toLowerCase() === String(b ?? '').toLowerCase();
+  if (run?.event !== 'pull_request' || pr?.number !== prNumber ||
+      pr?.head?.repo?.full_name !== repository || pr?.base?.repo?.full_name !== repository ||
+      (branch && pr?.head?.ref !== branch) || !sameSha(pr?.head?.sha, candidateSha)) {
+    throw new GithubActionsGateError('GITHUB_PR_CONTEXT_MISMATCH');
+  }
+  const association = run.pull_requests?.find(x => x.number === prNumber);
+  if (!association || !sameSha(association.head?.sha, candidateSha) ||
+      !sameSha(association.base?.sha, pr.base.sha) ||
+      (!sameSha(run.head_sha, candidateSha) && !sameSha(run.head_sha, pr.merge_commit_sha))) {
+    throw new GithubActionsGateError('GITHUB_PR_RUN_SHA_MISMATCH');
+  }
+  return { pr_number: prNumber, pr_head_sha: pr.head.sha, pr_base_sha: pr.base.sha, pr_merge_sha: pr.merge_commit_sha, repository };
+}
+
+export function candidateEvidenceMatches(evidence, contract, candidateSha, repository, branch) {
+  const sameSha = (a, b) => /^[a-f0-9]{40}$/i.test(String(a ?? '')) && String(a).toLowerCase() === String(b ?? '').toLowerCase();
+  if (contract?.trigger !== 'pull_request') return sameSha(evidence.head_sha, candidateSha);
+  return evidence.event === 'pull_request' && evidence.pr_number === contract.pr_number &&
+    evidence.repository === repository && evidence.head_branch === branch &&
+    sameSha(evidence.pr_head_sha, candidateSha) && /^[a-f0-9]{40}$/i.test(String(evidence.pr_base_sha ?? '')) &&
+    (sameSha(evidence.head_sha, candidateSha) || sameSha(evidence.head_sha, evidence.pr_merge_sha));
+}
+
+export function selectWorkflowRun(runs, { candidateSha, branch, event, excludeIds = [], pullRequest, repository, prNumber }) {
   if (!Array.isArray(runs)) throw new GithubActionsGateError('workflow runs must be an array');
   const excluded = new Set(excludeIds.map((value) => Number(value)));
   const matches = runs.filter((run) =>
     !excluded.has(Number(run?.id)) &&
-    String(run?.head_sha ?? '').toLowerCase() === String(candidateSha).toLowerCase() &&
+    (event === 'pull_request' ? (() => {
+      try { validatePullRequestRun(run, pullRequest, { candidateSha, branch, repository, prNumber }); return true; }
+      catch { return false; }
+    })() : String(run?.head_sha ?? '').toLowerCase() === String(candidateSha).toLowerCase()) &&
     (!branch || run?.head_branch === branch) &&
     (!event || run?.event === event));
   matches.sort((a, b) => {
@@ -569,10 +609,16 @@ export function validateWorkflowResult({
   requiredJobNames = [],
   executor,
   sourceCiRunId,
+  pullRequest,
+  repository,
+  branch,
 }) {
   assertGithubGateContract(contract, executor);
   if (!run) throw new GithubActionsGateError('GITHUB_RUN_NOT_FOUND');
-  if (executor === 'github_dev' && contract.mode === 'stateful') {
+  let prContext;
+  if (contract.trigger === 'pull_request') {
+    prContext = validatePullRequestRun(run, pullRequest, { candidateSha, repository, branch, prNumber: contract.pr_number });
+  } else if (executor === 'github_dev' && contract.mode === 'stateful') {
     if (run.head_branch !== contract.trusted_ref) throw new GithubActionsGateError('GITHUB_DEV_TRUSTED_REF_MISMATCH');
   } else if (String(run.head_sha ?? '').toLowerCase() !== String(candidateSha).toLowerCase()) {
     throw new GithubActionsGateError('GITHUB_RUN_SHA_MISMATCH');
@@ -609,6 +655,7 @@ export function validateWorkflowResult({
     head_sha: run.head_sha,
     head_branch: run.head_branch,
     event: run.event,
+    ...(prContext ?? {}),
     conclusion: run.conclusion,
     terminal_job: contract.terminal_job,
     terminal_job_name: expectedJobName,

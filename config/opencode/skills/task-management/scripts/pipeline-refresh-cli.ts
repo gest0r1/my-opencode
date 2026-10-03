@@ -1,3 +1,4 @@
+import { migrateLegacyManifest } from './manifest-migration.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
@@ -152,7 +153,7 @@ async function readManifest(stateRoot: string, runId: string): Promise<{ manifes
   const raw = await readFile(path, 'utf8').catch(() => {
     throw new RefreshError(`manifest not found: ${path}`);
   });
-  const manifest = JSON.parse(raw) as Manifest;
+  const manifest = migrateLegacyManifest(JSON.parse(raw), { manifestPath: path }) as Manifest;
   if (manifest.run_id !== runId) throw new RefreshError('manifest run_id does not match selected run');
   return { manifest, path, raw };
 }
@@ -481,11 +482,6 @@ async function createBoundedRun(
     cloned.planning_base_sha = newBase;
     const semanticDigest = String((impact as any).source_requirements?.frozen ?? '');
     if (cloned.source_type === 'github_issues' && /^[0-9a-f]{64}$/i.test(semanticDigest)) {
-      const inheritedSource = join(newRoot, 'sources', 'github-issues.json');
-      const snapshot = JSON.parse(await readFile(inheritedSource, 'utf8')) as Record<string, any>;
-      snapshot.requirements_sha256 = semanticDigest;
-      await writeJsonAtomic(inheritedSource, snapshot);
-      cloned.source_snapshot_sha256 = sha256(await readFile(inheritedSource, 'utf8'));
       cloned.source_requirements_sha256 = semanticDigest;
     } else if (/^[0-9a-f]{64}$/i.test(semanticDigest)) {
       cloned.source_requirements_sha256 = semanticDigest;
@@ -756,3 +752,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
+
