@@ -41,7 +41,7 @@ Use only:
 - `webfetch` only as fallback for page fetch;
 - `gh_grep_*` only for exact/regex public GitHub code search via grep.app.
 
-Never use: `bash`, `edit`, `write`, `task`, `yadisk_*`, `memory_*`, `context7_*`, `kagi_*`.
+Never use: `bash`, `edit`, `write`, `subagent`, `yadisk_*`, `memory_*`, `context7_*`, `kagi_*`.
 
 ## Context-Minimization Contract
 
@@ -108,3 +108,4 @@ Rules:
 - max 5 sources unless requested;
 - state empty/noisy results explicitly;
 - if Exa is unavailable/rate-limited, return concise failure with suggested retry/fallback.
+

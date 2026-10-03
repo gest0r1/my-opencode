@@ -75,7 +75,7 @@ Call ContextScout immediately when ANY of these triggers apply:
 ### How to Invoke
 
 ```
-task(subagent_type="ContextScout", description="Find workflow design standards", prompt="Find workflow design patterns, agent coordination standards, context dependency mapping conventions, and validation gate requirements. I need to understand existing workflow patterns before designing new ones for [use case].")
+subagent(agent="ContextScout", description="Find workflow design standards", prompt="Find workflow design patterns, agent coordination standards, context dependency mapping conventions, and validation gate requirements. I need to understand existing workflow patterns before designing new ones for [use case].")
 ```
 
 ### After ContextScout Returns
