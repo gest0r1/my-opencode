@@ -14,18 +14,11 @@ permission:
   gh_grep_*: allow
   context7_*: deny
   kagi_*: deny
-  read:
-    "*": deny
-  bash:
-    "*": deny
-  edit:
-    "*": deny
-    .tmp/**: allow
-  write:
-    "*": deny
-    .tmp/**: allow
-  task:
-    "*": deny
+  read: deny
+  bash: deny
+  edit: deny
+  write: deny
+  task: deny
 ---
 
 ## Mandatory Caveman Skill
