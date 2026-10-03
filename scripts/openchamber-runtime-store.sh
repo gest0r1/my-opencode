@@ -92,12 +92,12 @@ oc_stage_package() {
 
 oc_write_managed_launcher() {
   local tmp="$HOME/.local/bin/.openchamber.tmp.${BASHPID}"
-  cat > "$tmp" <<'EOF'
-#!/usr/bin/env bash
-# managed-by: my-opencode-v2
-set -Eeuo pipefail
-exec "$HOME/.local/share/openchamber-v2/current/bin/openchamber" "$@"
-EOF
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' '# managed-by: my-opencode-v2'
+    printf '%s\n' 'set -Eeuo pipefail'
+    printf 'exec %q "$@"\n' "$OPENCHAMBER_CURRENT_BIN"
+  } > "$tmp"
   chmod 755 "$tmp"
   mv -f "$tmp" "$OPENCHAMBER_MANAGED_BIN"
 }
