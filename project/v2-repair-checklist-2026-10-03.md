@@ -33,3 +33,11 @@ gh api -H 'Accept: application/vnd.github.raw' 'repos/gest0r1/my-opencode/conten
 ```
 
 Existing V2 installations need no cleanup. V1 cleanup stays a separate explicit command and is not embedded in the installer.
+
+## Cycle 4 — always refresh settings; bounded dependency installation
+
+- Supersedes the config no-op policy in cycle 3 by explicit owner decision: every invocation downloads the exact config SHA, stages the full settings/skills tree and validates plugins. No source fingerprint or installed-file receipt controls a config skip. Unchanged OpenCode binary and OpenChamber runtime packages remain reusable.
+- Changed: committed `config/opencode/bun.lock`; dependency installation uses `--production --frozen-lockfile`. Default total deadline 300 seconds (`OPENCODE_DEPENDENCY_TIMEOUT_SECONDS`), force termination grace 5 seconds, progress every 15 seconds. Detailed log is overwritten at `~/.local/state/my-opencode/opencode-dependency-install.log` (XDG_STATE_HOME honored). Cancellation is diagnosed separately from activation failure.
+- Checks: all 195 pipeline tests pass locally using the installed tsx loader (CLI IPC sockets are unavailable in this environment); 3 helper tests and installer/runtime/agent regressions pass. Real Bun 1.4.2 installs the frozen dependency graph and imports both V2 plugins. Negative tests cover dependency failure, timeout, cancellation and log replacement; full generation timeout preserves active config/skills/binary and removes both staging directories. Updated live CI verifies repeat full config installation with binary reuse.
+- Commit: the commit containing this cycle (see branch history).
+- Remaining: GitHub live smoke for this cycle; execution on the user's server. A deadline bounds waiting, but cannot guarantee registry/network availability.

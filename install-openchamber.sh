@@ -114,7 +114,11 @@ rollback_all() {
   trap - ERR INT TERM
   set +e
 
-  echo "OpenChamber activation failed; restoring previous runtime/service state." >&2
+  if [[ "$rc" == 130 || "$rc" == 143 ]]; then
+    echo "Installation interrupted by user/signal; restoring previous runtime/service state." >&2
+  else
+    echo "OpenChamber installation failed (exit=$rc); restoring previous runtime/service state." >&2
+  fi
   if (( TRANSACTION_STARTED == 1 )); then
     oc_rollback_service "$UNIT" "$NATIVE_STARTUP_ENV" "$DROP_DIR" || true
     restore_state || true
@@ -276,3 +280,4 @@ elif [[ "$runtime_pending" == 0 && -x "$OPENCHAMBER_CURRENT_BIN" ]]; then
 else
   echo "Atomic OpenChamber runtime activation remains deferred; legacy running service preserved."
 fi
+

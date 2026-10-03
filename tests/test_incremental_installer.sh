@@ -281,13 +281,13 @@ EOF
   printf '%s\n' "$dir"
 }
 
-# 1. Exact no-op: no config installer, release lookup, package transfer or restart.
+# 1. Identical invocation refreshes configuration but preserves runtime downloads.
 dir="$(run_case noop 2.0.21 "$CONFIG_SHA" "$APP_SHA" 0)"
-assert_contains "$dir/output.log" 'OpenCode binary/config unchanged: downloads skipped'
+assert_contains "$dir/output.log" 'Config-only update: OpenCode binary 2.0.21 is unchanged'
 assert_contains "$dir/output.log" 'OpenChamber source/runtime metadata unchanged: release lookup skipped'
 assert_contains "$dir/output.log" 'OpenChamber runtime fingerprint/package unchanged: package download skipped'
 assert_contains "$dir/output.log" 'OpenChamber service unchanged and active: restart skipped'
-assert_not_contains "$dir/trace.log" 'contents/install.sh'
+assert_contains "$dir/trace.log" 'contents/install.sh'
 assert_not_contains "$dir/trace.log" 'release download'
 assert_not_contains "$dir/trace.log" 'openchamber startup enable'
 assert_not_contains "$dir/trace.log" 'UNEXPECTED bun'

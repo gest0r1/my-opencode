@@ -144,35 +144,16 @@ EOF
   printf '%s\n' "$dir"
 }
 
-# Exact orchestrated generation already active: only the official binary
-# installer may run. The generation script/config archive must not be fetched.
-dir="$(run_bootstrap binary-only 2.0.20 "$CONFIG_SHA" "$APP_SHA" 0)"
-assert_contains "$dir/output.log" "Binary-only update: config SHA $CONFIG_SHA is unchanged"
-assert_contains "$dir/output.log" 'OpenCode binary-only update complete: 2.0.21'
-assert_contains "$dir/trace.log" 'curl -fsSL https://opencode.ai/v2/install'
-assert_contains "$dir/trace.log" 'official-installer --version 2.0.21'
-assert_not_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
-[[ "$("$dir/home/.opencode/bin/opencode" --version)" == 'opencode 2.0.21' ]] || fail 'binary-only version not applied'
-
-# Config-only must never enter binary-only mode; it delegates to the full
-# generation installer with the skip-binary flag intact.
-dir="$(run_bootstrap config-only 2.0.21 3333333333333333333333333333333333333333 "$APP_SHA" 1)"
-assert_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
-assert_contains "$dir/trace.log" 'generation skip_binary=1'
-assert_not_contains "$dir/trace.log" 'https://opencode.ai/v2/install'
-
-# Standalone install.sh keeps the historical full-generation semantics even if
-# an exact config SHA happens to match state: no OpenChamber transaction marker
-# means no binary-only shortcut.
-dir="$(run_bootstrap standalone 2.0.20 "$CONFIG_SHA" '' 0)"
+# Every invocation delegates a complete config generation. Identical binary
+# stays installed; an older binary is updated by the generation transaction.
+dir="$(run_bootstrap older-binary 2.0.20 "$CONFIG_SHA" "$APP_SHA" 0)"
 assert_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
 assert_contains "$dir/trace.log" 'generation skip_binary=0'
-assert_not_contains "$dir/trace.log" 'https://opencode.ai/v2/install'
-
-echo 'PASS: OpenCode bootstrap uses binary-only fast path only for pinned OpenChamber orchestration'
-
-# An identical standalone upgrade exits before generation/binary download.
-dir="$(run_bootstrap standalone-noop 2.0.21 "$CONFIG_SHA" '' 0)"
-assert_contains "$dir/output.log" 'no-op; downloads and normalization skipped'
-assert_not_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
 assert_not_contains "$dir/trace.log" 'curl '
+dir="$(run_bootstrap config-only 2.0.21 "$CONFIG_SHA" "$APP_SHA" 1)"
+assert_contains "$dir/trace.log" 'generation skip_binary=1'
+dir="$(run_bootstrap identical 2.0.21 "$CONFIG_SHA" '' 0)"
+assert_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
+assert_contains "$dir/trace.log" 'generation skip_binary=1'
+assert_not_contains "$dir/trace.log" 'curl '
+echo 'PASS: every bootstrap refreshes config; unchanged binary is reused'

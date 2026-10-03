@@ -6,6 +6,10 @@ on:
       - install-openchamber.sh
       - install.sh
       - scripts/install-opencode-generation.sh
+      - scripts/install-opencode-dependencies.sh
+      - config/opencode/bun.lock
+      - tests/test_dependency_installer.sh
+      - tests/test_generation_timeout.sh
       - scripts/install-openchamber-v2-core.sh
       - scripts/openchamber-runtime-store.sh
       - scripts/install-opencode-agents.sh
@@ -23,6 +27,10 @@ on:
       - install-openchamber.sh
       - install.sh
       - scripts/install-opencode-generation.sh
+      - scripts/install-opencode-dependencies.sh
+      - config/opencode/bun.lock
+      - tests/test_dependency_installer.sh
+      - tests/test_generation_timeout.sh
       - scripts/install-openchamber-v2-core.sh
       - scripts/openchamber-runtime-store.sh
       - scripts/install-opencode-agents.sh
@@ -51,6 +59,7 @@ jobs:
             install-openchamber.sh \
             install.sh \
             scripts/install-opencode-generation.sh \
+            scripts/install-opencode-dependencies.sh \
             scripts/install-openchamber-v2-core.sh \
             scripts/openchamber-runtime-store.sh \
             scripts/install-opencode-agents.sh \
@@ -83,10 +92,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/test_openchamber_runtime_store.sh
-      - name: Verify OpenCode binary-only bootstrap
+      - name: Verify full configuration bootstrap and dependency timeout
         run: |
           set -Eeuo pipefail
           bash tests/test_binary_only_installer.sh
+          bash tests/test_dependency_installer.sh
+          bash tests/test_generation_timeout.sh
       - name: Verify incremental installer execution
         run: |
           set -Eeuo pipefail
