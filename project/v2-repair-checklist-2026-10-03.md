@@ -47,5 +47,13 @@ Existing V2 installations need no cleanup. V1 cleanup stays a separate explicit 
 
 - Changed: 3 GPT Sol agents use `openai/gpt-6.1-sol` with `reasoningEffort: low`; SeniorStoryReviewer already uses GPT 6 Luna. Six remaining MiMo agents use `opencode-go/mimo-v2.6-flash` (build, BuildAgent, BatchExecutor, ContextManager, ContextScout, ADRManager). WebResearcher, ExternalScout, Context Retriever and OpenDataAnalyst use `opencode-go/longcat-2.5-preview-free`. OpenCopywriter, OpenTechnicalWriter, DocWriter and Simple Responder use `opencode-go/muse-spark-1.3-contributor`. Service `title` uses LongCat by explicit owner correction. Other models, permissions and model inheritance are preserved.
 - Checks: 8 model assignment tests pass; all 38 agents install and normalize with `markdown_changed=0 / config_changes=0`; permission/protected-path regressions pass. Exact MiMo, LongCat and Muse IDs confirmed against the live official Go `/models` endpoint. Model config and changes inspected locally.
-- Commit: the commit containing this cycle (see branch history). CI explicitly skipped by owner instruction for this model-only change.
+- Code commit: `216ad3853bf6c9b98ae9f932d2dd4187156f6226`. CI explicitly skipped by owner instruction for this model-only change.
 - Remaining: real model-driven turns on the user's authenticated server; registration/config tests do not measure model quality.
+
+## Cycle 6 — apply updated agent catalog to running service
+
+- Found: config-only updates replaced the config tree but did not participate in service restart decisions. This allows a running OpenCode to retain startup-cached configuration; the fork's native lifecycle explicitly restarts managed OpenCode on config changes. CI is not a distribution prerequisite: installer fetches source tarballs directly from immutable GitHub SHAs. The user's exact host cause remains unverified without its install log/on-disk/live catalog.
+- Changed: every successful config generation requires managed service reconciliation/restart. Embedded/defer mode keeps its console alive and records `service_restart_pending=1` with an explicit apply command. Existing binary/runtime download reuse remains intact.
+- Checks: local dynamic installer tests cover identical config install, changed config-only install and deferred config activation. Model assignment tests and installer syntax/contracts pass. CI now compares model choices source->installed->live, verifies reasoningEffort and native title model; previous live smoke verified catalog IDs/modes/permissions only.
+- Commit: the commit containing this cycle (see branch history). CI runs for this installer/live-model regression.
+- Remaining: GitHub live model verification and user's host confirmation; project-level overrides or an external OpenCode server need separate diagnosis if the discrepancy persists.

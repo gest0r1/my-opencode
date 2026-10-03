@@ -114,6 +114,26 @@ jobs:
             if (serialized.includes(`"${retired}"`)) throw new Error(`retired MCP still active: ${retired}`);
           }
 
+          // Check both source->installed and installed->live model assignments.
+          const sourceRoot = path.resolve('config/opencode/agent');
+          const walk = (root) => fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+            const file = path.join(root, entry.name);
+            return entry.isDirectory() ? walk(file) : entry.name.endsWith('.md') ? [file] : [];
+          });
+          for (const file of walk(sourceRoot)) {
+            const source = fs.readFileSync(file, 'utf8');
+            const name = /^name:\s*(.+?)\s*$/m.exec(source)?.[1]?.replace(/^['"]|['"]$/g, '');
+            const expectedModel = /^model:\s*(\S+)\s*$/m.exec(source)?.[1];
+            const installed = fs.readFileSync(path.join(os.homedir(), '.config/opencode/agents', `${name}.md`), 'utf8');
+            const installedModel = /^model:\s*(\S+)\s*$/m.exec(installed)?.[1];
+            if (expectedModel !== installedModel) throw new Error(`${name}: installed model differs from source`);
+          }
+          const titleExpected = JSON.parse(fs.readFileSync('config/opencode/opencode.json', 'utf8')).agents.title.model;
+          const title = byID.get('title');
+          if (`${title?.model?.providerID}/${title?.model?.id}` !== titleExpected) {
+            throw new Error(`title: expected=${titleExpected}, live=${JSON.stringify(title?.model)}`);
+          }
+
           // Every managed file is flat and its exact basename is its OpenCode ID.
           const root = path.join(os.homedir(), '.config', 'opencode', 'agents');
           const files = fs.readdirSync(root).filter((name) => name.endsWith('.md')).sort();
@@ -126,6 +146,14 @@ jobs:
             if (!resolved) throw new Error(`managed agent missing from live registry: ${id}`);
             if (expectedMode && resolved.mode !== expectedMode) {
               throw new Error(`${id}: expected mode=${expectedMode}, live mode=${resolved.mode}`);
+            }
+            const expectedModel = /^model:\s*(\S+)\s*$/m.exec(text)?.[1];
+            if (expectedModel && `${resolved.model?.providerID}/${resolved.model?.id}` !== expectedModel) {
+              throw new Error(`${id}: expected model=${expectedModel}, live=${JSON.stringify(resolved.model)}`);
+            }
+            const expectedReasoning = /^reasoningEffort:\s*(\S+)\s*$/m.exec(text)?.[1];
+            if (expectedReasoning && resolved.request?.body?.reasoningEffort !== expectedReasoning) {
+              throw new Error(`${id}: expected reasoning=${expectedReasoning}, live=${JSON.stringify(resolved.request)}`);
             }
           }
 

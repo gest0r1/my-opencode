@@ -47,6 +47,7 @@ def main():
     forbid(core, 'GENERATION_RECEIPT=', 'no fingerprint config skip')
     require(core, 'OPENCODE_SKIP_BINARY_INSTALL=1', "config-only binary skip")
     require(core, 'Config-only update:', 'always refresh config')
+    require(core, 'service restart required to reload agents/models.', 'configuration activation')
     require(core, 'v2-web-package-$APP_SHA', "exact-SHA OpenChamber manifest")
     require(core, 'runtime_fingerprint', "runtime fingerprint")
     require(core, 'package_source_sha', "reusable package source")
