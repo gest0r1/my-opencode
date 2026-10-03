@@ -41,30 +41,15 @@ Canonical agent IDs are defined in:
 /home/guber/.config/opencode/config/agent-metadata.json
 ```
 
-The primary orchestrator canonical ID is `open-stage-orchestrator`. This file
-contains the stage-tracking helper prompt and is exposed under the legacy
-`stage-orchestrator` alias.
+The primary orchestrator is registered as `OpenStageOrchestrator` (primary).
+This helper is registered as `StageOrchestrator` (subagent).
 
-Use canonical IDs for new delegations:
-
-```text
-open-stage-orchestrator
-task-manager
-batch-executor
-coder-agent
-build-agent
-devops-specialist
-tester
-reviewer
-documentation
-```
-
-Aliases remain supported for backward compatibility. Prefer canonical IDs when
-the task tool accepts IDs, and use registered display names only when required
-by the runtime.
-
-Before delegation, verify the target exists in `pipeline_registry.delegation`.
-Do not bypass the registry by inventing an agent name.
+Invoke workers with the V2 `subagent` tool using its `agent` field and the exact
+registered name: `TaskManager`, `BatchExecutor`, `CoderAgent`, `BuildAgent`,
+`OpenDevopsSpecialist`, `TestEngineer`, `CodeReviewer`, `DocWriter`.
+Never substitute metadata IDs such as `coder-agent`; primary agents cannot be
+subagent targets. Existing task permissions in Markdown are normalized by the
+V2 config loader into runtime subagent permissions.
 
 ## Назначение
 

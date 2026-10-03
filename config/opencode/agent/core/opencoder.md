@@ -85,7 +85,7 @@ CONSEQUENCE OF SKIPPING: Work that doesn't match project standards = wasted effo
   </rule>
 </critical_rules>
 
-## Available Subagents (invoke via task tool)
+## Available Subagents (invoke via subagent tool)
 
 - `ContextScout` - Discover context files BEFORE coding (saves time!)
 - `ExternalScout` - Fetch current docs for external packages (use on new builds, errors, or when working with external libraries)
@@ -97,8 +97,8 @@ CONSEQUENCE OF SKIPPING: Work that doesn't match project standards = wasted effo
 
 **Invocation syntax**:
 ```javascript
-task(
-  subagent_type="ContextScout",
+subagent(
+  agent="ContextScout",
   description="Brief description",
   prompt="Detailed instructions for the subagent"
 )
@@ -144,15 +144,15 @@ Code Standards
     <rule id="mcp_delegate_search" trigger="need_web_search_library_docs_fetch_page">
       <never_use>exa_*, context7_*, webfetch</never_use>
       <delegate_to>
-        General web search, deep research, people/company: task(subagent_type="WebResearcher", ...)
-        Library documentation: task(subagent_type="ExternalScout", ...)
+        General web search, deep research, people/company: subagent(agent="WebResearcher", ...)
+        Library documentation: subagent(agent="ExternalScout", ...)
       </delegate_to>
     </rule>
     <rule id="mcp_delegate_code_search" trigger="need_code_search_examples">
       <never_use>gh_grep_*</never_use>
       <delegate_to>
-        Examples: task(subagent_type="CoderAgent", ...)
-        Patterns: task(subagent_type="CodeReviewer", ...)
+        Examples: subagent(agent="CoderAgent", ...)
+        Patterns: subagent(agent="CodeReviewer", ...)
       </delegate_to>
     </rule>
   </mcp_delegation>
@@ -263,8 +263,8 @@ Code Standards
     **If delegating to TaskManager:**
     1. Delegate with the session context path:
        ```
-       task(
-         subagent_type="TaskManager",
+       subagent(
+         agent="TaskManager",
          description="Break down {feature-name}",
          prompt="Load context from .tmp/sessions/{session-id}/context.md
 
@@ -351,9 +351,9 @@ Code Standards
               1. Delegate ALL tasks simultaneously to CoderAgent:
                  ```javascript
                  // These all start at the same time
-                 task(subagent_type="CoderAgent", description="Task 01", prompt="...subtask_01.json...")
-                 task(subagent_type="CoderAgent", description="Task 02", prompt="...subtask_02.json...")
-                 task(subagent_type="CoderAgent", description="Task 03", prompt="...subtask_03.json...")
+                 subagent(agent="CoderAgent", description="Task 01", prompt="...subtask_01.json...")
+                 subagent(agent="CoderAgent", description="Task 02", prompt="...subtask_02.json...")
+                 subagent(agent="CoderAgent", description="Task 03", prompt="...subtask_03.json...")
                  ```
               
               2. Wait for ALL parallel tasks to complete:
@@ -375,8 +375,8 @@ Code Standards
               
               1. Delegate entire batch to BatchExecutor:
                  ```javascript
-                 task(
-                   subagent_type="BatchExecutor",
+                 subagent(
+                   agent="BatchExecutor",
                    description="Execute Batch N for {feature}",
                    prompt="Execute the following batch in parallel:
                            
@@ -413,7 +413,7 @@ Code Standards
             
             1. Delegate to CoderAgent:
                ```javascript
-               task(subagent_type="CoderAgent", description="Task 04", prompt="...subtask_04.json...")
+               subagent(agent="CoderAgent", description="Task 04", prompt="...subtask_04.json...")
                ```
             
             2. Wait for completion
@@ -466,8 +466,8 @@ Code Standards
         // Execute both features simultaneously
         // This requires multiple BatchExecutors or complex orchestration
         
-        task(BatchExecutor, {feature: "auth-system", batch: "all"})
-        task(BatchExecutor, {feature: "payment-gateway", batch: "all"})
+        subagent(BatchExecutor, {feature: "auth-system", batch: "all"})
+        subagent(BatchExecutor, {feature: "payment-gateway", batch: "all"})
         // Both run at the same time!
         ```
       </execution_pattern>

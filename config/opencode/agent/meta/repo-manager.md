@@ -58,7 +58,7 @@ ContextScout is exempt from the approval gate rule. ContextScout is your secret 
     ✨ Guaranteed compliance with repo rules
     
      🎯 SIMPLE 3-STEP PROCESS:
-     1. task(subagent_type="ContextScout", ...) - Discover context (Stage 1)
+     1. subagent(agent="ContextScout", ...) - Discover context (Stage 1)
      2. read() the returned files - Load just-in-time (Stage 3)
      3. Execute with confidence - Standards loaded! (Stage 4)
     
@@ -97,7 +97,7 @@ ContextScout is exempt from the approval gate rule. ContextScout is your secret 
 <!-- SECTION 3: AVAILABLE SUBAGENTS                                              -->
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
 
-## Available Subagents (invoke via task tool)
+## Available Subagents (invoke via subagent tool)
 
 **Core Subagents** (Planning & Coordination):
 - `TaskManager` - Break down complex features (4+ files, >60min)
@@ -128,12 +128,12 @@ ContextScout is exempt from the approval gate rule. ContextScout is your secret 
 | Документация библиотек | context7, webfetch | ExternalScout |
 | Поиск примеров кода, паттернов | gh_grep | CoderAgent или CodeReviewer |
 
-**Never call these MCP tools directly.** Always use `task(subagent_type="ExternalScout"|"CoderAgent"|"CodeReviewer", ...)`.
+**Never call these MCP tools directly.** Always use `subagent(agent="ExternalScout"|"CoderAgent"|"CodeReviewer", ...)`.
 
 **Invocation syntax**:
 ```javascript
-task(
-  subagent_type="TaskManager",
+subagent(
+  agent="TaskManager",
   description="Brief description",
   prompt="Detailed instructions for the subagent"
 )
@@ -167,7 +167,7 @@ task(
 
        4. Initial Discovery (REQUIRED):
           Use ContextScout to explore BEFORE planning to ensure plan is grounded in reality:
-          task(subagent_type="ContextScout", description="Explore context for...", ...)
+          subagent(agent="ContextScout", description="Explore context for...", ...)
        
        5. Decide execution path:
          - Question (no execution) → Answer directly, skip to Stage 6
@@ -399,8 +399,8 @@ task(
         
         5. Delegate to subagent with context path:
            
-           task(
-             subagent_type="TaskManager",
+           subagent(
+             agent="TaskManager",
              description="{brief description}",
              prompt="Load context from .tmp/sessions/{session_id}/context.md
                      
@@ -449,8 +449,8 @@ task(
         2. Delegate to subagent with inline context:
            
            <!-- Example: TestEngineer -->
-           task(
-             subagent_type="TestEngineer",
+           subagent(
+             agent="TestEngineer",
              description="Write tests for {feature}",
              prompt="Context to load:
                      - .opencode/context/core/standards/test-coverage.md
@@ -473,8 +473,8 @@ task(
            )
            
            <!-- Example: Reviewer -->
-           task(
-             subagent_type="CodeReviewer",
+           subagent(
+             agent="CodeReviewer",
              description="Review {feature} implementation",
              prompt="Context to load:
                      - .opencode/context/core/workflows/code-review.md
@@ -499,8 +499,8 @@ task(
            )
            
            <!-- Example: Coder Agent -->
-           task(
-             subagent_type="CoderAgent",
+           subagent(
+             agent="CoderAgent",
              description="Implement {subtask}",
              prompt="Context to load:
                      - .opencode/context/core/standards/code-quality.md
@@ -654,8 +654,8 @@ task(
          ELSE IF comprehensive docs (multi-page, new docs):
            Delegate to DocWriter subagent:
            
-           task(
-             subagent_type="DocWriter",
+           subagent(
+             agent="DocWriter",
              description="Update documentation for {feature}",
              prompt="Context to load:
                      - .opencode/context/core/standards/documentation.md
@@ -962,8 +962,8 @@ task(
          ```
       
       3. Delegate to TaskManager:
-         task(
-           subagent_type="TaskManager",
+         subagent(
+           agent="TaskManager",
            description="Break down parallel test execution feature",
            prompt="Load context from .tmp/sessions/20250114-143022-parallel-tests/context.md
                    
@@ -989,8 +989,8 @@ task(
          ✅ Passed
       
       2. Delegate to TestEngineer:
-         task(
-           subagent_type="TestEngineer",
+         subagent(
+           agent="TestEngineer",
            description="Validate parallel execution tests",
            prompt="Context to load:
                    - .opencode/context/core/standards/test-coverage.md
@@ -1002,8 +1002,8 @@ task(
          ✅ Coverage validated
       
       3. Delegate to CodeReviewer:
-         task(
-           subagent_type="CodeReviewer",
+         subagent(
+           agent="CodeReviewer",
            description="Review parallel execution implementation",
            prompt="Context to load:
                    - .opencode/context/core/workflows/code-review.md
@@ -1017,8 +1017,8 @@ task(
     
     <stage_6_complete>
       1. Delegate to DocWriter:
-         task(
-           subagent_type="DocWriter",
+         subagent(
+           agent="DocWriter",
            description="Update eval framework docs",
            prompt="Load context from .tmp/sessions/20250114-143022-parallel-tests/context.md
                    

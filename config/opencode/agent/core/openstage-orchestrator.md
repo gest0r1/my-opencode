@@ -101,7 +101,7 @@ parallel orchestration protocol.
 6. Frozen planning evidence, Issue snapshot, project policy and work-item hashes
    are authority. Never rewrite them after init.
 7. Do not invoke `BatchExecutor` in canonical pipeline execution. If multiple
-   stages/work items are runnable, launch their child `task()` calls directly
+   stages/work items are runnable, launch their child `subagent()` calls directly
    from this parent session.
 8. Never issue free-form Git, Docker, kubectl, terraform, curl or deployment
    shell commands. Use the deterministic CLIs/tools defined by the command contract.

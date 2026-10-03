@@ -1,8 +1,24 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import test from 'node:test';
 
 const read = (path) => readFileSync(path, 'utf8');
+
+test('installed agent prompts use native V2 delegation fields', () => {
+  function walk(root) {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      const file = `${root}/${entry.name}`;
+      if (entry.isDirectory()) walk(file);
+      else if (file.endsWith('.md')) {
+        const body = read(file).split('\n---').slice(1).join('\n---');
+        assert.doesNotMatch(body, /\btask\(|\bsubagent_type\s*[=:]/, file);
+      }
+    }
+  }
+  walk('config/opencode/agent');
+  assert.match(read('config/opencode/agent/subagents/core/stage-orchestrator.md'), /exact\nregistered name/);
+});
 
 test('OpenCode 2.0.21 runtime contract uses native subagent session resume', () => {
   const pkg = JSON.parse(read('config/opencode/package.json'));

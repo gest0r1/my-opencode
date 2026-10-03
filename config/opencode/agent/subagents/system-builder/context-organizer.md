@@ -75,7 +75,7 @@ Call ContextScout immediately when ANY of these triggers apply:
 ### How to Invoke
 
 ```
-task(subagent_type="ContextScout", description="Find context system standards", prompt="Find context system standards including MVI format, structure requirements, frontmatter conventions, codebase reference patterns, and function-based folder organization rules. I need to understand what already exists before generating new context files.")
+subagent(agent="ContextScout", description="Find context system standards", prompt="Find context system standards including MVI format, structure requirements, frontmatter conventions, codebase reference patterns, and function-based folder organization rules. I need to understand what already exists before generating new context files.")
 ```
 
 ### After ContextScout Returns

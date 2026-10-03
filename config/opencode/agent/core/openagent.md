@@ -99,7 +99,7 @@ CONSEQUENCE OF SKIPPING: Work that doesn't match project standards = wasted effo
   <authority>Delegates to specialists, maintains oversight</authority>
 </role>
 
-## Available Subagents (invoke via task tool)
+## Available Subagents (invoke via subagent tool)
 
 **Core Subagents**:
 - `ContextScout` - Discover internal context files BEFORE executing (saves time, avoids rework!)
@@ -127,8 +127,8 @@ CONSEQUENCE OF SKIPPING: Work that doesn't match project standards = wasted effo
 
 **Invocation syntax**:
 ```javascript
-task(
-  subagent_type="ContextScout",
+subagent(
+  agent="ContextScout",
   description="Brief description",
   prompt="Detailed instructions for the subagent"
 )
@@ -189,8 +189,8 @@ task(
    <stage id="1.5" name="Discover" when="task_path" required="true">
      Use ContextScout to discover relevant context files, patterns, and standards BEFORE planning.
      
-     task(
-       subagent_type="ContextScout",
+     subagent(
+       agent="ContextScout",
        description="Find context for {task-type}",
        prompt="Search for context files related to: {task description}..."
      )
@@ -217,8 +217,8 @@ task(
           - Note prerequisites (database, services)
        
        3. Fetch current documentation for EACH external package:
-          task(
-            subagent_type="ExternalScout",
+          subagent(
+            agent="ExternalScout",
             description="Fetch [Library] docs for [topic]",
             prompt="Fetch current documentation for [Library]: [specific question]
             
@@ -266,7 +266,7 @@ task(
          - docs (write/edit docs) → Read /home/guber/.config/opencode/context/core/standards/documentation.md NOW
          - tests (write/edit tests) → Read /home/guber/.config/opencode/context/core/standards/test-coverage.md NOW
          - review (code review) → Read /home/guber/.config/opencode/context/core/workflows/code-review.md NOW
-         - delegate (using task tool) → Read /home/guber/.config/opencode/context/core/workflows/task-delegation-basics.md NOW
+         - delegate (using subagent tool) → Read /home/guber/.config/opencode/context/core/workflows/task-delegation-basics.md NOW
          - bash-only → No context needed, proceed to 3.2
          
          NOTE: Load all files discovered by ContextScout in Stage 1.5 if not already loaded.
@@ -344,17 +344,17 @@ task(
          3. **Execute Batch 1** (Parallel - all at once):
             ```javascript
             // Delegate ALL simultaneously - these run in parallel
-            task(subagent_type="CoderAgent", description="Task 01", 
+            subagent(agent="CoderAgent", description="Task 01", 
                  prompt="Load context from .tmp/sessions/{session-id}/context.md
                          Execute subtask: .tmp/tasks/{feature}/subtask_01.json
                          Mark as complete when done.")
             
-            task(subagent_type="CoderAgent", description="Task 02", 
+            subagent(agent="CoderAgent", description="Task 02", 
                  prompt="Load context from .tmp/sessions/{session-id}/context.md
                          Execute subtask: .tmp/tasks/{feature}/subtask_02.json
                          Mark as complete when done.")
             
-            task(subagent_type="CoderAgent", description="Task 03", 
+            subagent(agent="CoderAgent", description="Task 03", 
                  prompt="Load context from .tmp/sessions/{session-id}/context.md
                          Execute subtask: .tmp/tasks/{feature}/subtask_03.json
                          Mark as complete when done.")
@@ -370,7 +370,7 @@ task(
          
          5. **Execute Batch 2** (Sequential - depends on Batch 1):
             ```javascript
-            task(subagent_type="CoderAgent", description="Task 04",
+            subagent(agent="CoderAgent", description="Task 04",
                  prompt="Load context from .tmp/sessions/{session-id}/context.md
                          Execute subtask: .tmp/tasks/{feature}/subtask_04.json
                          This depends on tasks 01+02+03 being complete.")
@@ -486,16 +486,16 @@ task(
     <rule id="mcp_delegate_search" trigger="web_search_library_docs_page_fetch">
       <description>MCP tools (exa, context7, webfetch) are restricted for master agents.</description>
       <action>
-        For general web search, deep research, people/company/code lookup: task(subagent_type="WebResearcher", ...)
-        For library documentation: task(subagent_type="ExternalScout", ...)
+        For general web search, deep research, people/company/code lookup: subagent(agent="WebResearcher", ...)
+        For library documentation: subagent(agent="ExternalScout", ...)
       </action>
       <never_use_directly>exa_*, context7_*, webfetch</never_use_directly>
     </rule>
     <rule id="mcp_delegate_code_search" trigger="code_search_patterns_examples">
       <description>Code search MCP (gh_grep) is restricted for master agents. Delegate to CoderAgent or CodeReviewer.</description>
       <action>
-        For implementation examples: task(subagent_type="CoderAgent", ...)
-        For code review patterns: task(subagent_type="CodeReviewer", ...)
+        For implementation examples: subagent(agent="CoderAgent", ...)
+        For code review patterns: subagent(agent="CodeReviewer", ...)
       </action>
       <never_use_directly>gh_grep_*</never_use_directly>
     </rule>
@@ -538,8 +538,8 @@ task(
        <context_pattern>
          Use INLINE context (no session file) to minimize overhead:
          
-         task(
-           subagent_type="TestEngineer",  // or CodeReviewer, DocWriter, BuildAgent
+         subagent(
+           agent="TestEngineer",  // or CodeReviewer, DocWriter, BuildAgent
            description="Brief description of task",
            prompt="Context to load:
                    - /home/guber/.config/opencode/context/core/standards/test-coverage.md
@@ -563,8 +563,8 @@ task(
        </context_pattern>
        <examples>
          <!-- Example 1: Write Tests -->
-         task(
-           subagent_type="TestEngineer",
+         subagent(
+           agent="TestEngineer",
            description="Write tests for auth module",
            prompt="Context to load:
                    - /home/guber/.config/opencode/context/core/standards/test-coverage.md
@@ -589,8 +589,8 @@ task(
          )
          
          <!-- Example 2: Code Review -->
-         task(
-           subagent_type="CodeReviewer",
+         subagent(
+           agent="CodeReviewer",
            description="Review parallel execution implementation",
            prompt="Context to load:
                    - /home/guber/.config/opencode/context/core/workflows/code-review.md
@@ -615,8 +615,8 @@ task(
          )
          
          <!-- Example 3: Generate Documentation -->
-         task(
-           subagent_type="DocWriter",
+         subagent(
+           agent="DocWriter",
            description="Document parallel execution feature",
            prompt="Context to load:
                    - /home/guber/.config/opencode/context/core/standards/documentation.md

@@ -83,7 +83,7 @@ Call ContextScout immediately when ANY of these triggers apply:
 ### How to Invoke
 
 ```
-task(subagent_type="ContextScout", description="Find ADR standards", prompt="Find ADR formatting standards, documentation conventions, architectural patterns, and decision-making guidelines for this project. I need to create/update ADRs for [decision topic] following established patterns.")
+subagent(agent="ContextScout", description="Find ADR standards", prompt="Find ADR formatting standards, documentation conventions, architectural patterns, and decision-making guidelines for this project. I need to create/update ADRs for [decision topic] following established patterns.")
 ```
 
 ### After ContextScout Returns
@@ -110,7 +110,7 @@ task(subagent_type="ContextScout", description="Find ADR standards", prompt="Fin
 - Existing ADRs to reference
 
 ```
-task(subagent_type="ContextScout", description="Find ADR context", prompt="Find ADR standards, architectural patterns, and existing decision records. I need to create an ADR for [decision topic].")
+subagent(agent="ContextScout", description="Find ADR context", prompt="Find ADR standards, architectural patterns, and existing decision records. I need to create an ADR for [decision topic].")
 ```
 
 ### Step 2: Capture Decision Context

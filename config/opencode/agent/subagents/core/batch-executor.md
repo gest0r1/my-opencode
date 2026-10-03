@@ -119,8 +119,8 @@ If validation fails → STOP and report to orchestrator with details.
 
 ```javascript
 // Task 01
-task(
-  subagent_type="CoderAgent",
+subagent(
+  agent="CoderAgent",
   description="Execute auth-system subtask 01",
   prompt="Load context from .tmp/sessions/2026-02-03-auth/context.md
           
@@ -131,8 +131,8 @@ task(
 )
 
 // Task 02
-task(
-  subagent_type="CoderAgent",
+subagent(
+  agent="CoderAgent",
   description="Execute auth-system subtask 02",
   prompt="Load context from .tmp/sessions/2026-02-03-auth/context.md
           
@@ -143,8 +143,8 @@ task(
 )
 
 // Task 03
-task(
-  subagent_type="CoderAgent",
+subagent(
+  agent="CoderAgent",
   description="Execute auth-system subtask 03",
   prompt="Load context from .tmp/sessions/2026-02-03-auth/context.md
           
@@ -155,7 +155,7 @@ task(
 )
 ```
 
-**Key point**: These three `task()` calls happen in the SAME turn — they all start simultaneously.
+**Key point**: These three `subagent()` calls happen in the SAME turn — they all start simultaneously.
 
 ### Step 5: Monitor Completion
 
@@ -163,7 +163,7 @@ task(
 
 While waiting, you can optionally:
 - Check status periodically (if monitoring long-running tasks)
-- But typically just wait for the task() calls to complete
+- But typically just wait for the subagent() calls to complete
 
 ### Step 6: Verify Batch Completion
 
@@ -283,8 +283,8 @@ OpenCoder/OpenAgent:
   2. Identifies Batch 1 (tasks 01, 02, 03 — all parallel)
   3. Delegates to BatchExecutor:
      
-     task(
-       subagent_type="BatchExecutor",
+     subagent(
+       agent="BatchExecutor",
        description="Execute Batch 1 for auth-system",
        prompt="Execute subtasks 01, 02, 03 in parallel.
                Feature: auth-system
