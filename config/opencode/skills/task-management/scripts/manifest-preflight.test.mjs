@@ -82,7 +82,7 @@ test('rejects missing local-gate profile before init without writing state', asy
 test('rejects wrong profile shape and stage-to-gate mismatch', async () => {
   const fx = await fixture();
   fx.spec.pipelines[0].profile = 'pytest';
-  fx.spec.gate_profiles = { pytest: { legacy: ['pytest -q'] } };
+  fx.spec.gate_profiles = { pytest: { wrong_stage: ['pytest -q'] } };
   assert.throws(() => validateGateManifest(fx.spec, { cwd: fx.root, manifestPath: fx.manifestPath }), /MACHINE_GATE_MISSING/);
   fx.spec.gate_profiles = { pytest: { 'test-rule-actions': { commands: ['pytest -q'] } } };
   assert.throws(() => validateGateManifest(fx.spec, { cwd: fx.root, manifestPath: fx.manifestPath }), /must contain commands/);
