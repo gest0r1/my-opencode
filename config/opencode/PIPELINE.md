@@ -25,7 +25,6 @@ A successful RUN creates or updates the delivery PR automatically. There is no
 separate owner command to create the PR. The owner reviews the resulting PR and
 merges it to `main` manually.
 
-
 When a second worktree was planned while another RUN was executing and `main`
 moves before that second RUN starts, use:
 
@@ -48,15 +47,11 @@ cross-run transfer.
 
 ## Manifest v2 and planning gates
 
-New design-freeze plans use manifest schema v2. V1 remains readable only for
-historical runs and `stage-cli init` no longer creates new V1 state. Before owner
-approval PLAN must run `stage-cli plan-run-preflight`, `git-worktree-cli adopt`
-and `git-worktree-cli verify`; schema/scope errors therefore fail before approval.
-Canonical RUN still begins with `stage-cli run-preflight`; an old V1 state returns
-`LEGACY_V1_REPLAN_REQUIRED`. Keep V1 state/evidence for audit and freeze any
-already-committed implementation through `git-worktree-cli baseline <base-sha>`
-as `preserved_baseline`, so historical source can remain without becoming writable
-scope in the V2 run.
+The canonical pipeline supports manifest schema v2 only. PLAN runs
+`stage-cli plan-run-preflight`, `git-worktree-cli adopt` and `git-worktree-cli verify`
+before owner approval, and RUN begins with `stage-cli run-preflight`. A manifest
+whose `schema_version` is not exactly `2` fails current-schema validation; there is
+no manifest migration or historical-manifest compatibility path in the runtime.
 
 Before owner approval, every triggered planning gate must be recorded literally
 as `ready` with frozen artifact path + SHA-256. `needs_revision` cannot be
@@ -66,7 +61,7 @@ blocking questions are presented to the owner.
 
 The v2 manifest also freezes:
 
-- authoritative GitHub Issue raw snapshot SHA-256 plus semantic requirements SHA-256;
+- semantic GitHub Issue requirements SHA-256 over human-controlled requirement content;
 - per-gate `planning_inputs` read-sets used for incremental refresh impact analysis;
 - required planning artifacts and reviews;
 - atomic TaskManager work items by ID/path/SHA-256;
@@ -123,7 +118,7 @@ Never solve rules drift by editing `state.json` or granting the model write perm
 
 ## Executor and package-manager integrity
 
-Every schema-v2 pipeline explicitly declares `deployable: true|false`, and every stage has an explicit executor. Repository test/build/typecheck/lint/install/runtime checks may use `local_gate`; for a deployable sink PLAN freezes the cost-aware order `git_verify -> local fail-fast -> git_publish -> final github_ci`. `deployment_validation.stage` points to that final exact-SHA GitHub CI. Legacy `fresh_job`/`upgrade_job` metadata is optional. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate.
+Every schema-v2 pipeline explicitly declares `deployable: true|false`, and every stage has an explicit executor. Repository test/build/typecheck/lint/install/runtime checks may use `local_gate`; for a deployable sink PLAN freezes the cost-aware order `git_verify -> local fail-fast -> git_publish -> final github_ci`. `deployment_validation.stage` points to that final exact-SHA GitHub CI. Fresh/upgrade job metadata is optional. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate.
 
 ## 1. PLAN reads authoritative Issues
 
@@ -144,17 +139,18 @@ The reader:
 - rejects pull requests, closed Issues, missing/inaccessible Issues, and unsafe
   run identifiers;
 - deduplicates Issue numbers;
-- writes the authoritative snapshot atomically to
-  `.tmp/pipelines/<run-id>/sources/github-issues.json`;
-- treats that snapshot as create-once for a run-id: a repeated `fetch` for the same
+- writes the fetched source material atomically to
+  `.tmp/pipelines/<run-id>/sources/github-issues.json` for PLAN consumption;
+- treats that file as create-once for a run-id: a repeated `fetch` for the same
   repository/Issue set returns the existing file and never refetches or overwrites
-  frozen source evidence; a different Issue set requires a new run-id;
-- returns both raw snapshot SHA-256 and semantic requirements SHA-256. The raw
-  digest protects the saved file; the semantic digest excludes `fetched_at`,
-  Issue `updated_at` bookkeeping, and pipeline-generated `pipeline-event` audit
-  comments while retaining human title/body/comment changes.
+  planning source evidence; a different Issue set requires a new run-id;
+- returns both a file SHA-256 and semantic requirements SHA-256. The file digest
+  protects the saved planning input; the semantic digest is the canonical manifest
+  requirement identity and excludes `fetched_at`, Issue `updated_at` bookkeeping,
+  and pipeline-generated `pipeline-event` audit comments while retaining human
+  title/body/comment changes.
 
-Read full bodies/comments without modifying the snapshot via:
+Read full bodies/comments without modifying the saved source material via:
 
 ```text
 npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts \\
@@ -165,10 +161,11 @@ Anonymous GitHub HTML/API requests, `webfetch`, `curl`, and
 `github_handoff_probe` are not Issue-reading substitutes. Git transport
 visibility does not prove REST Issue access.
 
-The approved manifest freezes both `source_issues[]` and each
-`pipelines[].issue_numbers[]`. Every source Issue must be mapped to at least
-one pipeline. This frozen mapping is the source of truth used later by status
-comments and PR closing keywords.
+The approved manifest freezes `source_requirements_sha256`, `source_issues[]` and
+each `pipelines[].issue_numbers[]`. Every source Issue must be mapped to at least
+one pipeline. The semantic requirements digest is rechecked against live human
+Issue content before freeze/RUN; the saved source file is not a compatibility or
+migration fallback for an older manifest.
 
 ## 2. Issue status comments
 
@@ -285,8 +282,8 @@ The intended audit chain is:
 
 ```text
 Issue
-  -> authenticated PLAN snapshot
-  -> frozen run + pipeline mapping
+  -> authenticated PLAN source
+  -> semantic requirements digest + frozen run mapping
   -> status comments
   -> tested/published candidate SHA
   -> PR link comment
@@ -350,7 +347,6 @@ Retrying after a transient GitHub failure is safe: status and PR-link comments
 are idempotent, and PR creation reuses the existing branch PR instead of opening
 a duplicate.
 
-
 ## Run lineage and supersede
 
 Use different mechanisms for different changes:
@@ -364,8 +360,6 @@ Use different mechanisms for different changes:
 
 Supersede copies only planning/source/work-item artifacts. Runtime state, locks, candidate and machine evidence are never reused. The old state records `superseded_by` and `supersede_reason`, so every run-id has a deterministic ancestry instead of unexplained v2b/v2c/v2d generations.
 
+### Explicit PR CI context
 
-### V2 compatibility repairs (2026-10-03)
-
-- Old schema-v2 GitHub Issue RUNs missing `source_requirements_sha256` use an effective-view migration from `source_snapshot_file` (default `sources/github-issues.json`) authenticated by `source_snapshot_sha256`. Original manifest bytes and the state's frozen manifest digest remain unchanged. Missing, altered or mismatched evidence reports `MANIFEST_MIGRATION_REQUIRED`; live GitHub data cannot replace the historical source.
-- PR CI is explicit: `trigger: pull_request`, `pr_number: <existing PR number>`. The gate uses authenticated `gh api` and binds PR repository, head branch/head SHA, base SHA and Actions association to the exact frozen candidate. Both direct head SHA and that PR's current merge SHA are accepted. A foreign/stale/unassociated run fails closed. Push and DEV contracts keep their existing SHA/trust rules; workflow bootstrap still requires push.
+PR CI uses `trigger: pull_request`, `pr_number: <existing PR number>`. The gate uses authenticated `gh api` and binds PR repository, head branch/head SHA, base SHA and Actions association to the exact frozen candidate. Both direct head SHA and that PR's current merge SHA are accepted. A foreign/stale/unassociated run fails closed. Push and DEV contracts keep their existing SHA/trust rules; workflow bootstrap still requires push.
