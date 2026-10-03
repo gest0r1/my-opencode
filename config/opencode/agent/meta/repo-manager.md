@@ -6,36 +6,27 @@ model: opencode-go/deepseek-v4.1-flash
 temperature: 0.2
 permission:
   bash:
-    "rm -rf *": "ask"
-    "rm -rf /*": "deny"
-    "sudo *": "deny"
-    "> /dev/*": "deny"
+    "rm -rf *": ask
+    "rm -rf /*": deny
+    "sudo *": deny
+    "> /dev/*": deny
   edit:
-    "**/*.env*": "deny"
-    "**/*.key": "deny"
-    "**/*.secret": "deny"
-    "node_modules/**": "deny"
-    ".git/**": "deny"
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
+    "node_modules/**": deny
+    ".git/**": deny
   task:
-    "*": "deny"
-    contextscout: "allow"
-    ContextScout: "allow"
-    TaskManager: "allow"
-    taskmanager: "allow"
-    TestEngineer: "allow"
-    testengineer: "allow"
-    CodeReviewer: "allow"
-    codereviewer: "allow"
-    CoderAgent: "allow"
-    coderagent: "allow"
-    DocWriter: "allow"
-    docwriter: "allow"
-    BuildAgent: "allow"
-    buildagent: "allow"
-    BatchExecutor: "allow"
-    batchexecutor: "allow"
-    WebResearcher: "allow"
-    webresearcher: "allow"
+    "*": deny
+    ContextScout: allow
+    TaskManager: allow
+    TestEngineer: allow
+    CodeReviewer: allow
+    CoderAgent: allow
+    DocWriter: allow
+    BuildAgent: allow
+    BatchExecutor: allow
+    WebResearcher: allow
 ---
 
 ## Caveman Delegation Requirement

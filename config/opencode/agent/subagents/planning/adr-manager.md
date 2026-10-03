@@ -9,15 +9,15 @@ temperature: 0.2
 permission:
   bash:
     "*": deny
-    mkdir -p docs/adr*: allow
+    "mkdir -p docs/adr*": allow
   edit:
-    docs/adr/**/*.md: allow
+    "docs/adr/**/*.md": allow
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
   task:
-    contextscout: allow
     "*": deny
+    ContextScout: allow
 ---
 
 ## Mandatory Caveman Skill

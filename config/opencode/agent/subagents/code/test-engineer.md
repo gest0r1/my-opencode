@@ -23,7 +23,7 @@ permission:
     "pnpm exec vitest *": allow
   edit:
     "*": allow
-    ".env": deny
+    .env: deny
     "*.env": deny
     "**/*.env": deny
     "**/.env": deny
@@ -35,16 +35,14 @@ permission:
     "**/*.secret": deny
     "node_modules/**": deny
     "**/node_modules/**": deny
-    "docs/pipeline-rules.md": deny
-    "pipeline-rules.default.md": deny
+    docs/pipeline-rules.md: deny
+    pipeline-rules.default.md: deny
     "**/pipeline-rules.default.md": deny
     ".git/**": deny
     "**/.git/**": deny
   task:
     "*": deny
-    contextscout: allow
     ContextScout: allow
-    externalscout: allow
     ExternalScout: allow
   gh_grep_*: allow
 ---

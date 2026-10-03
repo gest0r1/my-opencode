@@ -6,13 +6,10 @@ model: opencode-go/deepseek-v4-pro
 temperature: 0.1
 permission:
   task:
-    "*": "deny"
-    contextscout: "allow"
-    ContextScout: "allow"
-    externalscout: "allow"
-    ExternalScout: "allow"
-    WebResearcher: "allow"
-    webresearcher: "allow"
+    "*": deny
+    ContextScout: allow
+    ExternalScout: allow
+    WebResearcher: allow
 ---
 
 # Data Analyst

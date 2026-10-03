@@ -8,34 +8,25 @@ permission:
   question: deny
   bash:
     "*": deny
-    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
-    "npx tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
-    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
-    "npx tsx /root/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
-    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
-    "npx tsx /root/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
-    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
-    "npx tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
-    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
-    "npx tsx /root/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
-    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
-    "npx tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
-    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
-    "npx tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
-    "npx --yes tsx /root/.config/opencode/skills/task-management/scripts/pipeline-refresh-cli.ts*": allow
-    "npx tsx /root/.config/opencode/skills/task-management/scripts/pipeline-refresh-cli.ts*": allow
-    "node /root/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
-    "npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*": allow
-    "npx tsx .opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
-    "npx tsx .opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
-    "npx tsx .opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
-    "npx tsx .opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
-    "npx tsx .opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
-    "npx tsx .opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
-    "npx tsx .opencode/skills/task-management/scripts/pipeline-refresh-cli.ts*": allow
-    "node .opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
-    "bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh": allow
-    "bash /root/.config/opencode/skills/task-management/scripts/worktree-refresh.sh --check": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-refresh-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-refresh-cli.ts*": allow
+    "node $HOME/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
+    "bash $HOME/.config/opencode/skills/task-management/scripts/worktree-refresh.sh": allow
+    "bash $HOME/.config/opencode/skills/task-management/scripts/worktree-refresh.sh --check": allow
   edit:
     "*": deny
     ".tmp/pipelines/**": allow
@@ -59,37 +50,21 @@ permission:
     ".git/**": deny
   task:
     "*": deny
-    contextscout: allow
     ContextScout: allow
-    externalscout: allow
     ExternalScout: allow
-    story-mapper: allow
     StoryMapper: allow
-    senior-story-reviewer: allow
     SeniorStoryReviewer: allow
-    architecture-analyzer: allow
     ArchitectureAnalyzer: allow
-    contract-manager: allow
     ContractManager: allow
-    prioritization-engine: allow
     PrioritizationEngine: allow
-    senior-technical-plan-reviewer: allow
     SeniorTechnicalPlanReviewer: allow
-    task-manager: allow
     TaskManager: allow
-    coder-agent: allow
     CoderAgent: allow
-    build-agent: allow
     BuildAgent: allow
-    reviewer: allow
     CodeReviewer: allow
-    tester: allow
     TestEngineer: allow
-    documentation: allow
     DocWriter: allow
-    devops-specialist: allow
     OpenDevopsSpecialist: allow
-    frontend-specialist: allow
     OpenFrontendSpecialist: allow
 ---
 

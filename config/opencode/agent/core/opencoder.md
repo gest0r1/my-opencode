@@ -6,43 +6,33 @@ mode: primary
 temperature: 0.1
 permission:
   bash:
-    rm -rf *: ask
-    sudo *: deny
-    chmod *: ask
-    curl *: ask
-    wget *: ask
-    docker *: ask
-    kubectl *: ask
+    "rm -rf *": ask
+    "sudo *": deny
+    "chmod *": ask
+    "curl *": ask
+    "wget *": ask
+    "docker *": ask
+    "kubectl *": ask
   edit:
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
-    node_modules/**: deny
+    "node_modules/**": deny
     "**/__pycache__/**": deny
     "**/*.pyc": deny
-    .git/**: deny
+    ".git/**": deny
   task:
     "*": deny
-    contextscout: allow
     ContextScout: allow
-    externalscout: allow
     ExternalScout: allow
     TaskManager: allow
-    taskmanager: allow
     CoderAgent: allow
-    coderagent: allow
     BatchExecutor: allow
-    batchexecutor: allow
     TestEngineer: allow
-    testengineer: allow
     DocWriter: allow
-    docwriter: allow
     BuildAgent: allow
-    buildagent: allow
     CodeReviewer: allow
-    codereviewer: allow
     WebResearcher: allow
-    webresearcher: allow
 ---
 
 ## Caveman Delegation Requirement

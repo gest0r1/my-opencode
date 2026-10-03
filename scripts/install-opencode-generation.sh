@@ -143,6 +143,16 @@ OPENCODE_ARCHIVE_LEGACY=0 bash "$SRC/scripts/install-opencode-agents.sh" \
   "$HOME/.opencode/agent" \
   "$CONFIG_HOME/agent"
 
+# Host-specific command spellings are derived only after source normalization.
+# User agents are excluded: materialize only the repository-managed catalog.
+MANAGED_PATHS="$(mktemp -d "$TMP_DIR/managed-paths.XXXXXXXX")"
+while IFS= read -r -d '' file; do
+  name=$(sed -n 's/^name: *//p' "$file" | head -1 | tr -d '\"')
+  cp "$STAGE_CONFIG/agents/$name.md" "$MANAGED_PATHS/"
+done < <(find "$SRC/config/opencode/agent" -name '*.md' -type f -print0)
+node "$SRC/scripts/materialize-opencode-trusted-paths.mjs" "$MANAGED_PATHS" "$HOME"
+cp "$MANAGED_PATHS/"*.md "$STAGE_CONFIG/agents/"
+
 # Skills preserve the previous overlay semantics, but are prepared as a full
 # tree and swapped atomically together with the config.
 if [[ -d "$SKILLS_HOME" ]]; then

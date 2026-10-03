@@ -78,6 +78,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/test_agent_permission_normalization.sh
+          node --test tests/trusted-paths.test.mjs
       - name: Verify immutable OpenChamber runtime activation
         run: |
           set -Eeuo pipefail
@@ -94,3 +95,4 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tests/test_standard_installer.py
+

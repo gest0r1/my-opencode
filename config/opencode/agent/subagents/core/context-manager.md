@@ -14,26 +14,26 @@ permission:
   glob:
     "*": allow
   bash:
-    find .opencode/context*: allow
-    ls -la .opencode/context*: allow
-    mkdir -p .opencode/context*: allow
-    mv .opencode/context*: allow
     "*": deny
+    "find .opencode/context*": allow
+    "ls -la .opencode/context*": allow
+    "mkdir -p .opencode/context*": allow
+    "mv .opencode/context*": allow
   edit:
-    .opencode/context/**/*.md: allow
-    .opencode/context/**/*.json: allow
+    ".opencode/context/**/*.md": allow
+    ".opencode/context/**/*.json": allow
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
   write:
-    .opencode/context/**/*.md: allow
-    .opencode/context/**/*.json: allow
+    ".opencode/context/**/*.md": allow
+    ".opencode/context/**/*.json": allow
     "**/*.env*": deny
     "**/*.key": deny
     "**/*.secret": deny
   task:
     "*": deny
-    contextscout: allow
+    ContextScout: allow
 ---
 
 ## Mandatory Caveman Skill
