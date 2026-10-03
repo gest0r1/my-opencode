@@ -7,6 +7,9 @@ tags:
   - github-handoff
 ---
 
+Before creating or starting any PLAN/RUN, call `pipeline_runtime_preflight`. Require PASS from live tools, skills, exact subagent IDs and delegation permissions. `PIPELINE_CAPABILITY_UNAVAILABLE` stops execution with its concrete missing capability. Never implement inline or widen write permissions to bypass unavailable delegation.
+
+
 # Pipeline Run — one owner-selected worktree
 
 Execute only a frozen, owner-approved manifest in the CURRENT worktree-session. Never create/switch/rebase/merge/delete a worktree or branch; never create another user-facing OpenChamber session or dispatch PLAN elsewhere. Owner permits one RUN at a time across all worktrees.
@@ -224,3 +227,4 @@ Planning/reviews are always fresh. Invalid reuse starts a fresh child, never ano
 BLOCK on stale main/base, wrong worktree, changed planning evidence/project policy/work item, failed GitHub→OpenCode-host CD readiness recheck, unresolved owner decision, changed manifest, invalid/unreadable rules, protected/sensitive runtime-scope request, runtime-scope review that changes requirements/acceptance/external contracts/security boundaries/destructive behavior, GitHub gate without a valid frozen contract, missing workflow without its frozen bootstrap/adaptation work item, GitHub Environment/trusted-ref/concurrency mismatch, required GitHub job skipped/failed/missing, missing or mismatched artifact ID/digest, GitHub run/evidence from the wrong SHA/workflow/job/artifact, local-gate package-manager/environment failure, a true `security_stop`/`secret_stop`/`destructive_stop`/protected `scope_stop`, conflict that requires a DAG change, runtime failure needing design change, or an exhausted automatic-repair budget awaiting an owner choice.
 
 If queue is empty, report the actual terminal state; never bypass prerequisites or rewrite frozen evidence. A late external GitHub/CD blocker after an upstream source-ready milestone is not a reason to stop while `stage-cli next` still exposes downstream/independent work. Include run/pipeline status, branch, source/candidate SHA, work-item IDs, machine evidence, runtime result, technical-fix cycle counts and blocker dossier. Never delete historical runs.
+

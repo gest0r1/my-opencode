@@ -85,7 +85,7 @@ def main():
     require(config_generation, 'bun install --production', "local plugin dependencies")
     require(config_generation, 'pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export',
             "plugin validation")
-    require(config_generation, 'github_handoff.ts did not export any custom tool definitions',
+    require(config_generation, 'github-handoff.ts is not a native V2 plugin',
             "custom tool validation")
     require(config_generation, 'OpenCode V2 does not load config.instructions; use global AGENTS.md',
             "V2 instruction contract")
@@ -129,3 +129,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

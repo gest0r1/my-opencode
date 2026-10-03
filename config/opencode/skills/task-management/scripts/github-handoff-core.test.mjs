@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const cli = fileURLToPath(new URL('./github-handoff-cli.ts', import.meta.url));
-const toolWrapper = fileURLToPath(new URL('../../../tool/github_handoff.ts', import.meta.url));
+const toolWrapper = fileURLToPath(new URL('../../../plugins/github-handoff.ts', import.meta.url));
 
 function exec(command, args, cwd, envExtra = {}) {
   return execFileSync(command, args, {
@@ -368,5 +368,8 @@ test('publish preserves unstaged apps path from porcelain status', () => {
 
 test('tool wrapper has project_root optional param in all tools', () => {
   const source = readFileSync(toolWrapper, 'utf8');
-  assert.match(source, /project_root.*tool\.schema\.string\(\)\.optional\(\)/);
+  assert.equal((source.match(/project_root: \{ type: "string" \}/g) ?? []).length, 4);
+  assert.doesNotMatch(source, /required: \[[^\]]*project_root/);
+  assert.match(source, /Plugin\.define/);
+  assert.doesNotMatch(source, /@opencode-ai\/plugin/);
 });

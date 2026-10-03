@@ -198,6 +198,14 @@ EnvironmentFile=-$home/.config/opencode.env
 Environment="OPENCODE_BINARY=$home/.opencode/bin/opencode"
 EOF
 
+  cat > "$home/.config/opencode/.managed-generation.mjs" <<EOF
+import fs from 'node:fs';
+const [action, receipt] = process.argv.slice(2);
+if (action === 'remote') console.log('$CONFIG_SHA');
+else if (action === 'check') process.exit(fs.readFileSync(receipt, 'utf8').trim() === '$CONFIG_SHA' ? 0 : 1);
+EOF
+  printf '%s\n' "$prev_config" > "$home/.local/state/my-opencode/config-generation.json"
+
   local env_sha
   env_sha="$(sha256sum "$home/.config/opencode.env" | awk '{print $1}')"
   cat > "$home/.local/state/my-opencode/openchamber-v2-install.state" <<EOF
@@ -313,3 +321,4 @@ assert_contains "$dir/home/.local/state/my-opencode/openchamber-v2-install.state
 assert_contains "$dir/home/.local/state/my-opencode/openchamber-v2-install.state" "package_source_sha=$PACKAGE_SOURCE_SHA"
 
 echo 'PASS: incremental V2 execution keeps binary/config/runtime/service updates independent'
+
