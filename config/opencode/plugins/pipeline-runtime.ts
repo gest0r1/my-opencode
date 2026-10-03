@@ -2,9 +2,10 @@ import { Plugin } from "@opencode/plugin"
 import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
+import { assertPipelineCapabilities } from "../skills/task-management/scripts/capability-preflight.mjs"
 
 const ELIGIBLE_ROLES = new Set([
-  "CoderAgent", "coder-agent", "TestEngineer", "tester", "BuildAgent", "build-agent",
+  "CoderAgent", "TestEngineer", "BuildAgent",
 ])
 const CONTEXT_TTL_MS = 5 * 60 * 1000
 const WORK_ITEM_RE = /^[A-Za-z0-9._:-]{1,128}$/
@@ -210,14 +211,39 @@ export default Plugin.define({
     const root = String(plugin.location.directory)
     const statsBySession = new Map<string, SessionStats>()
     const invocationByCallID = new Map<string, InvocationMeta>()
+    const visibleBySession = new Map<string, string[]>()
+    await plugin.session.hook("context", (context) => {
+      if (String(context.agent) === "OpenStageOrchestrator") {
+        visibleBySession.set(String(context.sessionID), Object.keys(context.tools))
+      }
+    })
+
+    const capabilityPreflight = async (sessionID: string) => {
+      const [tools, agentResult, skillResult] = await Promise.all([
+        plugin.tool.list(), plugin.agent.list(), plugin.skill.list(),
+      ])
+      const agents = agentResult.data
+      const parent = agents.find((x) => String(x.id) === "OpenStageOrchestrator")
+      if (!parent) throw new Error("PIPELINE_CAPABILITY_UNAVAILABLE: primary OpenStageOrchestrator")
+      return assertPipelineCapabilities({ tools, agents, skills: skillResult.data,
+        visibleTools: visibleBySession.get(sessionID), permissions: parent.permissions })
+    }
 
     await plugin.tool.transform((editor) => {
+      editor.add({
+        name: "pipeline_runtime_preflight",
+        options: { codemode: false },
+        description: "Check live pipeline tools, skills, exact subagent IDs and delegation permissions before PLAN/RUN. BLOCKED is authoritative; never widen write permissions as fallback.",
+        input: { type: "object", properties: {}, additionalProperties: false },
+        execute: async (_args, context) => ({ content: JSON.stringify(await capabilityPreflight(String(context.sessionID))) }),
+      })
       editor.add({
         name: "pipeline_runtime_prepare",
         options: { codemode: false },
         description: "Prepare deterministic routing metadata for one pipeline work item before the next matching subagent call.",
         input: prepareInput,
         execute: async (args, context) => {
+          await capabilityPreflight(String(context.sessionID))
           if (!ELIGIBLE_ROLES.has(args.role)) {
             return { content: "rejected: role is not eligible for session reuse; next subagent must run fresh" }
           }

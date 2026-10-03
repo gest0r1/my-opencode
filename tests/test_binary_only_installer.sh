@@ -117,6 +117,14 @@ run_bootstrap() {
   write_official_installer "$official"
   write_generation_stub "$generation"
   prepare_home "$home" "$current_version" "$state_sha"
+  cat > "$home/.config/opencode/.managed-generation.mjs" <<EOF
+import fs from 'node:fs';
+const [action, receipt] = process.argv.slice(2);
+if (action === 'remote') console.log('$CONFIG_SHA');
+else if (action === 'check') process.exit(fs.readFileSync(receipt, 'utf8').trim() === '$CONFIG_SHA' ? 0 : 1);
+EOF
+  printf '%s\n' "$state_sha" > "$home/.local/state/my-opencode/config-generation.json"
+
 
   HOME="$home" \
   XDG_STATE_HOME="$home/.local/state" \
@@ -162,3 +170,9 @@ assert_contains "$dir/trace.log" 'generation skip_binary=0'
 assert_not_contains "$dir/trace.log" 'https://opencode.ai/v2/install'
 
 echo 'PASS: OpenCode bootstrap uses binary-only fast path only for pinned OpenChamber orchestration'
+
+# An identical standalone upgrade exits before generation/binary download.
+dir="$(run_bootstrap standalone-noop 2.0.21 "$CONFIG_SHA" '' 0)"
+assert_contains "$dir/output.log" 'no-op; downloads and normalization skipped'
+assert_not_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
+assert_not_contains "$dir/trace.log" 'curl '

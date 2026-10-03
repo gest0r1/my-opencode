@@ -306,9 +306,19 @@ if [[ "$installed_opencode" != "$OPENCODE_VERSION" || "$FORCE_OPENCODE_UPDATE" =
 fi
 
 config_changed=0
-if [[ "$CONFIG_SHA" != "$prev_config" || ! -f "$HOME/.config/opencode/opencode.json" || ! -d "$HOME/.config/opencode/agents" ]]; then
+CONFIG_FINGERPRINT=''
+GENERATION_HELPER="$HOME/.config/opencode/.managed-generation.mjs"
+GENERATION_RECEIPT="$STATE_ROOT/config-generation.json"
+if [[ -f "$GENERATION_HELPER" && -f "$GENERATION_RECEIPT" ]]; then
+  CONFIG_FINGERPRINT="$(node "$GENERATION_HELPER" remote "$CONFIG_REPO" "$CONFIG_SHA")"
+fi
+if [[ -z "$CONFIG_FINGERPRINT" ]] ||
+   ! node "$GENERATION_HELPER" check "$GENERATION_RECEIPT" "$CONFIG_REPO" "$CONFIG_FINGERPRINT" "$HOME"; then
   config_changed=1
 fi
+
+export OPENCODE_CONFIG_FINGERPRINT="$CONFIG_FINGERPRINT"
+export OPENCODE_RESOLVED_CONFIG_SHA="$CONFIG_SHA"
 
 if (( opencode_binary_changed == 1 || config_changed == 1 )); then
   gh api -H 'Accept: application/vnd.github.raw' \

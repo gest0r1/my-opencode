@@ -64,6 +64,7 @@ jobs:
             config/opencode/skills/task-management/scripts/opencode-v2-runtime-contract.test.mjs \
             config/opencode/skills/task-management/scripts/manifest-preflight.test.mjs \
             config/opencode/skills/task-management/scripts/manifest-migration.test.mjs \
+            config/opencode/skills/task-management/scripts/capability-preflight.test.mjs \
             config/opencode/skills/task-management/scripts/github-actions-pr.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-v2-contract.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-rules.test.mjs \

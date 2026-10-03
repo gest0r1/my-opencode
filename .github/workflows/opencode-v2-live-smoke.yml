@@ -312,3 +312,17 @@ jobs:
           if (errors.length) throw new Error(`permission audit failed:\n- ${errors.join('\n- ')}`);
           NODE
 
+
+      - name: Prove identical upgrade is no-op
+        env:
+          OPENCODE_CONFIG_REF: ${{ github.sha }}
+          OPENCODE_INSTALL_VERSION: 2.0.21
+        run: |
+          set -Eeuo pipefail
+          before=$(stat -c '%i:%Y' "$HOME/.config/opencode/opencode.json")
+          bash install.sh > /tmp/opencode-repeat.log 2>&1
+          cat /tmp/opencode-repeat.log
+          grep -Fq 'no-op; downloads and normalization skipped' /tmp/opencode-repeat.log
+          test "$before" = "$(stat -c '%i:%Y' "$HOME/.config/opencode/opencode.json")"
+          ! grep -Eq 'bun install|bun add|markdown_changed=|Скачиваю конфигурацию|Устанавливаю/обновляю' /tmp/opencode-repeat.log
+          test ! -d "$HOME/.config/opencode/node_modules/@opencode-ai/plugin"

@@ -29,6 +29,29 @@ state_value() {
   sed -n "s/^$1=//p" "$STATE" | head -1
 }
 
+# The installed helper verifies both remote managed source content and local
+# managed files. No archive, normalization or dependency install on a true no-op.
+generation_unchanged=0
+GENERATION_HELPER="$HOME/.config/opencode/.managed-generation.mjs"
+GENERATION_RECEIPT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode/config-generation.json"
+CONFIG_SHA="$REF"
+if [[ ! "$CONFIG_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+  CONFIG_SHA="$(gh api "repos/$REPO/commits/$REF" --jq .sha)"
+fi
+export OPENCODE_RESOLVED_CONFIG_SHA="$CONFIG_SHA"
+if [[ -f "$GENERATION_HELPER" && -f "$GENERATION_RECEIPT" ]]; then
+  CONFIG_FINGERPRINT="$(node "$GENERATION_HELPER" remote "$REPO" "$CONFIG_SHA")"
+  export OPENCODE_CONFIG_FINGERPRINT="$CONFIG_FINGERPRINT"
+  if node "$GENERATION_HELPER" check "$GENERATION_RECEIPT" "$REPO" "$CONFIG_FINGERPRINT" "$HOME"; then
+    generation_unchanged=1
+    if [[ -x "$OPENCODE_BIN" ]] &&
+       [[ "$("$OPENCODE_BIN" --version | sed -E 's/^opencode[[:space:]]+v?//')" == "$OPENCODE_INSTALL_VERSION" ]]; then
+      echo "OpenCode binary/config fingerprint unchanged: no-op; downloads and normalization skipped"
+      exit 0
+    fi
+  fi
+fi
+
 # The orchestrator pins both refs to immutable commits before it downloads this
 # file. If its recorded config generation is the same exact commit and the
 # canonical config is present, downloading/rebuilding that config again adds no
@@ -36,7 +59,7 @@ state_value() {
 # deliberate guard so a direct standalone install.sh invocation keeps the full
 # binary+config validation semantics.
 binary_only=0
-if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" != 1 &&
+if [[ "$generation_unchanged" == 1 && "${OPENCODE_SKIP_BINARY_INSTALL:-0}" != 1 &&
       "$REF" =~ ^[a-f0-9]{40}$ &&
       "${OPENCHAMBER_REF:-}" =~ ^[a-f0-9]{40}$ &&
       "$(state_value config_sha)" == "$REF" &&

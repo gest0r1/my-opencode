@@ -90,7 +90,8 @@ SRC="$TMP_DIR/src"
 mkdir -p "$SRC" "$CONFIG_PARENT" "$SKILLS_PARENT" "$STATE_ROOT"
 
 echo "Скачиваю конфигурацию $REPO@$REF..."
-gh api "repos/$REPO/tarball/$REF" > "$ARCHIVE"
+CONFIG_SHA="${OPENCODE_RESOLVED_CONFIG_SHA:-$(gh api "repos/$REPO/commits/$REF" --jq .sha)}"
+gh api "repos/$REPO/tarball/$CONFIG_SHA" > "$ARCHIVE"
 tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
 
 [[ -f "$SRC/config/opencode/opencode.json" ]] || {
@@ -101,6 +102,8 @@ tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
   echo "Ошибка: config/opencode/agent отсутствует в $REPO@$REF" >&2
   exit 1
 }
+
+CONFIG_FINGERPRINT="${OPENCODE_CONFIG_FINGERPRINT:-$(node "$SRC/scripts/opencode-generation-state.mjs" remote "$REPO" "$CONFIG_SHA")}"
 
 # ---- Build complete candidate trees outside active lookup paths ------------
 
@@ -118,6 +121,7 @@ for entry in "$SRC/config/opencode/"*; do
 done
 shopt -u dotglob nullglob
 
+cp "$SRC/scripts/opencode-generation-state.mjs" "$STAGE_CONFIG/.managed-generation.mjs"
 mkdir -p "$STAGE_CONFIG/agents" "$STAGE_CONFIG/commands" "$STAGE_CONFIG/tools"
 if [[ -d "$SRC/config/opencode/command" ]]; then
   cp -a "$SRC/config/opencode/command/." "$STAGE_CONFIG/commands/"
@@ -199,10 +203,9 @@ NODE
 (
   cd "$STAGE_CONFIG"
   bun -e '
-    const mod = await import("./tools/github_handoff.ts");
-    const definitions = Object.values(mod).filter((value) => value && typeof value === "object");
-    if (definitions.length < 1) {
-      throw new Error("github_handoff.ts did not export any custom tool definitions");
+    const mod = await import("./plugins/github-handoff.ts");
+    if (!mod.default || typeof mod.default.setup !== "function") {
+      throw new Error("github-handoff.ts is not a native V2 plugin");
     }
   '
 )
@@ -426,10 +429,6 @@ fi
   echo "Ошибка: @opencode/plugin dependency missing after commit." >&2
   exit 1
 }
-[[ -f "$CONFIG_HOME/node_modules/@opencode-ai/plugin/package.json" ]] || {
-  echo "Ошибка: @opencode-ai/plugin custom-tool helper missing after commit." >&2
-  exit 1
-}
 [[ ! -e "$CONFIG_HOME/plugins/shell-strategy" ]] || {
   echo "Ошибка: legacy shell-strategy plugin path still active." >&2
   exit 1
@@ -454,10 +453,12 @@ fi
   echo "Ошибка: canonical tools path missing after commit." >&2
   exit 1
 }
-[[ -f "$CONFIG_HOME/tools/github_handoff.ts" ]] || {
-  echo "Ошибка: github_handoff custom tool missing after commit." >&2
+[[ -f "$CONFIG_HOME/plugins/github-handoff.ts" ]] || {
+  echo "Ошибка: github-handoff native V2 plugin missing after commit." >&2
   exit 1
 }
+
+node "$CONFIG_HOME/.managed-generation.mjs" record "$STATE_ROOT/config-generation.json" "$REPO" "$CONFIG_SHA" "$CONFIG_FINGERPRINT" "$SRC" "$HOME"
 
 echo "Готово: OpenCode и конфигурация $REPO@$REF установлены атомарно."
 echo "Проверка: $OPENCODE_BIN --version -> $("$OPENCODE_BIN" --version)"
