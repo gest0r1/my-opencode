@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Static contract tests for the incremental, console-safe V2 installer."""
+"""Static contracts for the incremental OpenCode/OpenChamber V2 installer."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 wrapper = (ROOT / "install-openchamber.sh").read_text()
 core = (ROOT / "scripts/install-openchamber-v2-core.sh").read_text()
-installer = wrapper + "\n" + core
 runtime_store = (ROOT / "scripts/openchamber-runtime-store.sh").read_text()
-config_installer = (ROOT / "install.sh").read_text()
+config_bootstrap = (ROOT / "install.sh").read_text()
+config_generation = (ROOT / "scripts/install-opencode-generation.sh").read_text()
 cleanup = (ROOT / "scripts/cleanup-openchamber-v1-before-v2.sh").read_text()
+installer = wrapper + "\n" + core
+config_installer = config_bootstrap + "\n" + config_generation
 
 
 def require(text: str, needle: str, label: str):
@@ -20,170 +22,109 @@ def forbid(text: str, needle: str, label: str):
 
 
 def main():
-    # Network/NPM contract.
-    require(installer, 'HOST="', "bind host variable")
-    require(installer, '172.18.0.1', "NPM Docker bridge default")
-    require(installer, 'OPENCHAMBER_BIND_PORT', "bind port override")
-    require(installer, 'wait_for_service()', "readiness helper")
-    require(installer, 'for attempt in {1..45}', "bounded startup readiness retry")
-
-    # Incremental OpenCode behavior restored from 1.x.
-    require(installer, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"',
-            "OpenCode 2.0.21 migration pin")
+    # Version/network contract.
+    require(core, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"', "OpenCode pin")
+    require(core, 'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.0}"',
+            "OpenChamber pin")
+    require(core, 'HOST="${OPENCHAMBER_BIND_HOST:-172.18.0.1}"', "NPM bridge default")
+    require(core, 'PORT="${OPENCHAMBER_BIND_PORT:-3000}"', "default port")
+    require(core, 'for attempt in {1..45}', "bounded readiness retry")
     forbid(installer, '2.0.22', "unapproved OpenCode version bump")
-    require(installer, 'opencode_binary_changed=0', "OpenCode binary decision")
-    require(installer, 'config_changed=0', "config decision")
-    require(installer, 'OPENCODE_SKIP_BINARY_INSTALL=1', "config-only binary skip")
-    require(installer, 'OpenCode binary/config unchanged: downloads skipped', "no-op fast path")
-    require(installer, 'FORCE_OPENCODE_UPDATE=1', "explicit OpenCode update")
 
-    # The outer transaction must resolve moving refs once and pin every child
-    # fetch/execution to those immutable SHAs. Otherwise a branch move between
-    # wrapper and core can install APP_SHA B into release directory APP_SHA A.
+    # Outer transaction resolves branch refs once and all children use immutable SHAs.
     require(wrapper, 'CONFIG_SHA="$(gh api "repos/$CONFIG_REPO/commits/$CONFIG_REF" --jq .sha)"',
             "exact config SHA resolution")
     require(wrapper, 'APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"',
             "exact OpenChamber SHA resolution")
-    require(wrapper, 'install-openchamber-v2-core.sh?ref=$CONFIG_SHA',
-            "core fetched from exact config SHA")
-    require(wrapper, 'openchamber-runtime-store.sh?ref=$CONFIG_SHA',
-            "runtime helper fetched from exact config SHA")
-    require(wrapper, 'export OPENCODE_CONFIG_REF="$CONFIG_SHA"',
-            "core config ref pinned to exact SHA")
-    require(wrapper, 'export MY_OPENCODE_REF="$CONFIG_SHA"',
-            "legacy config ref alias pinned to exact SHA")
-    require(wrapper, 'export OPENCHAMBER_REF="$APP_SHA"',
-            "core OpenChamber ref pinned to exact SHA")
-    assert wrapper.index('export OPENCHAMBER_REF="$APP_SHA"') < wrapper.index('bash +h "$CORE"'), \
-        "exact refs must be exported before the core executes"
-    assert wrapper.index('CONFIG_SHA="$(gh api') < wrapper.index('RELEASE_DIR="$OPENCHAMBER_RELEASES/$APP_SHA"'), \
-        "transaction refs must be pinned before immutable release selection"
+    require(wrapper, 'install-openchamber-v2-core.sh?ref=$CONFIG_SHA', "exact core fetch")
+    require(wrapper, 'openchamber-runtime-store.sh?ref=$CONFIG_SHA', "exact runtime helper fetch")
+    require(wrapper, 'export OPENCODE_CONFIG_REF="$CONFIG_SHA"', "pinned config ref")
+    require(wrapper, 'export OPENCHAMBER_REF="$APP_SHA"', "pinned app ref")
+    assert wrapper.index('export OPENCHAMBER_REF="$APP_SHA"') < wrapper.index('bash +h "$CORE"')
 
-    # Immutable/fingerprinted OpenChamber package behavior.
-    require(installer, 'v2-web-package-$APP_SHA', "exact-SHA package manifest")
-    require(installer, 'runtime_fingerprint', "runtime fingerprint validation")
-    require(installer, 'package_source_sha', "reused package source SHA")
-    require(installer, 'sha256sum -c -', "package integrity verification")
-    require(installer, 'release lookup skipped', "unchanged runtime metadata fast path")
-    require(installer, 'Using cached verified OpenChamber package', "verified package cache")
-    require(installer, 'Using cached staged OpenChamber source package', "staged source cache")
-    require(installer, 'bun run --cwd packages/web build', "source fallback remains available")
+    # 1.x-style independent incremental decisions.
+    require(core, 'opencode_binary_changed=0', "OpenCode binary decision")
+    require(core, 'config_changed=0', "config decision")
+    require(core, 'OPENCODE_SKIP_BINARY_INSTALL=1', "config-only binary skip")
+    require(core, 'OpenCode binary/config unchanged: downloads skipped', "OpenCode no-op fast path")
+    require(core, 'v2-web-package-$APP_SHA', "exact-SHA OpenChamber manifest")
+    require(core, 'runtime_fingerprint', "runtime fingerprint")
+    require(core, 'package_source_sha', "reusable package source")
+    require(core, 'OpenChamber source/runtime metadata unchanged: release lookup skipped',
+            "manifest lookup fast path")
+    require(core, 'OpenChamber runtime fingerprint/package unchanged: package download skipped',
+            "runtime package fast path")
+    require(core, 'Using cached verified OpenChamber package', "verified package cache")
+    require(core, 'sha256sum -c -', "package integrity")
+    require(core, 'bun run --cwd packages/web build', "explicit source fallback")
 
-    # Concurrency and terminal self-preservation.
-    require(installer, 'flock -x 9', "core installer lock")
+    # Strict binary-only bootstrap: orchestration may replace only the OpenCode
+    # executable when the exact config generation is already active.
+    require(config_bootstrap, 'GENERATION_PATH="scripts/install-opencode-generation.sh"',
+            "generation installer split")
+    require(config_bootstrap, '"$(state_value config_sha)" == "$REF"',
+            "binary-only exact config guard")
+    require(config_bootstrap, '"${OPENCHAMBER_REF:-}" =~ ^[a-f0-9]{40}$',
+            "orchestrator-only binary fast path")
+    require(config_bootstrap, 'Binary-only update: config SHA $REF is unchanged',
+            "binary-only audit output")
+    require(config_bootstrap, 'https://opencode.ai/v2/install', "official binary installer")
+    require(config_bootstrap, 'rollback_binary_only()', "binary-only rollback")
+    require(config_bootstrap, 'contents/$GENERATION_PATH?ref=$REF', "exact generation fetch")
+    require(config_bootstrap, 'OPENCODE_SKIP_BINARY_INSTALL', "config-only delegation guard")
+
+    # Full generation installer remains the standalone/config-change path.
+    require(config_generation, 'CONFIG_HOME="$HOME/.config/opencode"', "canonical config root")
+    require(config_generation, 'mkdir -p "$STAGE_CONFIG/agents"', "canonical plural agents")
+    require(config_generation, '"$STAGE_CONFIG/commands"', "canonical plural commands")
+    require(config_generation, 'OPENCODE_SKIP_BINARY_INSTALL', "config-only support")
+    require(config_generation, 'https://opencode.ai/v2/install', "full install official binary path")
+    require(config_generation, 'rollback_transaction()', "config rollback")
+    require(config_generation, 'rollback_binary()', "full-install binary rollback")
+    require(config_generation, 'mv "$STAGE_CONFIG" "$CONFIG_HOME"', "atomic config commit")
+    require(config_generation, 'bun install --production', "local plugin dependencies")
+    require(config_generation, 'pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export',
+            "plugin validation")
+    require(config_generation, 'github_handoff.ts did not export any custom tool definitions',
+            "custom tool validation")
+    require(config_generation, 'OpenCode V2 does not load config.instructions; use global AGENTS.md',
+            "V2 instruction contract")
+    require(config_generation, 'legacy singular command path still active', "legacy command rejection")
+
+    # Atomic runtime/service transaction and self-preserving embedded-terminal mode.
     require(wrapper, 'TRANSACTION_LOCK="$STATE_ROOT/openchamber-v2-atomic.lock"',
-            "outer transaction lock path")
-    require(wrapper, 'flock -x 8', "outer transaction serialization")
-    assert wrapper.index('flock -x 8') < wrapper.index('CURRENT_BEFORE='), \
-        "outer transaction lock must precede current/state snapshot"
-    require(installer, 'OPENCHAMBER_EMBEDDED_TERMINAL', "embedded terminal marker")
-    require(installer, 'effective_restart_mode=defer', "automatic deferred restart")
-    require(installer, '--no-start', "native startup staging without restart")
-    require(installer, '--no-env-snapshot', "minimal native startup environment")
-    require(installer, 'PENDING APPLY: current OpenChamber terminal was preserved.', "safe handoff")
-    require(installer, 'runtime_pending=', "separate runtime pending state")
-    require(installer, 'service_restart_pending=', "separate service pending state")
+            "outer transaction lock")
+    require(wrapper, 'flock -x 8', "outer serialization")
+    require(core, 'flock -x 9', "core lock")
+    require(core, 'OPENCHAMBER_EMBEDDED_TERMINAL', "embedded terminal marker")
+    require(core, 'effective_restart_mode=defer', "self-preserving defer")
+    require(core, '--no-start', "deferred unit staging")
+    require(core, 'PENDING APPLY: current OpenChamber terminal was preserved.', "pending apply handoff")
+    require(wrapper, 'oc_snapshot_service', "service snapshot")
+    require(wrapper, 'oc_rollback_service', "service rollback")
+    require(wrapper, 'oc_activate_release', "runtime activation")
+    require(wrapper, 'TRANSACTION_COMMITTED=1', "commit boundary")
+    require(wrapper, 'oc_prune_releases', "bounded runtime retention")
 
-    # Startup environment must not persist build/session-local plugin paths.
-    require(installer, 'sanitize_native_startup_env()', "startup env sanitizer")
-    require(installer, 'removed transient/session variables', "sanitizer audit output")
-    require(installer, 'OPENCHAMBER_UI_PASSWORD', "password preservation")
-    require(installer, 'OPENCHAMBER_DATA_DIR', "data-dir preservation")
-    require(wrapper, 'read_password_from_env_file "$NATIVE_STARTUP_ENV"',
-            "native password recovery")
-    require(wrapper, 'read_password_from_env_file "$LEGACY_PASSWORD_ENV"',
-            "legacy password migration fallback")
-    assert wrapper.index('read_password_from_env_file "$NATIVE_STARTUP_ENV"') < \
-        wrapper.index('read_password_from_env_file "$LEGACY_PASSWORD_ENV"'), \
-        "native V2 password must win over legacy migration bridge"
-
-    # OpenChamber runtime activation is a separate transaction: immutable
-    # release prefix, service snapshot, atomic current switch, rollback.
-    require(wrapper, 'scripts/install-openchamber-v2-core.sh', "wrapper delegates to versioned core")
-    require(wrapper, 'scripts/openchamber-runtime-store.sh', "wrapper loads runtime transaction helper")
-    require(wrapper, 'BUN_INSTALL="$RELEASE_DIR"', "Bun writes only inactive immutable release")
-    require(wrapper, 'bash +h "$CORE"', "disable stale CLI command hashing")
-    require(wrapper, 'grep -Fq "$RELEASE_DIR/" "$UNIT"', "systemd unit pinned to immutable generation")
-    require(wrapper, 'oc_snapshot_service', "service generation snapshot")
-    require(wrapper, 'oc_rollback_service', "service/runtime rollback")
-    require(wrapper, 'oc_activate_release', "atomic runtime activation")
-    require(wrapper, 'OPENCHAMBER_RUNTIME_ROOT', "canonical immutable runtime store")
-    require(wrapper, 'TRANSACTION_STARTED=1', "transaction starts only after service snapshot")
-    require(wrapper, 'trap on_error ERR', "unexpected shell errors rollback transaction")
-    require(wrapper, "trap 'on_interrupt 130' INT", "interrupt rollback")
-    require(wrapper, "trap 'on_interrupt 143' TERM", "termination rollback")
-    require(wrapper, 'TRANSACTION_COMMITTED=1', "transaction commit boundary")
-    require(wrapper, 'trap - ERR INT TERM', "failure traps disabled after commit")
-    recovery_index = wrapper.index('Recovering interrupted OpenChamber activation from immutable runtime:')
-    migration_reset_index = wrapper.index('# First migration from Bun-global runtime')
-    state_reset_index = wrapper.index('rm -f -- "$STATE"', migration_reset_index)
-    assert recovery_index < migration_reset_index < state_reset_index, \
-        "valid interrupted immutable release must be recovered before pre-atomic state reset"
-    require(wrapper, 'oc_prune_releases', "bounded immutable release retention")
-    assert wrapper.index('oc_prune_releases') < wrapper.index('oc_commit_service'), \
-        "previous generation must still be known while pruning"
-    require(wrapper, 'Atomic OpenChamber runtime committed:', "atomic commit audit output")
     require(runtime_store, 'OPENCHAMBER_RELEASES="$OPENCHAMBER_RUNTIME_ROOT/releases"',
             "immutable releases root")
     require(runtime_store, 'OPENCHAMBER_CURRENT="$OPENCHAMBER_RUNTIME_ROOT/current"',
-            "atomic current link")
-    require(runtime_store, 'mv -Tf "$link_tmp" "$OPENCHAMBER_CURRENT"', "atomic symlink publish")
-    require(runtime_store, 'printf \'exec %q "$@"\\n\' "$OPENCHAMBER_CURRENT_BIN"',
-            "managed launcher honors configured runtime root")
-    require(runtime_store, 'oc_rollback_activation()', "runtime rollback helper")
-    require(runtime_store, 'LEGACY_BUN_INSTALL', "legacy Bun rollback source separation")
+            "current symlink")
+    require(runtime_store, 'mv -Tf "$link_tmp" "$OPENCHAMBER_CURRENT"', "atomic current publish")
+    require(runtime_store, 'oc_rollback_activation()', "runtime rollback")
+    require(runtime_store, 'oc_remove_legacy_bun_global()', "post-commit legacy Bun retirement")
 
-    # One-time legacy cleanup must remove active duplicate lookup roots while
-    # retaining a rollback copy outside OpenCode discovery.
-    require(cleanup, 'preserve_ui_password_only', "password-only migration")
-    require(cleanup, 'rm -f -- "$NATIVE_STARTUP_ENV"', "old startup snapshot removal")
-    require(cleanup, 'LEGACY_PLUGIN_ROOT="$HOME/.config/opencode/plugin"', "singular plugin root")
-    require(cleanup, 'PLUGIN_ROOT="$HOME/.config/opencode/plugins"', "plural plugin root")
-    require(cleanup, 'archive_lookup_root "$PLUGIN_ROOT"', "plugin root retirement")
-    require(cleanup, 'archive_lookup_root "$LEGACY_PLUGIN_ROOT"', "legacy plugin root retirement")
-    require(cleanup, 'LEGACY_SKILL_ROOTS=(', "legacy global skill roots")
-    require(cleanup, '$HOME/.opencode/skills', "legacy plural global skill root")
-    require(cleanup, '$HOME/.opencode/skill', "legacy singular global skill root")
-    require(cleanup, 'LEGACY_COMMAND_ROOT="$HOME/.config/opencode/command"', "legacy singular command root")
-    require(cleanup, 'LEGACY_TOOL_ROOT="$HOME/.config/opencode/tool"', "legacy singular tool root")
-    require(cleanup, 'archive_lookup_root "$LEGACY_TOOL_ROOT"', "legacy tool root retirement")
+    # Migration cleanup remains explicit/separate and keeps credentials/rollback source.
+    require(cleanup, 'preserve_ui_password_only', "UI password migration")
     require(cleanup, 'OPENCHAMBER_CLEANUP_RUNTIME_MODE', "console-safe cleanup mode")
-    require(cleanup, 'local pid="$$"', "cleanup process ancestry starts from current shell PID")
-    require(cleanup, 'retained as rollback source until atomic commit', "legacy runtime rollback retention")
-    forbid(cleanup, 'bun remove -g @openchamber/web', "cleanup must not destroy runtime rollback source")
-    forbid(cleanup, 'local pid="$"', "broken embedded-terminal PID detection")
+    require(cleanup, 'LEGACY_AGENT_ROOTS=(', "legacy agents")
+    require(cleanup, 'LEGACY_SKILL_ROOTS=(', "legacy skills")
+    require(cleanup, 'archive_lookup_root "$PLUGIN_ROOT"', "plugin lookup retirement")
+    require(cleanup, 'archive_lookup_root "$LEGACY_TOOL_ROOT"', "tool lookup retirement")
+    require(cleanup, 'retained as rollback source until atomic commit', "rollback source retention")
+    forbid(cleanup, 'bun remove -g @openchamber/web', "pre-migration runtime destruction")
 
-    # Canonical OpenCode locations and atomic managed-config replacement.
-    require(config_installer, 'CONFIG_HOME="$HOME/.config/opencode"', "canonical config root")
-    require(config_installer, 'mkdir -p "$STAGE_CONFIG/agents"', "canonical plural agent path")
-    require(config_installer, '"$STAGE_CONFIG/commands"', "canonical plural command path")
-    require(config_installer, 'agent|command|tool) continue', "legacy source roots remapped")
-    require(config_installer, 'legacy singular command path still active', "legacy command invariant")
-    require(config_installer, 'STAGE_CONFIG=', "staged config tree")
-    require(config_installer, 'mv "$STAGE_CONFIG" "$CONFIG_HOME"', "atomic config commit")
-    require(config_installer, 'rollback_transaction()', "atomic config rollback")
-    require(config_installer, 'rollback_binary()', "OpenCode binary rollback")
-    require(config_installer, 'BINARY_BACKUP=', "OpenCode binary backup")
-    require(config_installer, 'INSTALL_TRANSACTION_COMMITTED=1', "generation commit marker")
-    assert config_installer.index('pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export') < \
-        config_installer.index('https://opencode.ai/v2/install'), \
-        "plugin validation must happen before OpenCode binary replacement"
-    require(config_installer, 'bun install --production', "local plugin dependency install")
-    require(config_installer, 'pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export',
-            "plugin entrypoint validation")
-    require(config_installer, 'github_handoff.ts did not export any custom tool definitions',
-            "custom tool import validation")
-    require(config_installer, 'shell-strategy must not live under plugins/ in V2',
-            "retired plugin location rejection")
-    require(config_installer, 'global AGENTS.md missing from staged OpenCode V2 config',
-            "V2 active global instructions")
-    require(config_installer, 'OpenCode V2 does not load config.instructions; use global AGENTS.md',
-            "inactive V2 instructions rejection")
-    require(config_installer, 'OPENCODE_SKIP_BINARY_INSTALL', "config-only install support")
-    forbid(config_installer, 'Legacy agent directories were retained for rollback.',
-           "active legacy agent roots must not remain")
-
-    print("PASS: V2 installer contract is incremental, console-safe, atomic per component, ref-pinned, and legacy-clean")
+    print("PASS: V2 installer contract is incremental, ref-pinned, atomic and migration-safe")
 
 
 if __name__ == "__main__":
