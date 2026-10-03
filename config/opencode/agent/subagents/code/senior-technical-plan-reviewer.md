@@ -43,6 +43,14 @@ For runtime scope, read the exact architecture clarification plus frozen decisio
 
 Use `status: "blocked"` or set the relevant boolean true when any boundary is crossed. The reviewer must not turn a new decision into a technical clarification. This JSON is consumed by deterministic `stage-cli scope-extend`; prose cannot substitute it.
 
+## Owner amendment review mode
+
+Review explicit owner feedback independently after ArchitectureAnalyzer classifies it as bounded. Local requirements/acceptance changes are allowed and do not by themselves require full replan. New runtime work items and paths are also allowed; do not require them to exist in the frozen PLAN.
+
+The machine evidence consumed by `owner-amend-apply` must use `kind: "owner_amendment"`, `status: "ready"`, `bounded: true`, identify `target_stage`, exact `paths`, and hashed `work_items`. Set `business_intent_changed`, `external_contract_changed`, `security_boundary_changed`, and `destructive_change` explicitly. Any of those true requires full replan. `requirements_changed` and `acceptance_criteria_changed` may be true.
+
+Do not approve an amendment merely because the owner requested it: verify that its implementation impact is bounded and that it does not hide a structural decision. The original manifest remains immutable.
+
 ## Runtime replan review mode
 
 Run fresh after ArchitectureAnalyzer has produced a block-local runtime-replan architecture revision. Read the exhausted-cycle evidence and frozen PLAN boundaries. The review must not approve implementation itself; it prepares a proposal for the owner.
@@ -67,7 +75,7 @@ Write the supplied versioned `.tmp/pipelines/{run-id}/runtime-replan-<pipeline>-
 
 Use `status: "needs_owner_clarification"` and non-empty `owner_questions` when the owner must clarify or choose something before approval. After the owner answers, OpenStage reruns ArchitectureAnalyzer and this reviewer fresh and writes a new revision; do not overwrite the previous review.
 
-If requirements, acceptance criteria, external contracts, security boundaries or destructive behavior change, set the corresponding boolean true. Deterministic `stage-cli runtime-replan-propose` will reject it with `FULL_REPLAN_REQUIRED`.
+If ordinary runtime replan changes frozen requirements/acceptance criteria, route explicit owner feedback through owner-amendment review instead. External-contract, security-boundary, destructive/migration, business-intent or other structural PLAN changes require full replan.
 
 Even when status is `ready_for_owner_approval`, implementation must stop. Only the owner's explicit approval can later invoke `runtime-replan-approve --cycles N`.
 
