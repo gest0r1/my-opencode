@@ -2,9 +2,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-const [configFile, agentsDir] = process.argv.slice(2)
+const [configFile, agentsDir, managedSourceRoot] = process.argv.slice(2)
 if (!configFile || !agentsDir) {
-  console.error('Usage: normalize-opencode-agent-permissions.mjs OPENCODE_JSON AGENTS_DIR')
+  console.error('Usage: normalize-opencode-agent-permissions.mjs OPENCODE_JSON AGENTS_DIR [MANAGED_SOURCE_ROOT]')
   process.exit(2)
 }
 
@@ -42,6 +42,23 @@ const aliases = new Map(Object.entries({
   'senior-technical-plan-reviewer': 'SeniorTechnicalPlanReviewer',
 }))
 
+const builtinSubagents = new Set(['explore', 'general'])
+
+function walkMarkdown(root) {
+  if (!root || !fs.existsSync(root)) return []
+  const out = []
+  const stack = [root]
+  while (stack.length) {
+    const current = stack.pop()
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name)
+      if (entry.isDirectory()) stack.push(full)
+      else if (entry.isFile() && entry.name.endsWith('.md')) out.push(full)
+    }
+  }
+  return out.sort()
+}
+
 function frontmatterLines(text) {
   const lines = text.split(/\r?\n/)
   if (lines[0] !== '---') return { lines, end: -1 }
@@ -49,14 +66,28 @@ function frontmatterLines(text) {
   return { lines, end }
 }
 
+function frontmatterValue(lines, end, key) {
+  for (let i = 1; i < end; i++) {
+    const match = new RegExp(`^${key}:\\s*(.+?)\\s*$`).exec(lines[i])
+    if (!match) continue
+    let value = match[1].replace(/\s+#.*$/, '').trim()
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) value = value.slice(1, -1)
+    return value
+  }
+  return undefined
+}
+
 function readAgent(file) {
   const text = fs.readFileSync(file, 'utf8')
   const { lines, end } = frontmatterLines(text)
   if (end < 0) throw new Error(`Agent has no closed frontmatter: ${file}`)
-  const head = lines.slice(1, end)
-  const mode = head.map((line) => /^mode:\s*(\S+)\s*$/.exec(line)?.[1]).find(Boolean)
-  const hasPermission = head.some((line) => /^permission:\s*$/.test(line))
-  return { text, lines, end, mode, hasPermission }
+  const mode = frontmatterValue(lines, end, 'mode')
+  const name = frontmatterValue(lines, end, 'name')
+  const hasPermission = lines.slice(1, end).some((line) => /^permission:\s*$/.test(line))
+  return { text, lines, end, mode, name, hasPermission, file }
 }
 
 const files = fs.readdirSync(agentsDir)
@@ -68,87 +99,141 @@ for (const name of files) {
   const id = name.slice(0, -3)
   const file = path.join(agentsDir, name)
   const info = readAgent(file)
-  if (catalog.has(id)) throw new Error(`Duplicate managed agent ID: ${id}`)
-  catalog.set(id, { id, file, ...info })
+  if (catalog.has(id)) throw new Error(`Duplicate agent ID: ${id}`)
+  catalog.set(id, { id, ...info })
 }
 
-function parseTaskEntry(line) {
-  const match = /^(\s{4,})(?:"([^"]+)"|'([^']+)'|([^:#]+)):\s*(allow|deny|ask)(\s*(?:#.*)?)$/.exec(line)
+const managedIDs = new Set()
+if (managedSourceRoot) {
+  for (const file of walkMarkdown(managedSourceRoot)) {
+    const info = readAgent(file)
+    if (!info.name) throw new Error(`Managed agent has no frontmatter name: ${file}`)
+    if (managedIDs.has(info.name)) throw new Error(`Duplicate managed agent name: ${info.name}`)
+    managedIDs.add(info.name)
+  }
+} else {
+  for (const id of catalog.keys()) managedIDs.add(id)
+}
+
+for (const id of managedIDs) {
+  if (!catalog.has(id)) throw new Error(`Managed agent missing from staged target: ${id}`)
+}
+
+function parsePermissionEntry(line) {
+  const match = /^(\s{4,})(?:"([^"]+)"|'([^']+)'|([^:#]+)):\s*(?:"(allow|deny|ask)"|'(allow|deny|ask)'|(allow|deny|ask))(\s*(?:#.*)?)$/.exec(line)
   if (!match) return undefined
   return {
     indent: match[1],
     resource: (match[2] ?? match[3] ?? match[4]).trim(),
-    effect: match[5],
-    suffix: match[6] ?? '',
+    effect: match[5] ?? match[6] ?? match[7],
+    suffix: match[8] ?? '',
   }
 }
 
-function renderTaskEntry(entry) {
-  const key = entry.resource === '*' ? '"*"' : entry.resource
-  return `${entry.indent}${key}: ${entry.effect}${entry.suffix}`
+function renderPermissionEntry(entry) {
+  const safeKey = /^[A-Za-z0-9_.\/$?-]+$/.test(entry.resource) && entry.resource !== '*'
+    ? entry.resource
+    : JSON.stringify(entry.resource)
+  return `${entry.indent}${safeKey}: ${entry.effect}${entry.suffix}`
 }
 
-function normalizeTaskBlock(info) {
+function permissionRange(info) {
+  const start = info.lines.findIndex((line, index) => index > 0 && index < info.end && /^permission:\s*$/.test(line))
+  if (start < 0) return undefined
+  let end = info.end
+  for (let i = start + 1; i < info.end; i++) {
+    if (/^[^ \t#][^:]*:\s*/.test(info.lines[i])) {
+      end = i
+      break
+    }
+  }
+  return { start, end }
+}
+
+function normalizePermissionBlocks(info) {
   const source = [...info.lines]
+  const range = permissionRange(info)
+  if (!range) return false
+
   const out = []
   let changed = false
 
   for (let index = 0; index < source.length;) {
     const line = source[index]
-    if (index > 0 && index < info.end && /^  task:\s*$/.test(line)) {
+    const actionMatch =
+      index > range.start &&
+      index < range.end &&
+      /^  ([^:#]+):\s*$/.exec(line)
+
+    if (!actionMatch) {
       out.push(line)
-      let end = index + 1
-      while (end < info.end && !/^  \S/.test(source[end])) end++
+      index++
+      continue
+    }
 
-      const block = source.slice(index + 1, end)
-      const normalized = []
-      const seen = new Set()
-      for (const rawLine of block) {
-        const entry = parseTaskEntry(rawLine)
-        if (!entry) {
-          normalized.push(rawLine)
-          continue
-        }
+    const action = actionMatch[1].trim()
+    out.push(line)
+    let end = index + 1
+    while (end < range.end && !/^  \S/.test(source[end])) end++
 
-        const original = entry.resource
-        entry.resource = aliases.get(entry.resource) ?? entry.resource
-        if (entry.effect === 'allow' && catalog.get(entry.resource)?.mode === 'primary') {
+    const block = source.slice(index + 1, end)
+    const normalized = []
+    const seen = new Map()
+
+    for (const rawLine of block) {
+      const entry = parsePermissionEntry(rawLine)
+      if (!entry) {
+        normalized.push(rawLine)
+        continue
+      }
+
+      const original = entry.resource
+      if (action === 'task') entry.resource = aliases.get(entry.resource) ?? entry.resource
+
+      if (action === 'task' && entry.effect === 'allow') {
+        const target = catalog.get(entry.resource)
+        if (target?.mode === 'primary') {
           console.log(`Removed invalid subagent allow: ${path.basename(info.file)} -> ${entry.resource} (primary)`)
           changed = true
           continue
         }
-
-        const key = `${entry.resource}\0${entry.effect}`
-        if (seen.has(key)) {
-          changed = true
-          continue
-        }
-        seen.add(key)
-        if (entry.resource !== original) {
-          console.log(`Normalized subagent alias: ${path.basename(info.file)} ${original} -> ${entry.resource}`)
-          changed = true
-        }
-        normalized.push(renderTaskEntry(entry))
       }
 
-      // OpenCode 2.0.21 permission evaluation is last-match-wins. Catch-all
-      // task rules therefore must precede specific allows/denies, otherwise a
-      // trailing "*": deny silently revokes every allow above it.
-      const firstEntry = normalized.findIndex((candidate) => parseTaskEntry(candidate))
-      const wildcardIndex = normalized.findIndex((candidate) => parseTaskEntry(candidate)?.resource === '*')
-      if (firstEntry >= 0 && wildcardIndex > firstEntry) {
-        const [wildcard] = normalized.splice(wildcardIndex, 1)
-        normalized.splice(firstEntry, 0, wildcard)
+      const previous = seen.get(entry.resource)
+      if (previous) {
+        if (previous.effect !== entry.effect) {
+          throw new Error(
+            `${path.basename(info.file)} permission.${action} has conflicting duplicate resource '${entry.resource}': ${previous.effect} vs ${entry.effect}`,
+          )
+        }
+        changed = true
+        continue
+      }
+      seen.set(entry.resource, entry)
+
+      if (entry.resource !== original) {
+        console.log(`Normalized subagent alias: ${path.basename(info.file)} ${original} -> ${entry.resource}`)
         changed = true
       }
-
-      out.push(...normalized)
-      index = end
-      continue
+      normalized.push(renderPermissionEntry(entry))
     }
 
-    out.push(line)
-    index++
+    // OpenCode 2.0.21 permission evaluation is last-match-wins. A catch-all
+    // must precede specific rules so those specific rules can override it.
+    const entryIndexes = normalized
+      .map((candidate, i) => (parsePermissionEntry(candidate) ? i : -1))
+      .filter((i) => i >= 0)
+    const firstEntry = entryIndexes[0]
+    const wildcardIndex = normalized.findIndex((candidate) => parsePermissionEntry(candidate)?.resource === '*')
+    if (firstEntry !== undefined && wildcardIndex > firstEntry) {
+      const [wildcard] = normalized.splice(wildcardIndex, 1)
+      normalized.splice(firstEntry, 0, wildcard)
+      console.log(`Moved permission catch-all before specifics: ${path.basename(info.file)} permission.${action}`)
+      changed = true
+    }
+
+    out.push(...normalized)
+    index = end
   }
 
   if (changed) fs.writeFileSync(info.file, `${out.join('\n').replace(/\n+$/, '')}\n`)
@@ -156,8 +241,12 @@ function normalizeTaskBlock(info) {
 }
 
 let markdownChanges = 0
-for (const info of catalog.values()) {
-  if (normalizeTaskBlock(info)) markdownChanges++
+for (const id of managedIDs) {
+  const info = catalog.get(id)
+  if (normalizePermissionBlocks(info)) {
+    markdownChanges++
+    catalog.set(id, { id, ...readAgent(info.file) })
+  }
 }
 
 function normalizeConfigPermissions(id, permissions) {
@@ -167,23 +256,30 @@ function normalizeConfigPermissions(id, permissions) {
 
   let changed = false
   const subagent = []
-  const seen = new Set()
+  const seen = new Map()
   for (const rule of permissions.filter((candidate) => candidate?.action === 'subagent')) {
     const next = { ...rule }
     const original = next.resource
     next.resource = aliases.get(next.resource) ?? next.resource
     if (next.resource !== original) changed = true
+
     if (next.effect === 'allow' && catalog.get(next.resource)?.mode === 'primary') {
       console.log(`Removed invalid config subagent allow: ${id} -> ${next.resource} (primary)`)
       changed = true
       continue
     }
-    const key = `${next.action}\0${next.resource}\0${next.effect}`
-    if (seen.has(key)) {
+
+    const previous = seen.get(next.resource)
+    if (previous) {
+      if (previous.effect !== next.effect) {
+        throw new Error(
+          `opencode.json agent ${id} has conflicting subagent rules for '${next.resource}': ${previous.effect} vs ${next.effect}`,
+        )
+      }
       changed = true
       continue
     }
-    seen.add(key)
+    seen.set(next.resource, next)
     subagent.push(next)
   }
 
@@ -199,7 +295,8 @@ function normalizeConfigPermissions(id, permissions) {
 
 const config = JSON.parse(fs.readFileSync(configFile, 'utf8'))
 let configChanges = 0
-for (const [id, info] of catalog) {
+for (const id of managedIDs) {
+  const info = catalog.get(id)
   const entry = config.agents?.[id]
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
 
@@ -208,9 +305,8 @@ for (const [id, info] of catalog) {
     configChanges++
   }
 
-  // Agent Markdown owns its permission policy when it declares permission:.
-  // Keeping a second normalized ruleset in opencode.json caused stale aliases,
-  // default-primary agents during activation, and last-match shadowing.
+  // Markdown owns permissions when it declares permission:. Avoid a second,
+  // stale ruleset in opencode.json for the same managed agent.
   if (info.hasPermission && Object.hasOwn(entry, 'permissions')) {
     delete entry.permissions
     configChanges++
@@ -227,4 +323,58 @@ for (const [id, info] of catalog) {
 }
 
 if (configChanges) fs.writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`)
-console.log(`Agent permission normalization complete: agents=${catalog.size} markdown_changed=${markdownChanges} config_changes=${configChanges}`)
+
+// Fail closed on unresolved exact delegation mistakes in managed Markdown.
+const errors = []
+for (const id of managedIDs) {
+  const info = catalog.get(id)
+  const range = permissionRange(info)
+  if (!range) continue
+
+  for (let index = range.start + 1; index < range.end;) {
+    const actionMatch = /^  ([^:#]+):\s*$/.exec(info.lines[index])
+    if (!actionMatch) {
+      index++
+      continue
+    }
+    const action = actionMatch[1].trim()
+    let end = index + 1
+    while (end < range.end && !/^  \S/.test(info.lines[end])) end++
+
+    const entries = info.lines.slice(index + 1, end)
+      .map(parsePermissionEntry)
+      .filter(Boolean)
+
+    const wildcardIndex = entries.findIndex((entry) => entry.resource === '*')
+    if (wildcardIndex > 0) {
+      errors.push(`${id}: permission.${action} catch-all appears after specific rules`)
+    }
+
+    if (action === 'task') {
+      for (const entry of entries) {
+        if (entry.effect !== 'allow' || entry.resource === '*' || /[*?]/.test(entry.resource)) continue
+        if (aliases.has(entry.resource)) {
+          errors.push(`${id}: legacy subagent alias remains: ${entry.resource}`)
+          continue
+        }
+        const target = catalog.get(entry.resource)
+        if (target) {
+          if (target.mode === 'primary') errors.push(`${id}: delegates to primary agent ${entry.resource}`)
+          continue
+        }
+        if (!builtinSubagents.has(entry.resource)) {
+          errors.push(`${id}: delegates to unknown exact agent ${entry.resource}`)
+        }
+      }
+    }
+    index = end
+  }
+}
+
+if (errors.length) {
+  throw new Error(`Managed agent permission audit failed:\n- ${errors.join('\n- ')}`)
+}
+
+console.log(
+  `Agent permission normalization complete: agents=${catalog.size} managed=${managedIDs.size} markdown_changed=${markdownChanges} config_changes=${configChanges}`,
+)
