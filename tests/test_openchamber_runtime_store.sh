@@ -7,7 +7,9 @@ trap 'rm -rf "$TMP"' EXIT
 
 export HOME="$TMP/home"
 export EXPECTED_OPENCHAMBER_VERSION='2.1.0'
-export OPENCHAMBER_RUNTIME_ROOT="$HOME/.local/share/openchamber-v2"
+# Deliberately use a non-default root so the managed launcher cannot silently
+# hard-code ~/.local/share/openchamber-v2.
+export OPENCHAMBER_RUNTIME_ROOT="$HOME/custom/openchamber-runtime"
 export BUN_INSTALL="$HOME/.bun"
 export LEGACY_BUN_INSTALL="$HOME/.bun"
 export SYSTEMCTL_LOG="$TMP/systemctl.log"
@@ -48,6 +50,7 @@ r2="$(make_release release-two)"
 oc_activate_release "$r1"
 test "$(readlink -f "$OPENCHAMBER_CURRENT")" = "$r1"
 test "$("$OPENCHAMBER_MANAGED_BIN" --version)" = 'OpenChamber 2.1.0'
+grep -Fq "$OPENCHAMBER_CURRENT_BIN" "$OPENCHAMBER_MANAGED_BIN"
 oc_commit_activation
 
 oc_activate_release "$r2"
