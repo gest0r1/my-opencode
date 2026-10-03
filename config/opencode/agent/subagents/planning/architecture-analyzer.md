@@ -1,6 +1,6 @@
 ---
 name: ArchitectureAnalyzer
-description: Analyzes architecture boundaries during PLAN, runtime-scope clarification, and block-local runtime replanning.
+description: Analyzes architecture boundaries during PLAN, runtime scope/replanning, and bounded owner amendments.
 mode: subagent
 model: openai/gpt-6.1-sol
 reasoningEffort: low
@@ -43,7 +43,15 @@ Write a new versioned architecture artifact under `.tmp/pipelines/{run-id}/plann
 - owner questions, if a decision/clarification is needed before the local plan can be finalized;
 - booleans for `requirements_changed`, `acceptance_criteria_changed`, `external_contract_changed`, `security_boundary_changed`, `destructive_change`.
 
-If any of those five booleans is true, return blocked and require full replan. Otherwise return `ready` when the technical proposal is complete enough for senior review, even though final owner approval is still mandatory later.
+For ordinary runtime replan, keep frozen requirements/AC unchanged. For explicit owner feedback, use Owner amendment mode below instead of treating a local requirements/AC change as an automatic full replan. Otherwise return `ready` when the technical proposal is complete enough for senior review.
+
+## Owner amendment mode
+
+Run after explicit owner acceptance feedback asks for a bounded clarification/change during the current RUN. The amendment may change local requirements or acceptance criteria and may add new runtime work items or source paths; it does NOT have to map to an existing frozen work item.
+
+Classify the impact, not whether AC text changed. Return bounded/ready when `business_intent_changed=false`, `external_contract_changed=false`, `security_boundary_changed=false`, and `destructive_change=false`. `requirements_changed` and `acceptance_criteria_changed` may be true for an owner amendment.
+
+Require full replan only for changed business intent, external contract, security/trust boundary, destructive/migration semantics, or another structural PLAN-level decision. Produce exact affected paths, target implementation stage, and the minimum runtime work items needed. The frozen manifest is never rewritten; amendment evidence is append-only.
 
 ## Inputs
 
