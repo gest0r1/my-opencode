@@ -20,9 +20,10 @@ Branches: `my-opencode:upgrade/opencode-v2`; `openchamber-ru:upgrade/openchamber
 
 - Changed: live capability preflight checks tools, exact worker IDs, skills and delegation permissions; no permission fallback. Handoff tools register through native V2 Plugin API; legacy dependency removed. Managed-source fingerprint plus installed-file receipt protects no-op decisions for standalone and OpenChamber installation.
 - Checks: native V2 plugin/tool registration and missing-delegation negative check; local regression suite; binary-only, no-op, config-only, immutable-runtime and installer checks. Exact repeat installation is additionally tested by real V2 live smoke.
-- Commit: `9de9352c5ff724e5a71f80a2b14f1f4b87b1110b`; final prompt correction is the commit containing this updated checklist.
+- Commit: `9de9352c5ff724e5a71f80a2b14f1f4b87b1110b`; final prompt correction is included in code SHA `cff7f28e74b3834a771fa7d9cebb8e539a6c1bfb`.
 - Final correction: agent examples now use `subagent(agent=...)`; StageOrchestrator no longer recommends invalid metadata aliases or a primary-agent target. Added regression check over all installed agent prompts.
-- Checks: 197 local tests before prompt correction; installer CI, Pipeline CI and real V2 smoke (including identical no-op installation) passed for `9de9352`. Final prompt regression and all 38 agents’ source normalization passed locally; CI runs for the correction commit.
+- Checks: 198 local tests pass. All 38 agents normalize with `markdown_changed=0 / config_changes=0`. Pipeline CI and real V2 live smoke, including identical no-op installation, pass for final code SHA `cff7f28e74b3834a771fa7d9cebb8e539a6c1bfb`. Installer CI passed for `9de9352` (installer code unchanged by the final prompt correction).
+- CI evidence: [Pipeline contracts](https://github.com/gest0r1/my-opencode/actions/runs/37117271639), [V2 live smoke + no-op](https://github.com/gest0r1/my-opencode/actions/runs/37117271642), [Installer contract](https://github.com/gest0r1/my-opencode/actions/runs/37117012636).
 - Remaining functional changes: none. Real model-driven worker turns and user-host upgrade are not performed by these registration/permission smoke tests.
 
 ## Installation
