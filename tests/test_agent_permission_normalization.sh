@@ -43,8 +43,13 @@ permission:
   edit:
     "safe/**": "allow"
     "*": "deny"
+  read:
+    ".opencode/skills/context7/**": allow
+    "*": deny
   bash:
     "echo ok": allow
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "*": deny
 ---
 Coder
@@ -86,6 +91,9 @@ permission:
   task:
     contextscout: "allow"
     "*": "deny"
+  bash:
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "*": deny
 ---
 User-owned agent: must not be rewritten by managed normalization.
 EOF
@@ -110,19 +118,30 @@ NODE
 grep -Fq 'ContextScout: allow' "$tmp/agents/CoderAgent.md"
 ! grep -Fq 'contextscout:' "$tmp/agents/CoderAgent.md"
 ! grep -Fq 'build: "allow"' "$tmp/agents/CoderAgent.md"
-count=$(grep -Fc 'ContextScout: allow' "$tmp/agents/CoderAgent.md")
-test "$count" -eq 1
+test "$(grep -Fc 'ContextScout: allow' "$tmp/agents/CoderAgent.md")" -eq 1
+
+# Trusted managed skills and CLIs always resolve from installer-owned global
+# config, never from the current repository or a build user's fixed home.
+grep -Fq '"$HOME/.config/opencode/skills/context7/**": allow' "$tmp/agents/CoderAgent.md"
+grep -Fq '"npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow' "$tmp/agents/CoderAgent.md"
+test "$(grep -Fc 'stage-cli.ts*": allow' "$tmp/agents/CoderAgent.md")" -eq 1
+! grep -Fq '/root/.config/opencode/skills/' "$tmp/agents/CoderAgent.md"
+! grep -Fq '.opencode/skills/' "$tmp/agents/CoderAgent.md"
 
 mapfile -t wildcard_lines < <(grep -n '"\*": deny' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
-test "${#wildcard_lines[@]}" -eq 3
+test "${#wildcard_lines[@]}" -eq 4
 
 task_allow=$(grep -nF 'ContextScout: allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
 test "${wildcard_lines[0]}" -lt "$task_allow"
 edit_allow=$(grep -nF '"safe/**": allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
 test "${wildcard_lines[1]}" -lt "$edit_allow"
+read_allow=$(grep -nF '"$HOME/.config/opencode/skills/context7/**": allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+test "${wildcard_lines[2]}" -lt "$read_allow"
 bash_allow=$(grep -nF '"echo ok": allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
-test "${wildcard_lines[2]}" -lt "$bash_allow"
+test "${wildcard_lines[3]}" -lt "$bash_allow"
 
+# Managed-only normalization must not rewrite user-owned agents.
 grep -Fq 'contextscout: "allow"' "$tmp/agents/UserCustom.md"
+grep -Fq '/root/.config/opencode/skills/task-management/scripts/stage-cli.ts*' "$tmp/agents/UserCustom.md"
 
-printf 'PASS: quoted/unquoted effects, all action catch-alls, managed ownership, aliases and primary targets normalized\n'
+printf 'PASS: effects, catch-all precedence, managed ownership, delegation aliases and trusted skill paths normalized\n'
