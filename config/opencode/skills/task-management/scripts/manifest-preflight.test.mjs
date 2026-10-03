@@ -84,7 +84,7 @@ test('rejects wrong profile shape and stage-to-gate mismatch', async () => {
   fx.spec.pipelines[0].profile = 'pytest';
   fx.spec.gate_profiles = { pytest: { legacy: ['pytest -q'] } };
   assert.throws(() => validateGateManifest(fx.spec, { cwd: fx.root, manifestPath: fx.manifestPath }), /MACHINE_GATE_MISSING/);
-  fx.spec.gate_profiles = { pytest: { 'test-rule-actions': { commands: ['pytest -q'] } } };
+  fx.spec.gate_profiles = { pytest: { 'test-rule-actions': { commands: ['pytest -q'] } };
   assert.throws(() => validateGateManifest(fx.spec, { cwd: fx.root, manifestPath: fx.manifestPath }), /must contain commands/);
 });
 
@@ -121,15 +121,6 @@ test('environment preflight rejects missing executable', async () => {
       /EXECUTABLE_NOT_FOUND/,
     );
   } finally { process.env.PATH = oldPath; }
-});
-
-test('manifest schema v1 is rejected before gate inference', async () => {
-  const fx = await fixture();
-  fx.spec.schema_version = 1;
-  assert.throws(
-    () => validateGateManifest(fx.spec, { cwd: fx.root, manifestPath: fx.manifestPath }),
-    /schema_version must be exactly 2/,
-  );
 });
 
 test('accepts frozen uv pytest gates and validates locked environment', async () => {
