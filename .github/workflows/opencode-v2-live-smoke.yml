@@ -137,6 +137,7 @@ jobs:
             }
             return 'ask';
           };
+          const sampleFromPattern = (pattern) => pattern.replace(/\*\*/g, 'fixture/path').replace(/\*/g, 'fixture').replace(/\?/g, 'x');
 
           const errors = [];
           const legacyActions = new Set(['task', 'bash', 'write', 'patch']);
@@ -158,6 +159,15 @@ jobs:
                 }
               }
 
+              if (rule.effect === 'allow') {
+                if (rule.resource.includes('/root/.config/opencode/skills/')) {
+                  errors.push(`${id}: permission still trusts root-specific managed skill path '${rule.resource}'`);
+                }
+                if (/(^|\s)\.opencode\/skills\/(task-management|context7)\//.test(rule.resource)) {
+                  errors.push(`${id}: permission still trusts repository-local managed skill path '${rule.resource}'`);
+                }
+              }
+
               if (rule.action !== 'subagent' || rule.effect !== 'allow') continue;
               if (rule.resource === '*' || /[*?]/.test(rule.resource)) continue;
               const target = byID.get(rule.resource);
@@ -171,25 +181,127 @@ jobs:
             }
           }
 
-          const orchestrator = byID.get('OpenStageOrchestrator');
-          if (!orchestrator) errors.push('OpenStageOrchestrator missing');
-          else {
-            const rules = orchestrator.permissions ?? [];
-            if (evaluate(rules, 'edit', 'packages/example.ts') !== 'deny') {
-              errors.push('OpenStageOrchestrator broad edit unexpectedly allowed');
+          const expectEffect = (id, action, resource, expected, label = `${action} ${resource}`) => {
+            const agent = byID.get(id);
+            if (!agent) {
+              errors.push(`${id}: missing while checking ${label}`);
+              return;
             }
-            if (evaluate(rules, 'edit', '.tmp/pipelines/example.md') !== 'allow') {
-              errors.push('OpenStageOrchestrator pipeline scratch edit not allowed');
+            const actual = evaluate(agent.permissions ?? [], action, resource);
+            if (actual !== expected) errors.push(`${id}: ${label} expected=${expected} actual=${actual}`);
+          };
+          const expectCanonicalAllow = (id, action, contains, label) => {
+            const agent = byID.get(id);
+            if (!agent) {
+              errors.push(`${id}: missing while checking ${label}`);
+              return;
             }
-            for (const target of ['ContextScout', 'CoderAgent', 'CodeReviewer', 'TestEngineer']) {
-              if (evaluate(rules, 'subagent', target) !== 'allow') {
-                errors.push(`OpenStageOrchestrator cannot delegate to ${target}`);
-              }
+            const rule = (agent.permissions ?? []).find((candidate) =>
+              candidate.action === action && candidate.effect === 'allow' && candidate.resource.includes(contains));
+            if (!rule) {
+              errors.push(`${id}: no canonical allow found for ${label}`);
+              return;
             }
-            if (evaluate(rules, 'subagent', 'build') !== 'deny') {
-              errors.push('OpenStageOrchestrator unexpectedly allowed to delegate to primary build');
+            if (!rule.resource.includes('.config/opencode/skills/')) {
+              errors.push(`${id}: ${label} is not under global config: ${rule.resource}`);
             }
+            if (rule.resource.includes('/root/.config/opencode/skills/') || /(^|\s)\.opencode\/skills\//.test(rule.resource)) {
+              errors.push(`${id}: ${label} uses unsafe path: ${rule.resource}`);
+            }
+            const sample = sampleFromPattern(rule.resource);
+            const actual = evaluate(agent.permissions ?? [], action, sample);
+            if (actual !== 'allow') errors.push(`${id}: ${label} canonical rule is ineffective for '${sample}': ${actual}`);
+          };
+
+          // Orchestrator: scratch-only edits, exact worker delegation and only
+          // installer-owned pipeline CLI execution.
+          expectEffect('OpenStageOrchestrator', 'edit', 'packages/example.ts', 'deny', 'broad edit');
+          expectEffect('OpenStageOrchestrator', 'edit', '.tmp/pipelines/example.md', 'allow', 'pipeline scratch edit');
+          for (const target of ['ContextScout', 'CoderAgent', 'CodeReviewer', 'TestEngineer']) {
+            expectEffect('OpenStageOrchestrator', 'subagent', target, 'allow', `delegate ${target}`);
           }
+          expectEffect('OpenStageOrchestrator', 'subagent', 'build', 'deny', 'delegate primary build');
+          expectCanonicalAllow('OpenStageOrchestrator', 'shell', 'task-management/scripts/stage-cli.ts', 'stage-cli');
+          expectEffect(
+            'OpenStageOrchestrator',
+            'shell',
+            'npx tsx .opencode/skills/task-management/scripts/stage-cli.ts validate fixture',
+            'deny',
+            'repository-local stage-cli',
+          );
+          expectEffect(
+            'OpenStageOrchestrator',
+            'shell',
+            'npx tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts validate fixture',
+            'deny',
+            'root-specific stage-cli',
+          );
+
+          // Implementation worker: source edits are allowed, secrets/git are not,
+          // delegation is discovery-only, arbitrary shell stays closed.
+          expectEffect('CoderAgent', 'edit', 'src/example.ts', 'allow');
+          expectEffect('CoderAgent', 'edit', '.env', 'deny');
+          expectEffect('CoderAgent', 'edit', '.git/config', 'deny');
+          expectEffect('CoderAgent', 'subagent', 'ContextScout', 'allow');
+          expectEffect('CoderAgent', 'subagent', 'ExternalScout', 'allow');
+          expectEffect('CoderAgent', 'subagent', 'TestEngineer', 'deny');
+          expectEffect('CoderAgent', 'shell', 'npm test', 'deny');
+          expectCanonicalAllow('CoderAgent', 'shell', 'task-management/router.sh', 'task router');
+
+          // Build worker is diagnostic only: build/typecheck yes, package mutation
+          // and arbitrary pnpm exec no, source edits never.
+          expectEffect('BuildAgent', 'shell', 'pnpm run build', 'allow');
+          expectEffect('BuildAgent', 'shell', 'pnpm run typecheck', 'allow');
+          expectEffect('BuildAgent', 'shell', 'pnpm install', 'deny');
+          expectEffect('BuildAgent', 'shell', 'pnpm publish', 'deny');
+          expectEffect('BuildAgent', 'shell', 'pnpm exec sh', 'deny');
+          expectEffect('BuildAgent', 'edit', 'src/example.ts', 'deny');
+
+          // Reviewer may emit evidence only to pipeline scratch and cannot run
+          // shell or edit source.
+          expectEffect('CodeReviewer', 'shell', 'npm test', 'deny');
+          expectEffect('CodeReviewer', 'edit', 'src/example.ts', 'deny');
+          expectEffect('CodeReviewer', 'edit', '.tmp/pipelines/review.json', 'allow');
+
+          // Local discovery is strictly read-only and cannot reach the network.
+          expectEffect('ContextScout', 'read', 'src/example.ts', 'allow');
+          expectEffect('ContextScout', 'edit', 'src/example.ts', 'deny');
+          expectEffect('ContextScout', 'shell', 'ls', 'deny');
+          expectEffect('ContextScout', 'subagent', 'CoderAgent', 'deny');
+          expectEffect('ContextScout', 'webfetch', 'https://example.com', 'deny');
+
+          // External docs scout can persist bounded evidence and read only the
+          // trusted global Context7 skill, never a repository-controlled copy.
+          expectEffect('ExternalScout', 'webfetch', 'https://example.com', 'allow');
+          expectEffect('ExternalScout', 'shell', 'curl https://example.com', 'deny');
+          expectEffect('ExternalScout', 'subagent', 'ContextScout', 'deny');
+          expectEffect('ExternalScout', 'edit', '.tmp/external-context/evidence.md', 'allow');
+          expectCanonicalAllow('ExternalScout', 'read', 'skills/context7/', 'Context7 read');
+          expectCanonicalAllow('ExternalScout', 'external_directory', 'skills/context7/', 'Context7 external directory');
+          expectEffect('ExternalScout', 'read', '.opencode/skills/context7/README.md', 'deny', 'repository-local Context7 read');
+
+          // Internet researcher is intentionally stateless with respect to the
+          // repository: no local reads/writes/shell/delegation.
+          expectEffect('WebResearcher', 'webfetch', 'https://example.com', 'allow');
+          expectEffect('WebResearcher', 'read', 'README.md', 'deny');
+          expectEffect('WebResearcher', 'edit', '.tmp/research.md', 'deny');
+          expectEffect('WebResearcher', 'shell', 'echo test', 'deny');
+          expectEffect('WebResearcher', 'subagent', 'ContextScout', 'deny');
+
+          // DevOps may diagnose but never mutate infrastructure directly.
+          expectEffect('OpenDevopsSpecialist', 'shell', 'docker ps -a', 'allow');
+          expectEffect('OpenDevopsSpecialist', 'shell', 'kubectl get pods', 'allow');
+          expectEffect('OpenDevopsSpecialist', 'shell', 'terraform plan -no-color', 'allow');
+          expectEffect('OpenDevopsSpecialist', 'shell', 'docker compose up -d', 'deny');
+          expectEffect('OpenDevopsSpecialist', 'shell', 'kubectl apply -f deploy.yaml', 'deny');
+          expectEffect('OpenDevopsSpecialist', 'shell', 'terraform apply -auto-approve', 'deny');
+
+          // Frontend specialist writes design artifacts only; production code and
+          // shell remain owned by CoderAgent/parent gates.
+          expectEffect('OpenFrontendSpecialist', 'edit', 'design_iterations/demo/page.html', 'allow');
+          expectEffect('OpenFrontendSpecialist', 'edit', 'design_iterations/demo/theme.css', 'allow');
+          expectEffect('OpenFrontendSpecialist', 'edit', 'src/App.tsx', 'deny');
+          expectEffect('OpenFrontendSpecialist', 'shell', 'npm run build', 'deny');
 
           if (errors.length) throw new Error(`permission audit failed:\n- ${errors.join('\n- ')}`);
           NODE
