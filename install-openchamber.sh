@@ -134,9 +134,23 @@ trap on_error ERR
 trap 'on_interrupt 130' INT
 trap 'on_interrupt 143' TERM
 
+# Recover the only uncatchable crash window. If a previous process was SIGKILLed
+# after native startup had already pinned the unit to a complete immutable
+# release but before it published `current`, adopt that exact validated release
+# as the baseline. Do not mutate a directory that may already be executing.
+if [[ ! -x "$OPENCHAMBER_CURRENT_BIN" ]] &&
+   oc_validate_release "$RELEASE_DIR" &&
+   [[ -f "$UNIT" ]] && grep -Fq "$RELEASE_DIR/" "$UNIT"; then
+  echo "Recovering interrupted OpenChamber activation from immutable runtime: $RELEASE_DIR"
+  oc_activate_release "$RELEASE_DIR"
+  oc_commit_activation
+  CURRENT_BEFORE="$RELEASE_DIR"
+fi
+
 # First migration from Bun-global runtime: force the core to resolve/apply the
-# verified package even if an earlier pre-atomic V2 state file says the same
-# package source was already installed globally.
+# verified package if there is no recovered/canonical immutable current. This
+# avoids trusting an older pre-atomic state file that referred to Bun-global
+# installation rather than the immutable release store.
 if [[ ! -x "$OPENCHAMBER_CURRENT_BIN" ]]; then
   rm -f -- "$STATE"
 fi
@@ -172,7 +186,10 @@ service_restart_pending="${service_restart_pending:-0}"
 # release and publish it through one atomic symlink switch. In defer mode the
 # core may only cache the package; then RELEASE_DIR legitimately has no CLI yet.
 if [[ "$runtime_pending" == 0 && -x "$RELEASE_DIR/bin/openchamber" ]]; then
-  oc_activate_release "$RELEASE_DIR"
+  current_target="$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)"
+  if [[ "$current_target" != "$RELEASE_DIR" ]]; then
+    oc_activate_release "$RELEASE_DIR"
+  fi
 fi
 
 # A non-pending successful migration must end with a valid canonical runtime.
