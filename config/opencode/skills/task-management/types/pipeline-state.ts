@@ -264,6 +264,26 @@ export interface RuntimeReplanRecord {
   superseded_at?: string;
 }
 
+export interface OwnerAmendmentWorkItem extends FrozenArtifact {
+  id: string;
+  pipeline_id: string;
+}
+
+export interface OwnerAmendmentRecord {
+  revision: number;
+  pipeline_id: string;
+  source_stage: string;
+  status: 'approved';
+  summary: string;
+  approved_at: string;
+  evidence_path: string;
+  evidence_sha256: string;
+  acceptance_criteria_changed: boolean;
+  requirements_changed: boolean;
+  paths: string[];
+  work_items: OwnerAmendmentWorkItem[];
+}
+
 export interface StageRuntime {
   repair_evidence?: FrozenArtifact;
   repair_paths?: string[];
@@ -335,6 +355,7 @@ export interface PipelineState {
     new_sha256: string;
   }>;
   runtime_scope_extensions?: RuntimeScopeExtension[];
+  owner_amendments?: OwnerAmendmentRecord[];
   scope_preflight?: ScopePreflight;
   security_fix_preflight?: SecurityFixPreflight;
   project_policy_file?: string;
