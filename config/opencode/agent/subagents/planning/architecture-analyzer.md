@@ -47,11 +47,20 @@ For ordinary runtime replan, keep frozen requirements/AC unchanged. For explicit
 
 ## Owner amendment mode
 
-Run after explicit owner acceptance feedback asks for a bounded clarification/change during the current RUN. The amendment may change local requirements or acceptance criteria and may add new runtime work items or source paths; it does NOT have to map to an existing frozen work item.
+Run after explicit owner acceptance feedback asks for a bounded clarification/change during the current RUN. The amendment may change local requirements or acceptance criteria and may extend source paths, but it MUST remain implementation of an existing frozen work item.
 
-Classify the impact, not whether AC text changed. Return bounded/ready when `business_intent_changed=false`, `external_contract_changed=false`, `security_boundary_changed=false`, and `destructive_change=false`. `requirements_changed` and `acceptance_criteria_changed` may be true for an owner amendment.
+Do not equate a new file/component/path with a new work item. Refactoring or extracting already-existing behavior into a reusable component is an implementation detail when it is needed to satisfy the same frozen work item's responsibility. A new work item is required only when the feedback introduces a new independently scoped responsibility/deliverable that should be planned, assigned, reviewed or accepted separately.
 
-Require full replan only for changed business intent, external contract, security/trust boundary, destructive/migration semantics, or another structural PLAN-level decision. Produce exact affected paths, target implementation stage, and the minimum runtime work items needed. The frozen manifest is never rewritten; amendment evidence is append-only.
+State explicitly:
+- `work_item_id`: the existing frozen work item that still owns the change;
+- `new_work_item_required: true | false`;
+- why the change remains inside that work item's responsibility, or why a separate responsibility appeared;
+- exact affected paths and target implementation stage;
+- `requirements_changed`, `acceptance_criteria_changed`, `business_intent_changed`, `external_contract_changed`, `security_boundary_changed`, `destructive_change`.
+
+Return bounded/ready only when `new_work_item_required=false`, `business_intent_changed=false`, `external_contract_changed=false`, `security_boundary_changed=false`, and `destructive_change=false`. `requirements_changed` and `acceptance_criteria_changed` may be true for an owner amendment.
+
+Require full replan when `new_work_item_required=true`, or for changed business intent, external contract, security/trust boundary, destructive/migration semantics, or another structural PLAN-level decision. The frozen manifest is never rewritten; amendment evidence is append-only.
 
 ## Inputs
 
