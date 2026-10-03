@@ -71,6 +71,12 @@ def main():
     require(wrapper, 'oc_rollback_service', "service/runtime rollback")
     require(wrapper, 'oc_activate_release', "atomic runtime activation")
     require(wrapper, 'OPENCHAMBER_RUNTIME_ROOT', "canonical immutable runtime store")
+    require(wrapper, 'TRANSACTION_STARTED=1', "transaction starts only after service snapshot")
+    require(wrapper, 'trap on_error ERR', "unexpected shell errors rollback transaction")
+    require(wrapper, "trap 'on_interrupt 130' INT", "interrupt rollback")
+    require(wrapper, "trap 'on_interrupt 143' TERM", "termination rollback")
+    require(wrapper, 'TRANSACTION_COMMITTED=1', "transaction commit boundary")
+    require(wrapper, 'trap - ERR INT TERM', "failure traps disabled after commit")
     require(wrapper, 'Atomic OpenChamber runtime committed:', "atomic commit audit output")
     require(runtime_store, 'OPENCHAMBER_RELEASES="$OPENCHAMBER_RUNTIME_ROOT/releases"',
             "immutable releases root")
