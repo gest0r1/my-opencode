@@ -61,7 +61,7 @@ test('V2 global config is portable and has no active legacy home skill roots', (
   assert.equal(config.agents, undefined, 'distribution agents have one Markdown source');
   const build = read('config/opencode/agent/core/build.md').split('\n---')[0];
   assert.doesNotMatch(build, /\/home\/guber\/|\.opencode\/skills\//);
-  const external = /  external_directory:\n([\s\S]*?)(?=^  \S|$)/m.exec(build)?.[1] ?? '';
+  const external = /^  external_directory:\n((?:    [^\n]*\n)*)/m.exec(build)?.[1] ?? '';
   assert.ok(external.includes('"$HOME/.local/share/opencode/tool-output/*": allow'));
   assert.ok(external.includes('"$HOME/.config/opencode/skills/task-management/*": allow'));
   assert.match(build, /^  doom_loop: ask$/m);
