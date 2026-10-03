@@ -17,6 +17,9 @@ shift 2
 LEGACY_ROOTS=("$@")
 LEGACY_BACKUP_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode/legacy-agent-roots/$(date -u +%Y%m%dT%H%M%SZ)"
 ARCHIVE_LEGACY="${OPENCODE_ARCHIVE_LEGACY:-1}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+NORMALIZER="$SCRIPT_DIR/normalize-opencode-agent-permissions.mjs"
+TARGET_CONFIG="$(dirname "$TARGET_ROOT")/opencode.json"
 
 [[ -d "$SOURCE_ROOT" ]] || { echo "Agent source directory not found: $SOURCE_ROOT" >&2; exit 1; }
 mkdir -p "$TARGET_ROOT"
@@ -117,6 +120,22 @@ done
 while IFS= read -r -d '' file; do
   install_managed "$file"
 done < <(find "$SOURCE_ROOT" -type f -name '*.md' -print0 | sort -z)
+
+# During the full config staging path, normalize legacy delegation aliases and
+# make Markdown the single permission source for agents that declare their own
+# permission: block. This also synchronizes mode into opencode.json so a managed
+# subagent never exists temporarily as the default primary agent.
+if [[ -f "$TARGET_CONFIG" ]]; then
+  [[ -f "$NORMALIZER" ]] || {
+    echo "Agent permission normalizer missing: $NORMALIZER" >&2
+    exit 1
+  }
+  command -v node >/dev/null 2>&1 || {
+    echo "Node.js is required for agent permission normalization." >&2
+    exit 1
+  }
+  node "$NORMALIZER" "$TARGET_CONFIG" "$TARGET_ROOT"
+fi
 
 archive_legacy_root() {
   local root=$1 relative safe_name destination
