@@ -23,15 +23,23 @@ permission:
     "pnpm exec vitest *": allow
   edit:
     "*": allow
+    ".env": deny
+    "*.env": deny
     "**/*.env": deny
     "**/.env": deny
+    "*.key": deny
     "**/*.key": deny
+    "*.pem": deny
     "**/*.pem": deny
+    "*.secret": deny
     "**/*.secret": deny
     "node_modules/**": deny
+    "**/node_modules/**": deny
     "docs/pipeline-rules.md": deny
+    "pipeline-rules.default.md": deny
     "**/pipeline-rules.default.md": deny
     ".git/**": deny
+    "**/.git/**": deny
   task:
     "*": deny
     contextscout: allow
@@ -63,12 +71,13 @@ gap. Call ExternalScout only for a missing current external testing/API fact.
 ## Test design
 
 - Cover acceptance criteria and material failure/edge cases; do not mechanically
-  create positive+negative pairs where behavior does not justify them.
-- Keep tests deterministic: mock external network/services unless the manifest
-  explicitly defines an integration/runtime gate for them.
-- Follow existing project structure and assertion style.
-- Modify production code only when the work item explicitly includes it; otherwise
-  report the defect to the parent for CoderAgent.
+  maximize line coverage.
+- Prefer repository-native test framework/patterns.
+- Tests should be deterministic and independent from external network/services
+  unless the approved gate explicitly provisions those dependencies.
+- Keep fixtures minimal and avoid embedding real secrets/credentials.
+- Do not modify production source merely to make a test pass; return the blocker
+  to the parent if production behavior is wrong.
 
-Return changed files, covered behaviors, remaining gaps and the exact machine gate
-that should be run by the parent.
+Return changed test files, scenarios covered, any targeted diagnostic command run,
+and gaps that the parent gate still needs to validate.
