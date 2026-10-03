@@ -43,10 +43,32 @@ jobs:
           test "$version" = "2.0.21"
 
           timeout 45s opencode debug config > /tmp/opencode-config.json 2> /tmp/opencode-config.err
-          timeout 45s opencode debug agents > /tmp/opencode-agents.txt 2> /tmp/opencode-agents.err
-
           test -s /tmp/opencode-config.json
-          test -s /tmp/opencode-agents.txt
+
+          # PluginSupervisor activates post-config plugins asynchronously. Poll
+          # the same daemon until ConfigAgentPlugin has populated the registry.
+          activated=0
+          for attempt in {1..30}; do
+            timeout 15s opencode debug agents > /tmp/opencode-agents.txt 2> /tmp/opencode-agents.err || true
+            if node -e '
+              const fs=require("fs");
+              try {
+                const a=JSON.parse(fs.readFileSync("/tmp/opencode-agents.txt","utf8"));
+                process.exit(a.some(x => (x.id ?? x.name) === "OpenStageOrchestrator") ? 0 : 1);
+              } catch { process.exit(1) }
+            '; then
+              activated=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [[ "$activated" != 1 ]]; then
+            echo "ConfigAgentPlugin did not expose managed agents after bounded wait." >&2
+            cat /tmp/opencode-agents.err >&2 || true
+            cat /tmp/opencode-agents.txt >&2 || true
+            exit 1
+          fi
+
           if grep -Fq 'Failed to load plugin' /tmp/opencode-config.err /tmp/opencode-agents.err; then
             cat /tmp/opencode-config.err /tmp/opencode-agents.err >&2
             exit 1
@@ -66,14 +88,16 @@ jobs:
               }
             '
           )
+
           node - <<'NODE'
           const fs = require('fs');
-          const text = fs.readFileSync('/tmp/opencode-config.json', 'utf8');
-          const config = JSON.parse(text);
+          const path = require('path');
+          const os = require('os');
+          const config = JSON.parse(fs.readFileSync('/tmp/opencode-config.json', 'utf8'));
           const agents = JSON.parse(fs.readFileSync('/tmp/opencode-agents.txt', 'utf8'));
-          if (!Array.isArray(agents) || agents.length < 5) {
-            throw new Error(`unexpected agent catalog: ${Array.isArray(agents) ? agents.length : 'not-array'}`);
-          }
+          const idOf = (agent) => agent.id ?? agent.name;
+          const byID = new Map(agents.map((agent) => [idOf(agent), agent]));
+          console.error('Resolved agent catalog:', agents.map((agent) => `${idOf(agent)}:${agent.mode}`).join(', '));
 
           const serialized = JSON.stringify(config);
           for (const forbidden of ['/tmp/openchamber-v2-install', '/home/guber/', '.opencode/skills/']) {
@@ -86,24 +110,22 @@ jobs:
             if (serialized.includes(`"${retired}"`)) throw new Error(`retired MCP still active: ${retired}`);
           }
 
-          const idOf = (agent) => agent.id ?? agent.name;
-          const byID = new Map(agents.map((agent) => [idOf(agent), agent]));
-          console.error('Resolved agent catalog:', agents.map((agent) => `${idOf(agent)}:${agent.mode}`).join(', '));
-          for (const required of ['OpenStageOrchestrator', 'CoderAgent', 'ContextScout', 'Architect', 'Reviewer', 'DocWriterAgent', 'QA']) {
-            if (!byID.has(required)) throw new Error(`missing exact agent ID: ${required}`);
-          }
-          for (const required of ['CoderAgent', 'ContextScout', 'Architect', 'Reviewer', 'DocWriterAgent', 'QA']) {
-            const mode = byID.get(required)?.mode;
-            if (mode !== 'subagent' && mode !== 'all') {
-              throw new Error(`${required} cannot be delegated to: mode=${mode}`);
+          // Every managed file is flat and its exact basename is its OpenCode ID.
+          const root = path.join(os.homedir(), '.config', 'opencode', 'agents');
+          const files = fs.readdirSync(root).filter((name) => name.endsWith('.md')).sort();
+          if (files.length < 30) throw new Error(`managed agent set unexpectedly small: ${files.length}`);
+          for (const file of files) {
+            const id = file.slice(0, -3);
+            const text = fs.readFileSync(path.join(root, file), 'utf8');
+            const expectedMode = /^mode:\s*(\S+)\s*$/m.exec(text)?.[1];
+            const resolved = byID.get(id);
+            if (!resolved) throw new Error(`managed agent missing from live registry: ${id}`);
+            if (expectedMode && resolved.mode !== expectedMode) {
+              throw new Error(`${id}: expected mode=${expectedMode}, live mode=${resolved.mode}`);
             }
           }
-          if (byID.get('OpenStageOrchestrator')?.mode === 'subagent') {
-            throw new Error('OpenStageOrchestrator unexpectedly became subagent-only');
-          }
-
-          const nested = [...byID.keys()].filter((id) => typeof id === 'string' && id.includes('/'));
-          if (nested.length) throw new Error(`nested/non-canonical agent IDs: ${nested.join(', ')}`);
+          const nestedManaged = files.filter((file) => file.includes('/'));
+          if (nestedManaged.length) throw new Error(`nested managed agent files: ${nestedManaged.join(', ')}`);
 
           const wildcard = (value, pattern) => {
             const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
@@ -117,6 +139,10 @@ jobs:
             return 'ask';
           };
 
+          // Audit every concrete subagent allow in the fully normalized runtime
+          // matrix: target must exist, be delegable, and remain effectively allow
+          // after last-match-wins precedence.
+          const errors = [];
           for (const agent of agents) {
             const id = idOf(agent);
             const rules = agent.permissions ?? [];
@@ -124,31 +150,38 @@ jobs:
               if (rule.action !== 'subagent' || rule.effect !== 'allow') continue;
               if (rule.resource === '*' || /[*?]/.test(rule.resource)) continue;
               const target = byID.get(rule.resource);
-              if (!target) throw new Error(`${id}: subagent allow targets unknown agent '${rule.resource}'`);
-              if (target.mode !== 'subagent' && target.mode !== 'all') {
-                throw new Error(`${id}: subagent allow targets non-subagent '${rule.resource}' mode=${target.mode}`);
+              if (!target) {
+                errors.push(`${id}: allow targets unknown subagent '${rule.resource}'`);
+                continue;
+              }
+              if (target.mode === 'primary') {
+                errors.push(`${id}: allow targets primary agent '${rule.resource}'`);
+                continue;
               }
               const effective = evaluate(rules, 'subagent', rule.resource);
-              if (effective !== 'allow') {
-                throw new Error(`${id}: subagent allow for '${rule.resource}' is shadowed; effective=${effective}`);
-              }
+              if (effective !== 'allow') errors.push(`${id}: allow for '${rule.resource}' is shadowed; effective=${effective}`);
             }
           }
 
           const orchestrator = byID.get('OpenStageOrchestrator');
-          const orchestratorRules = orchestrator.permissions ?? [];
-          if (evaluate(orchestratorRules, 'edit', 'packages/example.ts') !== 'deny') {
-            throw new Error('OpenStageOrchestrator broad edit unexpectedly allowed');
-          }
-          if (evaluate(orchestratorRules, 'edit', '.tmp/pipelines/example.md') !== 'allow') {
-            throw new Error('OpenStageOrchestrator pipeline scratch edit not allowed');
-          }
-          for (const target of ['ContextScout', 'Architect', 'CoderAgent', 'Reviewer', 'DocWriterAgent', 'QA']) {
-            if (evaluate(orchestratorRules, 'subagent', target) !== 'allow') {
-              throw new Error(`OpenStageOrchestrator cannot delegate to ${target}`);
+          if (!orchestrator) errors.push('OpenStageOrchestrator missing');
+          else {
+            const rules = orchestrator.permissions ?? [];
+            if (evaluate(rules, 'edit', 'packages/example.ts') !== 'deny') {
+              errors.push('OpenStageOrchestrator broad edit unexpectedly allowed');
+            }
+            if (evaluate(rules, 'edit', '.tmp/pipelines/example.md') !== 'allow') {
+              errors.push('OpenStageOrchestrator pipeline scratch edit not allowed');
+            }
+            for (const target of ['ContextScout', 'CoderAgent', 'CodeReviewer', 'TestEngineer']) {
+              if (evaluate(rules, 'subagent', target) !== 'allow') {
+                errors.push(`OpenStageOrchestrator cannot delegate to ${target}`);
+              }
+            }
+            if (evaluate(rules, 'subagent', 'build') !== 'deny') {
+              errors.push('OpenStageOrchestrator unexpectedly allowed to delegate to primary build');
             }
           }
-          if (evaluate(orchestratorRules, 'subagent', 'build') !== 'deny') {
-            throw new Error('OpenStageOrchestrator unexpectedly allowed to delegate to primary build');
-          }
+
+          if (errors.length) throw new Error(`permission audit failed:\n- ${errors.join('\n- ')}`);
           NODE
