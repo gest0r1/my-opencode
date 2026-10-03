@@ -1,21 +1,57 @@
 name: Canonical OpenChamber and OpenCode installer contract
 on:
   push:
-    branches: [integration/standard-bundle-installer-2026-09-19, upgrade/openchamber-1.24.2-agents]
+    branches: [main]
     paths:
+      - scripts/merge-user-plugins.mjs
+      - config/opencode/plugin-policy.json
+      - tests/test_user_plugins.mjs
       - install-openchamber.sh
       - install.sh
+      - scripts/install-opencode-generation.sh
+      - scripts/install-opencode-dependencies.sh
+      - config/opencode/bun.lock
+      - tests/test_dependency_installer.sh
+      - tests/test_generation_timeout.sh
+      - scripts/install-openchamber-v2-core.sh
+      - scripts/openchamber-runtime-store.sh
       - scripts/install-opencode-agents.sh
+      - scripts/retire-opencode-agent-copies.mjs
+      - scripts/normalize-opencode-agent-permissions.mjs
+      - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
+      - tests/test_incremental_installer.sh
+      - tests/test_binary_only_installer.sh
+      - tests/test_native_activation.sh
+      - tests/test_openchamber_runtime_store.sh
       - tests/test_agent_path_migration.sh
+      - tests/test_agent_permission_normalization.sh
       - .github/workflows/installer-contract.yml
   pull_request:
     paths:
+      - scripts/merge-user-plugins.mjs
+      - config/opencode/plugin-policy.json
+      - tests/test_user_plugins.mjs
       - install-openchamber.sh
       - install.sh
+      - scripts/install-opencode-generation.sh
+      - scripts/install-opencode-dependencies.sh
+      - config/opencode/bun.lock
+      - tests/test_dependency_installer.sh
+      - tests/test_generation_timeout.sh
+      - scripts/install-openchamber-v2-core.sh
+      - scripts/openchamber-runtime-store.sh
       - scripts/install-opencode-agents.sh
+      - scripts/retire-opencode-agent-copies.mjs
+      - scripts/normalize-opencode-agent-permissions.mjs
+      - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
+      - tests/test_incremental_installer.sh
+      - tests/test_binary_only_installer.sh
+      - tests/test_native_activation.sh
+      - tests/test_openchamber_runtime_store.sh
       - tests/test_agent_path_migration.sh
+      - tests/test_agent_permission_normalization.sh
 permissions:
   contents: read
 jobs:
@@ -29,9 +65,23 @@ jobs:
       - name: Validate canonical installer and config installer syntax
         run: |
           set -Eeuo pipefail
-          bash -n install-openchamber.sh install.sh scripts/install-opencode-agents.sh tests/test_agent_path_migration.sh
-          grep -Fq 'OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-1.18.31}"' install.sh
-          grep -Fq 'bash -s -- --version "$OPENCODE_INSTALL_VERSION"' install.sh
+          bash -n \
+            install-openchamber.sh \
+            install.sh \
+            scripts/install-opencode-generation.sh \
+            scripts/install-opencode-dependencies.sh \
+            scripts/install-openchamber-v2-core.sh \
+            scripts/openchamber-runtime-store.sh \
+            scripts/install-opencode-agents.sh \
+            scripts/cleanup-openchamber-v1-before-v2.sh \
+            tests/test_incremental_installer.sh \
+            tests/test_binary_only_installer.sh \
+            tests/test_openchamber_runtime_store.sh \
+            tests/test_agent_path_migration.sh \
+            tests/test_agent_permission_normalization.sh
+          node --check scripts/normalize-opencode-agent-permissions.mjs
+          grep -Fq 'OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"' scripts/install-opencode-generation.sh
+          grep -Fq 'bash -s -- --version "$OPENCODE_INSTALL_VERSION"' scripts/install-opencode-generation.sh
           git diff --check
       - name: Verify standard OpenCode agent path migration
         run: |
@@ -43,8 +93,28 @@ jobs:
           source_count=$(find config/opencode/agent -type f -name '*.md' | wc -l)
           installed_count=$(find "$tmp/agents" -type f -name '*.md' | wc -l)
           test "$source_count" -eq "$installed_count"
-      - name: Verify repeat install downloads only small manifest
+      - name: Verify managed agent permission normalization
         run: |
           set -Eeuo pipefail
-          sudo install -m 755 /bin/true /usr/local/bin/openchamber
+          bash tests/test_agent_permission_normalization.sh
+          node --test tests/trusted-paths.test.mjs tests/generation-state.test.mjs tests/test_user_plugins.mjs
+      - name: Verify immutable OpenChamber runtime activation
+        run: |
+          set -Eeuo pipefail
+          bash tests/test_openchamber_runtime_store.sh
+          bash tests/test_native_activation.sh
+      - name: Verify full configuration bootstrap and dependency timeout
+        run: |
+          set -Eeuo pipefail
+          bash tests/test_binary_only_installer.sh
+          bash tests/test_dependency_installer.sh
+          bash tests/test_generation_timeout.sh
+      - name: Verify incremental installer execution
+        run: |
+          set -Eeuo pipefail
+          bash tests/test_incremental_installer.sh
+      - name: Verify OpenChamber/OpenCode v2 installer contract
+        run: |
+          set -Eeuo pipefail
           python3 tests/test_standard_installer.py
+

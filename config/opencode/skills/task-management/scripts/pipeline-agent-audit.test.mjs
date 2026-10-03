@@ -57,7 +57,6 @@ test('OpenStage owns orchestration directly and registry does not require BatchE
   const orchestratorYaml = frontmatter(orchestrator);
   const run = await text('config/opencode/command/pipeline-run.md');
   assert.doesNotMatch(orchestratorYaml, /BatchExecutor|batch-executor/i);
-  assert.match(orchestrator, /Do not invoke `BatchExecutor`/);
   assert.match(run, /never delegate orchestration to BatchExecutor/i);
 
   const metadata = JSON.parse(await text('config/opencode/config/agent-metadata.json'));
@@ -176,7 +175,6 @@ test('canonical RUN requires deterministic v2 run-preflight before next', async 
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
   assert.match(run, /stage-cli run-preflight <run-id>/);
   assert.match(run, /LEGACY_V1_REPLAN_REQUIRED/);
-  assert.match(orchestrator, /stage-cli run-preflight/);
 });
 
 test('pipeline contracts use a five-cycle shared repair budget with owner-controlled overrides', async () => {
@@ -198,9 +196,6 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   assert.match(run, /stage-cli runtime-replan-propose/);
   assert.match(run, /stage-cli runtime-replan-approve/);
   assert.match(run, /`--unattended` never supplies runtime-replan approval/i);
-  assert.match(orchestrator, /initial fix budget is 5 cycles/i);
-  assert.match(orchestrator, /security-fix-check/i);
-  assert.match(orchestrator, /Never infer approval from `--unattended`/i);
   assert.match(rules, /initial automatic fix budget is \*\*5 per stage\/work-item\*\*/i);
   assert.match(rules, /severity alone never forces a stop/i);
   assert.match(status, /run_override\|owner_direct\|runtime_replan/);
@@ -222,11 +217,6 @@ test('RUN finishes the active repair cycle before budget checkpoint and never au
   assert.match(run, /Runtime replan this block.*only on explicit owner intent/is);
   assert.match(run, /explicit `\+N`.*fix-budget-add/is);
 
-  assert.match(orchestrator, /already-started cycle must finish through its frozen downstream review\/gates/i);
-  assert.match(orchestrator, /executor=`review`.*CodeReviewer/i);
-  assert.match(orchestrator, /Budget exhaustion matters only when.*next.*fix-cycle/is);
-  assert.match(orchestrator, /runtime replan.*only when the owner explicitly requests/i);
-  assert.match(orchestrator, /plain owner `\+N` grant must not trigger architecture review/i);
 
   assert.match(rules, /does not interrupt an already-started repair/i);
   assert.match(rules, /executor=`review` runs CodeReviewer/i);
@@ -251,7 +241,6 @@ test('pipeline contracts require source-ready scheduling, local fail-fast, and a
   assert.match(rules, /terminal DAG sink owns the single integrated publish\/validation chain/is);
   assert.match(rules, /after `git_verify` and before `git_publish`/i);
   assert.match(status, /integrated candidate/i);
-  assert.match(orchestrator, /single integrated delivery chain/i);
 });
 
 test('PLAN proves v2 run viability and baseline scope before owner approval', async () => {
@@ -269,8 +258,6 @@ test('RUN uses deterministic publication and CI diagnostics before owner shell i
   assert.match(run, /publish.*owns staging.*candidate commit.*non-force push/is);
   assert.match(run, /diagnose.*per-job.*\.log/is);
   assert.match(run, /log \.\.\. --job\|--job-id/i);
-  assert.match(orchestrator, /GitHub `run\/diagnose\/log` owns CI evidence and logs/i);
-  assert.match(orchestrator, /never ask the owner to fetch or reshape evidence/i);
 });
 
 
@@ -298,7 +285,6 @@ test('rules drift is adopted from the current file for both rule sources', async
 
   assert.match(run, /Rules are live external policy/i);
   assert.match(run, /changed rules hash\/version is not a blocker/i);
-  assert.match(orchestrator, /changed rules version\/SHA metadata is adopted automatically/i);
   assert.match(rules, /project-local .* and distribution .* follow the same lifecycle/is);
   assert.match(rules, /does not BLOCK by itself/i);
   assert.doesNotMatch(run, /DEFAULT_RULES_SNAPSHOT_REQUIRED|stage-cli rules-refresh/);
@@ -313,13 +299,14 @@ test('pipeline agents cannot edit project or distribution rules', async () => {
     'config/opencode/agent/subagents/development/devops-specialist.md',
   ]) {
     const yaml = frontmatter(await text(file));
-    assert.match(yaml, /["']docs\/pipeline-rules\.md["']:\s*deny/, file);
+    if (/edit:\s*deny/.test(yaml)) continue;
+    assert.match(yaml, /["']?docs\/pipeline-rules\.md["']?:\s*deny/, file);
     assert.match(yaml, /["']\*\*\/pipeline-rules\.default\.md["']:\s*deny/, file);
   }
 
-  const config = JSON.parse(await text('config/opencode/opencode.json'));
-  assert.equal(config.agent.CoderAgent.permission.edit['docs/pipeline-rules.md'], 'deny');
-  assert.equal(config.agent.CoderAgent.permission.edit['**/pipeline-rules.default.md'], 'deny');
+  const yaml = frontmatter(await text('config/opencode/agent/subagents/code/coder-agent.md'));
+  assert.match(yaml, /["']?docs\/pipeline-rules\.md["']?:\s*deny/);
+  assert.match(yaml, /["']\*\*\/pipeline-rules\.default\.md["']:\s*deny/);
 });
 
 
@@ -337,8 +324,16 @@ test('RUN authorizes bounded runtime scope before consuming technical-fix cycles
   assert.match(run, /stage-cli scope-extend/);
   assert.match(run, /Only after scope preflight PASS call `stage-cli fix-cycle/i);
   assert.match(run, /inside the \*\*same\*\* cycle/i);
-  assert.match(orchestrator, /scope-check/);
-  assert.match(orchestrator, /scope-extend/);
   assert.match(rules, /machine-owned effective scope/i);
   assert.match(reviewer, /runtime-scope-review-<n>\.json/);
+});
+
+
+test('compact parent loads the single command contract at entry and after resume', async () => {
+  const parent = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  assert.match(parent, /At entry and after compaction\/resume, load the active installed command/);
+  assert.match(parent, /commands\/pipeline-\{plan,run,refresh,status\}/);
+  assert.match(parent, /never reinterpret a missing contract/);
+  assert.match(parent, /stage-cli dispatch/);
+  assert.match(parent, /Never supply `sessionID`/);
 });

@@ -1,13 +1,6 @@
 {
+  "type": "module",
   "dependencies": {
-    "@franlol/opencode-md-table-formatter": "^0.0.6",
-    "@khalilgharbaoui/opencode-claude-code-plugin": "^0.7.0",
-    "@opencode-ai/plugin": "^1.18.18",
-    "@opencode-ai/sdk": "^1.18.18",
-    "octto": "^0.3.1",
-    "opencode-openai-codex-auth": "^4.4.0"
-  },
-  "devDependencies": {
-    "zod": "4.3.5"
+    "@opencode/plugin": "2.0.21"
   }
 }

@@ -11,7 +11,6 @@ permission:
     ".tmp/pipelines/**": allow
   task:
     "*": deny
-    contextscout: allow
     ContextScout: allow
 ---
 

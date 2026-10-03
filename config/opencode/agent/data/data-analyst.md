@@ -2,17 +2,14 @@
 name: OpenDataAnalyst
 description: "Expert in data analysis, visualization, and statistical insights"
 mode: primary
-model: opencode-go/deepseek-v4-pro
+model: opencode-go/longcat-2.5-preview-free
 temperature: 0.1
 permission:
   task:
-    "*": "deny"
-    contextscout: "allow"
-    ContextScout: "allow"
-    externalscout: "allow"
-    ExternalScout: "allow"
-    WebResearcher: "allow"
-    webresearcher: "allow"
+    "*": deny
+    ContextScout: allow
+    ExternalScout: allow
+    WebResearcher: allow
 ---
 
 # Data Analyst

@@ -2,7 +2,7 @@
 name: BuildAgent
 description: Read-only build/typecheck diagnostic agent; canonical pipeline PASS comes from gate-runner evidence.
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/mimo-v2.6-flash
 temperature: 0.1
 permission:
   bash:
@@ -13,15 +13,23 @@ permission:
     "go build*": allow
     "cargo check*": allow
     "cargo build*": allow
-    "corepack pnpm*": allow
-    "pnpm*": allow
+    "corepack pnpm run build*": allow
+    "corepack pnpm run typecheck*": allow
+    "corepack pnpm exec tsc*": allow
+    "corepack pnpm -r run build*": allow
+    "corepack pnpm -r run typecheck*": allow
+    "pnpm run build*": allow
+    "pnpm run typecheck*": allow
+    "pnpm exec tsc*": allow
+    "pnpm -r run build*": allow
+    "pnpm -r run typecheck*": allow
     "yarn build*": allow
     "npm run build*": allow
+    "npm run typecheck*": allow
     "python -m build*": allow
   edit: deny
   task:
     "*": deny
-    contextscout: allow
     ContextScout: allow
 ---
 

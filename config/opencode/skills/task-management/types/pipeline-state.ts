@@ -25,7 +25,7 @@ export type StageExecutor =
   | 'github_dev'
   | 'owner_acceptance';
 
-export type GithubGateTrigger = 'push' | 'workflow_dispatch';
+export type GithubGateTrigger = 'push' | 'pull_request' | 'workflow_dispatch';
 export type GithubDevMode = 'disposable' | 'stateful';
 
 export interface GithubGateContract {
@@ -33,6 +33,7 @@ export interface GithubGateContract {
   terminal_job: string;
   required_jobs?: string[];
   trigger: GithubGateTrigger;
+  pr_number?: number;
   artifact?: string;
   environment?: string;
   mode?: GithubDevMode;
@@ -95,11 +96,9 @@ export interface PlanningReadinessV2 {
   gates: Record<string, PlanningGateEvidence>;
   required_artifacts: {
     decision_register: FrozenArtifact;
-    technology_evidence: FrozenArtifact;
-    contract_inventory: FrozenArtifact;
-    test_strategy: FrozenArtifact;
-    accepted_risks: FrozenArtifact;
     work_items: FrozenArtifact;
+    technology_evidence?: FrozenArtifact;
+    contract_inventory?: FrozenArtifact;
   };
 }
 
@@ -174,7 +173,6 @@ export interface PreservedBaseline {
 }
 
 export type PipelineSupersedeReason =
-  | 'V1_TO_V2_MIGRATION'
   | 'MANIFEST_CONTRACT_CORRECTION'
   | 'BASELINE_SCOPE_MISMATCH'
   | 'PLANNING_EVIDENCE_CORRECTION'
@@ -215,7 +213,6 @@ export interface PipelineManifest {
   source_type?: PipelineSourceType;
   repository?: string;
   source_issues?: PipelineIssueSource[];
-  source_snapshot_sha256?: string;
   source_requirements_sha256?: string;
   planning_base_sha?: string;
   planning_inputs?: Record<string, string[]>;
@@ -268,6 +265,8 @@ export interface RuntimeReplanRecord {
 }
 
 export interface StageRuntime {
+  repair_evidence?: FrozenArtifact;
+  repair_paths?: string[];
   status: StageStatus;
   technical_fix_cycles?: number;
   technical_fix_limit?: number;
@@ -348,7 +347,6 @@ export interface PipelineState {
   source_type?: PipelineSourceType;
   repository?: string;
   source_issues?: PipelineIssueSource[];
-  source_snapshot_sha256?: string;
   source_requirements_sha256?: string;
   planning_base_sha?: string;
   run_base_sha?: string;
@@ -366,3 +364,4 @@ export interface PipelineState {
     message?: string;
   }>;
 }
+

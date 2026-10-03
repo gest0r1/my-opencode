@@ -2,17 +2,14 @@
 name: CodeReviewer
 description: Fresh read-only code/security reviewer for approved pipeline changes.
 mode: subagent
-model: openai/gpt-6-sol
+model: openai/gpt-6.1-sol
 reasoningEffort: low
 permission:
   bash: deny
   edit:
     "*": deny
     ".tmp/pipelines/**": allow
-  task:
-    "*": deny
-    contextscout: allow
-    ContextScout: allow
+  task: deny
   gh_grep_*: allow
 ---
 
@@ -23,7 +20,7 @@ Review source changes without modifying them. Review sessions are always fresh.
 ## Context
 
 Use the supplied context packet, decisions, contracts, acceptance criteria and
-changed-file list first. Call ContextScout only for a concrete missing standard.
+changed-file list first. Return a concrete missing standard to OpenStage; it obtains context and reruns this review fresh.
 Use public code search only as supporting evidence; project constraints and
 official docs outrank it.
 

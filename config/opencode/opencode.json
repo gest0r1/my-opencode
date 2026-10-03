@@ -1,76 +1,98 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    "@franlol/opencode-md-table-formatter@0.0.6"
-  ],
   "model": "opencode-go/qwen3.7-plus",
-  "small_model": "opencode-go/mimo-v2.5",
+  "permissions": [
+    {
+      "action": "subagent",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "context7_*",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "exa_*",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "gh_grep_*",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "kagi_*",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "webfetch",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "worktree_*",
+      "resource": "*",
+      "effect": "deny"
+    }
+  ],
   "mcp": {
-    "context7": {
-      "type": "remote",
-      "url": "https://mcp.context7.com/mcp",
-      "enabled": true
-    },
-    "gh_grep": {
-      "type": "remote",
-      "url": "https://mcp.grep.app",
-      "enabled": true
-    },
-    "exa": {
-      "type": "remote",
-      "url": "https://mcp.exa.ai/mcp",
-      "enabled": true
-    },
-    "yadisk": {
-      "type": "local",
-      "command": [
-        "/home/guber/.local/bin/yadisk-mcp"
-      ],
-      "enabled": true,
-      "env": {
-        "YANDEX_DISK_TOKEN": "{env:YANDEX_DISK_TOKEN}",
-        "YADISK_MCP_READ_ONLY": "false"
-      }
-    },
-    "memory": {
-      "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-memory"
-      ],
-      "enabled": true
-    },
-    "1c-buddy": {
-      "type": "remote",
-      "url": "http://localhost:6002/mcp",
-      "enabled": true,
-      "oauth": {
-        "redirectUri": "http://10.0.10.66:4099/mcp/oauth/callback?server=1c-buddy"
+    "servers": {
+      "context7": {
+        "type": "remote",
+        "url": "https://mcp.context7.com/mcp",
+        "disabled": false
+      },
+      "gh_grep": {
+        "type": "remote",
+        "url": "https://mcp.grep.app",
+        "disabled": false
+      },
+      "exa": {
+        "type": "remote",
+        "url": "https://mcp.exa.ai/mcp",
+        "disabled": false
+      },
+      "yadisk": {
+        "type": "local",
+        "command": [
+          "{env:HOME}/.local/bin/yadisk-mcp"
+        ],
+        "environment": {
+          "YANDEX_DISK_TOKEN": "{env:YANDEX_DISK_TOKEN}",
+          "YADISK_MCP_READ_ONLY": "false"
+        },
+        "disabled": false
+      },
+      "memory": {
+        "type": "local",
+        "command": [
+          "npx",
+          "-y",
+          "@modelcontextprotocol/server-memory"
+        ],
+        "disabled": false
+      },
+      "1c-buddy": {
+        "type": "remote",
+        "url": "http://localhost:6002/mcp",
+        "oauth": {
+          "redirect_uri": "http://10.0.10.66:4099/mcp/oauth/callback?server=1c-buddy"
+        },
+        "disabled": false
       }
     }
   },
-  "permission": {
-    "task": "deny",
-    "context7_*": "deny",
-    "exa_*": "deny",
-    "gh_grep_*": "deny",
-    "kagi_*": "deny",
-    "webfetch": "deny",
-    "worktree_*": "deny"
-  },
-  "instructions": [
-    "./plugins/shell-strategy/shell_strategy.md",
-    "/home/guber/.agents/skills/caveman/SKILL.md"
-  ],
   "compaction": {
     "auto": true,
-    "prune": true,
-    "reserved": 10000
+    "buffer": 10000
   },
-  "provider": {
+  "plugins": [],
+  "providers": {
     "openai": {
-      "options": {
+      "settings": {
         "reasoningEffort": "medium",
         "reasoningSummary": "auto",
         "textVerbosity": "medium",
@@ -78,188 +100,6 @@
           "reasoning.encrypted_content"
         ],
         "store": false
-      }
-    }
-  },
-  "agent": {
-    "CodeReviewer": {
-      "permission": {
-        "doom_loop": "ask",
-        "external_directory": {
-          "/home/guber/.local/share/opencode/tool-output/*": "allow",
-          "/tmp/opencode/*": "allow",
-          "/home/guber/.agents/skills/caveman/*": "allow",
-          "/home/guber/.agents/skills/find-skills/*": "allow",
-          "/home/guber/.config/opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/corporate-mail/*": "allow",
-          "/home/guber/.opencode/skills/context7/*": "allow",
-          "/home/guber/.opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/telegram-send/*": "allow",
-          "*": "ask"
-        },
-        "question": "deny",
-        "plan_enter": "deny",
-        "plan_exit": "deny",
-        "read": {
-          "*.env": "ask",
-          "*.env.*": "ask",
-          "*.env.example": "allow"
-        },
-        "task": {
-          "contextscout": "allow",
-          "*": "deny"
-        },
-        "gh_grep_*": "allow",
-        "bash": "deny",
-        "edit": {
-          "**/*": "deny"
-        },
-        "write": {
-          "**/*": "deny"
-        }
-      }
-    },
-    "CoderAgent": {
-      "permission": {
-        "doom_loop": "ask",
-        "external_directory": {
-          "/home/guber/.local/share/opencode/tool-output/*": "allow",
-          "/tmp/opencode/*": "allow",
-          "/home/guber/.agents/skills/caveman/*": "allow",
-          "/home/guber/.agents/skills/find-skills/*": "allow",
-          "/home/guber/.config/opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/context7/*": "allow",
-          "/home/guber/.opencode/skills/corporate-mail/*": "allow",
-          "/home/guber/.opencode/skills/telegram-send/*": "allow",
-          "*": "ask"
-        },
-        "question": "deny",
-        "plan_enter": "deny",
-        "plan_exit": "deny",
-        "read": {
-          "*.env": "ask",
-          "*.env.*": "ask",
-          "*.env.example": "allow"
-        },
-        "task": {
-          "contextscout": "allow",
-          "externalscout": "allow",
-          "TestEngineer": "allow",
-          "*": "deny"
-        },
-        "bash": {
-          "bash .opencode/skills/task-management/router.sh complete*": "allow",
-          "bash .opencode/skills/task-management/router.sh status*": "allow",
-          "*": "deny"
-        },
-        "gh_grep_*": "allow",
-        "edit": {
-          "**/*.env*": "deny",
-          "**/*.key": "deny",
-          "**/*.secret": "deny",
-          "node_modules/**": "deny",
-          ".git/**": "deny",
-          "docs/pipeline-rules.md": "deny",
-          "**/pipeline-rules.default.md": "deny"
-        }
-      }
-    },
-    "build": {
-      "permission": {
-        "doom_loop": "ask",
-        "external_directory": {
-          "/home/guber/.local/share/opencode/tool-output/*": "allow",
-          "/tmp/opencode/*": "allow",
-          "/home/guber/.agents/skills/find-skills/*": "allow",
-          "/home/guber/.agents/skills/caveman/*": "allow",
-          "/home/guber/.config/opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/corporate-mail/*": "allow",
-          "/home/guber/.opencode/skills/context7/*": "allow",
-          "/home/guber/.opencode/skills/telegram-send/*": "allow",
-          "*": "ask"
-        },
-        "plan_exit": "deny",
-        "read": {
-          "*.env": "ask",
-          "*.env.*": "ask",
-          "*.env.example": "allow"
-        },
-        "task": "deny",
-        "context7_*": "deny",
-        "exa_*": "deny",
-        "gh_grep_*": "deny",
-        "kagi_*": "deny",
-        "webfetch": "deny"
-      }
-    },
-    "OpenAgent": {
-      "permission": {
-        "doom_loop": "ask",
-        "external_directory": {
-          "*": "ask",
-          "/home/guber/.local/share/opencode/tool-output/*": "allow",
-          "/tmp/opencode/*": "allow",
-          "/home/guber/.agents/skills/caveman/*": "allow",
-          "/home/guber/.agents/skills/find-skills/*": "allow",
-          "/home/guber/.config/opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/context7/*": "allow",
-          "/home/guber/.opencode/skills/corporate-mail/*": "allow",
-          "/home/guber/.opencode/skills/task-management/*": "allow",
-          "/home/guber/.opencode/skills/telegram-send/*": "allow"
-        },
-        "question": "deny",
-        "plan_enter": "deny",
-        "plan_exit": "deny",
-        "read": {
-          "*.env": "ask",
-          "*.env.*": "ask",
-          "*.env.example": "allow"
-        },
-        "task": {
-          "*": "deny",
-          "contextscout": "allow",
-          "ContextScout": "allow",
-          "externalscout": "allow",
-          "ExternalScout": "allow",
-          "TaskManager": "allow",
-          "taskmanager": "allow",
-          "DocWriter": "allow",
-          "docwriter": "allow",
-          "CoderAgent": "allow",
-          "coderagent": "allow",
-          "TestEngineer": "allow",
-          "testengineer": "allow",
-          "CodeReviewer": "allow",
-          "codereviewer": "allow",
-          "BuildAgent": "allow",
-          "buildagent": "allow",
-          "BatchExecutor": "allow",
-          "batchexecutor": "allow",
-          "WebResearcher": "allow",
-          "webresearcher": "allow",
-          "StageOrchestrator": "allow",
-          "stage-orchestrator": "allow",
-          "OpenStageOrchestrator": "allow",
-          "OpenDevopsSpecialist": "allow",
-          "devops-specialist": "allow",
-          "OpenFrontendSpecialist": "allow"
-        },
-        "bash": {
-          "*": "ask",
-          "rm -rf *": "ask",
-          "rm -rf /*": "deny",
-          "sudo *": "deny",
-          "> /dev/*": "deny"
-        },
-        "edit": {
-          "**/*.env*": "deny",
-          "**/*.key": "deny",
-          "**/*.secret": "deny",
-          "node_modules/**": "deny",
-          ".git/**": "deny"
-        }
       }
     }
   }

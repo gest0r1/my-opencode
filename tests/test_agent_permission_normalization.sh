@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/agents" "$tmp/source"
+
+cat > "$tmp/opencode.json" <<'JSON'
+{
+  "agents": {
+    "CoderAgent": {
+      "permissions": [
+        {"action":"subagent","resource":"TestEngineer","effect":"allow"},
+        {"action":"subagent","resource":"*","effect":"deny"}
+      ]
+    },
+    "PrimaryManager": {
+      "permissions": [
+        {"action":"subagent","resource":"contextscout","effect":"allow"},
+        {"action":"subagent","resource":"build","effect":"allow"},
+        {"action":"subagent","resource":"*","effect":"deny"}
+      ]
+    },
+    "build": {
+      "permissions": [
+        {"action":"subagent","resource":"*","effect":"deny"}
+      ]
+    }
+  }
+}
+JSON
+
+cat > "$tmp/agents/CoderAgent.md" <<'EOF'
+---
+name: CoderAgent
+mode: subagent
+permission:
+  task:
+    contextscout: "allow"
+    ContextScout: allow
+    build: "allow"
+    "*": "deny"
+  edit:
+    "safe/**": "allow"
+    "*": "deny"
+  read:
+    ".opencode/skills/context7/**": allow
+    "*": deny
+  bash:
+    "echo ok": allow
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "npx tsx .opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "*": deny
+---
+Coder
+EOF
+cp "$tmp/agents/CoderAgent.md" "$tmp/source/coder.md"
+
+cat > "$tmp/agents/ContextScout.md" <<'EOF'
+---
+name: ContextScout
+mode: subagent
+---
+Scout
+EOF
+cp "$tmp/agents/ContextScout.md" "$tmp/source/context.md"
+
+cat > "$tmp/agents/PrimaryManager.md" <<'EOF'
+---
+name: PrimaryManager
+mode: primary
+---
+Manager with config-only permissions
+EOF
+cp "$tmp/agents/PrimaryManager.md" "$tmp/source/manager.md"
+
+cat > "$tmp/agents/build.md" <<'EOF'
+---
+name: build
+mode: primary
+---
+Build
+EOF
+cp "$tmp/agents/build.md" "$tmp/source/build.md"
+
+cat > "$tmp/agents/UserCustom.md" <<'EOF'
+---
+name: UserCustom
+mode: subagent
+permission:
+  task:
+    contextscout: "allow"
+    "*": "deny"
+  bash:
+    "npx tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "*": deny
+---
+User-owned agent: must not be rewritten by managed normalization.
+EOF
+
+node scripts/normalize-opencode-agent-permissions.mjs \
+  "$tmp/opencode.json" "$tmp/agents" "$tmp/source"
+
+node - "$tmp/opencode.json" <<'NODE'
+const fs = require('fs')
+const c = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+if (c.agents.CoderAgent.mode !== 'subagent') throw new Error('CoderAgent mode not synchronized')
+if ('permissions' in c.agents.CoderAgent) throw new Error('duplicate CoderAgent permissions retained')
+if (c.agents.build.mode !== 'primary') throw new Error('build mode not synchronized')
+if (!Array.isArray(c.agents.build.permissions)) throw new Error('build config-only permissions were removed')
+const rules = c.agents.PrimaryManager.permissions.filter((r) => r.action === 'subagent')
+if (rules[0]?.resource !== '*' || rules[0]?.effect !== 'deny') throw new Error('config catch-all was not moved before specific rules')
+if (!rules.some((r) => r.resource === 'ContextScout' && r.effect === 'allow')) throw new Error('config alias not canonicalized')
+if (rules.some((r) => r.resource === 'contextscout')) throw new Error('legacy config alias retained')
+if (rules.some((r) => r.resource === 'build' && r.effect === 'allow')) throw new Error('primary subagent allow retained')
+NODE
+
+grep -Fq 'ContextScout: allow' "$tmp/agents/CoderAgent.md"
+! grep -Fq 'contextscout:' "$tmp/agents/CoderAgent.md"
+! grep -Fq 'build: "allow"' "$tmp/agents/CoderAgent.md"
+test "$(grep -Fc 'ContextScout: allow' "$tmp/agents/CoderAgent.md")" -eq 1
+
+# Trusted managed skills and CLIs always resolve from installer-owned global
+# config, never from the current repository or a build user's fixed home.
+grep -Fq '"$HOME/.config/opencode/skills/context7/**": allow' "$tmp/agents/CoderAgent.md"
+grep -Fq '"npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow' "$tmp/agents/CoderAgent.md"
+test "$(grep -Fc 'stage-cli.ts*": allow' "$tmp/agents/CoderAgent.md")" -eq 1
+! grep -Fq '/root/.config/opencode/skills/' "$tmp/agents/CoderAgent.md"
+! grep -Fq '.opencode/skills/' "$tmp/agents/CoderAgent.md"
+
+mapfile -t wildcard_lines < <(grep -n '"\*": deny' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+test "${#wildcard_lines[@]}" -eq 4
+
+task_allow=$(grep -nF 'ContextScout: allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+test "${wildcard_lines[0]}" -lt "$task_allow"
+edit_allow=$(grep -nF '"safe/**": allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+test "${wildcard_lines[1]}" -lt "$edit_allow"
+read_allow=$(grep -nF '"$HOME/.config/opencode/skills/context7/**": allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+test "${wildcard_lines[2]}" -lt "$read_allow"
+bash_allow=$(grep -nF '"echo ok": allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+test "${wildcard_lines[3]}" -lt "$bash_allow"
+
+# Managed-only normalization must not rewrite user-owned agents.
+grep -Fq 'contextscout: "allow"' "$tmp/agents/UserCustom.md"
+grep -Fq '/root/.config/opencode/skills/task-management/scripts/stage-cli.ts*' "$tmp/agents/UserCustom.md"
+
+# Normalize the actual repository-managed catalog and audit the effective edit
+# policy for sensitive/generated paths. Default ask is acceptable for interactive
+# primary agents; an explicit effective allow is not.
+real="$tmp/real"
+mkdir -p "$real/agents"
+cp config/opencode/opencode.json "$real/opencode.json"
+OPENCODE_ARCHIVE_LEGACY=0 bash scripts/install-opencode-agents.sh \
+  config/opencode/agent "$real/agents"
+
+node - "$real/agents" <<'NODE'
+const fs = require('fs')
+const path = require('path')
+const root = process.argv[2]
+const sensitive = [
+  '.env',
+  'config/.env',
+  'app.env',
+  'config/app.env',
+  'private.key',
+  'config/private.key',
+  'cert.pem',
+  'config/cert.pem',
+  'token.secret',
+  'config/token.secret',
+  '.git/config',
+  'packages/app/.git/config',
+  'node_modules/pkg/index.js',
+  'packages/app/node_modules/pkg/index.js',
+]
+
+const wildcard = (value, pattern) => {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
+  return new RegExp(`^${escaped}$`).test(value)
+}
+
+const parseEntry = (line) => {
+  const match = /^(\s{4,})(?:"([^"]+)"|'([^']+)'|([^:#]+)):\s*(?:"(allow|deny|ask)"|'(allow|deny|ask)'|(allow|deny|ask))(?:\s*(?:#.*)?)$/.exec(line)
+  if (!match) return undefined
+  return { resource: (match[2] ?? match[3] ?? match[4]).trim(), effect: match[5] ?? match[6] ?? match[7] }
+}
+
+const failures = []
+for (const file of fs.readdirSync(root).filter((name) => name.endsWith('.md')).sort()) {
+  const id = file.slice(0, -3)
+  const lines = fs.readFileSync(path.join(root, file), 'utf8').split(/\r?\n/)
+  const frontmatterEnd = lines.indexOf('---', 1)
+  if (frontmatterEnd < 0) throw new Error(`${id}: malformed frontmatter`)
+
+  let rules = []
+  let scalar
+  for (let i = 1; i < frontmatterEnd; i++) {
+    const scalarMatch = /^  edit:\s*(allow|deny|ask)\s*$/.exec(lines[i])
+    if (scalarMatch) {
+      scalar = scalarMatch[1]
+      break
+    }
+    if (!/^  edit:\s*$/.test(lines[i])) continue
+    i++
+    while (i < frontmatterEnd && !/^  \S/.test(lines[i])) {
+      const entry = parseEntry(lines[i])
+      if (entry) rules.push(entry)
+      i++
+    }
+    break
+  }
+
+  const effect = (resource) => {
+    if (scalar) return scalar
+    for (let i = rules.length - 1; i >= 0; i--) {
+      if (wildcard(resource, rules[i].resource)) return rules[i].effect
+    }
+    return 'ask'
+  }
+
+  for (const resource of sensitive) {
+    if (effect(resource) === 'allow') failures.push(`${id}: edit allow reaches protected path '${resource}'`)
+  }
+}
+
+if (failures.length) throw new Error(`managed edit security audit failed:\n- ${failures.join('\n- ')}`)
+console.log('PASS: all managed agents deny-or-ask on secrets, .git and node_modules')
+NODE
+
+printf 'PASS: effects, catch-all precedence, managed ownership, delegation aliases, trusted skill paths and protected edit policy normalized\n'

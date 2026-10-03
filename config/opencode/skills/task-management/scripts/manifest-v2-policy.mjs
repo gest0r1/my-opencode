@@ -7,7 +7,6 @@ export class ManifestV2PolicyError extends Error {}
 const SHA = /^[0-9a-f]{40}$/i;
 const SHA256 = /^[0-9a-f]{64}$/i;
 const SUPERSEDE_REASONS = new Set([
-  'V1_TO_V2_MIGRATION',
   'MANIFEST_CONTRACT_CORRECTION',
   'BASELINE_SCOPE_MISMATCH',
   'PLANNING_EVIDENCE_CORRECTION',
@@ -232,12 +231,18 @@ function validatePlanningReadiness(manifest, root) {
   }
 
   const required = readiness.required_artifacts;
-  const keys = ['decision_register', 'technology_evidence', 'contract_inventory', 'test_strategy', 'accepted_risks', 'work_items'];
+  const mandatory = ['decision_register', 'work_items'];
+  const optional = ['technology_evidence', 'contract_inventory'];
   if (!required || typeof required !== 'object') {
     throw new ManifestV2PolicyError('planning_readiness.required_artifacts is required');
   }
-  for (const key of keys) {
+  for (const key of mandatory) {
     readFrozenArtifact(root, required[key], `planning_readiness.required_artifacts.${key}`);
+  }
+  for (const key of optional) {
+    if (required[key] !== undefined) {
+      readFrozenArtifact(root, required[key], `planning_readiness.required_artifacts.${key}`);
+    }
   }
 
   if (!Array.isArray(manifest.open_decisions) || manifest.open_decisions.length !== 0) {
@@ -279,32 +284,14 @@ function validateWorkItems(manifest, root) {
   }
 }
 
-function validateSourceSnapshot(manifest, root) {
+function validateSourceRequirements(manifest) {
   if (manifest.source_type !== 'github_issues') return;
-  if (!SHA256.test(String(manifest.source_snapshot_sha256 ?? ''))) {
-    throw new ManifestV2PolicyError('github_issues schema v2 manifest requires source_snapshot_sha256');
-  }
-  const file = join(root, 'sources', 'github-issues.json');
-  let content;
-  try { content = readFileSync(file, 'utf8'); }
-  catch { throw new ManifestV2PolicyError('authoritative GitHub Issue snapshot is missing'); }
-  if (sha256(content) !== manifest.source_snapshot_sha256.toLowerCase()) {
-    throw new ManifestV2PolicyError('authoritative GitHub Issue snapshot SHA-256 mismatch');
-  }
-  if (manifest.source_requirements_sha256 !== undefined) {
-    if (!SHA256.test(String(manifest.source_requirements_sha256))) {
-      throw new ManifestV2PolicyError('source_requirements_sha256 must be SHA-256 when present');
-    }
-    let snapshot;
-    try { snapshot = JSON.parse(content); }
-    catch { throw new ManifestV2PolicyError('authoritative GitHub Issue snapshot is invalid JSON'); }
-    if (!SHA256.test(String(snapshot.requirements_sha256 ?? '')) ||
-        snapshot.requirements_sha256.toLowerCase() !== manifest.source_requirements_sha256.toLowerCase()) {
-      throw new ManifestV2PolicyError('semantic GitHub Issue requirements SHA-256 mismatch');
-    }
+  if (!SHA256.test(String(manifest.source_requirements_sha256 ?? ''))) {
+    throw new ManifestV2PolicyError(
+      'github_issues schema v2 manifest requires source_requirements_sha256',
+    );
   }
 }
-
 function validateProjectPolicy(manifest, cwd) {
   const defaultRelative = '.opencode/pipeline-policy.json';
   const defaultFile = resolve(cwd, defaultRelative);
@@ -337,7 +324,7 @@ function validateProjectPolicy(manifest, cwd) {
           !/\.ya?ml$/i.test(gate.workflow) || !GITHUB_JOB_ID.test(String(gate.terminal_job ?? ''))) {
         throw new ManifestV2PolicyError(`project_policy.github_actions.${kind} has invalid workflow/terminal_job`);
       }
-      if (gate.trigger !== undefined && !['push', 'workflow_dispatch'].includes(gate.trigger)) {
+      if (gate.trigger !== undefined && !['push', 'pull_request', 'workflow_dispatch'].includes(gate.trigger)) {
         throw new ManifestV2PolicyError(`project_policy.github_actions.${kind}.trigger is invalid`);
       }
       if (gate.required_jobs !== undefined &&
@@ -549,8 +536,11 @@ function validateGithubExecutionContract(manifest) {
              new Set(gate.required_jobs).size !== gate.required_jobs.length)) {
           throw new ManifestV2PolicyError(`GITHUB_REQUIRED_JOBS_INVALID: ${pipeline.id}/${stage}`);
         }
-        if (!['push', 'workflow_dispatch'].includes(gate.trigger)) {
+        if (!['push', 'pull_request', 'workflow_dispatch'].includes(gate.trigger)) {
           throw new ManifestV2PolicyError(`GITHUB_TRIGGER_INVALID: ${pipeline.id}/${stage}`);
+        }
+        if (gate.trigger === 'pull_request' && (!Number.isSafeInteger(gate.pr_number) || gate.pr_number < 1)) {
+          throw new ManifestV2PolicyError(`GITHUB_PR_NUMBER_REQUIRED: ${pipeline.id}/${stage}`);
         }
         if (gate.timeout_seconds !== undefined &&
             (!Number.isInteger(gate.timeout_seconds) || gate.timeout_seconds < 30 || gate.timeout_seconds > 7200)) {
@@ -755,7 +745,9 @@ function validateGithubExecutionContract(manifest) {
 }
 
 export function validateManifestV2Policy(manifest, options = {}) {
-  if (manifest?.schema_version !== 2) return { checked_artifacts: 0, project_policy: undefined };
+  if (manifest?.schema_version !== 2) {
+    throw new ManifestV2PolicyError('pipeline manifest schema_version must be exactly 2');
+  }
   if (manifest.planning_mode !== 'design-freeze') {
     throw new ManifestV2PolicyError('schema v2 requires planning_mode=design-freeze');
   }
@@ -767,7 +759,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
   validatePreservedBaseline(manifest);
   validateLineage(manifest);
   validateGithubExecutionContract(manifest);
-  validateSourceSnapshot(manifest, root);
+  validateSourceRequirements(manifest);
   assertConflictSerialization(manifest);
   const projectPolicy = validateProjectPolicy(manifest, cwd);
   const usesOpenCodeHost = (manifest.pipelines ?? []).some((pipeline) =>
@@ -808,3 +800,4 @@ export function validateManifestV2Policy(manifest, options = {}) {
   }
   return { checked_artifacts: true, project_policy: projectPolicy };
 }
+

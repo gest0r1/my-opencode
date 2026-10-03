@@ -2,7 +2,7 @@
 name: DocWriter
 description: Updates approved Markdown documentation without changing pipeline policy.
 mode: subagent
-model: opencode-go/mimo-v2.5
+model: opencode-go/muse-spark-1.3-contributor
 temperature: 0.2
 permission:
   bash: deny
@@ -30,3 +30,4 @@ history files. If an existing docs file unexpectedly shrinks materially after an
 edit, stop and report the path instead of continuing.
 
 Return changed documentation paths and the documented user/developer behavior.
+

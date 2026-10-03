@@ -12,7 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { probeRequirements, requirementsSha256ForSnapshot } from './github-issue-cli.ts';
+import { probeRequirements } from './github-issue-cli.ts';
 
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -25,15 +25,8 @@ const MACHINE_FILES = new Set([
   'git-runtime.json',
   'refresh-impact.json',
 ]);
-const COPY_DIRS = ['planning', 'stories', 'reviews', 'sources', 'work-items'];
-const COPY_FILES = [
-  'decision-register.md',
-  'technology-evidence.md',
-  'contract-inventory.md',
-  'test-strategy.md',
-  'accepted-risks.md',
-  'work-items.json',
-];
+const COPY_DIRS = ['planning', 'stories', 'reviews', 'work-items'];
+const COPY_FILES = ['decision-register.md', 'work-items.json'];
 const STRUCTURAL_PATHS = new Set([
   'docs/pipeline-rules.md',
   '.opencode/pipeline-policy.json',
@@ -160,6 +153,9 @@ async function readManifest(stateRoot: string, runId: string): Promise<{ manifes
     throw new RefreshError(`manifest not found: ${path}`);
   });
   const manifest = JSON.parse(raw) as Manifest;
+  if (manifest.schema_version !== 2) {
+    throw new RefreshError('pipeline manifest schema_version must be exactly 2');
+  }
   if (manifest.run_id !== runId) throw new RefreshError('manifest run_id does not match selected run');
   return { manifest, path, raw };
 }
@@ -311,7 +307,7 @@ function computeAffected(manifest: Manifest, changed: string[]): {
       addGate(affected, manifest, 'architecture');
       addGate(affected, manifest, 'technical');
       rebuildWorkItems = true;
-      reasons.add('legacy_freshness_scope');
+      reasons.add('fallback_freshness_scope');
     }
   }
 
@@ -323,28 +319,15 @@ function computeAffected(manifest: Manifest, changed: string[]): {
   };
 }
 
-async function sourceRequirementsStatus(manifest: Manifest, root: string, cwd: string): Promise<{
+async function sourceRequirementsStatus(manifest: Manifest, _root: string, cwd: string): Promise<{
   changed: boolean;
   frozen: string | null;
   live: string | null;
 }> {
   if (manifest.source_type !== 'github_issues') return { changed: false, frozen: null, live: null };
-  const sourceFile = join(root, 'sources', 'github-issues.json');
-  const sourceRaw = await readFile(sourceFile, 'utf8');
-  if (manifest.source_snapshot_sha256 &&
-      sha256(sourceRaw).toLowerCase() !== String(manifest.source_snapshot_sha256).toLowerCase()) {
-    throw new RefreshError('frozen GitHub Issue snapshot integrity mismatch');
-  }
-  const snapshot = JSON.parse(sourceRaw) as Record<string, any>;
-  const computed = requirementsSha256ForSnapshot(snapshot);
-  if (snapshot.requirements_sha256 &&
-      String(snapshot.requirements_sha256).toLowerCase() !== computed.toLowerCase()) {
-    throw new RefreshError('stored semantic requirements digest does not match frozen Issue snapshot');
-  }
-  const frozen = String(manifest.source_requirements_sha256 ?? snapshot.requirements_sha256 ?? computed);
-  if (manifest.source_requirements_sha256 &&
-      String(manifest.source_requirements_sha256).toLowerCase() !== computed.toLowerCase()) {
-    throw new RefreshError('manifest semantic requirements digest does not match frozen Issue snapshot');
+  const frozen = String(manifest.source_requirements_sha256 ?? '');
+  if (!/^[0-9a-f]{64}$/i.test(frozen)) {
+    throw new RefreshError('github_issues manifest has no valid source_requirements_sha256');
   }
   const numbers = Array.isArray(manifest.source_issues)
     ? manifest.source_issues.map((issue: any) => Number(issue.number)).filter((value: number) => Number.isInteger(value) && value > 0)
@@ -352,12 +335,9 @@ async function sourceRequirementsStatus(manifest: Manifest, root: string, cwd: s
   if (!numbers.length) throw new RefreshError('github_issues manifest has no source issue numbers');
   const liveResult = await probeRequirements(numbers, { cwd });
   const live = String(liveResult.requirements_sha256 ?? '');
-  if (!/^[0-9a-f]{64}$/i.test(frozen) || !/^[0-9a-f]{64}$/i.test(live)) {
-    throw new RefreshError('invalid semantic requirements digest');
-  }
+  if (!/^[0-9a-f]{64}$/i.test(live)) throw new RefreshError('invalid live semantic requirements digest');
   return { changed: frozen.toLowerCase() !== live.toLowerCase(), frozen, live };
 }
-
 function structuralPaths(manifest: Manifest, changed: string[]): string[] {
   const policyPath = typeof manifest.project_policy?.path === 'string' ? manifest.project_policy.path : undefined;
   return changed.filter((path) => STRUCTURAL_PATHS.has(path) || (policyPath && path === policyPath));
@@ -504,11 +484,6 @@ async function createBoundedRun(
     cloned.planning_base_sha = newBase;
     const semanticDigest = String((impact as any).source_requirements?.frozen ?? '');
     if (cloned.source_type === 'github_issues' && /^[0-9a-f]{64}$/i.test(semanticDigest)) {
-      const inheritedSource = join(newRoot, 'sources', 'github-issues.json');
-      const snapshot = JSON.parse(await readFile(inheritedSource, 'utf8')) as Record<string, any>;
-      snapshot.requirements_sha256 = semanticDigest;
-      await writeJsonAtomic(inheritedSource, snapshot);
-      cloned.source_snapshot_sha256 = sha256(await readFile(inheritedSource, 'utf8'));
       cloned.source_requirements_sha256 = semanticDigest;
     } else if (/^[0-9a-f]{64}$/i.test(semanticDigest)) {
       cloned.source_requirements_sha256 = semanticDigest;
@@ -588,9 +563,6 @@ async function createBoundedRun(
 }
 
 async function inspectContext(manifest: Manifest, cwd: string): Promise<{ main: string; head: string; branch: string }> {
-  if (manifest.schema_version !== 2) {
-    throw new RefreshError('LEGACY_V1_FULL_REPLAN_REQUIRED');
-  }
   const branch = currentBranch(cwd);
   if (!branch || branch === 'main' || branch === 'master') {
     throw new RefreshError('refresh must run in a non-default linked worktree branch');
@@ -623,17 +595,6 @@ async function analyzeAndApply(
   if (state?.manifest_sha256 &&
       String(state.manifest_sha256).toLowerCase() !== sha256(manifestRaw).toLowerCase()) {
     throw new RefreshError('frozen manifest integrity mismatch');
-  }
-
-  if (manifest.schema_version !== 2) {
-    return {
-      status: 'PASS',
-      classification: 'STRUCTURAL_IMPACT',
-      action: 'full_replan',
-      old_run_id: runId,
-      reasons: ['legacy_v1'],
-      copied_by_cli: false,
-    };
   }
 
   const context = await inspectContext(manifest, cwd);
