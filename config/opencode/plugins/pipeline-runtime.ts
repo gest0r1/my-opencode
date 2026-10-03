@@ -1,3 +1,4 @@
+import { dispatchPacket } from "../skills/task-management/scripts/pipeline-dispatch.ts"
 import { Plugin } from "@opencode/plugin"
 import fs from "node:fs"
 import path from "node:path"
@@ -46,6 +47,7 @@ type RuntimeContext = {
   changed_files: string[]
   diff_path?: string
   required_reread: string[]
+  no_session_reuse?: boolean
 }
 
 type InvocationMeta = {
@@ -56,9 +58,13 @@ type InvocationMeta = {
   prompt_bytes: number
   packet_bytes?: number
   prior_files_read: string[]
+  no_session_reuse?: boolean
 }
 
 type SessionStats = {
+  context_bytes: number
+  model_requests: number
+  model?: unknown
   tool_calls: number
   read_calls: number
   grep_calls: number
@@ -77,6 +83,7 @@ const prepareInput = {
     stage: { type: "string" },
     role: { type: "string" },
     work_item_id: { type: "string" },
+    no_session_reuse: { type: "boolean" },
     loop: { type: "integer", minimum: 0 },
     technical_fix: { type: "boolean" },
     state_revision: { type: "string" },
@@ -88,7 +95,7 @@ const prepareInput = {
   },
   required: [
     "run_id", "pipeline_id", "stage", "role", "work_item_id",
-    "loop", "technical_fix", "state_revision",
+
   ],
   additionalProperties: false,
 } as const
@@ -164,7 +171,7 @@ function validateReuseDelta(root: string, ctx: RuntimeContext, previous: Registr
     return { ok: false as const, reason: "stale_state" }
   }
   const diff = resolveInsideRoot(root, ctx.diff_path)
-  if (!ctx.changed_files.length && !(diff && fs.existsSync(diff))) return { ok: false as const, reason: "missing_delta" }
+  // Fresh authoritative review/gate evidence can request a repair before any source change.
   for (const item of ctx.required_reread) {
     const resolved = resolveInsideRoot(root, item)
     if (!resolved || !fs.existsSync(resolved)) return { ok: false as const, reason: "stale_evidence" }
@@ -192,7 +199,7 @@ function isMeaningfulTool(toolName: string, input: any) {
 function getStats(map: Map<string, SessionStats>, sessionID: string) {
   let value = map.get(sessionID)
   if (!value) {
-    value = { tool_calls: 0, read_calls: 0, grep_calls: 0, glob_calls: 0, edit_calls: 0, shell_calls: 0, files_read: new Set() }
+    value = { context_bytes: 0, model_requests: 0, tool_calls: 0, read_calls: 0, grep_calls: 0, glob_calls: 0, edit_calls: 0, shell_calls: 0, files_read: new Set() }
     map.set(sessionID, value)
   }
   return value
@@ -211,8 +218,28 @@ export default Plugin.define({
     const root = String(plugin.location.directory)
     const statsBySession = new Map<string, SessionStats>()
     const invocationByCallID = new Map<string, InvocationMeta>()
+    const optionFile = (id: string) => path.join(root, '.tmp/pipeline-runtime', sha256(id).slice(0, 24), 'options.json')
+    const reuseDisabled = (id: string) => safeJson(optionFile(id))?.no_session_reuse === true
+    const runBySession = new Map<string, string>()
+    const parentFiles = new Map<string, Set<string>>()
+    await plugin.session.hook("prompt", (event) => {
+      const text = JSON.stringify(event.prompt)
+      if (/pipeline-run/.test(text)) {
+        const file = optionFile(String(event.sessionID)); ensureDir(path.dirname(file))
+        fs.writeFileSync(file, JSON.stringify({ no_session_reuse: /--no-session-reuse/.test(text) }))
+      }
+    })
+    await plugin.session.hook("compaction", (event) => {
+      const run = runBySession.get(String(event.sessionID))
+      if (run) appendJsonLine(metricsFile(root, run), { event: "parent_compaction", timestamp: new Date().toISOString() })
+    })
     const visibleBySession = new Map<string, string[]>()
     await plugin.session.hook("context", (context) => {
+      const stats = getStats(statsBySession, String(context.sessionID))
+      stats.context_bytes += byteLength({ system: context.system, messages: context.messages })
+      stats.model_requests++; stats.model = context.model
+      const run = runBySession.get(String(context.sessionID))
+      if (run) appendJsonLine(metricsFile(root, run), { event: 'parent_context', timestamp: new Date().toISOString(), context_bytes: byteLength({ system: context.system, messages: context.messages }), model: context.model })
       if (String(context.agent) === "OpenStageOrchestrator") {
         visibleBySession.set(String(context.sessionID), Object.keys(context.tools))
       }
@@ -255,16 +282,17 @@ export default Plugin.define({
           if (existing && contextIsFresh(existing)) {
             return { content: `rejected: outstanding prepare already exists for work_item_id=${args.work_item_id}` }
           }
+          const packet = await dispatchPacket(root, args.run_id, args.pipeline_id, args.stage, args.work_item_id, args.role)
+          runBySession.set(String(context.sessionID), args.run_id)
+          const previous = loadRegistry(root, args.run_id).find(item => identity(item as RuntimeContext) === identity(packet as RuntimeContext))
           const now = Date.now()
           const ctx: RuntimeContext = {
-            nonce: crypto.randomUUID(), prepared_at: new Date(now).toISOString(),
-            expires_at: new Date(now + CONTEXT_TTL_MS).toISOString(),
-            parent_session_id: String(context.sessionID), run_id: args.run_id, pipeline_id: args.pipeline_id,
-            stage: args.stage, role: args.role, work_item_id: args.work_item_id, loop: args.loop,
-            technical_fix: args.technical_fix, state_revision: args.state_revision,
-            previous_state_revision: args.previous_state_revision, evidence_path: args.evidence_path,
-            changed_files: args.changed_files ?? [], diff_path: args.diff_path,
-            required_reread: args.required_reread ?? [],
+            ...packet, nonce: crypto.randomUUID(), prepared_at: new Date(now).toISOString(),
+            expires_at: new Date(now + CONTEXT_TTL_MS).toISOString(), parent_session_id: String(context.sessionID),
+            technical_fix: packet.loop > 0, previous_state_revision: previous?.state_revision,
+            evidence_path: packet.evidence_paths.at(-1), changed_files: packet.repair_paths,
+            required_reread: [packet.work_item_path, ...packet.authoritative_paths, ...packet.evidence_paths],
+            no_session_reuse: args.no_session_reuse === true || reuseDisabled(String(context.sessionID)),
           }
           ensureDir(path.dirname(file))
           fs.writeFileSync(file, JSON.stringify(ctx, null, 2) + "\n", "utf8")
@@ -279,6 +307,15 @@ export default Plugin.define({
         if (!sessionID || event.tool === "pipeline_runtime_prepare") return
         const stats = getStats(statsBySession, sessionID)
         stats.tool_calls += 1
+        const run = runBySession.get(sessionID)
+        if (run) {
+          const file = fileFromInput(event.input)
+          const files = parentFiles.get(sessionID) ?? new Set<string>()
+          if (event.tool === "read" && file) files.add(path.resolve(root, file))
+          parentFiles.set(sessionID, files)
+          appendJsonLine(metricsFile(root, run), { event: "parent_tool", timestamp: new Date().toISOString(), tool: event.tool,
+            read_calls: event.tool === "read" ? 1 : 0, unique_files_read: files.size })
+        }
         if (event.tool === "read") {
           stats.read_calls += 1
           const file = fileFromInput(event.input)
@@ -301,8 +338,23 @@ export default Plugin.define({
       event.input = input
 
       if (!sessionID || !workItemID) return
-      const ctx = consumeRuntimeContext(root, sessionID, workItemID)
+      let ctx = consumeRuntimeContext(root, sessionID, workItemID)
+      // Preparation is enforced here; the LLM need not remember a helper call.
+      const marker = /<pipeline_dispatch run="([A-Za-z0-9._-]+)" pipeline="([^"]+)" stage="([^"]+)"\s*\/>/.exec(String(input.prompt))
+      if (!ctx && marker) {
+        const packet = await dispatchPacket(root, marker[1], marker[2], marker[3], workItemID, role)
+        const previous = loadRegistry(root, packet.run_id).find(item => identity(item as RuntimeContext) === identity(packet as RuntimeContext))
+        ctx = { ...packet, nonce: crypto.randomUUID(), prepared_at: new Date().toISOString(), expires_at: new Date(Date.now() + CONTEXT_TTL_MS).toISOString(),
+          parent_session_id: sessionID, technical_fix: packet.loop > 0, previous_state_revision: previous?.state_revision,
+          evidence_path: packet.evidence_paths.at(-1), changed_files: packet.repair_paths, required_reread: [packet.work_item_path, ...packet.authoritative_paths, ...packet.evidence_paths],
+          no_session_reuse: reuseDisabled(sessionID) }
+      }
       if (!ctx) return
+      const current = await dispatchPacket(root, ctx.run_id, ctx.pipeline_id, ctx.stage, ctx.work_item_id, role)
+      runBySession.set(sessionID, ctx.run_id)
+      if (current.state_revision !== ctx.state_revision) throw new Error("STALE_DISPATCH_STATE")
+      input.prompt = [String(input.prompt), "<dispatch_packet>", JSON.stringify(current), "</dispatch_packet>", "Read authoritative files directly. Conversation history is supplemental. Return status, blockers and artifact paths."].join("\n")
+      event.input = input
       const promptBytes = byteLength(input.prompt ?? "")
       const rememberFresh = (reason: string, priorFiles: string[] = []) => {
         invocationByCallID.set(String(event.id), {
@@ -323,6 +375,7 @@ export default Plugin.define({
         item.run_id === ctx.run_id && item.pipeline_id === ctx.pipeline_id &&
         item.stage === ctx.stage && item.role === role && item.work_item_id === ctx.work_item_id)
 
+      if (ctx.no_session_reuse) return rememberFresh("disabled_by_owner")
       if (!ctx.technical_fix) return rememberFresh("baseline")
       if (!match) return rememberFresh("no_prior_session")
       if (match.status !== "healthy") return rememberFresh(match.status, match.files_read ?? [])
@@ -335,6 +388,8 @@ export default Plugin.define({
         return rememberFresh(delta.reason, match.files_read ?? [])
       }
 
+      try { await plugin.session.get({ sessionID: match.session_id as any }) }
+      catch { return rememberFresh("session_unavailable", match.files_read ?? []) }
       input.sessionID = match.session_id
       input.prompt = [
         String(input.prompt ?? ""), "", "<session_reuse_delta>",
@@ -354,7 +409,12 @@ export default Plugin.define({
     })
 
     await plugin.tool.hook("execute.after", async (event) => {
-      if (event.tool !== "subagent") return
+      if (event.tool !== "subagent") {
+        const run = runBySession.get(String(event.sessionID))
+        if (run && event.status === "completed" && event.tool === "read") appendJsonLine(metricsFile(root, run), {
+          event: "parent_read", timestamp: new Date().toISOString(), bytes_read: byteLength(event.result.content) })
+        return
+      }
       const callID = String(event.id)
       const invocation = invocationByCallID.get(callID)
       if (!invocation) return
@@ -397,6 +457,7 @@ export default Plugin.define({
         latency_ms: Date.now() - invocation.started_at,
         orientation_ms: sessionStats?.first_meaningful_at ? sessionStats.first_meaningful_at - invocation.started_at : null,
         prompt_bytes: invocation.prompt_bytes,
+        context_bytes: sessionStats?.context_bytes ?? null, model_requests: sessionStats?.model_requests ?? null, model: sessionStats?.model ?? null,
         response_bytes: event.status === "completed" ? byteLength(event.result?.content ?? event.result?.output ?? "") : 0,
         packet_bytes: invocation.packet_bytes ?? null,
         tool_calls: sessionStats?.tool_calls ?? null, read_calls: sessionStats?.read_calls ?? null,

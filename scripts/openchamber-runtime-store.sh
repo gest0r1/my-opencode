@@ -13,8 +13,7 @@ OPENCHAMBER_CURRENT_BIN="$OPENCHAMBER_CURRENT/bin/openchamber"
 OPENCHAMBER_MANAGED_BIN="$HOME/.local/bin/openchamber"
 OPENCHAMBER_PREVIOUS_TARGET=''
 OPENCHAMBER_RUNTIME_ACTIVATED=0
-OPENCHAMBER_SERVICE_SNAPSHOT=''
-OPENCHAMBER_SERVICE_WAS_ACTIVE=0
+OPENCHAMBER_PREVIOUS_FILE="$OPENCHAMBER_RUNTIME_ROOT/previous"
 
 oc_runtime_init() {
   mkdir -p "$OPENCHAMBER_RELEASES" "$HOME/.local/bin"
@@ -134,62 +133,11 @@ oc_rollback_activation() {
 }
 
 oc_commit_activation() {
+  if [[ -n "$OPENCHAMBER_PREVIOUS_TARGET" ]]; then
+    printf '%s\n' "$OPENCHAMBER_PREVIOUS_TARGET" > "$OPENCHAMBER_PREVIOUS_FILE"
+  fi
   OPENCHAMBER_PREVIOUS_TARGET=''
   OPENCHAMBER_RUNTIME_ACTIVATED=0
-}
-
-oc_snapshot_service() {
-  local unit=$1 startup_env=$2 drop_dir=$3 snapshot_root=$4
-  OPENCHAMBER_SERVICE_SNAPSHOT="$snapshot_root"
-  rm -rf -- "$snapshot_root"
-  mkdir -p "$snapshot_root"
-
-  [[ -f "$unit" ]] && cp -a "$unit" "$snapshot_root/unit" || : > "$snapshot_root/no-unit"
-  [[ -f "$startup_env" ]] && cp -a "$startup_env" "$snapshot_root/startup.env" || : > "$snapshot_root/no-startup-env"
-  [[ -d "$drop_dir" ]] && cp -a "$drop_dir" "$snapshot_root/dropins" || : > "$snapshot_root/no-dropins"
-  systemctl --user is-active --quiet openchamber.service && OPENCHAMBER_SERVICE_WAS_ACTIVE=1 || OPENCHAMBER_SERVICE_WAS_ACTIVE=0
-}
-
-oc_rollback_service() {
-  local unit=$1 startup_env=$2 drop_dir=$3
-  [[ -n "$OPENCHAMBER_SERVICE_SNAPSHOT" && -d "$OPENCHAMBER_SERVICE_SNAPSHOT" ]] || {
-    oc_rollback_activation
-    return 0
-  }
-
-  systemctl --user stop openchamber.service >/dev/null 2>&1 || true
-  if [[ -f "$OPENCHAMBER_SERVICE_SNAPSHOT/unit" ]]; then
-    mkdir -p "$(dirname "$unit")"
-    cp -a "$OPENCHAMBER_SERVICE_SNAPSHOT/unit" "$unit"
-  else
-    rm -f -- "$unit"
-  fi
-
-  if [[ -f "$OPENCHAMBER_SERVICE_SNAPSHOT/startup.env" ]]; then
-    mkdir -p "$(dirname "$startup_env")"
-    cp -a "$OPENCHAMBER_SERVICE_SNAPSHOT/startup.env" "$startup_env"
-  else
-    rm -f -- "$startup_env"
-  fi
-
-  rm -rf -- "$drop_dir"
-  if [[ -d "$OPENCHAMBER_SERVICE_SNAPSHOT/dropins" ]]; then
-    mkdir -p "$(dirname "$drop_dir")"
-    cp -a "$OPENCHAMBER_SERVICE_SNAPSHOT/dropins" "$drop_dir"
-  fi
-
-  oc_rollback_activation
-  systemctl --user daemon-reload >/dev/null 2>&1 || true
-  if (( OPENCHAMBER_SERVICE_WAS_ACTIVE == 1 )) && [[ -f "$unit" ]]; then
-    systemctl --user restart openchamber.service >/dev/null 2>&1 || true
-  fi
-}
-
-oc_commit_service() {
-  [[ -z "$OPENCHAMBER_SERVICE_SNAPSHOT" ]] || rm -rf -- "$OPENCHAMBER_SERVICE_SNAPSHOT"
-  OPENCHAMBER_SERVICE_SNAPSHOT=''
-  OPENCHAMBER_SERVICE_WAS_ACTIVE=0
-  oc_commit_activation
 }
 
 oc_remove_legacy_bun_global() {
@@ -205,7 +153,7 @@ oc_remove_legacy_bun_global() {
 oc_prune_releases() {
   local current previous keep dir
   current="$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)"
-  previous="$OPENCHAMBER_PREVIOUS_TARGET"
+  previous="${OPENCHAMBER_PREVIOUS_TARGET:-$(cat "$OPENCHAMBER_PREVIOUS_FILE" 2>/dev/null || true)}"
   for dir in "$OPENCHAMBER_RELEASES"/*; do
     [[ -d "$dir" ]] || continue
     keep=0

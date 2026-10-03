@@ -265,6 +265,8 @@ export interface RuntimeReplanRecord {
 }
 
 export interface StageRuntime {
+  repair_evidence?: FrozenArtifact;
+  repair_paths?: string[];
   status: StageStatus;
   technical_fix_cycles?: number;
   technical_fix_limit?: number;

@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TASK_TMP=$(mktemp -d)
 trap 'rm -rf -- "$TASK_TMP"' EXIT
 mkdir -p "$TASK_TMP/bin" "$TASK_TMP/home/.config/opencode" "$TASK_TMP/home/.agents/skills" "$TASK_TMP/home/.opencode/bin"
-printf 'previous config\n' > "$TASK_TMP/home/.config/opencode/opencode.json"
+printf '{"plugins":[]}\n' > "$TASK_TMP/home/.config/opencode/opencode.json"
 printf 'previous skill\n' > "$TASK_TMP/home/.agents/skills/previous"
 cat > "$TASK_TMP/home/.opencode/bin/opencode" <<'BIN'
 #!/usr/bin/env bash
@@ -32,7 +32,7 @@ env HOME="$TASK_TMP/home" PATH="$TASK_TMP/bin:$PATH" SOURCE_ARCHIVE="$TASK_TMP/s
   OPENCODE_DEPENDENCY_TIMEOUT_SECONDS=1 bash "$ROOT/scripts/install-opencode-generation.sh" > "$TASK_TMP/output" 2>&1 || rc=$?
 [[ "$rc" == 124 ]] || { cat "$TASK_TMP/output"; exit 1; }
 grep -Fq 'timed out after 1s' "$TASK_TMP/output"
-[[ "$(cat "$TASK_TMP/home/.config/opencode/opencode.json")" == 'previous config' ]]
+[[ "$(cat "$TASK_TMP/home/.config/opencode/opencode.json")" == '{"plugins":[]}' ]]
 [[ "$(cat "$TASK_TMP/home/.agents/skills/previous")" == 'previous skill' ]]
 [[ "$("$TASK_TMP/home/.opencode/bin/opencode" --version)" == 2.0.21 ]]
 [[ -z "$(find "$TASK_TMP/home/.config" "$TASK_TMP/home/.agents" -maxdepth 1 -name '*-stage.*' -print -quit)" ]]

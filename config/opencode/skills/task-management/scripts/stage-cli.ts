@@ -1,3 +1,4 @@
+import { dispatchPacket } from './pipeline-dispatch.ts';
 import { candidateEvidenceMatches } from './github-actions-gate-core.mjs';
 // Stable CLI entry point. Keep core stage/DAG/state implementation untouched and
 // reject non-executable machine gates BEFORE init creates any state or approve mutates it.
@@ -329,6 +330,18 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
 
 async function main(args: string[]): Promise<void> {
   const [command, identifier] = args;
+  if (command === 'dispatch') {
+    if (!identifier) throw new Error('run-id is required');
+    const allowed = new Set(['--pipeline', '--stage', '--work-item', '--role']);
+    for (let i = 2; i < args.length; i++) {
+      if (args[i] === '--json') continue;
+      if (!allowed.has(args[i]) || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error('Invalid dispatch arguments');
+      i++;
+    }
+    const packet = await dispatchPacket(process.cwd(), identifier, optionFromArgs(args, '--pipeline') ?? '', optionFromArgs(args, '--stage') ?? '', optionFromArgs(args, '--work-item') ?? '', optionFromArgs(args, '--role') ?? '');
+    console.log(JSON.stringify(packet));
+    return;
+  }
   if (command === 'owner-accept') {
     await ownerAcceptance(args);
     return;

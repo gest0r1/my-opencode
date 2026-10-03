@@ -167,6 +167,9 @@ rm -rf -- "$STAGE_SKILLS/bitrix24"
 rm -f -- "$STAGE_CONFIG/env.example"
 rm -rf -- "$STAGE_CONFIG/skills/bitrix24"
 
+# Merge user plugins before validation/atomic commit; parsing errors preserve active config.
+node "$SRC/scripts/merge-user-plugins.mjs" "$CONFIG_HOME" "$STAGE_CONFIG" "$SRC/config/opencode/plugin-policy.json"
+
 # V2 local plugins resolve external dependencies from the config directory.
 # Install them before commit so an unavailable/incompatible dependency cannot
 # corrupt the active configuration.

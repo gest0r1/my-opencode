@@ -1644,6 +1644,7 @@ export async function recordTechnicalFixCycle(
   stage: string,
   pipelineId?: string,
   repairClass: 'technical_fix' | 'security_fix' = 'technical_fix',
+  evidencePath?: string,
 ): Promise<PipelineState> {
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
@@ -1680,6 +1681,12 @@ export async function recordTechnicalFixCycle(
         `TECHNICAL_FIX_LIMIT_EXCEEDED: ${pipeline.id}/${stage} used=${runtime.technical_fix_cycles ?? 0} limit=${limit}; owner may grant +N cycles or request runtime replan`,
       );
     }
+    if (evidencePath) {
+      const absolute = resolve(evidencePath);
+      if (!absolute.startsWith(resolve(process.cwd()) + '/')) throw new StageCliError('REPAIR_EVIDENCE_OUTSIDE_PROJECT');
+      runtime.repair_evidence = { path: absolute, sha256: sha256(readFileSync(absolute, 'utf8')) };
+    } else runtime.repair_evidence = undefined;
+    runtime.repair_paths = [...scopePreflight.paths];
     runtime.technical_fix_cycles = next;
     runtime.message = `${repairClass} cycle ${next}/${limit}`;
     state.scope_preflight = undefined;
@@ -2112,6 +2119,7 @@ export async function runCli(args: string[]): Promise<void> {
         stage,
         options.pipelineId,
         options.repairClass ?? 'technical_fix',
+        options.evidencePath,
       ),
       options.json,
     );

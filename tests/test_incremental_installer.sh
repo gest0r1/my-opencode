@@ -286,11 +286,11 @@ dir="$(run_case noop 2.0.21 "$CONFIG_SHA" "$APP_SHA" 0)"
 assert_contains "$dir/output.log" 'Config-only update: OpenCode binary 2.0.21 is unchanged'
 assert_contains "$dir/output.log" 'OpenChamber source/runtime metadata unchanged: release lookup skipped'
 assert_contains "$dir/output.log" 'OpenChamber runtime fingerprint/package unchanged: package download skipped'
-assert_contains "$dir/output.log" 'service restart required to reload agents/models.'
-assert_contains "$dir/trace.log" 'systemctl --user restart openchamber.service'
+assert_contains "$dir/output.log" 'Delivery prepared:'
+assert_not_contains "$dir/trace.log" 'systemctl --user restart openchamber.service'
 assert_contains "$dir/trace.log" 'contents/install.sh'
 assert_not_contains "$dir/trace.log" 'release download'
-assert_contains "$dir/trace.log" 'openchamber startup enable'
+assert_not_contains "$dir/trace.log" 'openchamber startup enable'
 assert_not_contains "$dir/trace.log" 'UNEXPECTED bun'
 
 # 2. Config-only: fetch/run the config installer with binary installation disabled.
@@ -298,7 +298,7 @@ dir="$(run_case config-only 2.0.21 "$OLD_APP_SHA" "$APP_SHA" 0)"
 assert_contains "$dir/output.log" 'Config-only update: OpenCode binary 2.0.21 is unchanged'
 assert_contains "$dir/trace.log" 'contents/install.sh?ref='
 assert_contains "$dir/trace.log" 'install skip=1'
-assert_contains "$dir/trace.log" 'systemctl --user restart openchamber.service'
+assert_not_contains "$dir/trace.log" 'systemctl --user restart openchamber.service'
 assert_not_contains "$dir/trace.log" 'release download'
 assert_not_contains "$dir/trace.log" 'UNEXPECTED bun'
 
@@ -309,8 +309,8 @@ assert_contains "$dir/trace.log" 'install skip=0'
 assert_contains "$dir/output.log" 'OpenChamber runtime fingerprint/package unchanged: package download skipped'
 assert_not_contains "$dir/trace.log" 'release download'
 assert_not_contains "$dir/trace.log" 'UNEXPECTED bun'
-assert_contains "$dir/trace.log" 'openchamber startup enable'
-assert_contains "$dir/trace.log" 'systemctl --user restart openchamber.service'
+assert_not_contains "$dir/trace.log" 'openchamber startup enable'
+assert_not_contains "$dir/trace.log" 'systemctl --user restart openchamber.service'
 
 # 4. OpenChamber source SHA advances but runtime fingerprint points to the same
 # package source: download only the small exact-SHA manifest, not the package.
@@ -328,7 +328,7 @@ echo 'PASS: incremental V2 execution keeps binary/config/runtime/service updates
 # Config-only updates inside the running console must report pending activation
 # and preserve the console instead of silently leaving stale agents live.
 dir="$(run_case config-defer 2.0.21 "$CONFIG_SHA" "$APP_SHA" 0 defer)"
-assert_contains "$dir/output.log" 'PENDING APPLY: current OpenChamber terminal was preserved.'
-assert_contains "$dir/output.log" 'service restart required to reload agents/models.'
+assert_contains "$dir/home/.local/state/my-opencode/openchamber-v2-install.state" 'effective_restart_mode=defer'
+assert_contains "$dir/output.log" 'Delivery prepared:'
 assert_not_contains "$dir/trace.log" 'systemctl --user restart openchamber.service'
 assert_contains "$dir/home/.local/state/my-opencode/openchamber-v2-install.state" 'service_restart_pending=1'
