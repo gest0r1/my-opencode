@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/agents"
+mkdir -p "$tmp/agents" "$tmp/source"
 
 cat > "$tmp/opencode.json" <<'JSON'
 {
@@ -36,13 +36,20 @@ name: CoderAgent
 mode: subagent
 permission:
   task:
-    contextscout: allow
+    contextscout: "allow"
     ContextScout: allow
-    build: allow
+    build: "allow"
+    "*": "deny"
+  edit:
+    "safe/**": "allow"
+    "*": "deny"
+  bash:
+    "echo ok": allow
     "*": deny
 ---
 Coder
 EOF
+cp "$tmp/agents/CoderAgent.md" "$tmp/source/coder.md"
 
 cat > "$tmp/agents/ContextScout.md" <<'EOF'
 ---
@@ -51,6 +58,7 @@ mode: subagent
 ---
 Scout
 EOF
+cp "$tmp/agents/ContextScout.md" "$tmp/source/context.md"
 
 cat > "$tmp/agents/PrimaryManager.md" <<'EOF'
 ---
@@ -59,6 +67,7 @@ mode: primary
 ---
 Manager with config-only permissions
 EOF
+cp "$tmp/agents/PrimaryManager.md" "$tmp/source/manager.md"
 
 cat > "$tmp/agents/build.md" <<'EOF'
 ---
@@ -67,8 +76,22 @@ mode: primary
 ---
 Build
 EOF
+cp "$tmp/agents/build.md" "$tmp/source/build.md"
 
-node scripts/normalize-opencode-agent-permissions.mjs "$tmp/opencode.json" "$tmp/agents"
+cat > "$tmp/agents/UserCustom.md" <<'EOF'
+---
+name: UserCustom
+mode: subagent
+permission:
+  task:
+    contextscout: "allow"
+    "*": "deny"
+---
+User-owned agent: must not be rewritten by managed normalization.
+EOF
+
+node scripts/normalize-opencode-agent-permissions.mjs \
+  "$tmp/opencode.json" "$tmp/agents" "$tmp/source"
 
 node - "$tmp/opencode.json" <<'NODE'
 const fs = require('fs')
@@ -85,12 +108,21 @@ if (rules.some((r) => r.resource === 'build' && r.effect === 'allow')) throw new
 NODE
 
 grep -Fq 'ContextScout: allow' "$tmp/agents/CoderAgent.md"
-! grep -Fq 'contextscout: allow' "$tmp/agents/CoderAgent.md"
-! grep -Fq 'build: allow' "$tmp/agents/CoderAgent.md"
+! grep -Fq 'contextscout:' "$tmp/agents/CoderAgent.md"
+! grep -Fq 'build: "allow"' "$tmp/agents/CoderAgent.md"
 count=$(grep -Fc 'ContextScout: allow' "$tmp/agents/CoderAgent.md")
 test "$count" -eq 1
-wildcard_line=$(grep -n '"\*": deny' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
-allow_line=$(grep -n 'ContextScout: allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
-test "$wildcard_line" -lt "$allow_line"
 
-printf 'PASS: agent modes, aliases, primary targets, catch-all precedence and permission ownership normalized\n'
+mapfile -t wildcard_lines < <(grep -n '"\*": deny' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+test "${#wildcard_lines[@]}" -eq 3
+
+task_allow=$(grep -n 'ContextScout: allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+test "${wildcard_lines[0]}" -lt "$task_allow"
+edit_allow=$(grep -n 'safe/\*\*: allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+test "${wildcard_lines[1]}" -lt "$edit_allow"
+bash_allow=$(grep -n 'echo ok: allow' "$tmp/agents/CoderAgent.md" | cut -d: -f1)
+test "${wildcard_lines[2]}" -lt "$bash_allow"
+
+grep -Fq 'contextscout: "allow"' "$tmp/agents/UserCustom.md"
+
+printf 'PASS: quoted/unquoted effects, all action catch-alls, managed ownership, aliases and primary targets normalized\n'
