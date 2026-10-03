@@ -92,10 +92,10 @@ def main():
     require(wrapper, "trap 'on_interrupt 143' TERM", "termination rollback")
     require(wrapper, 'TRANSACTION_COMMITTED=1', "transaction commit boundary")
     require(wrapper, 'trap - ERR INT TERM', "failure traps disabled after commit")
-    require(wrapper, 'Recovering interrupted OpenChamber activation from immutable runtime:',
-            "SIGKILL crash-window recovery")
-    assert wrapper.index('oc_validate_release "$RELEASE_DIR"') < \
-        wrapper.index('rm -f -- "$STATE"'), \
+    recovery_index = wrapper.index('Recovering interrupted OpenChamber activation from immutable runtime:')
+    migration_reset_index = wrapper.index('# First migration from Bun-global runtime')
+    state_reset_index = wrapper.index('rm -f -- "$STATE"', migration_reset_index)
+    assert recovery_index < migration_reset_index < state_reset_index, \
         "valid interrupted immutable release must be recovered before pre-atomic state reset"
     require(wrapper, 'oc_prune_releases', "bounded immutable release retention")
     assert wrapper.index('oc_prune_releases') < wrapper.index('oc_commit_service'), \
