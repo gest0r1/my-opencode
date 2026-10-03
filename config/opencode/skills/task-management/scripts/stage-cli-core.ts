@@ -1762,8 +1762,7 @@ export async function applyOwnerAmendment(
         !/^[0-9a-f]{64}$/i.test(String(item.sha256 ?? ''))) {
       throw new StageCliError('OWNER_AMENDMENT_INVALID: invalid runtime work item');
     }
-    const content = await readFile(resolve(dirname(resolve(evidencePath)), item.path), 'utf8').catch(async () =>
-      readFile(resolve(item.path), 'utf8'));
+    const content = await readFile(resolve(stateDir(stateRoot, runId), item.path), 'utf8');
     if (sha256(content) !== item.sha256) throw new StageCliError('OWNER_AMENDMENT_WORK_ITEM_CHANGED: ' + item.id);
     workItems.push({ id: item.id, pipeline_id: item.pipeline_id, path: item.path, sha256: item.sha256 });
   }
