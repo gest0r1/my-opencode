@@ -305,41 +305,21 @@ if [[ "$installed_opencode" != "$OPENCODE_VERSION" || "$FORCE_OPENCODE_UPDATE" =
   opencode_binary_changed=1
 fi
 
-config_changed=0
-CONFIG_FINGERPRINT=''
-GENERATION_HELPER="$HOME/.config/opencode/.managed-generation.mjs"
-GENERATION_RECEIPT="$STATE_ROOT/config-generation.json"
-if [[ -f "$GENERATION_HELPER" && -f "$GENERATION_RECEIPT" ]]; then
-  CONFIG_FINGERPRINT="$(node "$GENERATION_HELPER" remote "$CONFIG_REPO" "$CONFIG_SHA")"
-fi
-if [[ -z "$CONFIG_FINGERPRINT" ]] ||
-   ! node "$GENERATION_HELPER" check "$GENERATION_RECEIPT" "$CONFIG_REPO" "$CONFIG_FINGERPRINT" "$HOME"; then
-  config_changed=1
-fi
-
-export OPENCODE_CONFIG_FINGERPRINT="$CONFIG_FINGERPRINT"
+# User policy: refresh configuration on every invocation. Runtime package and
+# binary reuse remain independent of configuration installation.
 export OPENCODE_RESOLVED_CONFIG_SHA="$CONFIG_SHA"
-
-if (( opencode_binary_changed == 1 || config_changed == 1 )); then
-  gh api -H 'Accept: application/vnd.github.raw' \
-    "repos/$CONFIG_REPO/contents/install.sh?ref=$CONFIG_REF" > "$TMP/install-opencode.sh"
-
-  if (( opencode_binary_changed == 1 )); then
-    echo "Installing/updating OpenCode binary to $OPENCODE_VERSION"
-    OPENCODE_CONFIG_REPO="$CONFIG_REPO" \
-    OPENCODE_CONFIG_REF="$CONFIG_REF" \
-    OPENCODE_INSTALL_VERSION="$OPENCODE_VERSION" \
-      bash "$TMP/install-opencode.sh"
-  else
-    echo "Config-only update: OpenCode binary $OPENCODE_VERSION is unchanged"
-    OPENCODE_CONFIG_REPO="$CONFIG_REPO" \
-    OPENCODE_CONFIG_REF="$CONFIG_REF" \
-    OPENCODE_INSTALL_VERSION="$OPENCODE_VERSION" \
-    OPENCODE_SKIP_BINARY_INSTALL=1 \
-      bash "$TMP/install-opencode.sh"
-  fi
+gh api -H 'Accept: application/vnd.github.raw' \
+  "repos/$CONFIG_REPO/contents/install.sh?ref=$CONFIG_SHA" > "$TMP/install-opencode.sh"
+if (( opencode_binary_changed == 1 )); then
+  echo "Installing/updating OpenCode binary to $OPENCODE_VERSION"
+  OPENCODE_CONFIG_REPO="$CONFIG_REPO" OPENCODE_CONFIG_REF="$CONFIG_SHA" \
+  OPENCODE_INSTALL_VERSION="$OPENCODE_VERSION" OPENCODE_FORCE_BINARY_INSTALL=1 \
+    bash "$TMP/install-opencode.sh"
 else
-  echo "OpenCode binary/config unchanged: downloads skipped"
+  echo "Config-only update: OpenCode binary $OPENCODE_VERSION is unchanged"
+  OPENCODE_CONFIG_REPO="$CONFIG_REPO" OPENCODE_CONFIG_REF="$CONFIG_SHA" \
+  OPENCODE_INSTALL_VERSION="$OPENCODE_VERSION" OPENCODE_SKIP_BINARY_INSTALL=1 \
+    bash "$TMP/install-opencode.sh"
 fi
 
 [[ -x "$OPENCODE_BIN" ]] || { echo "OpenCode binary missing: $OPENCODE_BIN" >&2; exit 1; }

@@ -44,9 +44,9 @@ def main():
 
     # 1.x-style independent incremental decisions.
     require(core, 'opencode_binary_changed=0', "OpenCode binary decision")
-    require(core, 'config_changed=0', "config decision")
+    forbid(core, 'GENERATION_RECEIPT=', 'no fingerprint config skip')
     require(core, 'OPENCODE_SKIP_BINARY_INSTALL=1', "config-only binary skip")
-    require(core, 'OpenCode binary/config unchanged: downloads skipped', "OpenCode no-op fast path")
+    require(core, 'Config-only update:', 'always refresh config')
     require(core, 'v2-web-package-$APP_SHA', "exact-SHA OpenChamber manifest")
     require(core, 'runtime_fingerprint', "runtime fingerprint")
     require(core, 'package_source_sha', "reusable package source")
@@ -58,20 +58,11 @@ def main():
     require(core, 'sha256sum -c -', "package integrity")
     require(core, 'bun run --cwd packages/web build', "explicit source fallback")
 
-    # Strict binary-only bootstrap: orchestration may replace only the OpenCode
-    # executable when the exact config generation is already active.
-    require(config_bootstrap, 'GENERATION_PATH="scripts/install-opencode-generation.sh"',
-            "generation installer split")
-    require(config_bootstrap, '"$(state_value config_sha)" == "$REF"',
-            "binary-only exact config guard")
-    require(config_bootstrap, '"${OPENCHAMBER_REF:-}" =~ ^[a-f0-9]{40}$',
-            "orchestrator-only binary fast path")
-    require(config_bootstrap, 'Binary-only update: config SHA $REF is unchanged',
-            "binary-only audit output")
-    require(config_bootstrap, 'https://opencode.ai/v2/install', "official binary installer")
-    require(config_bootstrap, 'rollback_binary_only()', "binary-only rollback")
-    require(config_bootstrap, 'contents/$GENERATION_PATH?ref=$REF', "exact generation fetch")
-    require(config_bootstrap, 'OPENCODE_SKIP_BINARY_INSTALL', "config-only delegation guard")
+    # Always refresh settings; unchanged binary remains independently reusable.
+    require(config_bootstrap, 'GENERATION_PATH="scripts/install-opencode-generation.sh"', 'generation installer split')
+    require(config_bootstrap, 'export OPENCODE_SKIP_BINARY_INSTALL=1', 'unchanged binary skip')
+    require(config_bootstrap, 'contents/$GENERATION_PATH?ref=$CONFIG_SHA', 'exact generation fetch')
+    forbid(config_bootstrap, 'generation_unchanged=', 'no fingerprint config skip')
 
     # Full generation installer remains the standalone/config-change path.
     require(config_generation, 'CONFIG_HOME="$HOME/.config/opencode"', "canonical config root")
@@ -82,7 +73,7 @@ def main():
     require(config_generation, 'rollback_transaction()', "config rollback")
     require(config_generation, 'rollback_binary()', "full-install binary rollback")
     require(config_generation, 'mv "$STAGE_CONFIG" "$CONFIG_HOME"', "atomic config commit")
-    require(config_generation, 'bun install --production', "local plugin dependencies")
+    require(config_generation, 'install-opencode-dependencies.sh', 'bounded locked dependencies')
     require(config_generation, 'pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export',
             "plugin validation")
     require(config_generation, 'github-handoff.ts is not a native V2 plugin',

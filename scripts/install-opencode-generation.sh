@@ -103,7 +103,6 @@ tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
   exit 1
 }
 
-CONFIG_FINGERPRINT="${OPENCODE_CONFIG_FINGERPRINT:-$(node "$SRC/scripts/opencode-generation-state.mjs" remote "$REPO" "$CONFIG_SHA")}"
 
 # ---- Build complete candidate trees outside active lookup paths ------------
 
@@ -121,7 +120,6 @@ for entry in "$SRC/config/opencode/"*; do
 done
 shopt -u dotglob nullglob
 
-cp "$SRC/scripts/opencode-generation-state.mjs" "$STAGE_CONFIG/.managed-generation.mjs"
 mkdir -p "$STAGE_CONFIG/agents" "$STAGE_CONFIG/commands" "$STAGE_CONFIG/tools"
 if [[ -d "$SRC/config/opencode/command" ]]; then
   cp -a "$SRC/config/opencode/command/." "$STAGE_CONFIG/commands/"
@@ -173,10 +171,7 @@ rm -rf -- "$STAGE_CONFIG/skills/bitrix24"
 # Install them before commit so an unavailable/incompatible dependency cannot
 # corrupt the active configuration.
 ensure_bun
-(
-  cd "$STAGE_CONFIG"
-  bun install --production
-)
+bash "$SRC/scripts/install-opencode-dependencies.sh" "$STAGE_CONFIG" "$STATE_ROOT"
 
 # Validate config and local V2 plugin entrypoints before touching active paths.
 node - "$STAGE_CONFIG/opencode.json" <<'NODE'
@@ -458,7 +453,8 @@ fi
   exit 1
 }
 
-node "$CONFIG_HOME/.managed-generation.mjs" record "$STATE_ROOT/config-generation.json" "$REPO" "$CONFIG_SHA" "$CONFIG_FINGERPRINT" "$SRC" "$HOME"
+# Retire receipts from the superseded config no-op policy.
+rm -f -- "$STATE_ROOT/config-generation.json"
 
 echo "Готово: OpenCode и конфигурация $REPO@$REF установлены атомарно."
 echo "Проверка: $OPENCODE_BIN --version -> $("$OPENCODE_BIN" --version)"

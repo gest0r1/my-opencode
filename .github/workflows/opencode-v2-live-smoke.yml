@@ -10,6 +10,7 @@ on:
       - 'scripts/normalize-opencode-agent-permissions.mjs'
       - 'scripts/materialize-opencode-trusted-paths.mjs'
       - 'scripts/install-opencode-generation.sh'
+      - 'scripts/install-opencode-dependencies.sh'
       - 'config/opencode/**'
       - '.github/workflows/opencode-v2-live-smoke.yml'
   workflow_dispatch:
@@ -313,16 +314,20 @@ jobs:
           NODE
 
 
-      - name: Prove identical upgrade is no-op
+      - name: Prove identical upgrade refreshes config and reuses binary
         env:
           OPENCODE_CONFIG_REF: ${{ github.sha }}
           OPENCODE_INSTALL_VERSION: 2.0.21
         run: |
           set -Eeuo pipefail
-          before=$(stat -c '%i:%Y' "$HOME/.config/opencode/opencode.json")
+          cp "$HOME/.config/opencode/opencode.json" /tmp/opencode-config-before.json
+          binary_before=$(sha256sum "$HOME/.opencode/bin/opencode")
           bash install.sh > /tmp/opencode-repeat.log 2>&1
           cat /tmp/opencode-repeat.log
-          grep -Fq 'no-op; downloads and normalization skipped' /tmp/opencode-repeat.log
-          test "$before" = "$(stat -c '%i:%Y' "$HOME/.config/opencode/opencode.json")"
-          ! grep -Eq 'bun install|bun add|markdown_changed=|Скачиваю конфигурацию|Устанавливаю/обновляю' /tmp/opencode-repeat.log
+          grep -Fq 'Скачиваю конфигурацию' /tmp/opencode-repeat.log
+          grep -Fq 'Locked OpenCode plugin dependencies installed successfully.' /tmp/opencode-repeat.log
+          grep -Fq 'Пропускаю обновление бинарника' /tmp/opencode-repeat.log
+          cmp /tmp/opencode-config-before.json "$HOME/.config/opencode/opencode.json"
+          test "$binary_before" = "$(sha256sum "$HOME/.opencode/bin/opencode")"
           test ! -d "$HOME/.config/opencode/node_modules/@opencode-ai/plugin"
+          test -z "$(find "$HOME/.config" -maxdepth 1 -name '.opencode-stage.*' -print -quit)"
