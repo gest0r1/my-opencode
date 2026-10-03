@@ -72,63 +72,83 @@ for (const name of files) {
   catalog.set(id, { id, file, ...info })
 }
 
+function parseTaskEntry(line) {
+  const match = /^(\s{4,})(?:"([^"]+)"|'([^']+)'|([^:#]+)):\s*(allow|deny|ask)(\s*(?:#.*)?)$/.exec(line)
+  if (!match) return undefined
+  return {
+    indent: match[1],
+    resource: (match[2] ?? match[3] ?? match[4]).trim(),
+    effect: match[5],
+    suffix: match[6] ?? '',
+  }
+}
+
+function renderTaskEntry(entry) {
+  const key = entry.resource === '*' ? '"*"' : entry.resource
+  return `${entry.indent}${key}: ${entry.effect}${entry.suffix}`
+}
+
 function normalizeTaskBlock(info) {
-  const lines = [...info.lines]
-  let inTask = false
-  const seen = new Set()
-  let changed = false
+  const source = [...info.lines]
   const out = []
+  let changed = false
 
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index]
-    if (index === 0 || index > info.end) {
+  for (let index = 0; index < source.length;) {
+    const line = source[index]
+    if (index > 0 && index < info.end && /^  task:\s*$/.test(line)) {
       out.push(line)
+      let end = index + 1
+      while (end < info.end && !/^  \S/.test(source[end])) end++
+
+      const block = source.slice(index + 1, end)
+      const normalized = []
+      const seen = new Set()
+      for (const rawLine of block) {
+        const entry = parseTaskEntry(rawLine)
+        if (!entry) {
+          normalized.push(rawLine)
+          continue
+        }
+
+        const original = entry.resource
+        entry.resource = aliases.get(entry.resource) ?? entry.resource
+        if (entry.effect === 'allow' && catalog.get(entry.resource)?.mode === 'primary') {
+          console.log(`Removed invalid subagent allow: ${path.basename(info.file)} -> ${entry.resource} (primary)`)
+          changed = true
+          continue
+        }
+
+        const key = `${entry.resource}\0${entry.effect}`
+        if (seen.has(key)) {
+          changed = true
+          continue
+        }
+        seen.add(key)
+        if (entry.resource !== original) {
+          console.log(`Normalized subagent alias: ${path.basename(info.file)} ${original} -> ${entry.resource}`)
+          changed = true
+        }
+        normalized.push(renderTaskEntry(entry))
+      }
+
+      // OpenCode 2.0.21 permission evaluation is last-match-wins. Catch-all
+      // task rules therefore must precede specific allows/denies, otherwise a
+      // trailing "*": deny silently revokes every allow above it.
+      const firstEntry = normalized.findIndex((candidate) => parseTaskEntry(candidate))
+      const wildcardIndex = normalized.findIndex((candidate) => parseTaskEntry(candidate)?.resource === '*')
+      if (firstEntry >= 0 && wildcardIndex > firstEntry) {
+        const [wildcard] = normalized.splice(wildcardIndex, 1)
+        normalized.splice(firstEntry, 0, wildcard)
+        changed = true
+      }
+
+      out.push(...normalized)
+      index = end
       continue
     }
 
-    if (/^  task:\s*$/.test(line)) {
-      inTask = true
-      seen.clear()
-      out.push(line)
-      continue
-    }
-    if (inTask && /^  \S/.test(line)) inTask = false
-    if (!inTask) {
-      out.push(line)
-      continue
-    }
-
-    const match = /^(\s{4,})(?:"([^"]+)"|'([^']+)'|([^:#]+)):\s*(allow|deny|ask)(\s*(?:#.*)?)$/.exec(line)
-    if (!match) {
-      out.push(line)
-      continue
-    }
-
-    const indent = match[1]
-    const raw = (match[2] ?? match[3] ?? match[4]).trim()
-    const effect = match[5]
-    const suffix = match[6] ?? ''
-    const resource = aliases.get(raw) ?? raw
-
-    if (effect === 'allow' && catalog.get(resource)?.mode === 'primary') {
-      console.log(`Removed invalid subagent allow: ${path.basename(info.file)} -> ${resource} (primary)`)
-      changed = true
-      continue
-    }
-
-    const key = `${resource}\0${effect}`
-    if (seen.has(key)) {
-      changed = true
-      continue
-    }
-    seen.add(key)
-
-    if (resource !== raw) {
-      console.log(`Normalized subagent alias: ${path.basename(info.file)} ${raw} -> ${resource}`)
-      changed = true
-    }
-    const rendered = resource === '*' ? `${indent}"*": ${effect}${suffix}` : `${indent}${resource}: ${effect}${suffix}`
-    out.push(rendered)
+    out.push(line)
+    index++
   }
 
   if (changed) fs.writeFileSync(info.file, `${out.join('\n').replace(/\n+$/, '')}\n`)
@@ -138,6 +158,43 @@ function normalizeTaskBlock(info) {
 let markdownChanges = 0
 for (const info of catalog.values()) {
   if (normalizeTaskBlock(info)) markdownChanges++
+}
+
+function normalizeConfigPermissions(id, permissions) {
+  if (!Array.isArray(permissions)) return { permissions, changed: false }
+  const firstSubagent = permissions.findIndex((rule) => rule?.action === 'subagent')
+  if (firstSubagent < 0) return { permissions, changed: false }
+
+  let changed = false
+  const subagent = []
+  const seen = new Set()
+  for (const rule of permissions.filter((candidate) => candidate?.action === 'subagent')) {
+    const next = { ...rule }
+    const original = next.resource
+    next.resource = aliases.get(next.resource) ?? next.resource
+    if (next.resource !== original) changed = true
+    if (next.effect === 'allow' && catalog.get(next.resource)?.mode === 'primary') {
+      console.log(`Removed invalid config subagent allow: ${id} -> ${next.resource} (primary)`)
+      changed = true
+      continue
+    }
+    const key = `${next.action}\0${next.resource}\0${next.effect}`
+    if (seen.has(key)) {
+      changed = true
+      continue
+    }
+    seen.add(key)
+    subagent.push(next)
+  }
+
+  const wildcard = subagent.filter((rule) => rule.resource === '*')
+  const specific = subagent.filter((rule) => rule.resource !== '*')
+  const ordered = [...wildcard, ...specific]
+  if (JSON.stringify(ordered) !== JSON.stringify(permissions.filter((rule) => rule?.action === 'subagent'))) changed = true
+
+  const before = permissions.slice(0, firstSubagent).filter((rule) => rule?.action !== 'subagent')
+  const after = permissions.slice(firstSubagent).filter((rule) => rule?.action !== 'subagent')
+  return { permissions: [...before, ...ordered, ...after], changed }
 }
 
 const config = JSON.parse(fs.readFileSync(configFile, 'utf8'))
@@ -157,6 +214,15 @@ for (const [id, info] of catalog) {
   if (info.hasPermission && Object.hasOwn(entry, 'permissions')) {
     delete entry.permissions
     configChanges++
+    continue
+  }
+
+  if (Object.hasOwn(entry, 'permissions')) {
+    const normalized = normalizeConfigPermissions(id, entry.permissions)
+    if (normalized.changed) {
+      entry.permissions = normalized.permissions
+      configChanges++
+    }
   }
 }
 
