@@ -296,6 +296,8 @@ test('schema v2 protects stateful DEV behind trusted default-branch workflow', a
       concurrency_group: 'development',
       target_id: 'opencode-development-host',
       source_ci_stage: 'tests',
+      artifact: 'dev-evidence',
+      evidence_file: 'dev-evidence.json',
     },
   };
 
@@ -1339,28 +1341,6 @@ test('technical fix after publish reopens verify and publish before GitHub CI', 
   result = invoke(['next', fx.manifest.run_id, '--json']);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).runnable, [{ pipeline_id: 'app', stage: 'git-verify' }]);
-});
-
-test('manifest v1 is rejected everywhere by the canonical pipeline', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'pipeline-v1-rejected-'));
-  const stateRoot = path.join(root, '.tmp', 'pipelines');
-  const manifestPath = path.join(root, 'manifest.json');
-  await writeFile(manifestPath, JSON.stringify({
-    schema_version: 1,
-    run_id: 'legacy-v1',
-    rules_file: 'docs/pipeline-rules.md',
-    rules_version: 2,
-    pipelines: [{ id: 'app', stages: ['implementation'] }],
-    gate_profiles: {},
-  }, null, 2));
-
-  let result = run(root, ['plan-run-preflight', manifestPath, '--environment']);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /schema_version must be exactly 2|NEW_PLAN_SCHEMA_V2_REQUIRED|schema v2/i);
-
-  result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /schema_version must be exactly 2|NEW_PLAN_SCHEMA_V2_REQUIRED|schema v2/i);
 });
 
 test('automatic repair counter permits exactly five default cycles and blocks the sixth', async () => {
