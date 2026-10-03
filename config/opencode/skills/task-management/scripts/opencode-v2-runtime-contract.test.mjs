@@ -58,12 +58,13 @@ test('V2 global config is portable and has no active legacy home skill roots', (
   assert.doesNotMatch(serialized, /\/home\/guber\//);
   assert.doesNotMatch(serialized, /\.opencode\/skills\//);
 
-  const rules = Object.values(config.agents ?? {}).flatMap((agent) => agent.permissions ?? []);
-  const externalResources = rules
-    .filter((rule) => rule.action === 'external_directory')
-    .map((rule) => rule.resource);
-  assert.ok(externalResources.includes('$HOME/.local/share/opencode/tool-output/*'));
-  assert.ok(externalResources.includes('$HOME/.config/opencode/skills/task-management/*'));
+  assert.equal(config.agents, undefined, 'distribution agents have one Markdown source');
+  const build = read('config/opencode/agent/core/build.md').split('\n---')[0];
+  assert.doesNotMatch(build, /\/home\/guber\/|\.opencode\/skills\//);
+  const external = /  external_directory:\n([\s\S]*?)(?=^  \S|$)/m.exec(build)?.[1] ?? '';
+  assert.ok(external.includes('"$HOME/.local/share/opencode/tool-output/*": allow'));
+  assert.ok(external.includes('"$HOME/.config/opencode/skills/task-management/*": allow'));
+  assert.match(build, /^  doom_loop: ask$/m);
 
   assert.equal(
     config.mcp?.servers?.yadisk?.command?.[0],
@@ -72,5 +73,9 @@ test('V2 global config is portable and has no active legacy home skill roots', (
 
   assert.equal(typeof config.model, 'string');
   assert.match(config.model, /^[^/]+\/.+/);
-  assert.equal(typeof config.agents?.title?.model, 'string');
+  const title = read('config/opencode/agent/core/title.md');
+  assert.match(title, /^model: [^/]+\/.+$/m);
+  assert.match(title, /^mode: primary$/m);
+  assert.match(title, /^hidden: true$/m);
+  assert.match(title, /You are a title generator/);
 });
