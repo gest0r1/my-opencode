@@ -10,7 +10,20 @@ export EXPECTED_OPENCHAMBER_VERSION='2.1.0'
 export OPENCHAMBER_RUNTIME_ROOT="$HOME/.local/share/openchamber-v2"
 export BUN_INSTALL="$HOME/.bun"
 export LEGACY_BUN_INSTALL="$HOME/.bun"
-mkdir -p "$HOME"
+export SYSTEMCTL_LOG="$TMP/systemctl.log"
+mkdir -p "$HOME" "$TMP/bin"
+
+cat > "$TMP/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$*" >> "$SYSTEMCTL_LOG"
+if [[ "$*" == '--user is-active --quiet openchamber.service' ]]; then
+  exit 0
+fi
+exit 0
+EOF
+chmod 755 "$TMP/bin/systemctl"
+export PATH="$TMP/bin:$PATH"
 
 # shellcheck disable=SC1091
 source "$ROOT/scripts/openchamber-runtime-store.sh"
@@ -31,6 +44,7 @@ EOF
 r1="$(make_release release-one)"
 r2="$(make_release release-two)"
 
+# Atomic current publication and runtime-only rollback.
 oc_activate_release "$r1"
 test "$(readlink -f "$OPENCHAMBER_CURRENT")" = "$r1"
 test "$("$OPENCHAMBER_MANAGED_BIN" --version)" = 'OpenChamber 2.1.0'
@@ -42,4 +56,50 @@ oc_rollback_activation
 test "$(readlink -f "$OPENCHAMBER_CURRENT")" = "$r1"
 test "$("$OPENCHAMBER_MANAGED_BIN" --version)" = 'OpenChamber 2.1.0'
 
-echo 'PASS: immutable OpenChamber current activation and rollback'
+# Full service generation rollback: unit, startup env, drop-ins and current
+# must return to the exact pre-transaction generation. The fake systemctl also
+# verifies that an active old service is stopped, daemon-reloaded and restarted.
+unit="$HOME/.config/systemd/user/openchamber.service"
+startup_env="$HOME/.config/openchamber/startup.env"
+drop_dir="$HOME/.config/systemd/user/openchamber.service.d"
+snapshot="$TMP/service-snapshot"
+mkdir -p "$(dirname "$unit")" "$(dirname "$startup_env")" "$drop_dir"
+printf 'OLD-UNIT\n' > "$unit"
+printf 'OLD-ENV\n' > "$startup_env"
+printf 'OLD-DROPIN\n' > "$drop_dir/10-old.conf"
+
+oc_snapshot_service "$unit" "$startup_env" "$drop_dir" "$snapshot"
+test "$OPENCHAMBER_SERVICE_WAS_ACTIVE" -eq 1
+
+oc_activate_release "$r2"
+printf 'NEW-UNIT\n' > "$unit"
+printf 'NEW-ENV\n' > "$startup_env"
+rm -rf -- "$drop_dir"
+mkdir -p "$drop_dir"
+printf 'NEW-DROPIN\n' > "$drop_dir/99-new.conf"
+
+oc_rollback_service "$unit" "$startup_env" "$drop_dir"
+
+test "$(readlink -f "$OPENCHAMBER_CURRENT")" = "$r1"
+test "$(cat "$unit")" = 'OLD-UNIT'
+test "$(cat "$startup_env")" = 'OLD-ENV'
+test "$(cat "$drop_dir/10-old.conf")" = 'OLD-DROPIN'
+test ! -e "$drop_dir/99-new.conf"
+grep -Fxq -- '--user stop openchamber.service' "$SYSTEMCTL_LOG"
+grep -Fxq -- '--user daemon-reload' "$SYSTEMCTL_LOG"
+grep -Fxq -- '--user restart openchamber.service' "$SYSTEMCTL_LOG"
+
+# Retention contract: keep current + immediate previous only.
+r3="$(make_release release-three)"
+oc_commit_activation
+oc_activate_release "$r2"
+oc_commit_activation
+oc_activate_release "$r3"
+oc_prune_releases
+test -d "$r3"
+test -d "$r2"
+test ! -d "$r1"
+oc_rollback_activation
+test "$(readlink -f "$OPENCHAMBER_CURRENT")" = "$r2"
+
+echo 'PASS: immutable OpenChamber runtime, service rollback and bounded retention'
