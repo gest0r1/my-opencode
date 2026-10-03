@@ -17,7 +17,8 @@ source "$ROOT/scripts/openchamber-runtime-store.sh"
 oc_runtime_init
 
 make_release() {
-  local name=$1 dir="$OPENCHAMBER_RELEASES/$name"
+  local name=$1
+  local dir="$OPENCHAMBER_RELEASES/$name"
   mkdir -p "$dir/bin"
   cat > "$dir/bin/openchamber" <<'EOF'
 #!/usr/bin/env bash
