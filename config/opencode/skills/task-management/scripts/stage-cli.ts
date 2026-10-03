@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { applyOwnerAmendment, runCli } from './stage-cli-core.ts';
 import { preflightFile } from './manifest-preflight.mjs';
+import { validateOwnerAmendmentForApply } from './owner-amendment-policy.ts';
 
 function stateRootFromArgs(args: string[]): string {
   const index = args.indexOf('--state-root');
@@ -353,7 +354,21 @@ async function main(args: string[]): Promise<void> {
     if (!identifier || !stage || !pipelineId || !evidence) {
       throw new Error('usage: stage-cli owner-amend-apply <run-id> <owner-stage> --pipeline <id> --evidence <owner-amendment.json>');
     }
-    const state = await applyOwnerAmendment(resolve(stateRootFromArgs(args)), identifier, stage, evidence, pipelineId);
+    const stateRoot = resolve(stateRootFromArgs(args));
+    const validated = await validateOwnerAmendmentForApply({
+      stateRoot,
+      runId: identifier,
+      pipelineId,
+      sourceStage: stage,
+      evidencePath: evidence,
+    });
+    const state = await applyOwnerAmendment(
+      stateRoot,
+      identifier,
+      stage,
+      validated.absoluteEvidencePath,
+      pipelineId,
+    );
     console.log(JSON.stringify(state, null, 2));
     return;
   }
