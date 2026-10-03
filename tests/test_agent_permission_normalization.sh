@@ -144,4 +144,87 @@ test "${wildcard_lines[3]}" -lt "$bash_allow"
 grep -Fq 'contextscout: "allow"' "$tmp/agents/UserCustom.md"
 grep -Fq '/root/.config/opencode/skills/task-management/scripts/stage-cli.ts*' "$tmp/agents/UserCustom.md"
 
-printf 'PASS: effects, catch-all precedence, managed ownership, delegation aliases and trusted skill paths normalized\n'
+# Normalize the actual repository-managed catalog and audit the effective edit
+# policy for sensitive/generated paths. Default ask is acceptable for interactive
+# primary agents; an explicit effective allow is not.
+real="$tmp/real"
+mkdir -p "$real/agents"
+cp config/opencode/opencode.json "$real/opencode.json"
+OPENCODE_ARCHIVE_LEGACY=0 bash scripts/install-opencode-agents.sh \
+  config/opencode/agent "$real/agents"
+
+node - "$real/agents" <<'NODE'
+const fs = require('fs')
+const path = require('path')
+const root = process.argv[2]
+const sensitive = [
+  '.env',
+  'config/.env',
+  'app.env',
+  'config/app.env',
+  'private.key',
+  'config/private.key',
+  'cert.pem',
+  'config/cert.pem',
+  'token.secret',
+  'config/token.secret',
+  '.git/config',
+  'packages/app/.git/config',
+  'node_modules/pkg/index.js',
+  'packages/app/node_modules/pkg/index.js',
+]
+
+const wildcard = (value, pattern) => {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
+  return new RegExp(`^${escaped}$`).test(value)
+}
+
+const parseEntry = (line) => {
+  const match = /^(\s{4,})(?:"([^"]+)"|'([^']+)'|([^:#]+)):\s*(?:"(allow|deny|ask)"|'(allow|deny|ask)'|(allow|deny|ask))(?:\s*(?:#.*)?)$/.exec(line)
+  if (!match) return undefined
+  return { resource: (match[2] ?? match[3] ?? match[4]).trim(), effect: match[5] ?? match[6] ?? match[7] }
+}
+
+const failures = []
+for (const file of fs.readdirSync(root).filter((name) => name.endsWith('.md')).sort()) {
+  const id = file.slice(0, -3)
+  const lines = fs.readFileSync(path.join(root, file), 'utf8').split(/\r?\n/)
+  const frontmatterEnd = lines.indexOf('---', 1)
+  if (frontmatterEnd < 0) throw new Error(`${id}: malformed frontmatter`)
+
+  let rules = []
+  let scalar
+  for (let i = 1; i < frontmatterEnd; i++) {
+    const scalarMatch = /^  edit:\s*(allow|deny|ask)\s*$/.exec(lines[i])
+    if (scalarMatch) {
+      scalar = scalarMatch[1]
+      break
+    }
+    if (!/^  edit:\s*$/.test(lines[i])) continue
+    i++
+    while (i < frontmatterEnd && !/^  \S/.test(lines[i])) {
+      const entry = parseEntry(lines[i])
+      if (entry) rules.push(entry)
+      i++
+    }
+    break
+  }
+
+  const effect = (resource) => {
+    if (scalar) return scalar
+    for (let i = rules.length - 1; i >= 0; i--) {
+      if (wildcard(resource, rules[i].resource)) return rules[i].effect
+    }
+    return 'ask'
+  }
+
+  for (const resource of sensitive) {
+    if (effect(resource) === 'allow') failures.push(`${id}: edit allow reaches protected path '${resource}'`)
+  }
+}
+
+if (failures.length) throw new Error(`managed edit security audit failed:\n- ${failures.join('\n- ')}`)
+console.log('PASS: all managed agents deny-or-ask on secrets, .git and node_modules')
+NODE
+
+printf 'PASS: effects, catch-all precedence, managed ownership, delegation aliases, trusted skill paths and protected edit policy normalized\n'
