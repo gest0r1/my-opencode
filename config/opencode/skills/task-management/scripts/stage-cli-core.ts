@@ -1736,6 +1736,78 @@ export async function recordTechnicalFixCycle(
   });
 }
 
+export async function applyOwnerAmendment(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  evidencePath: string,
+  pipelineId: string,
+): Promise<PipelineState> {
+  const raw = await readFile(resolve(evidencePath), 'utf8');
+  const evidence = JSON.parse(raw) as any;
+  if (evidence.kind !== 'owner_amendment' || evidence.status !== 'ready' || evidence.bounded !== true) {
+    throw new StageCliError('OWNER_AMENDMENT_INVALID: ready bounded owner amendment evidence required');
+  }
+  if (evidence.business_intent_changed === true || evidence.external_contract_changed === true ||
+      evidence.security_boundary_changed === true || evidence.destructive_change === true) {
+    throw new StageCliError('FULL_REPLAN_REQUIRED: owner amendment crosses a structural PLAN boundary');
+  }
+  if (!Array.isArray(evidence.paths) || evidence.paths.some((path: unknown) => !safeScopePath(path))) {
+    throw new StageCliError('OWNER_AMENDMENT_INVALID: paths must be safe repository scopes');
+  }
+  if (!Array.isArray(evidence.work_items)) throw new StageCliError('OWNER_AMENDMENT_INVALID: work_items must be an array');
+  const workItems: any[] = [];
+  for (const item of evidence.work_items) {
+    if (!item || typeof item.id !== 'string' || item.pipeline_id !== pipelineId || !safeRepoPath(item.path) ||
+        !/^[0-9a-f]{64}$/i.test(String(item.sha256 ?? ''))) {
+      throw new StageCliError('OWNER_AMENDMENT_INVALID: invalid runtime work item');
+    }
+    const content = await readFile(resolve(dirname(resolve(evidencePath)), item.path), 'utf8').catch(async () =>
+      readFile(resolve(item.path), 'utf8'));
+    if (sha256(content) !== item.sha256) throw new StageCliError('OWNER_AMENDMENT_WORK_ITEM_CHANGED: ' + item.id);
+    workItems.push({ id: item.id, pipeline_id: item.pipeline_id, path: item.path, sha256: item.sha256 });
+  }
+  return updateState(stateRoot, runId, (state) => {
+    const pipeline = getPipeline(state, pipelineId);
+    const manifest = readFrozenManifestFromState(state);
+    const source = pipeline.stages[stage];
+    if (!source || !['blocked', 'failed', 'in_progress'].includes(source.status)) {
+      throw new StageCliError('OWNER_AMENDMENT_REQUIRES_OWNER_CHECKPOINT: ' + pipelineId + '/' + stage);
+    }
+    const targetStage = String(evidence.target_stage ?? '');
+    const spec = manifest.pipelines.find((item) => item.id === pipelineId);
+    const targetIndex = pipeline.stage_order.indexOf(targetStage);
+    if (!spec || targetIndex < 0 || spec.executors?.[targetStage] !== 'agent') {
+      throw new StageCliError('OWNER_AMENDMENT_INVALID: target_stage must be an existing agent stage');
+    }
+    for (const path of evidence.paths as string[]) assertRuntimeScopeExtensible(manifest, path.replace(/\/\*\*$/, ''));
+    const revision = (state.owner_amendments?.length ?? 0) + 1;
+    state.owner_amendments ??= [];
+    state.owner_amendments.push({
+      revision, pipeline_id: pipelineId, source_stage: stage, status: 'approved',
+      summary: String(evidence.summary ?? 'owner clarification'), approved_at: now(),
+      evidence_path: evidencePath, evidence_sha256: sha256(raw),
+      acceptance_criteria_changed: evidence.acceptance_criteria_changed === true,
+      requirements_changed: evidence.requirements_changed === true,
+      paths: [...evidence.paths], work_items: workItems,
+    });
+    if (evidence.paths.length) {
+      state.runtime_scope_extensions ??= [];
+      state.runtime_scope_extensions.push({ timestamp: now(), scope_class: 'owner_amendment', paths: [...evidence.paths],
+        reason: 'approved owner amendment revision ' + revision, evidence_path: evidencePath, evidence_sha256: sha256(raw) });
+    }
+    for (const name of pipeline.stage_order.slice(targetIndex)) {
+      const runtime = pipeline.stages[name];
+      if (!runtime) continue;
+      runtime.status = 'pending'; runtime.started_at = undefined; runtime.completed_at = undefined; runtime.evidence = undefined;
+      runtime.message = undefined;
+      addHistory(state, pipeline.id, name, 'pending', 'reopened by owner amendment revision ' + revision);
+    }
+    pipeline.status = 'approved';
+    pipeline.current_stage = undefined;
+  });
+}
+
 export async function setStageFailure(
   stateRoot: string,
   runId: string,
