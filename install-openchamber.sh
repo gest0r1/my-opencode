@@ -39,7 +39,9 @@ STATE_BACKUP="$TMP/openchamber-v2-install.state.before"
 SERVICE_SNAPSHOT="$TMP/service-snapshot"
 STATE_EXISTED=0
 RELEASE_EXISTED=0
+TRANSACTION_STARTED=0
 TRANSACTION_COMMITTED=0
+ROLLBACK_RUNNING=0
 
 cleanup() {
   rm -rf -- "$TMP"
@@ -84,9 +86,18 @@ restore_state() {
 
 rollback_all() {
   local rc=${1:-1}
+  if (( ROLLBACK_RUNNING == 1 )); then
+    exit "$rc"
+  fi
+  ROLLBACK_RUNNING=1
+  trap - ERR INT TERM
+  set +e
+
   echo "OpenChamber activation failed; restoring previous runtime/service state." >&2
-  oc_rollback_service "$UNIT" "$NATIVE_STARTUP_ENV" "$DROP_DIR" || true
-  restore_state || true
+  if (( TRANSACTION_STARTED == 1 )); then
+    oc_rollback_service "$UNIT" "$NATIVE_STARTUP_ENV" "$DROP_DIR" || true
+    restore_state || true
+  fi
 
   # A release created only by this failed transaction was never committed via
   # current. Remove it after service/runtime rollback. Existing staged releases
@@ -97,7 +108,23 @@ rollback_all() {
   exit "$rc"
 }
 
+on_error() {
+  local rc=$?
+  (( TRANSACTION_COMMITTED == 1 )) && return "$rc"
+  rollback_all "$rc"
+}
+
+on_interrupt() {
+  local rc=$1
+  (( TRANSACTION_COMMITTED == 1 )) && exit "$rc"
+  rollback_all "$rc"
+}
+
 oc_snapshot_service "$UNIT" "$NATIVE_STARTUP_ENV" "$DROP_DIR" "$SERVICE_SNAPSHOT"
+TRANSACTION_STARTED=1
+trap on_error ERR
+trap 'on_interrupt 130' INT
+trap 'on_interrupt 143' TERM
 
 # First migration from Bun-global runtime: force the core to resolve/apply the
 # verified package even if an earlier pre-atomic V2 state file says the same
@@ -116,11 +143,12 @@ export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:$HOME/.opencode/bin:$LEGACY_BUN_I
 # before installing the new release; with normal hashall Bash could keep using
 # that old path after Bun creates $RELEASE_DIR/bin/openchamber and then write a
 # new systemd unit that still points at the legacy global package.
-set +e
-bash +h "$CORE" "$@"
-core_rc=$?
-set -e
-(( core_rc == 0 )) || rollback_all "$core_rc"
+if bash +h "$CORE" "$@"; then
+  core_rc=0
+else
+  core_rc=$?
+  rollback_all "$core_rc"
+fi
 
 state_value() {
   [[ -f "$STATE" ]] || return 0
@@ -136,9 +164,7 @@ service_restart_pending="${service_restart_pending:-0}"
 # release and publish it through one atomic symlink switch. In defer mode the
 # core may only cache the package; then RELEASE_DIR legitimately has no CLI yet.
 if [[ "$runtime_pending" == 0 && -x "$RELEASE_DIR/bin/openchamber" ]]; then
-  if ! oc_activate_release "$RELEASE_DIR"; then
-    rollback_all 1
-  fi
+  oc_activate_release "$RELEASE_DIR"
 fi
 
 # A non-pending successful migration must end with a valid canonical runtime.
@@ -147,20 +173,20 @@ fi
 if [[ "$runtime_pending" == 0 && "$service_restart_pending" == 0 ]]; then
   if [[ ! -x "$OPENCHAMBER_CURRENT_BIN" ]]; then
     echo "Atomic install finished without a canonical OpenChamber current runtime." >&2
-    rollback_all 1
+    false
   fi
   current_version="$(oc_version_of "$OPENCHAMBER_CURRENT_BIN" || true)"
   if [[ "$current_version" != "$EXPECTED_OPENCHAMBER_VERSION" ]]; then
     echo "Canonical OpenChamber version mismatch: expected=$EXPECTED_OPENCHAMBER_VERSION actual=$current_version" >&2
-    rollback_all 1
+    false
   fi
   if [[ ! -f "$UNIT" ]] || ! grep -Fq "$RELEASE_DIR/" "$UNIT"; then
     echo "OpenChamber unit is not pinned to immutable runtime $RELEASE_DIR" >&2
-    rollback_all 1
+    false
   fi
   if ! systemctl --user is-active --quiet openchamber.service; then
     echo "OpenChamber service is not active after atomic apply." >&2
-    rollback_all 1
+    false
   fi
 fi
 
@@ -169,6 +195,7 @@ fi
 # committed. Only now retire the competing Bun-global V2 CLI.
 oc_commit_service
 TRANSACTION_COMMITTED=1
+trap - ERR INT TERM
 
 if [[ "$runtime_pending" == 0 && "$service_restart_pending" == 0 ]]; then
   oc_remove_legacy_bun_global
