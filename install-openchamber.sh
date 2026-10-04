@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 # Exact-SHA delivery and binary-only atomic activation. Native CLI owns services.
 set -Eeuo pipefail
+
+RUNTIME_USER="${OPENCODE_RUNTIME_USER:-opencode}"
+for cmd in id getent cut; do
+  command -v "$cmd" >/dev/null 2>&1 || { echo "Missing prerequisite: $cmd" >&2; exit 1; }
+done
+CURRENT_USER="$(id -un)"
+RUNTIME_HOME="$(getent passwd "$RUNTIME_USER" | cut -d: -f6 || true)"
+if [[ "$CURRENT_USER" != "$RUNTIME_USER" ]]; then
+  echo "OpenCode/OpenChamber must be installed and run as user '$RUNTIME_USER' (current: '$CURRENT_USER')." >&2
+  echo "Use: sudo -iu $RUNTIME_USER" >&2
+  exit 2
+fi
+if [[ -z "$RUNTIME_HOME" || "$HOME" != "$RUNTIME_HOME" ]]; then
+  echo "Invalid HOME for runtime user '$RUNTIME_USER': HOME='$HOME', expected='$RUNTIME_HOME'." >&2
+  echo "Use a login shell: sudo -iu $RUNTIME_USER" >&2
+  exit 2
+fi
+
 CONFIG_REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 CONFIG_REF="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
 APP_REPO="${OPENCHAMBER_REPO:-gest0r1/openchamber-ru}"
