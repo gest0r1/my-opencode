@@ -3,10 +3,16 @@ import { createHash } from 'node:crypto';
 import { lstat, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import {
+  RUNTIME_SCOPE_CLASSES,
+  type PipelineState,
+  type RuntimeScopeExtension,
+} from '../types/pipeline-state.ts';
 
 const execFileAsync = promisify(execFile);
 const SHA = /^[0-9a-f]{40}$/i;
 const BRANCH = /^(?!main$|master$)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const RUNTIME_SCOPE_CLASS_SET = new Set<string>(RUNTIME_SCOPE_CLASSES);
 
 type GitSetup = {
   base_sha: string;
@@ -17,8 +23,7 @@ type GitSetup = {
 };
 type PreservedBaseline = { head_sha: string; changed_paths: string[]; diff_sha256: string; };
 type Manifest = { run_id?: string; git_setup?: GitSetup; allowed_change_paths?: string[]; freshness_sensitive_paths?: string[]; preserved_baseline?: PreservedBaseline; };
-type RuntimeScopeExtension = { timestamp?: string; scope_class?: 'test'|'technical'; paths?: string[]; reason?: string; evidence_path?: string; evidence_sha256?: string; };
-type PipelineState = { run_id?: string; runtime_scope_extensions?: RuntimeScopeExtension[]; };
+type RuntimeStateView = Pick<PipelineState, 'run_id' | 'runtime_scope_extensions'>;
 type GitRuntime = { planning_base_sha: string; run_base_sha: string; merged_head_sha: string; upstream_changed_files: string[]; refreshed_at: string; };
 class GateError extends Error {}
 
@@ -99,12 +104,12 @@ async function inspect(cwd: string): Promise<Record<string, unknown>> {
 function runtimeEvidencePath(manifestPath:string):string{return join(dirname(resolve(manifestPath)),'git-runtime.json');}
 function statePathForManifest(manifestPath:string):string{return join(dirname(resolve(manifestPath)),'state.json');}
 async function runtimeScopeExtensions(manifest:Manifest,manifestPath:string):Promise<RuntimeScopeExtension[]>{
-  let state:PipelineState;
-  try{state=JSON.parse(await readFile(statePathForManifest(manifestPath),'utf8')) as PipelineState;}catch{return [];}
+  let state:RuntimeStateView;
+  try{state=JSON.parse(await readFile(statePathForManifest(manifestPath),'utf8')) as RuntimeStateView;}catch{return [];}
   if(manifest.run_id&&state.run_id&&state.run_id!==manifest.run_id)throw new GateError('state.json run_id does not match manifest');
   const extensions=state.runtime_scope_extensions??[];
   for(const entry of extensions){
-    if(!entry||!['test','technical'].includes(String(entry.scope_class))||!Array.isArray(entry.paths)||entry.paths.length===0||
+    if(!entry||!RUNTIME_SCOPE_CLASS_SET.has(String(entry.scope_class))||!Array.isArray(entry.paths)||entry.paths.length===0||
       entry.paths.some(path=>!validScopePath(path)||path.endsWith('/**'))){
       throw new GateError('state runtime_scope_extensions is invalid');
     }
