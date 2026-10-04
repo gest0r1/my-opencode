@@ -48,7 +48,6 @@ test('GPT-6 agent assignments and reasoning levels are pinned', () => {
   const expectations = [
     ['config/opencode/agent/subagents/code/senior-story-reviewer.md', 'openai/gpt-6-luna', null],
     ['config/opencode/agent/subagents/code/reviewer.md', 'openai/gpt-6.1-sol', 'low'],
-    ['config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md', 'openai/gpt-6.1-sol', 'low'],
     ['config/opencode/agent/subagents/planning/architecture-analyzer.md', 'openai/gpt-6.1-sol', 'low'],
   ];
 
@@ -63,7 +62,6 @@ test('GPT-6 agents omit temperature when reasoning is enabled', () => {
   for (const path of [
     'config/opencode/agent/subagents/code/senior-story-reviewer.md',
     'config/opencode/agent/subagents/code/reviewer.md',
-    'config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md',
     'config/opencode/agent/subagents/planning/architecture-analyzer.md',
   ]) {
     assert.equal(value(path, 'temperature'), null, path);
@@ -110,4 +108,29 @@ test('title uses unlimited LongCat instead of Muse or MiMo', () => {
   const config = JSON.parse(readFileSync('config/opencode/opencode.json', 'utf8'));
   assert.ok(!config.agents, 'agent definitions must live only in Markdown');
   assert.match(readFileSync('config/opencode/agent/core/title.md', 'utf8'), /model: opencode-go\/longcat-2\.5-preview-free/);
+});
+
+test('technical plan reviewer uses Claude Opus 5.5 without OpenAI reasoning options', () => {
+  const path = 'config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md';
+  assert.equal(value(path, 'model'), 'anthropic/claude-opus-5-5');
+  assert.equal(value(path, 'reasoningEffort'), null);
+});
+
+test('architecture and technical review retain evidence-based reuse/drift checks in every mode', () => {
+  for (const path of [
+    'config/opencode/agent/subagents/planning/architecture-analyzer.md',
+    'config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md',
+  ]) {
+    const prompt = readFileSync(join(process.cwd(), path), 'utf8');
+    for (const invariant of [
+      'every mode', 'reuse_drift_analysis', 'searched paths/symbols',
+      'consumers', 'canonical owner', 'sources of truth', 'equivalence',
+      'cross-consumer regression', 'scope',
+    ]) {
+      // Reviewer says "every review mode", which carries the same invariant.
+      assert.ok(invariant === 'every mode'
+        ? /every (?:review )?mode/.test(prompt)
+        : prompt.includes(invariant), `${path}: missing reuse/drift invariant ${invariant}`);
+    }
+  }
 });

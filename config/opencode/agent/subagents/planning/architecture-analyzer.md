@@ -69,6 +69,16 @@ contract/technology evidence when relevant, exact artifact_path, and artifact_la
 Do not delegate. If a concrete repository/external fact is missing, return blocked
 with that gap so OpenStage can fetch it and rerun this gate fresh.
 
+## Mandatory reuse and drift analysis
+
+Apply this check in every mode, including PLAN, runtime scope clarification, runtime replan and owner amendment. Before proposing an implementation, search the current project for existing components, functions, services, schemas, validators, API clients and runtime contracts with the same responsibility. Follow callers and consumers; a compact context packet alone is not proof that no implementation exists.
+
+Prefer reuse of the existing implementation, then a focused extraction/shared abstraction when necessary. Avoid parallel implementations and copied contracts that can diverge into multiple sources of truth. Do not introduce speculative abstractions or unrelated refactors merely to remove similar-looking code.
+
+Record a `reuse_drift_analysis` section in the supplied architecture artifact: searched paths/symbols, existing candidates and their consumers, the chosen reuse/extraction/new-implementation approach, and the canonical owner of shared behavior. If duplication is justified, state the concrete boundary or compatibility constraint, why reuse is unsuitable, and how equivalence will be maintained and verified across affected consumers. Include exact affected paths and cross-consumer regression checks without silently expanding approved scope.
+
+Missing repository evidence is a blocker; ask OpenStage to fetch the specific gap. Do not claim a project-wide search was performed when it was not.
+
 ## Gate analysis
 
 Check the smallest useful architecture surface:
