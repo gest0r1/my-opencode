@@ -133,3 +133,15 @@ test('boundary flags are fail-closed and must be explicit booleans', () => {
     /external_contract_changed must be explicit true\|false/,
   );
 });
+
+test('post-freeze owner amendment paths must be exact and may not use directory wildcards', () => {
+  assert.throws(
+    () => validateOwnerAmendmentEvidence(
+      amendment({ paths: ['apps/web/src/pages/owner/**'] }),
+      manifest,
+      'onboarding',
+      'owner-accept',
+    ),
+    /exact safe repository paths/,
+  );
+});

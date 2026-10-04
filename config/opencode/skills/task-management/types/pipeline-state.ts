@@ -310,7 +310,8 @@ export interface PipelineRuntime {
   current_stage?: string;
 }
 
-export type RuntimeScopeClass = 'test' | 'technical' | 'owner_amendment';
+export const RUNTIME_SCOPE_CLASSES = ['test', 'technical', 'owner_amendment'] as const;
+export type RuntimeScopeClass = (typeof RUNTIME_SCOPE_CLASSES)[number];
 
 export interface RuntimeScopeExtension {
   timestamp: string;
@@ -385,4 +386,3 @@ export interface PipelineState {
     message?: string;
   }>;
 }
-

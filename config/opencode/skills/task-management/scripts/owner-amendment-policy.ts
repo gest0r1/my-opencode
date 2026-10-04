@@ -27,12 +27,7 @@ function safeRepoPath(value: unknown): value is string {
   return !parts.includes('..') && !parts.includes('.git');
 }
 
-function safeScopePath(value: unknown): value is string {
-  if (typeof value !== 'string' || !value) return false;
-  if (value.endsWith('/**')) {
-    const base = value.slice(0, -3).replace(/\/$/, '');
-    return safeRepoPath(base) && !/[?*\[\]{}]/.test(base);
-  }
+function safeRuntimePath(value: unknown): value is string {
   return safeRepoPath(value) && !/[?*\[\]{}]/.test(value);
 }
 
@@ -101,8 +96,8 @@ export function validateOwnerAmendmentEvidence(
   if (typeof item.target_stage !== 'string' || !pipeline.stages?.includes(item.target_stage) || pipeline.executors?.[item.target_stage] !== 'agent') {
     throw new Error('OWNER_AMENDMENT_INVALID: target_stage must be an existing agent stage');
   }
-  if (!Array.isArray(item.paths) || item.paths.length === 0 || item.paths.some((path) => !safeScopePath(path))) {
-    throw new Error('OWNER_AMENDMENT_INVALID: paths must be a non-empty array of safe repository scopes');
+  if (!Array.isArray(item.paths) || item.paths.length === 0 || item.paths.some((path) => !safeRuntimePath(path))) {
+    throw new Error('OWNER_AMENDMENT_INVALID: paths must be a non-empty array of exact safe repository paths');
   }
   if (new Set(item.paths).size !== item.paths.length) {
     throw new Error('OWNER_AMENDMENT_INVALID: paths must be unique');
