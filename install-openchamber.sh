@@ -65,16 +65,21 @@ native_startup() {
   OPENCHAMBER_STARTUP_LAUNCHER="$OPENCHAMBER_MANAGED_BIN" OPENCHAMBER_MIGRATE_MANAGED_STARTUP=1 "$OPENCHAMBER_MANAGED_BIN" "${args[@]}"
 }
 readiness() {
-  local probe_host="$HOST" code
+  local probe_host="$HOST" code attempt
   [[ "$probe_host" != 0.0.0.0 ]] || probe_host=127.0.0.1
   for ((attempt=0;attempt<30;attempt++)); do
-    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 "http://$probe_host:$PORT/" || true)"
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 "http://$probe_host:$PORT/" 2>"$TMP/readiness-curl.err" || true)"
     if systemctl --user is-active --quiet openchamber.service; then
       case "$code" in 200|301|302|303|307|308|401|403) return 0;; esac
     fi
     sleep 1
   done
+  echo "OpenChamber readiness failed after 30 attempts: http://$probe_host:$PORT/ (last HTTP status: ${code:-unknown})" >&2
+  [[ ! -s "$TMP/readiness-curl.err" ]] || cat "$TMP/readiness-curl.err" >&2
   systemctl --user status openchamber.service --no-pager -l >&2 || true
+  if command -v journalctl >/dev/null; then
+    journalctl --user -u openchamber.service -n 50 --no-pager >&2 || true
+  fi
   return 1
 }
 rollback() {

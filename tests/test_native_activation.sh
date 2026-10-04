@@ -32,6 +32,16 @@ printf 'native %s launcher=%s\n' "$*" "$OPENCHAMBER_STARTUP_LAUNCHER" >> "$TRACE
 CLI
 cat > "$TASK_TMP/bin/curl" <<'CURL'
 #!/usr/bin/env bash
+if [[ "${TRANSIENT_FAILURES:-0}" == 1 ]]; then
+  count=0
+  [[ ! -f "$CURL_COUNTER" ]] || read -r count < "$CURL_COUNTER"
+  printf '%s\n' "$((count+1))" > "$CURL_COUNTER"
+  if ((count<3)); then
+    echo 'curl: (7) simulated connection refused' >&2
+    printf 000
+    exit 7
+  fi
+fi
 if [[ "${FAIL_NEW:-0}" == 1 && "$(readlink -f "$OPENCHAMBER_RUNTIME_ROOT/current")" == *"$APP_SHA" ]]; then printf 500; else printf 200; fi
 CURL
 cat > "$TASK_TMP/bin/systemctl" <<'SYSTEMCTL'
@@ -39,6 +49,11 @@ cat > "$TASK_TMP/bin/systemctl" <<'SYSTEMCTL'
 printf 'systemctl %s\n' "$*" >> "$TRACE"
 [[ "$*" == '--user is-active --quiet openchamber.service' || "$*" == '--user status openchamber.service --no-pager -l' ]]
 SYSTEMCTL
+cat > "$TASK_TMP/bin/journalctl" <<'JOURNAL'
+#!/usr/bin/env bash
+printf 'journalctl %s\n' "$*" >> "$TRACE"
+echo 'simulated service journal'
+JOURNAL
 printf '#!/bin/sh\nexit 0\n' > "$TASK_TMP/bin/sleep"
 chmod +x "$TASK_TMP/bin/"* "$TASK_TMP/cli"
 export CORE_FIXTURE="$TASK_TMP/core" CLI_FIXTURE="$TASK_TMP/cli"
@@ -52,13 +67,17 @@ printf 'old-state\n' > "$HOME/.local/state/my-opencode/openchamber-v2-install.st
 rc=0
 FAIL_NEW=1 bash "$ROOT/install-openchamber.sh" > "$TASK_TMP/failure.log" 2>&1 || rc=$?
 [[ "$rc" != 0 ]]
+grep -Fq 'OpenChamber readiness failed after 30 attempts' "$TASK_TMP/failure.log"
+grep -Fq 'simulated service journal' "$TASK_TMP/failure.log"
 [[ "$(readlink -f "$OPENCHAMBER_CURRENT")" == "$old" ]]
 [[ "$(cat "$HOME/.local/state/my-opencode/openchamber-v2-install.state")" == old-state ]]
 [[ "$(grep -c '^native startup enable' "$TRACE")" == 2 ]]
 OPENCHAMBER_RESTART_MODE=defer bash "$ROOT/install-openchamber.sh" > "$TASK_TMP/defer.log" 2>&1
 [[ "$(readlink -f "$OPENCHAMBER_CURRENT")" == "$old" ]]
 grep -Fq 'PENDING APPLY' "$TASK_TMP/defer.log"
-bash "$ROOT/install-openchamber.sh" > "$TASK_TMP/success.log" 2>&1
+TRANSIENT_FAILURES=1 CURL_COUNTER="$TASK_TMP/curl-counter" bash "$ROOT/install-openchamber.sh" > "$TASK_TMP/success.log" 2>&1
+[[ "$(cat "$TASK_TMP/curl-counter")" == 4 ]]
+! grep -Eq 'curl:|readiness failed|simulated service journal' "$TASK_TMP/success.log"
 [[ "$(readlink -f "$OPENCHAMBER_CURRENT")" == "$OPENCHAMBER_RELEASES/$APP_SHA" ]]
 grep -Fxq 'service_restart_pending=0' "$HOME/.local/state/my-opencode/openchamber-v2-install.state"
 [[ -d "$old" ]]
