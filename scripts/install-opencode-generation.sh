@@ -18,7 +18,7 @@ BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 export BUN_INSTALL
 export PATH="$HOME/.opencode/bin:$BUN_INSTALL/bin:$PATH"
 
-for cmd in gh curl tar mktemp mv cp grep; do
+for cmd in gh curl tar mktemp mv cp node grep; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "Ошибка: требуется команда '$cmd'." >&2
     exit 1
@@ -93,9 +93,6 @@ echo "Скачиваю конфигурацию $REPO@$REF..."
 CONFIG_SHA="${OPENCODE_RESOLVED_CONFIG_SHA:-$(gh api "repos/$REPO/commits/$REF" --jq .sha)}"
 gh api "repos/$REPO/tarball/$CONFIG_SHA" > "$ARCHIVE"
 tar -xzf "$ARCHIVE" -C "$SRC" --strip-components=1
-
-source "$SRC/scripts/bootstrap-runtime-tools.sh"
-ensure_runtime_node
 
 [[ -f "$SRC/config/opencode/opencode.json" ]] || {
   echo "Ошибка: config/opencode/opencode.json отсутствует в $REPO@$REF" >&2
@@ -350,9 +347,6 @@ if [[ -f "$LEGACY_ENV_FILE" ]]; then
   rm -f "$LEGACY_ENV_FILE"
   echo "Удалён legacy runtime-файл: $LEGACY_ENV_FILE"
 fi
-
-ensure_claude_cli
-if [[ ! -f "$HOME/.local/state/my-opencode/root-state-sync.pending" ]]; then configure_server_browser; fi
 
 # ---- Shell env + managed launcher -----------------------------------------
 
