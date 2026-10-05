@@ -12,20 +12,36 @@ for cmd in id getent cut; do
 done
 CURRENT_USER="$(id -un)"
 RUNTIME_HOME="$(getent passwd "$RUNTIME_USER" | cut -d: -f6 || true)"
-[[ -n "$RUNTIME_HOME" ]] || {
+[[ -n "$RUNTIME_HOME" || "$CURRENT_USER" != "$RUNTIME_USER" ]] || {
   echo "Runtime user '$RUNTIME_USER' does not exist. Run scripts/migrate-root-runtime-to-opencode.sh first." >&2
   exit 2
 }
 
 reexec_as_runtime_user() {
   [[ "$CURRENT_USER" != "$RUNTIME_USER" ]] || return 0
-  for cmd in sudo loginctl systemctl mktemp cp chmod rm; do
+  for cmd in sudo loginctl systemctl mktemp cp chmod rm gh; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "Missing prerequisite for user switch: $cmd" >&2; exit 1; }
   done
   sudo -v || { echo "Current user '$CURRENT_USER' must have sudo rights." >&2; exit 2; }
 
+  # Refresh fixed privileged helpers from the same immutable configuration SHA.
+  # The runtime account cannot grant itself these privileges.
+  local provision_dir provision_sha provision_repo provision_ref file
+  provision_repo="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
+  provision_ref="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
+  provision_sha="$(gh api "repos/$provision_repo/commits/$provision_ref" --jq .sha)"
+  [[ "$provision_sha" =~ ^[a-f0-9]{40}$ ]] || exit 1
+  provision_dir="$(mktemp -d /tmp/my-opencode-provision.XXXXXXXX)"
+  chmod 755 "$provision_dir"
+  for file in provision-runtime-user.sh setup-opencode-package-sudo.sh runtime-processes.py migrate-runtime-state.py finalize-runtime-migration.py bootstrap-runtime-tools.sh; do
+    gh api -H 'Accept: application/vnd.github.raw' "repos/$provision_repo/contents/scripts/$file?ref=$provision_sha" > "$provision_dir/$file"
+    chmod 644 "$provision_dir/$file"
+  done
+  sudo env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash "$provision_dir/provision-runtime-user.sh"
+  rm -rf -- "$provision_dir"
+  RUNTIME_HOME="$(getent passwd "$RUNTIME_USER" | cut -d: -f6)"
   local runtime_uid script_copy rc token name source_file bootstrap_sha='' token_file=''
-  local -a pass_env=()
+  local -a pass_env=("OPENCODE_CONFIG_REF=$provision_sha" "MY_OPENCODE_REF=$provision_sha")
   runtime_uid="$(id -u "$RUNTIME_USER")"
   sudo loginctl enable-linger "$RUNTIME_USER" >/dev/null
   sudo systemctl start "user@${runtime_uid}.service"
@@ -42,7 +58,7 @@ reexec_as_runtime_user() {
     }
     local bootstrap_repo="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
     local bootstrap_ref="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
-    bootstrap_sha="$(gh api "repos/$bootstrap_repo/commits/$bootstrap_ref" --jq .sha)"
+    bootstrap_sha="$provision_sha"
     [[ "$bootstrap_sha" =~ ^[a-f0-9]{40}$ ]] || { rm -f -- "$script_copy"; exit 1; }
     gh api -H 'Accept: application/vnd.github.raw' \
       "repos/$bootstrap_repo/contents/install.sh?ref=$bootstrap_sha" > "$script_copy"
@@ -56,13 +72,14 @@ reexec_as_runtime_user() {
         ;;
     esac
   done
+  bootstrap_sha="$provision_sha"
   if [[ -n "$bootstrap_sha" ]]; then
     pass_env+=("OPENCODE_CONFIG_REF=$bootstrap_sha" "MY_OPENCODE_REF=$bootstrap_sha")
   fi
 
   # Prefer opencode's migrated gh auth. If unavailable, hand the invoking
   # sudo user's token over through a mode-0600 runtime file, never argv.
-  if ! sudo -H -u "$RUNTIME_USER" env \
+  if ! sudo -H -u "$RUNTIME_USER" env -i \
       HOME="$RUNTIME_HOME" USER="$RUNTIME_USER" LOGNAME="$RUNTIME_USER" \
       PATH="$RUNTIME_HOME/.local/bin:$RUNTIME_HOME/.opencode/bin:$RUNTIME_HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin" \
       XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" \
@@ -74,17 +91,17 @@ reexec_as_runtime_user() {
     fi
     if [[ -n "$token" ]]; then
       token_file="/run/user/$runtime_uid/.my-opencode-gh-token.${BASHPID}.${RANDOM}"
-      printf '%s' "$token" | sudo -H -u "$RUNTIME_USER" sh -c 'umask 077; cat > "$1"' sh "$token_file"
+      printf '%s' "$token" | sudo -H -u "$RUNTIME_USER" sh -c 'cd "$HOME"; umask 077; cat > "$1"' sh "$token_file"
       pass_env+=("OPENCODE_INSTALL_GH_TOKEN_FILE=$token_file")
     fi
   fi
 
   echo "Switching installer runtime: $CURRENT_USER -> $RUNTIME_USER"
-  if sudo -H -u "$RUNTIME_USER" env \
+  if sudo -H -u "$RUNTIME_USER" env -i \
       HOME="$RUNTIME_HOME" USER="$RUNTIME_USER" LOGNAME="$RUNTIME_USER" \
       PATH="$RUNTIME_HOME/.local/bin:$RUNTIME_HOME/.opencode/bin:$RUNTIME_HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin" \
       XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" \
-      "${pass_env[@]}" bash "$script_copy" "$@"; then
+      "${pass_env[@]}" bash -c 'cd "$HOME"; exec bash "$@"' bash "$script_copy" "$@"; then
     rc=0
   else
     rc=$?
@@ -94,6 +111,8 @@ reexec_as_runtime_user() {
   exit "$rc"
 }
 reexec_as_runtime_user "$@"
+cd "$RUNTIME_HOME"
+export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
 
 if [[ -n "${OPENCODE_INSTALL_GH_TOKEN_FILE:-}" ]]; then
   [[ -r "$OPENCODE_INSTALL_GH_TOKEN_FILE" ]] || { echo 'Temporary GitHub token handoff is unreadable.' >&2; exit 1; }
@@ -139,7 +158,11 @@ bash "$GENERATION" "$@"
 # OpenCode is a user service owned by opencode. Enable it for boot/login now;
 # the combined OpenChamber installer starts it only after the old root runtime
 # has been safely stopped at the final cutover point.
-WEB_HOST="${OPENCODE_WEB_HOST:-0.0.0.0}"
+"$OPENCODE_BIN" serve --help > "$TMP_DIR/serve-help"
+grep -q -- '--hostname' "$TMP_DIR/serve-help" && grep -q -- '--port' "$TMP_DIR/serve-help" || {
+  echo 'Installed OpenCode does not support serve --hostname/--port' >&2; exit 1;
+}
+WEB_HOST="${OPENCODE_WEB_HOST:-127.0.0.1}"
 WEB_PORT="${OPENCODE_WEB_PORT:-4096}"
 [[ "$WEB_PORT" =~ ^[0-9]+$ && "$WEB_PORT" -ge 1 && "$WEB_PORT" -le 65535 ]] || {
   echo 'OPENCODE_WEB_PORT must be 1..65535' >&2; exit 2;
@@ -159,7 +182,9 @@ StartLimitBurst=10
 [Service]
 Type=simple
 WorkingDirectory=$HOME
-ExecStart=$HOME/.opencode/bin/opencode web --port $WEB_PORT --hostname $WEB_HOST
+ExecStart=$HOME/.opencode/bin/opencode serve --port $WEB_PORT --hostname $WEB_HOST
+Environment="HOME=$HOME" "PATH=$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="XDG_CONFIG_HOME=$HOME/.config" "XDG_DATA_HOME=$HOME/.local/share" "XDG_STATE_HOME=$HOME/.local/state"
 EnvironmentFile=-$HOME/.config/opencode.env
 TimeoutStopSec=10
 Restart=on-failure

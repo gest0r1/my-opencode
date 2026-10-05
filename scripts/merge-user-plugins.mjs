@@ -42,7 +42,14 @@ export function mergePlugins(repo, user, policy = { excluded: [] }) {
       if (config[key] !== undefined && !Array.isArray(config[key])) throw Error(`${key} must be an array`);
       for (const entry of config[key] ?? []) {
         const normalized = normalize(entry), id = identity(normalized);
-        if (!(policy.excluded ?? []).includes(id) && !(policy.excluded ?? []).includes(spec(normalized))) result.set(id, normalized);
+        if (!(policy.excluded ?? []).includes(id) && !(policy.excluded ?? []).includes(spec(normalized))) {
+          const previous = result.get(id);
+          // The managed subscription plugin pins its version while retaining
+          // the runtime user's transport/options configuration.
+          const selected = id === '@openchamber/opencode-claude' && typeof normalized === 'string' && previous?.options !== undefined
+            ? {package: normalized, options: previous.options} : normalized;
+          result.set(id, selected);
+        }
       }
     }
   }

@@ -251,15 +251,17 @@ rm -f ~/.config/opencode-web.env
 
 ## Перенос root-runtime на отдельного пользователя
 
-Скрипт `scripts/migrate-root-runtime-to-opencode.sh` запускается **от root через SSH**,
-а обычный installer — **от пользователя `opencode`**. Допустимое имя только `opencode`: другое имя вызывает ошибку.
-Если пользователя нет, миграция создаёт его с домашним каталогом и bash.
-До запуска нужен системный Node.js 22+; Node из `/root/.nvm` недоступен новому runtime.
-Скрипт копирует данные без удаления источника и без перезаписи имеющихся файлов назначения,
-переносит абсолютные symlinks и служебные пути, поднимает user systemd manager.
-При ошибке возвращает ранее активные root services; успешно перенесённые файлы остаются
-для повторного запуска. Root services отключаются только после успешного переноса.
-Проекты по умолчанию копируются из `/root/projects` в домашний каталог пользователя.
+Скрипт `scripts/migrate-root-runtime-to-opencode.sh` запускается от root; он **не останавливает текущий runtime и терминал**. Это подготовка, а не завершённый cutover. Отдельный пользователь называется `opencode`. Оба установщика принимают любого sudo-capable пользователя, создают runtime account при необходимости, обновляют ограниченные root-owned helpers и переключаются с чистым HOME/XDG/PATH и cwd в домашний каталог `opencode`.
+
+При подготовке источник сохраняется, имеющиеся файлы назначения не перезаписываются. SQLite копируется через backup API вместе с committed WAL. Исправляются физические Git worktree links и admin metadata, выполняются repair/list/status без reset/clean/prune. Активный runtime назначения блокирует подготовку. Node 22+ проверяется от runtime user; при отсутствии совместимой версии ставится пользовательский Node 24.21.0 с проверкой SHA-256 официального архива.
+
+Финальный запуск установщика выполняется из внешней SSH-консоли. Старые systemd/native services останавливаются с сохранением возможности восстановления. Process inventory проверяется fail-closed. Затем root делает свежий снимок источника, а **все записи в домашний каталог выполняет пользователь opencode**. Изменённые после подготовки файлы назначения блокируют перезапись. Миграция SQLite проверяется сначала на копии, затем выполняется транзакционно с integrity/FK, сохранением session/history counts и проверкой идемпотентности. Совместимые дубли составных ключей объединяются; конфликт metadata или referenced identity требует явной реконсиляции. Search DB, JSON sandboxes и base64 registries мигрируют отдельно. MISSING targets и immutable history сохраняются, фиктивные каталоги не создаются.
+
+Резервные копии, `rollback-index.json` и отчёты находятся в `~/.local/state/my-opencode/state-migration-*`; исходные данные root не удаляются. Не восстанавливайте SQLite поверх работающего сервиса: остановите писателей и используйте backup API. При ошибке final sync сначала восстанавливаются файлы назначения, затем прежние сервисы. Изменение metadata при открытом старом UI требует обновления вкладки и выбора нового `/home/opencode/...` пути.
+
+OpenCode unit запускает проверенный `serve --hostname/--port` на loopback. OpenChamber по умолчанию слушает `0.0.0.0:3000`: Docker proxy сохраняет доступ, а managed callback выбирает loopback, обходя MASQUERADE. UI password, same-machine и bearer проверки сохранены. Browser использует доступный native Chrome вместо root wrapper; отсутствие native Chrome при включённом server-browser — явный блокер. CLI Claude устанавливается в пользовательский prefix при включённом плагине. Незавершённый Claude login отражается как `CLAUDE_LOGIN_REQUIRED`, без подмены credentials.
+
+Cutover проверяет API, enable/linger, UID/HOME/PATH/cwd сервисов и аутентифицированный UI/API; повторяет проверку после restart. Реальный reboot и платную генерацию установщик автоматически не выполняет. После reboot отдельно повторите `verify-runtime-services.py` с теми же bind/password env; browser.open/snapshot и реальную генерацию провайдера проверьте из OpenChamber. Только успешные проверки позволяют зафиксировать отключение старых сервисов.
 
 ```bash
 # root, внешняя SSH-консоль
@@ -290,8 +292,7 @@ OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCHAMBER_REF="$OPENCHAMBER_SHA" \
   bash /tmp/install-openchamber-v2.sh
 ```
 
-При миграции root добавляет `opencode` в группу `sudo` и устанавливает
-root-owned helper с NOPASSWD только для установки пакетов из системных APT-репозиториев.
+При миграции root устанавливает ограниченный root-owned helper с NOPASSWD только для установки пакетов из системных APT-репозиториев.
 Обычный installer проверяет доступ; сам он не может выдавать себе права root.
 Для уже созданного `opencode` отдельно выполните от root
 `scripts/setup-opencode-package-sudo.sh` с `OPENCODE_RUNTIME_USER=opencode`.
@@ -304,3 +305,14 @@ sudo -n /usr/local/sbin/opencode-install-packages install python3-pip ffmpeg
 
 OpenCode запрашивает подтверждение инструмента перед вызовом package helper.
 Произвольный root shell и APT-опции через helper не разрешены.
+
+
+## Подготовка окружения проекта и модели конвейера
+
+Перед dispatch `/pipeline-run` выполняет `stage-cli prepare-environment <manifest.json>`, затем environment preflight. Менеджер выбирается по точному `packageManager` проекта; package.json и lockfiles остаются неизменными. pnpm/npm устанавливаются в пользовательский versioned cache с отключёнными lifecycle scripts; launcher выбирает кеш по проекту. Для Yarn и integrity-qualified pins используется Corepack. Подготовка другого PLAN не переключает версию pnpm уже выполняющегося проекта. PATH сервиса включает `~/.local/bin`. Установка не использует APT, не ремонтирует глобальные root symlinks и не расходует fix-cycles. Несовместимый Node, неподдерживаемые engine ranges, registry/auth/network failures остаются environment BLOCKED. Исправление окружения позволяет продолжить тот же RUN.
+
+Preflight различает EXECUTABLE_NOT_FOUND, EXECUTABLE_BROKEN_SYMLINK, EXECUTABLE_NOT_ACCESSIBLE, EXECUTABLE_START_FAILED и PACKAGE_MANAGER_VERSION_MISMATCH; проверяет реальный запуск и engines из cwd проекта. Команда prepare-environment валидирует frozen manifest до установки и не меняет pipeline state. Установщики окружения проекта выполняются от opencode.
+
+`pipeline_runtime_preflight` сверяет явно заданные модели агентов с живым enabled-каталогом текущего runtime. Отсутствующий точный provider/model возвращает PIPELINE_MODEL_UNAVAILABLE; пустой каталог не считается успешной проверкой. Автоматической смены провайдера нет. SeniorTechnicalPlanReviewer использует `claude-code/claude-opus-5-5[1m]` через `@openchamber/opencode-claude@1.3.4` и Claude.ai login пользователя opencode. Каталог подтверждает регистрацию, а не успешность генерации/остаток квоты. Проверка реальным вызовом reviewer требуется после изменения модели или подписки.
+
+Проверки восстановления: `python3 tests/test_runtime_state_recovery.py`, `python3 tests/test_runtime_user_migration.py`, тесты project-tooling, manifest-preflight, capability-preflight и динамические installer/activation fixtures. Они дополняют, а не заменяют acceptance на установленном сервере.

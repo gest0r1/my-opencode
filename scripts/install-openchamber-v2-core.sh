@@ -11,7 +11,7 @@ APP_REF="${OPENCHAMBER_REF:-main}"
 OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"
 EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.0}"
 OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}"
-HOST="${OPENCHAMBER_BIND_HOST:-172.18.0.1}"
+HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"
 PORT="${OPENCHAMBER_BIND_PORT:-3000}"
 RESTART_MODE="${OPENCHAMBER_RESTART_MODE:-auto}"
 
@@ -45,7 +45,7 @@ Environment:
   OPENCODE_INSTALL_VERSION (default: 2.0.21)
   OPENCHAMBER_EXPECTED_VERSION (default: 2.1.0)
   OPENCHAMBER_PACKAGE_MODE (auto|release|source; default: auto)
-  OPENCHAMBER_BIND_HOST (default: 172.18.0.1)
+  OPENCHAMBER_BIND_HOST (default: 0.0.0.0)
   OPENCHAMBER_BIND_PORT (default: 3000)
   OPENCHAMBER_RESTART_MODE (auto|now|defer; default: auto)
 
@@ -128,22 +128,10 @@ read_ui_password_from_env_file() {
 inside_openchamber_terminal() {
   [[ "${OPENCHAMBER_EMBEDDED_TERMINAL:-}" == 1 ]] && return 0
 
-  # Fallback for the migration from an older OpenChamber that did not export
-  # OPENCHAMBER_EMBEDDED_TERMINAL yet.
-  local pid="$$" parent='' args='' depth=0
-  while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$depth" -lt 12 ]]; do
-    parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
-    [[ "$parent" =~ ^[0-9]+$ && "$parent" -gt 1 ]] || break
-    args="$(ps -o args= -p "$parent" 2>/dev/null || true)"
-    case "$args" in
-      *openchamber*serve*|*openchamber*/server/*|*packages/web/server/*|*packages/web/bin/cli.js*)
-        return 0
-        ;;
-    esac
-    pid="$parent"
-    depth=$((depth + 1))
-  done
-  return 1
+  local detector="$(dirname "${BASH_SOURCE[0]}")/runtime-processes.py" result
+  [[ -f "$detector" ]] || { echo 'Runtime process detector missing' >&2; exit 1; }
+  result="$(python3 "$detector" --ancestor "$PPID")" || exit 1
+  [[ "$result" == embedded ]]
 }
 
 validate_bind_host() {

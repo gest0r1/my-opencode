@@ -11,20 +11,36 @@ for cmd in id getent cut; do
 done
 CURRENT_USER="$(id -un)"
 RUNTIME_HOME="$(getent passwd "$RUNTIME_USER" | cut -d: -f6 || true)"
-[[ -n "$RUNTIME_HOME" ]] || {
+[[ -n "$RUNTIME_HOME" || "$CURRENT_USER" != "$RUNTIME_USER" ]] || {
   echo "Runtime user '$RUNTIME_USER' does not exist. Run scripts/migrate-root-runtime-to-opencode.sh first." >&2
   exit 2
 }
 
 reexec_as_runtime_user() {
   [[ "$CURRENT_USER" != "$RUNTIME_USER" ]] || return 0
-  for cmd in sudo loginctl systemctl mktemp cp chmod rm; do
+  for cmd in sudo loginctl systemctl mktemp cp chmod rm gh; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "Missing prerequisite for user switch: $cmd" >&2; exit 1; }
   done
   sudo -v || { echo "Current user '$CURRENT_USER' must have sudo rights." >&2; exit 2; }
 
+  # Refresh fixed privileged helpers from the same immutable configuration SHA.
+  # The runtime account cannot grant itself these privileges.
+  local provision_dir provision_sha provision_repo provision_ref file
+  provision_repo="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
+  provision_ref="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
+  provision_sha="$(gh api "repos/$provision_repo/commits/$provision_ref" --jq .sha)"
+  [[ "$provision_sha" =~ ^[a-f0-9]{40}$ ]] || exit 1
+  provision_dir="$(mktemp -d /tmp/my-opencode-provision.XXXXXXXX)"
+  chmod 755 "$provision_dir"
+  for file in provision-runtime-user.sh setup-opencode-package-sudo.sh runtime-processes.py migrate-runtime-state.py finalize-runtime-migration.py bootstrap-runtime-tools.sh; do
+    gh api -H 'Accept: application/vnd.github.raw' "repos/$provision_repo/contents/scripts/$file?ref=$provision_sha" > "$provision_dir/$file"
+    chmod 644 "$provision_dir/$file"
+  done
+  sudo env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash "$provision_dir/provision-runtime-user.sh"
+  rm -rf -- "$provision_dir"
+  RUNTIME_HOME="$(getent passwd "$RUNTIME_USER" | cut -d: -f6)"
   local runtime_uid script_copy rc token name source_file bootstrap_sha='' token_file=''
-  local -a pass_env=()
+  local -a pass_env=("OPENCODE_CONFIG_REF=$provision_sha" "MY_OPENCODE_REF=$provision_sha")
   runtime_uid="$(id -u "$RUNTIME_USER")"
   sudo loginctl enable-linger "$RUNTIME_USER" >/dev/null
   sudo systemctl start "user@${runtime_uid}.service"
@@ -41,7 +57,7 @@ reexec_as_runtime_user() {
     }
     local bootstrap_repo="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
     local bootstrap_ref="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
-    bootstrap_sha="$(gh api "repos/$bootstrap_repo/commits/$bootstrap_ref" --jq .sha)"
+    bootstrap_sha="$provision_sha"
     [[ "$bootstrap_sha" =~ ^[a-f0-9]{40}$ ]] || { rm -f -- "$script_copy"; exit 1; }
     gh api -H 'Accept: application/vnd.github.raw' \
       "repos/$bootstrap_repo/contents/install-openchamber.sh?ref=$bootstrap_sha" > "$script_copy"
@@ -55,13 +71,14 @@ reexec_as_runtime_user() {
         ;;
     esac
   done
+  bootstrap_sha="$provision_sha"
   if [[ -n "$bootstrap_sha" ]]; then
     pass_env+=("OPENCODE_CONFIG_REF=$bootstrap_sha" "MY_OPENCODE_REF=$bootstrap_sha")
   fi
 
   # Prefer opencode's migrated gh auth. If unavailable, hand the invoking
   # sudo user's token over through a mode-0600 runtime file, never argv.
-  if ! sudo -H -u "$RUNTIME_USER" env \
+  if ! sudo -H -u "$RUNTIME_USER" env -i \
       HOME="$RUNTIME_HOME" USER="$RUNTIME_USER" LOGNAME="$RUNTIME_USER" \
       PATH="$RUNTIME_HOME/.local/bin:$RUNTIME_HOME/.opencode/bin:$RUNTIME_HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin" \
       XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" \
@@ -73,17 +90,17 @@ reexec_as_runtime_user() {
     fi
     if [[ -n "$token" ]]; then
       token_file="/run/user/$runtime_uid/.my-opencode-gh-token.${BASHPID}.${RANDOM}"
-      printf '%s' "$token" | sudo -H -u "$RUNTIME_USER" sh -c 'umask 077; cat > "$1"' sh "$token_file"
+      printf '%s' "$token" | sudo -H -u "$RUNTIME_USER" sh -c 'cd "$HOME"; umask 077; cat > "$1"' sh "$token_file"
       pass_env+=("OPENCODE_INSTALL_GH_TOKEN_FILE=$token_file")
     fi
   fi
 
   echo "Switching installer runtime: $CURRENT_USER -> $RUNTIME_USER"
-  if sudo -H -u "$RUNTIME_USER" env \
+  if sudo -H -u "$RUNTIME_USER" env -i \
       HOME="$RUNTIME_HOME" USER="$RUNTIME_USER" LOGNAME="$RUNTIME_USER" \
       PATH="$RUNTIME_HOME/.local/bin:$RUNTIME_HOME/.opencode/bin:$RUNTIME_HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin" \
       XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" \
-      "${pass_env[@]}" bash "$script_copy" "$@"; then
+      "${pass_env[@]}" bash -c 'cd "$HOME"; exec bash "$@"' bash "$script_copy" "$@"; then
     rc=0
   else
     rc=$?
@@ -93,6 +110,8 @@ reexec_as_runtime_user() {
   exit "$rc"
 }
 reexec_as_runtime_user "$@"
+cd "$RUNTIME_HOME"
+export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
 
 if [[ -n "${OPENCODE_INSTALL_GH_TOKEN_FILE:-}" ]]; then
   [[ -r "$OPENCODE_INSTALL_GH_TOKEN_FILE" ]] || { echo 'Temporary GitHub token handoff is unreadable.' >&2; exit 1; }
@@ -107,7 +126,7 @@ if [[ "$HOME" != "$RUNTIME_HOME" ]]; then
 fi
 if ! command -v sudo >/dev/null ||
    ! sudo -n /usr/local/sbin/opencode-install-packages --check >/dev/null 2>&1 ||
-   ! sudo -n /usr/local/sbin/opencode-runtime-cutover --check >/dev/null 2>&1; then
+   [[ "$(sudo -n /usr/local/sbin/opencode-runtime-cutover --check 2>/dev/null)" != 'Runtime cutover sudo: READY migration-v2' ]]; then
   echo 'Runtime sudo helpers are not configured. Run scripts/migrate-root-runtime-to-opencode.sh or scripts/setup-opencode-package-sudo.sh once with sudo/root.' >&2
   exit 2
 fi
@@ -121,7 +140,7 @@ OPENCHAMBER_RUNTIME_ROOT="${OPENCHAMBER_RUNTIME_ROOT:-$HOME/.local/share/opencha
 LEGACY_BUN_INSTALL="${LEGACY_BUN_INSTALL:-$HOME/.bun}"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode"
 STATE="$STATE_ROOT/openchamber-v2-install.state"
-HOST="${OPENCHAMBER_BIND_HOST:-172.18.0.1}"
+HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"
 PORT="${OPENCHAMBER_BIND_PORT:-3000}"
 for cmd in gh mktemp readlink ln mv cp rm sed flock curl systemctl; do
   command -v "$cmd" >/dev/null || { echo "Missing prerequisite: $cmd" >&2; exit 1; }
@@ -131,9 +150,11 @@ trap 'rm -rf -- "$TMP"' EXIT
 CONFIG_SHA="$(gh api "repos/$CONFIG_REPO/commits/$CONFIG_REF" --jq .sha)"
 APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"
 [[ "$CONFIG_SHA" =~ ^[a-f0-9]{40}$ && "$APP_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'Invalid resolved SHA' >&2; exit 1; }
-for file in install-openchamber-v2-core.sh openchamber-runtime-store.sh; do
+for file in install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py verify-runtime-services.py; do
   gh api -H 'Accept: application/vnd.github.raw' "repos/$CONFIG_REPO/contents/scripts/$file?ref=$CONFIG_SHA" > "$TMP/$file"
 done
+source "$TMP/bootstrap-runtime-tools.sh"
+ensure_runtime_node
 export OPENCODE_CONFIG_REF="$CONFIG_SHA" MY_OPENCODE_REF="$CONFIG_SHA" OPENCHAMBER_REF="$APP_SHA"
 export EXPECTED_OPENCHAMBER_VERSION OPENCHAMBER_RUNTIME_ROOT LEGACY_BUN_INSTALL
 source "$TMP/openchamber-runtime-store.sh"
@@ -174,6 +195,15 @@ native_startup() {
   [[ -z "${OPENCHAMBER_UI_PASSWORD:-}" ]] || args+=(--ui-password "$OPENCHAMBER_UI_PASSWORD")
   case "${OPENCHAMBER_API_ONLY:-}" in 1|true|TRUE|yes|YES|on|ON) args+=(--api-only);; esac
   OPENCHAMBER_STARTUP_LAUNCHER="$OPENCHAMBER_MANAGED_BIN" OPENCHAMBER_MIGRATE_MANAGED_STARTUP=1 "$OPENCHAMBER_MANAGED_BIN" "${args[@]}"
+  mkdir -p "$HOME/.config/systemd/user/openchamber.service.d"
+  cat > "$HOME/.config/systemd/user/openchamber.service.d/runtime-env.conf" <<EOF
+[Service]
+WorkingDirectory=$HOME
+Environment="HOME=$HOME" "PATH=$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="XDG_CONFIG_HOME=$HOME/.config" "XDG_DATA_HOME=$HOME/.local/share" "XDG_STATE_HOME=$HOME/.local/state"
+EOF
+  systemctl --user daemon-reload
+  systemctl --user restart openchamber.service
 }
 readiness() {
   local probe_host="$HOST" code attempt
@@ -196,7 +226,8 @@ readiness() {
 opencode_readiness() {
   local attempt
   for ((attempt=0;attempt<20;attempt++)); do
-    systemctl --user is-active --quiet opencode-web.service && return 0
+    if systemctl --user is-active --quiet opencode-web.service &&
+       curl --noproxy '*' --fail --silent --max-time 2 "http://${OPENCODE_WEB_HOST:-127.0.0.1}:${OPENCODE_WEB_PORT:-4096}/api/info" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const v=JSON.parse(s);process.exit(typeof v.version==="string" && Number.isInteger(v.pid)?0:1)}catch{process.exit(1)}})'; then return 0; fi
     sleep 1
   done
   echo 'OpenCode user service failed to become active.' >&2
@@ -205,13 +236,14 @@ opencode_readiness() {
 }
 
 LEGACY_CUTOVER_ACTIVE=0
+MIGRATION_STATE_READY=0
 rollback() {
   local rc=${1:-$?} recovered=0
   trap - ERR INT TERM
   oc_rollback_activation
   if [[ -f "$TMP/state.before" ]]; then cp -p "$TMP/state.before" "$STATE"; else rm -f "$STATE"; fi
 
-  if [[ -x "$OPENCHAMBER_MANAGED_BIN" ]]; then
+  if (( MIGRATION_STATE_READY == 1 )) && [[ -x "$OPENCHAMBER_MANAGED_BIN" ]]; then
     if systemctl --user enable --now opencode-web.service >/dev/null 2>&1 && opencode_readiness && native_startup && readiness; then
       recovered=1
     else
@@ -225,7 +257,7 @@ rollback() {
     else
       systemctl --user disable --now openchamber.service >/dev/null 2>&1 || true
       systemctl --user disable --now opencode-web.service >/dev/null 2>&1 || true
-      sudo -n /usr/local/sbin/opencode-runtime-cutover legacy-restore || true
+      sudo -n /usr/local/sbin/opencode-runtime-cutover legacy-restore || echo 'Legacy runtime restoration failed; inspect the cutover journal before retrying.' >&2
     fi
   fi
   exit "$rc"
@@ -236,8 +268,17 @@ trap 'rollback 143' TERM
 
 # Arm rollback before privileged cutover: even a partially failed legacy-stop
 # is followed by legacy-restore from the ERR trap.
+# Fail closed on incomplete process inspection, including across sudo reexec.
+console="$(python3 "$TMP/runtime-processes.py" --ancestor "$PPID")"
+[[ "$console" == external && "${OPENCHAMBER_EMBEDDED_TERMINAL:-0}" != 1 ]] || {
+  echo 'PENDING APPLY: final activation requires an external SSH console.'; exit 0;
+}
+ensure_claude_cli
 LEGACY_CUTOVER_ACTIVE=1
 sudo -n /usr/local/sbin/opencode-runtime-cutover legacy-stop
+[[ ! -f "$HOME/.local/state/my-opencode/root-state-sync.pending" ]] || { echo 'Final runtime state synchronization is incomplete' >&2; false; }
+MIGRATION_STATE_READY=1
+configure_server_browser
 systemctl --user daemon-reload
 systemctl --user enable --now opencode-web.service >/dev/null
 opencode_readiness
@@ -251,6 +292,11 @@ native_startup
 readiness
 systemctl --user is-enabled --quiet openchamber.service || { echo 'OpenChamber autostart is not enabled' >&2; false; }
 systemctl --user is-enabled --quiet opencode-web.service || { echo 'OpenCode autostart is not enabled' >&2; false; }
+# Restart acceptance: API readiness must survive another service restart.
+systemctl --user restart opencode-web.service openchamber.service
+opencode_readiness
+readiness
+python3 "$TMP/verify-runtime-services.py"
 oc_prune_releases
 oc_commit_activation
 sudo -n /usr/local/sbin/opencode-runtime-cutover legacy-commit

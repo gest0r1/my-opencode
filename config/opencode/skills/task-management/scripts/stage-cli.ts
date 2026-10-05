@@ -8,6 +8,7 @@ import { dirname, resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { applyOwnerAmendment, runCli } from './stage-cli-core.ts';
+import { prepareProjectTooling } from './project-tooling.mjs';
 import { preflightFile } from './manifest-preflight.mjs';
 import { validateOwnerAmendmentForApply } from './owner-amendment-policy.ts';
 
@@ -372,6 +373,14 @@ async function main(args: string[]): Promise<void> {
     console.log(JSON.stringify(state, null, 2));
     return;
   }
+  if (command === 'prepare-environment') {
+    if (!identifier || args.length !== 2) throw new Error('usage: stage-cli prepare-environment <manifest.json>');
+    await preflightFile(resolve(identifier));
+    const tooling = prepareProjectTooling(process.cwd());
+    const preflight = await preflightFile(resolve(identifier), { environment: true });
+    console.log(JSON.stringify({tooling, preflight}));
+    return;
+  }
   if (command === 'preflight') {
     if (!identifier || args.some((arg, index) => index > 1 && arg !== '--environment')) {
       throw new Error('usage: stage-cli preflight <manifest.json> [--environment]');
@@ -403,4 +412,3 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     process.exitCode = 1;
   });
 }
-

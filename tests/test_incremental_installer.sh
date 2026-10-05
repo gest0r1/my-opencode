@@ -7,6 +7,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORE="$ROOT/scripts/install-openchamber-v2-core.sh"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf -- "$TMP_ROOT"' EXIT
+# Isolate the process inventory boundary; detector semantics are tested in
+# test_runtime_state_recovery.py, including malformed output and ps failure.
+cp "$CORE" "$TMP_ROOT/core.sh"
+CORE="$TMP_ROOT/core.sh"
+printf 'print("external")\n' > "$TMP_ROOT/runtime-processes.py"
 
 CONFIG_SHA="1111111111111111111111111111111111111111"
 APP_SHA="2222222222222222222222222222222222222222"
@@ -147,6 +152,7 @@ EOF
 printf 'UNEXPECTED bun %s\n' "$*" >> "$TRACE"
 exit 96
 EOF
+
 
   chmod +x "$fakebin"/*
 }

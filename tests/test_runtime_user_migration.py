@@ -16,6 +16,11 @@ class MigrationTests(unittest.TestCase):
         src, dst, bins = (root / n for n in ('source', 'target', 'bin'))
         for p in (src, dst, bins): p.mkdir()
         trace = root / 'trace'
+        # Node must be reachable through the managed user PATH, not inherited
+        # from the administrative test runner's private installation.
+        import shutil
+        (dst / '.local/bin').mkdir(parents=True)
+        (dst / '.local/bin/node').symlink_to(shutil.which('node'))
         commands = {
             'id': 'case "$1" in -u) echo 1234;; -gn) echo testgroup;; *) [[ "${TEST_CREATE_USER:-0}" != 1 || -f "$TEST_USER_CREATED" ]];; esac',
             'getent': 'echo "opencode:x:1234:1234::' + str(dst) + ':/bin/bash"',
@@ -28,6 +33,7 @@ class MigrationTests(unittest.TestCase):
             'systemctl': 'echo "$*" >> "$TEST_TRACE"; case "$*" in *is-active*) exit 0;; *"-p User"*) echo root;; esac',
             'node': '[[ "${TEST_FAIL_NODE:-0}" != 1 ]]',
             'gh': 'exit 0',
+            'ps': 'printf \"1 0 0 init\\n\"; if [[ \"${TEST_ACTIVE_RUNTIME:-0}\" == 1 ]]; then printf \"5 1 1234 opencode serve\\n\"; fi',
         }
         for name, body in commands.items():
             f = bins / name
@@ -94,7 +100,9 @@ exec "${args[@]}"
         src, dst, bins, trace, env = self.fixture()
         (src / '.local/bin').mkdir(parents=True)
         (src / '.local/bin/cli').write_text('fixture\n')
-        (dst / '.local').mkdir()
+        (dst / '.local').mkdir(exist_ok=True)
+        import shutil
+        shutil.rmtree(dst / '.local/bin')
         (dst / '.local/bin').symlink_to(bins)
         result = self.run_script(env)
         self.assertNotEqual(result.returncode, 0)
@@ -111,6 +119,14 @@ exec "${args[@]}"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(Path(env['TEST_USER_CREATED']).exists())
         self.assertIn('Creating runtime user: opencode', result.stdout)
+
+    def test_active_target_runtime_blocks_before_copy(self):
+        src, dst, bins, trace, env = self.fixture()
+        env['TEST_ACTIVE_RUNTIME'] = '1'
+        result = self.run_script(env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('still active', result.stderr)
+        self.assertFalse(trace.exists())
 
     def test_invalid_options_do_not_stop_services(self):
         src, dst, bins, trace, env = self.fixture()
