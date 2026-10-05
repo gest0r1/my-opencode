@@ -185,6 +185,10 @@ migrate_and_archive_agent_root() {
 remove_legacy_launcher() {
   local launcher=$1 target=''
   [[ -e "$launcher" || -L "$launcher" ]] || return 0
+  if [[ ! -w "$(dirname "$launcher")" ]]; then
+    echo "Skipping system launcher without write permission: $launcher (user launcher takes precedence)"
+    return 0
+  fi
 
   if [[ -L "$launcher" ]]; then
     target="$(readlink -f "$launcher" 2>/dev/null || true)"

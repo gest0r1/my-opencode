@@ -382,6 +382,11 @@ ensure_shell_env_loader "$HOME/.profile"
 
 if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
   LAUNCHER="/usr/local/bin/opencode"
+else
+  mkdir -p "$HOME/.local/bin"
+  LAUNCHER="$HOME/.local/bin/opencode"
+fi
+if [[ -n "$LAUNCHER" ]]; then
   manage_launcher=0
 
   if [[ ! -e "$LAUNCHER" && ! -L "$LAUNCHER" ]]; then
@@ -394,7 +399,7 @@ if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
   fi
 
   if (( manage_launcher == 1 )); then
-    LAUNCHER_TMP="$(mktemp /usr/local/bin/.opencode.XXXXXXXX)"
+    LAUNCHER_TMP="$(mktemp "$(dirname "$LAUNCHER")/.opencode.XXXXXXXX")"
     cat > "$LAUNCHER_TMP" <<'EOF'
 #!/usr/bin/env bash
 # managed-by: my-opencode
