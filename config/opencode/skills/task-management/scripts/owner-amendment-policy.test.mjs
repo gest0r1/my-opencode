@@ -60,19 +60,13 @@ test('bounded owner amendment may add files/components while staying in the exis
   assert.ok(result.paths.includes('apps/web/src/pages/owner/ServiceCreateForm.tsx'));
 });
 
-test('new independently scoped work item is a hard full-replan boundary', () => {
-  assert.throws(
-    () => validateOwnerAmendmentEvidence(
-      amendment({ new_work_item_required: true }),
-      manifest,
-      'onboarding',
-      'owner-accept',
-    ),
-    /FULL_REPLAN_REQUIRED_NEW_WORK_ITEM/,
-  );
+test('compatible amendment may add a hash-bound runtime work unit', () => {
+  const unit = { id: 'WI-NEW', pipeline_id: 'onboarding', path: 'work-items/runtime/new.json', sha256: 'c'.repeat(64) };
+  const result = validateOwnerAmendmentEvidence(amendment({ new_work_item_required: true, work_item_id: unit.id, work_items: [unit] }), manifest, 'onboarding', 'owner-accept');
+  assert.equal(result.work_items[0].id, unit.id);
 });
 
-test('runtime work item injection is rejected even when new_work_item_required is falsely marked false', () => {
+test('malformed runtime work item is rejected', () => {
   assert.throws(
     () => validateOwnerAmendmentEvidence(
       amendment({
@@ -82,11 +76,11 @@ test('runtime work item injection is rejected even when new_work_item_required i
       'onboarding',
       'owner-accept',
     ),
-    /FULL_REPLAN_REQUIRED_NEW_WORK_ITEM/,
+    /OWNER_AMENDMENT_INVALID/,
   );
 });
 
-test('work_item_id must already be frozen and mapped to this pipeline', () => {
+test('undeclared work_item_id is rejected', () => {
   assert.throws(
     () => validateOwnerAmendmentEvidence(
       amendment({ work_item_id: 'WI-NEW' }),
@@ -94,7 +88,7 @@ test('work_item_id must already be frozen and mapped to this pipeline', () => {
       'onboarding',
       'owner-accept',
     ),
-    /FULL_REPLAN_REQUIRED_NEW_WORK_ITEM/,
+    /OWNER_AMENDMENT_INVALID/,
   );
 });
 
@@ -145,3 +139,4 @@ test('post-freeze owner amendment paths must be exact and may not use directory 
     /exact safe repository paths/,
   );
 });
+

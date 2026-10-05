@@ -17,10 +17,13 @@ class MigrationTests(unittest.TestCase):
         for p in (src, dst, bins): p.mkdir()
         trace = root / 'trace'
         commands = {
-            'id': 'case "$1" in -u) echo 1234;; -gn) echo testgroup;; *) exit 0;; esac',
-            'getent': 'echo "opencod:x:1234:1234::' + str(dst) + ':/bin/bash"',
+            'id': 'case "$1" in -u) echo 1234;; -gn) echo testgroup;; *) [[ "${TEST_CREATE_USER:-0}" != 1 || -f "$TEST_USER_CREATED" ]];; esac',
+            'getent': 'echo "opencode:x:1234:1234::' + str(dst) + ':/bin/bash"',
             'chown': 'exit 0',
-            'useradd': 'exit 0',
+            'useradd': '[[ -z "${TEST_USER_CREATED:-}" ]] || touch "$TEST_USER_CREATED"',
+            'usermod': 'exit 0',
+            'sudo': 'exit 0',
+            'visudo': 'exit 0',
             'loginctl': 'exit 0',
             'runuser': 'shift 3; exec "$@"',
             'systemctl': 'echo "$*" >> "$TEST_TRACE"; case "$*" in *is-active*) exit 0;; *"-p User"*) echo root;; esac',
@@ -42,8 +45,8 @@ exec "${args[@]}"
         # systemctl trace remains available in env -i through the script's literal.
         f = bins / 'systemctl'
         f.write_text('#!/bin/bash\necho "$*" >> "' + str(trace) + '"\ncase "$*" in *is-active*) exit 0;; *"-p User"*) echo root;; esac\n')
-        env = dict(os.environ, PATH=f'{bins}:/usr/bin:/bin', TEST_BIN=str(bins),
-                   OPENCODE_RUNTIME_USER='opencod', OPENCODE_MIGRATION_SOURCE_HOME=str(src))
+        env = dict(os.environ, PATH=f'{bins}:/usr/bin:/bin', TEST_BIN=str(bins), TEST_USER_CREATED=str(root / 'user-created'),
+                   OPENCODE_SUDO_PREFIX=str(root / 'sudo-root'), OPENCODE_RUNTIME_USER='opencode', OPENCODE_MIGRATION_SOURCE_HOME=str(src))
         return src, dst, bins, trace, env
 
     def run_script(self, env):
@@ -72,6 +75,12 @@ exec "${args[@]}"
         self.assertEqual((dst / '.config/gh/hosts.yml').stat().st_mode & 0o777, 0o600)
         self.assertIn('disable openchamber.service', trace.read_text())
         self.assertEqual(self.run_script(env).returncode, 0)
+        helper = Path(env['OPENCODE_SUDO_PREFIX']) / 'usr/local/sbin/opencode-install-packages'
+        self.assertEqual(subprocess.run(['bash',str(helper),'--check']).returncode,0)
+        self.assertEqual(subprocess.run(['bash',str(helper),'install','--option']).returncode,2)
+        policy = Path(env['OPENCODE_SUDO_PREFIX']) / 'etc/sudoers.d/opencode-packages-opencode'
+        self.assertIn('opencode ALL=(root) NOPASSWD:',policy.read_text())
+        self.assertEqual(policy.stat().st_mode & 0o777,0o440)
 
     def test_failure_restarts_services_without_disable(self):
         src, dst, bins, trace, env = self.fixture()
@@ -85,11 +94,25 @@ exec "${args[@]}"
         self.assertNotIn('disable openchamber.service', trace.read_text())
         self.assertFalse((dst / '.local/state/my-opencode/root-user-migration.done').exists())
 
+    def test_missing_user_is_created(self):
+        src, dst, bins, trace, env = self.fixture()
+        env['TEST_CREATE_USER']='1'
+        result=self.run_script(env)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertTrue(Path(env['TEST_USER_CREATED']).exists())
+        self.assertIn('Creating runtime user: opencode',result.stdout)
+
     def test_invalid_options_do_not_stop_services(self):
         src, dst, bins, trace, env = self.fixture()
         env['OPENCODE_MIGRATE_PROJECTS'] = 'invalid'
         result = self.run_script(env)
         self.assertEqual(result.returncode, 2)
+        self.assertFalse(trace.exists())
+        env['OPENCODE_MIGRATE_PROJECTS']='1'
+        env['OPENCODE_RUNTIME_USER']='wrong-user'
+        result=self.run_script(env)
+        self.assertEqual(result.returncode,2)
+        self.assertIn('required name is exactly opencode',result.stderr)
         self.assertFalse(trace.exists())
 
 

@@ -3,6 +3,9 @@
 set -Eeuo pipefail
 
 RUNTIME_USER="${OPENCODE_RUNTIME_USER:-opencode}"
+[[ "$RUNTIME_USER" == opencode ]] || {
+  echo "Invalid runtime user '$RUNTIME_USER': required name is exactly opencode" >&2; exit 2;
+}
 for cmd in id getent cut; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing prerequisite: $cmd" >&2; exit 1; }
 done
@@ -16,6 +19,10 @@ fi
 if [[ -z "$RUNTIME_HOME" || "$HOME" != "$RUNTIME_HOME" ]]; then
   echo "Invalid HOME for runtime user '$RUNTIME_USER': HOME='$HOME', expected='$RUNTIME_HOME'." >&2
   echo "Use a login shell: sudo -iu $RUNTIME_USER" >&2
+  exit 2
+fi
+if ! command -v sudo >/dev/null || ! sudo -n /usr/local/sbin/opencode-install-packages --check >/dev/null 2>&1; then
+  echo 'Package installation sudo is not configured. Root must run scripts/setup-opencode-package-sudo.sh with the same OPENCODE_RUNTIME_USER before installation.' >&2
   exit 2
 fi
 

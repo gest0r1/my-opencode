@@ -13,9 +13,11 @@ Before creating or starting any PLAN/RUN, call `pipeline_runtime_preflight`. Req
 
 Build a design-freeze PLAN only. Never implement source changes, create a worktree/branch/session, switch checkout, rebase, merge, clean, reset or invoke `openchamber session.create`. Owner opens an existing worktree-session and invokes this command inside that session. Other worktrees may PLAN concurrently; only one RUN executes at a time.
 
-`$ARGUMENTS` selects exactly one source mode: `--refresh <run-id>` for a CLI-created bounded refresh draft; same-repository Issue refs such as `#51 #47`; an existing task/plan file path; or free task text. Empty arguments are invalid. There is NO fallback to `docs/plan.md` and no OpenChamber linked-Issue source: GitHub Issues are selected explicitly with `#N`. `docs/pipeline-rules.md` remains the rules path; project rules take precedence and invalid rules BLOCK. PLAN and all delegated agents must never edit project or distribution rules.
+`$ARGUMENTS` selects exactly one source mode: `--revise <run-id>` for a not-yet-implemented PLAN; same-repository Issue refs such as `#51 #47`; an existing task/plan file path; or free task text. Empty arguments are invalid. There is NO fallback to `docs/plan.md` and no OpenChamber linked-Issue source: GitHub Issues are selected explicitly with `#N`. `docs/pipeline-rules.md` remains the rules path; project rules take precedence and invalid rules BLOCK. PLAN and all delegated agents must never edit project or distribution rules.
 
-For `--refresh <run-id>`, require an existing schema-v2 draft created by `pipeline-refresh-cli` with `refresh_revalidation.classification="BOUNDED_IMPACT"` and lineage `MAIN_DRIFT_REPLAN`. Do **not** fetch a new source snapshot, create another run-id, copy artifacts, or rerun unaffected planning gates. Treat the inherited artifacts as draft context only; rerun exactly the gates in `refresh_revalidation.affected_gates`, recompile TaskManager work items when `rebuild_work_items=true`, refresh any execution/GitHub contracts those gates own, then complete the normal manifest/preflight/owner-approval sequence. If the draft or impact evidence is missing/inconsistent, BLOCK instead of falling back to a full PLAN.
+For `--revise <run-id>`, use the existing folder. Before changing manifest or gate artifacts, write a fresh independent revision review containing the current `manifest_sha256`, `owner_contract_changed: true|false`, `affected_gates[]` and `reason`, then call `pipeline-reconcile-cli.ts revise-plan <run-id> --evidence <review-path>`. It rejects revision after any source-changing agent stage actually started. Replace stories/manifest/work items in place; repeat only invalidated gates, keeping unaffected ready artifacts. Never reset state manually. If owner scope/behavior/constraints changed, obtain approval again; technical corrections reuse the previous approval when the validated revised manifest is initialized. Log a short reason/gate list, not old story versions.
+
+After implementation began, an incompatible replan uses `pipeline-reconcile-cli.ts inherit-replan <old-run-id> --new-run <new-run-id>`. The CLI copies stories/context/previous decisions/research to `planning/inherited/` only. Read them as historical context; rebuild all required gates. Never transfer old manifest/state/reviews/work-items/candidate/CI/deployment evidence as current validity. Old run remains intact. Compatible owner clarifications use RUN amendments instead.
 
 ## Preflight: inspect only
 
@@ -26,7 +28,7 @@ npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue
 npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts show <issue-number>...
 ```
 
-The GitHub Issue itself is authoritative; PLAN does not persist a raw Issue snapshot. Freeze the returned repository/source Issue metadata and semantic `requirements_sha256` as `source_requirements_sha256`. The digest covers Issue title/body and human comments while excluding pipeline-owned audit/planning comments. Immediately before design freeze, run the same `probe` again and require the digest to equal the value used for planning. Do not substitute anonymous GitHub HTML/API requests, `webfetch`, free-form `curl` or `github_handoff_probe`.
+The GitHub Issue itself is authoritative; PLAN persists normalized semantic evidence via `pipeline-reconcile-cli.ts snapshot-source <run-id>` after writing the draft manifest and before initialization. GitHub remains authoritative; `planning/source-requirements.json` is only the planning baseline for future diff. Freeze the returned repository/source Issue metadata and semantic `requirements_sha256` as `source_requirements_sha256`. The digest covers Issue title/body and human comments while excluding pipeline-owned audit/planning comments. Immediately before design freeze, run the same `probe` again and require the digest to equal the value used for planning. Do not substitute anonymous GitHub HTML/API requests, `webfetch`, free-form `curl` or `github_handoff_probe`.
 
 1. `git-worktree-cli.ts inspect`: require owner-created linked worktree, non-default branch, valid local main and clean tracked checkout. Verify `.tmp/pipelines/` is ignored; tracked pipeline state BLOCKS.
 2. Record exact worktree directory, branch, HEAD and local main SHA in `git_setup.base_sha`; require main ancestor of HEAD. `stage-cli.ts rules docs/pipeline-rules.md --json` must PASS. PLAN never mutates Git.
@@ -84,7 +86,7 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
 ## Design-freeze
 
 1. Collect project context once through ContextScout into a compact packet of exact relevant paths. Fetch again only on a documented gap.
-   Freeze the actual repository paths consumed by each required planning gate in `planning_inputs[gate_id][]`. Add `planning_inputs.work_items[]` for the implementation/context paths TaskManager used. Use exact paths or `directory/**` only. These paths are the deterministic read-set used by `/pipeline-refresh`; do not substitute broad writable scope when a narrower read-set is known.
+   Record the union of actual repository paths consumed by planning in `planning_scope[]`. Existing `planning_inputs` is read for legacy RUNs; new PLANs do not need per-gate read-sets. Use exact paths or `directory/**` only. These paths are the deterministic read-set used by `/pipeline-refresh`; do not substitute broad writable scope when a narrower read-set is known.
 2. Select only triggered planning gates: StoryMapper/SeniorStoryReviewer for user-facing behavior; ArchitectureAnalyzer for architecture/cross-module; ContractManager for interfaces; ExternalScout for current external technology/security/migration facts; SeniorTechnicalPlanReviewer for material risks. PrioritizationEngine only on explicit owner prioritization.
 3. Maintain stable Issue story files `stories/issue-N.md`; owner corrections rewrite the same story. Reviews are append-only/versioned.
 4. Collect ALL unresolved owner decisions in `decision-register.md`. Each decision records its owning planning gate and status. Never omit a decision to make validation pass or self-authorize it.
@@ -184,24 +186,11 @@ git-worktree-cli.ts adopt .tmp/pipelines/{run-id}/manifest.json
 git-worktree-cli.ts verify .tmp/pipelines/{run-id}/manifest.json
 ```
 
-All three must PASS. `plan-run-preflight` accepts only schema version 2. `verify` must prove that the complete current branch diff is either the frozen preserved baseline or inside writable `allowed_change_paths`; do not defer a baseline/scope mismatch until RUN. Preflight verifies planning evidence hashes, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Before `init`, deterministic manifest corrections remain the same draft/run-id and are simply revalidated; after `init`, never mutate that manifest.
+All three must PASS. `plan-run-preflight` accepts only schema version 2. `verify` must prove that the complete current branch diff is either the frozen preserved baseline or inside writable `allowed_change_paths`; do not defer a baseline/scope mismatch until RUN. Preflight verifies planning evidence hashes, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Before `init`, deterministic manifest corrections remain the same draft/run-id and are simply revalidated; after `init`, use the trusted revise-plan lifecycle until implementation starts; after first implementation start, never mutate that manifest.
 
 ## Preservation, migration, supersede and refresh
 
-### Bounded refresh drafts
-
-When invoked as `/pipeline-plan --refresh <run-id>`, first read `refresh_revalidation` from that existing draft. The draft was created and populated by the deterministic refresh CLI because OpenStage has no authority to copy historical artifacts. Never copy from the superseded run manually.
-
-- rerun only `affected_gates[]` and their normal reviewer pairings/dependencies;
-- unaffected inherited gate records remain `ready` and are not dispatched again;
-- if `rebuild_work_items=true`, call TaskManager after affected gates are ready and replace the draft work-item index/references with freshly compiled work items;
-- update hashes only for artifacts actually regenerated in the new draft;
-- re-inspect GitHub CI/deployment contracts when the affected gate owns those contracts;
-- set every affected gate back to literal `ready`, finalize `refresh_revalidation.status="ready"`, and run the same `plan-run-preflight` / `adopt` / `verify` checks before presenting approval;
-- any newly discovered owner decision, requirement change, rules/policy change, or architecture expansion outside the recorded bounded impact escalates to a normal full replan rather than widening the bounded refresh silently.
-
-
-Canonical results stay under `.tmp/pipelines/{run-id}/`. Deterministic tools own `state.json`, locks, candidate and machine evidence. Never manually edit approved manifest/state.
+Canonical results stay under `.tmp/pipelines/{run-id}/`. Deterministic tools own `state.json`, locks, candidate and machine evidence. Never manually edit runtime state; before implementation use revise-plan to authorize in-place manifest changes.
 
 When PLAN intentionally continues existing committed implementation from an older/legacy run, first call:
 
@@ -211,20 +200,11 @@ git-worktree-cli.ts baseline <planning-base-sha>
 
 Freeze its exact `head_sha`, sorted `changed_paths[]` and `diff_sha256` as `preserved_baseline`. Those files are allowed to remain exactly as they were at the preserved HEAD, but that does **not** grant the new RUN permission to edit them. Any post-baseline change to such a path must still match `allowed_change_paths`. This is the canonical V1→V2/existing-implementation migration contract.
 
-Distinguish lifecycle changes:
-- planning `needs_revision`: same run-id/draft, up to 3 autonomous cycles;
-- `technical_fix` / bounded `security_fix`: same approved run, default 5 automatic cycles per stage/work-item; owner may raise the RUN ceiling explicitly with `--fix-cycles N` (max 20) or add `+N` later to one active stage;
-- deterministic manifest correction **before init**: same draft/run-id;
-- frozen-manifest correction after init: create a lineage-preserving draft through `stage-cli supersede <old> <new> --reason <code>`;
-- architecture/scope/main-drift replan: new run with `lineage.change_class=replan` and a reason code.
-
-`stage-cli supersede` copies planning/source/work-item artifacts only; it never copies state, locks, candidate, GitHub/gate/owner evidence. Do not hand-copy pipeline directories.
-
-After another worktree merges relevant main changes, owner invokes `/pipeline-refresh`. Preserve historical evidence, create a NEW run_id/manifest with reason-coded lineage, review affected design/scope/gates and obtain new approval. Never copy old state/locks/candidate into the new run.
+Lifecycle rule: before the first actual source-agent start, all plan corrections/replanning stay in this folder via `revise-plan`. Afterwards, compatible amendments stay in the current RUN, while incompatible replan uses `inherit-replan` and a new PLAN with historical context only. Never hand-copy run directories, clone approved reviews/work-items as current validity, or use the legacy `stage-cli supersede` cloning path for new replans.
 
 ## Owner approval — mandatory stop
 
-Present the current gate history/readiness, exact branch/main SHA, manifest, DAG, scope, evidence hashes, risks and run ID. Then STOP.
+For a new PLAN or owner-contract-changing revision, present gate readiness, branch/main SHA, manifest, DAG, scope, hashes, risks and run ID. Then STOP. A technical-only `--revise` with previous approval and `owner_contract_changed=false` instead runs normal preflight/adopt/verify/init; init restores approved status, so do not ask for approval again or invoke approve on the already-approved state.
 
 Only AFTER a separate explicit owner message approving this exact v2 manifest/run ID, with every owner decision resolved and every required planning gate `ready`, run:
 
@@ -255,3 +235,8 @@ If the owner has said they will be away or wants a larger autonomous repair wind
 
 
 PR CI requires an existing PR number frozen as `github_gates.<stage>.pr_number` with `trigger: pull_request`. Use authenticated GitHub/CLI to inspect private PRs. The PR head must equal the published candidate; head/merge mapping is verified by the deterministic gate. Workflow bootstrap uses push.
+
+
+## Freeze boundary and owner clarifications
+
+Owner may clarify in the current session at any time. Before implementation starts, refine this PLAN in the same folder. Frozen runtime starts at the first `stage-cli start` whose executor is `agent` (source implementation, including bootstrap), not at approval, command invocation, preflight, reconciliation or review. After that boundary keep manifest immutable and use accepted amendments. File/component/work-unit count is never a reason for full replan by itself. A new PLAN is required after start only for an incompatible business/architecture/external-contract/security/destructive boundary or an unresolved owner decision.

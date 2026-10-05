@@ -91,7 +91,7 @@ export function isPipelineOwnedComment(comment: Record<string, unknown>): boolea
   return /<!--\s*pipeline-(?:event|artifact):[^>]+-->/i.test(body);
 }
 
-function canonicalRequirements(snapshot: Record<string, any>): Record<string, unknown> {
+export function canonicalRequirements(snapshot: Record<string, any>): Record<string, unknown> {
   const issues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
   return {
     schema_version: 2,
@@ -102,15 +102,12 @@ function canonicalRequirements(snapshot: Record<string, any>): Record<string, un
       number: Number(issue.number),
       title: typeof issue.title === 'string' ? issue.title : '',
       body: typeof issue.body === 'string' ? issue.body : '',
-      state: String(issue.state ?? ''),
       comments: (Array.isArray(issue.comments) ? issue.comments : [])
         .filter((comment: Record<string, unknown>) => !isPipelineOwnedComment(comment))
         .map((comment: Record<string, unknown>) => ({
           id: comment.id ?? null,
           user: comment.user ?? null,
           body: typeof comment.body === 'string' ? comment.body : '',
-          created_at: comment.created_at ?? null,
-          updated_at: comment.updated_at ?? null,
         })),
     })),
   };
@@ -280,7 +277,10 @@ export async function checkFrozenRequirements(
   if (manifest.source_type !== 'github_issues') {
     return { status: 'PASS', run_id: runId, source_type: manifest.source_type ?? null, changed: false };
   }
-  const frozen = String(manifest.source_requirements_sha256 ?? '');
+  const { acceptedReconciliations } = await import('./reconcile-evidence.ts');
+  const state = await readFile(path.join(runRoot, 'state.json'), 'utf8').then(JSON.parse).catch((error) => { if (error.code === 'ENOENT') return undefined; throw error; });
+  const records = await acceptedReconciliations(runRoot, state, sha256(await readFile(manifestPath, 'utf8')));
+  const frozen = String(records.at(-1)?.source_requirements_sha256 ?? manifest.source_requirements_sha256 ?? '');
   if (!SHA256.test(frozen)) throw new GitHubIssueCliError('manifest source_requirements_sha256 is missing or invalid');
   const issueNumbers = Array.isArray(manifest.source_issues)
     ? manifest.source_issues.map((issue: any) => Number(issue.number)).filter((n: number) => Number.isInteger(n) && n > 0)
@@ -290,7 +290,7 @@ export async function checkFrozenRequirements(
   const liveSha = String(live.requirements_sha256 ?? '');
   if (!SHA256.test(liveSha)) throw new GitHubIssueCliError('live source requirements digest is invalid');
   if (liveSha.toLowerCase() !== frozen.toLowerCase()) {
-    throw new GitHubIssueCliError(`SOURCE_REQUIREMENTS_CHANGED: frozen=${frozen.toLowerCase()} live=${liveSha.toLowerCase()}`);
+    throw new GitHubIssueCliError(`SOURCE_REQUIREMENTS_CHANGED: reconcile required; frozen=${frozen.toLowerCase()} live=${liveSha.toLowerCase()}`);
   }
   return {
     status: 'PASS',
@@ -425,3 +425,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exitCode = 1;
   });
 }
+

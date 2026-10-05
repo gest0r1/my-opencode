@@ -9,10 +9,10 @@ export interface OwnerAmendmentEvidence {
   source_stage: string;
   target_stage: string;
   work_item_id: string;
-  new_work_item_required: false;
+  new_work_item_required?: boolean;
   summary?: string;
   paths: string[];
-  work_items: [];
+  work_items: Array<{ id: string; pipeline_id: string; path: string; sha256: string }>;
   requirements_changed: boolean;
   acceptance_criteria_changed: boolean;
   business_intent_changed: false;
@@ -42,6 +42,7 @@ export function validateOwnerAmendmentEvidence(
   manifest: any,
   pipelineId: string,
   sourceStage: string,
+  priorWorkUnits: any[] = [],
 ): OwnerAmendmentEvidence {
   if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
     throw new Error('OWNER_AMENDMENT_INVALID: evidence must be a JSON object');
@@ -55,7 +56,6 @@ export function validateOwnerAmendmentEvidence(
   }
 
   for (const field of [
-    'new_work_item_required',
     'requirements_changed',
     'acceptance_criteria_changed',
     'business_intent_changed',
@@ -64,14 +64,15 @@ export function validateOwnerAmendmentEvidence(
     'destructive_change',
   ]) assertExplicitBoolean(item, field);
 
-  if (item.new_work_item_required !== false) {
-    throw new Error('FULL_REPLAN_REQUIRED_NEW_WORK_ITEM: owner amendment requires a new independently scoped work item');
-  }
-  if (!Array.isArray(item.work_items)) {
-    throw new Error('OWNER_AMENDMENT_INVALID: work_items must be an empty array');
-  }
-  if (item.work_items.length !== 0) {
-    throw new Error('FULL_REPLAN_REQUIRED_NEW_WORK_ITEM: owner amendment may not add runtime work items');
+  if (!Array.isArray(item.work_items)) throw new Error('OWNER_AMENDMENT_INVALID: work_items must be an array');
+  const ids = new Set<string>();
+  for (const work of item.work_items as any[]) {
+    if (!work || typeof work.id !== 'string' || !work.id || ids.has(work.id) ||
+        work.pipeline_id !== pipelineId || !safeRuntimePath(work.path) || !work.path.startsWith('work-items/') ||
+        !/^[0-9a-f]{64}$/i.test(String(work.sha256 ?? '')) || (manifest?.work_items ?? []).concat(priorWorkUnits).some((w: any) => w.id === work.id)) {
+      throw new Error('OWNER_AMENDMENT_INVALID: invalid or duplicate runtime work unit');
+    }
+    ids.add(work.id);
   }
 
   if (
@@ -86,11 +87,11 @@ export function validateOwnerAmendmentEvidence(
   const pipeline = manifest?.pipelines?.find((candidate: any) => candidate?.id === pipelineId);
   if (!pipeline) throw new Error(`OWNER_AMENDMENT_INVALID: pipeline not found: ${pipelineId}`);
   if (typeof item.work_item_id !== 'string' || !item.work_item_id) {
-    throw new Error('OWNER_AMENDMENT_INVALID: work_item_id must reference an existing frozen work item');
+    throw new Error('OWNER_AMENDMENT_INVALID: work_item_id is required');
   }
-  const frozenWorkItem = manifest?.work_items?.find((candidate: any) => candidate?.id === item.work_item_id);
-  if (!frozenWorkItem || frozenWorkItem.pipeline_id !== pipelineId || !pipeline.work_items?.includes(item.work_item_id)) {
-    throw new Error(`FULL_REPLAN_REQUIRED_NEW_WORK_ITEM: ${String(item.work_item_id)} is not a frozen work item of ${pipelineId}`);
+  const frozenWorkItem = (manifest?.work_items ?? []).concat(priorWorkUnits).find((candidate: any) => candidate?.id === item.work_item_id);
+  if ((!frozenWorkItem || frozenWorkItem.pipeline_id !== pipelineId || !pipeline.work_items?.includes(item.work_item_id) && !priorWorkUnits.some(w => w.id === item.work_item_id)) && !ids.has(item.work_item_id)) {
+    throw new Error('OWNER_AMENDMENT_INVALID: work_item_id must be frozen or explicitly supplied as an approved runtime work unit');
   }
 
   if (typeof item.target_stage !== 'string' || !pipeline.stages?.includes(item.target_stage) || pipeline.executors?.[item.target_stage] !== 'agent') {
@@ -137,7 +138,7 @@ export async function validateOwnerAmendmentForApply(input: {
   }
 
   return {
-    evidence: validateOwnerAmendmentEvidence(evidence, manifest, input.pipelineId, input.sourceStage),
+    evidence: validateOwnerAmendmentEvidence(evidence, manifest, input.pipelineId, input.sourceStage, (state.owner_amendments ?? []).flatMap((a: any) => a.work_items ?? [])),
     absoluteEvidencePath,
   };
 }

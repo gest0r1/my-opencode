@@ -32,18 +32,7 @@ moves before that second RUN starts, use:
 /pipeline-refresh [run-id]
 ```
 
-Refresh is impact-aware:
-
-- `NO_IMPACT`: keep the same v2 run, manifest and owner approval; the trusted
-  refresh CLI advances only the machine-owned effective `run_base_sha`.
-- `BOUNDED_IMPACT`: the refresh CLI creates a lineage draft itself, copies only
-  allowed planning/source/work-item context, never runtime evidence, and marks only
-  affected planning gates for `/pipeline-plan --refresh <new-run-id>`.
-- `STRUCTURAL_IMPACT`: preserve history and perform a normal full PLAN.
-
-OpenStage never copies run artifacts manually. `worktree-refresh.sh` owns the
-snapshot/Git merge and `pipeline-refresh-cli` owns impact classification plus any
-cross-run transfer.
+Refresh uses the same reconciliation as RUN. Trusted `worktree-refresh.sh` preserves a verified snapshot while syncing main. `pipeline-reconcile-cli` returns only COMPATIBLE or PLAN_INVALID; a changed hash first requests semantic review, never automatic replan. Before implementation begins, revise the same folder and only affected gates. After source implementation starts, compatible amendments may include new runtime work units; incompatible PLAN requires a new folder with reusable context under planning/inherited, keeping the old folder intact. Owner feedback is accepted at any checkpoint. Technical corrections preserve approval; changed owner scope/behavior/constraints require approval again.
 
 ## Manifest v2 and planning gates
 
@@ -62,7 +51,7 @@ blocking questions are presented to the owner.
 The v2 manifest also freezes:
 
 - semantic GitHub Issue requirements SHA-256 over human-controlled requirement content;
-- per-gate `planning_inputs` read-sets used for incremental refresh impact analysis;
+- `planning_scope` read-set used for compatibility checks (legacy `planning_inputs` remains readable);
 - required planning artifacts and reviews;
 - atomic TaskManager work items by ID/path/SHA-256;
 - per-pipeline decision/research/contract IDs;
@@ -355,7 +344,7 @@ Use different mechanisms for different changes:
 - technical/security fix during RUN → same run-id with an initial five-cycle budget; owner may pre-authorize a higher run-wide ceiling with `--fix-cycles N` (max 20), grant `+N` to one active stage later, or approve a block-local runtime replan; all remain in the same run and are audited without rewriting the manifest;
 - frozen V2 manifest correction after init → `stage-cli supersede <old> <new> --reason <code>`;
 - architecture/scope/structural main-drift replan → new run with reason-coded `lineage.change_class=replan`;
-- bounded main drift → deterministic CLI-created lineage draft plus affected-gate-only `/pipeline-plan --refresh`;
+- main/source drift → same-run reconciliation; pre-implementation revision stays in the same folder;
 - no-impact main drift → same approved run with machine-owned effective base adoption.
 
 Supersede copies only planning/source/work-item artifacts. Runtime state, locks, candidate and machine evidence are never reused. The old state records `superseded_by` and `supersede_reason`, so every run-id has a deterministic ancestry instead of unexplained v2b/v2c/v2d generations.
@@ -363,3 +352,4 @@ Supersede copies only planning/source/work-item artifacts. Runtime state, locks,
 ### Explicit PR CI context
 
 PR CI uses `trigger: pull_request`, `pr_number: <existing PR number>`. The gate uses authenticated `gh api` and binds PR repository, head branch/head SHA, base SHA and Actions association to the exact frozen candidate. Both direct head SHA and that PR's current merge SHA are accepted. A foreign/stale/unassociated run fails closed. Push and DEV contracts keep their existing SHA/trust rules; workflow bootstrap still requires push.
+

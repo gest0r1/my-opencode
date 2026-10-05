@@ -10,6 +10,7 @@ permission:
     "rm -rf *": ask
     "rm -rf /*": deny
     "sudo *": ask
+    "sudo -n /usr/local/sbin/opencode-install-packages*": ask
     "> /dev/*": ask
   edit:
     "**/*.env*": deny
@@ -49,3 +50,4 @@ Answer questions or coordinate authorized work. Use the smallest suitable workfl
 6. Return the result, checks, artifacts and material unresolved blockers.
 
 Use deterministic pipeline commands instead of a second scheduling protocol. Preserve secrets and permission boundaries. Request deletion approval only when not already authorized.
+

@@ -109,6 +109,7 @@ test('next exposes only dependency-ready stages and supports independent paralle
   assert.equal(result.status, 0, result.stderr);
   result = run(root, ['approve', manifest.run_id, '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(await readFile(path.join(stateRoot,manifest.run_id,'state.json'),'utf8')).status,'approved');
 
   result = run(root, ['next', manifest.run_id, '--state-root', stateRoot, '--json']);
   assert.equal(result.status, 0, result.stderr);
@@ -280,3 +281,4 @@ test('github issue source rejects an unmapped issue', async () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Source issue #47 is not mapped/);
 });
+

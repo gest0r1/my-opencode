@@ -212,6 +212,46 @@ async function fixture() {
   return { root, worktree, runId, stateRoot, artifactRoot, manifestPath };
 }
 
+test('technical revision retains folder and approval until actual implementation start', async t => {
+  const f=await fixture(); t.after(()=>rm(f.root,{recursive:true,force:true}));
+  for(const args of [['init',f.manifestPath],['approve',f.runId]]) {
+    const r=stage(f.worktree,[...args,'--state-root',f.stateRoot]); assert.equal(r.status,0,r.stderr);
+  }
+  const reviseCli=path.join(HERE,'pipeline-reconcile-cli.ts');
+  const evidence=path.join(f.artifactRoot,'planning/revision-review.json');
+  await writeFile(evidence,JSON.stringify({manifest_sha256:sha256(await readFile(f.manifestPath,'utf8')),owner_contract_changed:false,affected_gates:[],reason:'Technical correction, approved behavior unchanged'}));
+  let r=run(f.worktree,'npx',['--yes','tsx',reviseCli,'revise-plan',f.runId,'--evidence',evidence,'--state-root',f.stateRoot]);
+  assert.equal(r.status,0,r.stderr);
+  r=stage(f.worktree,['init',f.manifestPath,'--state-root',f.stateRoot]);assert.equal(r.status,0,r.stderr);
+  assert.equal(JSON.parse(await readFile(path.join(f.artifactRoot,'state.json'),'utf8')).status,'approved');
+  r=stage(f.worktree,['start',f.runId,'implementation','--pipeline','onboarding','--state-root',f.stateRoot]);assert.equal(r.status,0,r.stderr);
+  r=stage(f.worktree,['block',f.runId,'implementation','--pipeline','onboarding','--state-root',f.stateRoot]);assert.equal(r.status,0,r.stderr);
+  r=run(f.worktree,'npx',['--yes','tsx',reviseCli,'revise-plan',f.runId,'--evidence',evidence,'--state-root',f.stateRoot]);
+  assert.notEqual(r.status,0);assert.match(r.stderr,/IMPLEMENTATION_STARTED/);
+  const oldState=await readFile(path.join(f.artifactRoot,'state.json'),'utf8');
+  r=run(f.worktree,'npx',['--yes','tsx',reviseCli,'inherit-replan',f.runId,'--new-run','replanned','--state-root',f.stateRoot]);assert.equal(r.status,0,r.stderr);
+  assert.equal(await readFile(path.join(f.artifactRoot,'state.json'),'utf8'),oldState);
+  const inherited=JSON.parse(await readFile(path.join(f.stateRoot,'replanned/planning/inherited/lineage.json'),'utf8'));
+  assert.equal(inherited.previous_run_id,f.runId);
+  await assert.rejects(readFile(path.join(f.stateRoot,'replanned/state.json')),{code:'ENOENT'});
+});
+
+test('owner can add a runtime unit between stages and dispatch it with immutable evidence', async t => {
+  const f=await fixture(); t.after(()=>rm(f.root,{recursive:true,force:true}));
+  for(const args of [['init',f.manifestPath],['approve',f.runId]]) {
+    const r=stage(f.worktree,[...args,'--state-root',f.stateRoot]); assert.equal(r.status,0,r.stderr);
+  }
+  const unitArtifact=await frozen(f.artifactRoot,'work-items/runtime.json',JSON.stringify({role:'CoderAgent',summary:'Owner clarification',context_files:[],reference_files:[]}));
+  const evidence=path.join(f.artifactRoot,'planning/owner-runtime.json');
+  await writeFile(evidence,JSON.stringify({kind:'owner_amendment',status:'ready',bounded:true,pipeline_id:'onboarding',source_stage:'implementation',target_stage:'implementation',work_item_id:'WI-RUNTIME',new_work_item_required:true,work_items:[{id:'WI-RUNTIME',pipeline_id:'onboarding',...unitArtifact}],paths:['src/clarification.txt'],requirements_changed:true,acceptance_criteria_changed:true,business_intent_changed:false,external_contract_changed:false,security_boundary_changed:false,destructive_change:false}));
+  let r=stage(f.worktree,['owner-amend-apply',f.runId,'implementation','--pipeline','onboarding','--evidence',evidence,'--state-root',f.stateRoot]);assert.equal(r.status,0,r.stderr);
+  r=stage(f.worktree,['start',f.runId,'implementation','--pipeline','onboarding','--state-root',f.stateRoot]);assert.equal(r.status,0,r.stderr);
+  r=stage(f.worktree,['dispatch',f.runId,'--pipeline','onboarding','--stage','implementation','--work-item','WI-RUNTIME','--role','CoderAgent']);assert.equal(r.status,0,r.stderr);
+  const packet=JSON.parse(r.stdout);assert.equal(packet.work_item_id,'WI-RUNTIME');assert.ok(packet.effective_scope.includes('src/clarification.txt'));
+  await writeFile(evidence,'tampered');
+  r=stage(f.worktree,['dispatch',f.runId,'--pipeline','onboarding','--stage','implementation','--work-item','WI-RUNTIME','--role','CoderAgent']);assert.notEqual(r.status,0);assert.match(r.stderr,/OWNER_AMENDMENT_EVIDENCE_CHANGED/);
+});
+
 test('owner-amend-apply output is accepted by git verify and stays exact-path bounded', async (t) => {
   const f = await fixture();
   t.after(() => rm(f.root, { recursive: true, force: true }));

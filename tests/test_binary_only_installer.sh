@@ -28,6 +28,16 @@ assert_not_contains() {
 write_fake_tools() {
   local fakebin=$1
   mkdir -p "$fakebin"
+  cat > "$fakebin/id" <<'EOF'
+#!/bin/bash
+case "$1" in -un) echo opencode;; -u) echo 1234;; *) /usr/bin/id "$@";; esac
+EOF
+  cat > "$fakebin/getent" <<'EOF'
+#!/bin/bash
+echo "opencode:x:1234:1234::$HOME:/bin/bash"
+EOF
+  printf '#!/bin/sh\nexit 0\n' > "$fakebin/sudo"
+  chmod +x "$fakebin/id" "$fakebin/getent" "$fakebin/sudo"
 
   cat > "$fakebin/gh" <<'EOF'
 #!/usr/bin/env bash

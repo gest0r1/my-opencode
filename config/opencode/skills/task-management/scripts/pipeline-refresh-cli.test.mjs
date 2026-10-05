@@ -95,73 +95,33 @@ async function advanceMain(fx, relative, content) {
   return newBase;
 }
 
-test('preflight blocks an active RUN before any refresh mutation', async () => {
-  const fx = await fixture('active-run');
-  await writeFile(path.join(fx.runRoot, 'state.json'), JSON.stringify({
-    run_id: fx.runId,
-    status: 'in_progress',
-    active_stages: ['app/implementation'],
-  }, null, 2));
-
-  const result = spawnSync('npx', ['--yes', 'tsx', CLI, 'preflight', fx.runId], {
-    cwd: fx.b,
-    encoding: 'utf8',
-    env: process.env,
-  });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /RUN_ACTIVE/);
-  assert.equal(git(fx.b, 'rev-parse', 'HEAD'), fx.base);
+test('legacy aggregate in_progress with no active stage can refresh the same folder', async () => {
+  const fx=await fixture();
+  await writeFile(path.join(fx.runRoot,'state.json'),JSON.stringify({run_id:fx.runId,status:'in_progress',active_stages:[],history:[]}));
+  assert.equal(invoke(fx.b,['preflight',fx.runId]).status,'PASS');
+  await advanceMain(fx,'docs/unrelated.md','# other');
+  const result=invoke(fx.b,['apply',fx.runId]);
+  assert.equal(result.result,'COMPATIBLE');
+  assert.equal(result.run_id,fx.runId);
 });
-
-test('NO_IMPACT adopts new run base without creating a new run', async () => {
-  const fx = await fixture('no-impact');
-  const newBase = await advanceMain(fx, 'docs/other.md', '# unrelated\n');
-
-  const output = invoke(fx.b, ['apply', fx.runId]);
-  assert.equal(output.classification, 'NO_IMPACT');
-  assert.equal(output.action, 'reuse_approved_run');
-  assert.equal(output.approval_reused, true);
-  assert.equal(output.new_base_sha, newBase);
-
-  const runtime = JSON.parse(await readFile(path.join(fx.runRoot, 'git-runtime.json'), 'utf8'));
-  assert.equal(runtime.run_base_sha, newBase);
-  const state = JSON.parse(await readFile(path.join(fx.runRoot, 'state.json'), 'utf8'));
-  assert.equal(state.run_base_sha, newBase);
+test('changed planning input requires semantic review instead of cloning/replan', async () => {
+  const fx=await fixture();
+  await advanceMain(fx,'src/input.ts','export const value=2;');
+  const result=invoke(fx.b,['apply',fx.runId]);
+  assert.equal(result.status,'REVIEW_REQUIRED');
+  assert.equal(result.implementation_started,false);
+  const input=JSON.parse(await readFile(result.evidence,'utf8'));
+  assert.match(input.git_diff,/value=2/);
+  const review=path.join(fx.runRoot,'planning/reconcile-review.json');
+  await writeFile(review,JSON.stringify({input_sha256:input.input_sha256,result:'COMPATIBLE',reason:'Existing approved implementation covers changed constant',business_intent_changed:false,architecture_invalid:false,external_contract_changed:false,security_boundary_changed:false,destructive_change:false,owner_decision_required:false,implementation_change_required:false}));
+  const applied=invoke(fx.b,['apply',fx.runId,'--evidence',review]);
+  assert.equal(applied.result,'COMPATIBLE');
+  assert.equal(invoke(fx.b,['apply',fx.runId]).result,'COMPATIBLE');
 });
-
-test('BOUNDED_IMPACT is copied by CLI and invalidates only affected gate', async () => {
-  const fx = await fixture('bounded');
-  const newBase = await advanceMain(fx, 'src/input.ts', 'export const value = 2;\n');
-
-  const output = invoke(fx.b, ['apply', fx.runId]);
-  assert.equal(output.classification, 'BOUNDED_IMPACT');
-  assert.equal(output.action, 'revalidate_affected_gates');
-  assert.equal(output.copied_by_cli, true);
-  assert.deepEqual(output.affected_gates, ['architecture']);
-  assert.equal(output.rebuild_work_items, true);
-
-  const newRoot = path.join(fx.b, '.tmp', 'pipelines', output.new_run_id);
-  const cloned = JSON.parse(await readFile(path.join(newRoot, 'manifest.json'), 'utf8'));
-  assert.equal(cloned.git_setup.base_sha, newBase);
-  assert.equal(cloned.planning_base_sha, newBase);
-  assert.equal(cloned.lineage.supersedes, fx.runId);
-  assert.equal(cloned.lineage.reason_code, 'MAIN_DRIFT_REPLAN');
-  assert.equal(cloned.planning_readiness.gates.architecture.status, 'needs_revision');
-  assert.equal(await readFile(path.join(newRoot, 'planning', 'architecture.md'), 'utf8'), '# architecture\n');
-
-  await assert.rejects(readFile(path.join(newRoot, 'state.json'), 'utf8'));
-  await assert.rejects(readFile(path.join(newRoot, 'candidate.json'), 'utf8'));
-
-  const oldState = JSON.parse(await readFile(path.join(fx.runRoot, 'state.json'), 'utf8'));
-  assert.equal(oldState.superseded_by, output.new_run_id);
-});
-
-test('STRUCTURAL_IMPACT does not copy a replacement run', async () => {
-  const fx = await fixture('structural');
-  await advanceMain(fx, 'docs/pipeline-rules.md', '# changed rules\n');
-
-  const output = invoke(fx.b, ['apply', fx.runId]);
-  assert.equal(output.classification, 'STRUCTURAL_IMPACT');
-  assert.equal(output.action, 'full_replan');
-  assert.match(output.reasons.join(','), /structural_path:docs\/pipeline-rules\.md/);
+test('real active stage blocks refresh before mutations', async () => {
+  const fx=await fixture();
+  await writeFile(path.join(fx.runRoot,'state.json'),JSON.stringify({run_id:fx.runId,status:'approved',active_stages:[],pipelines:{app:{stages:{implementation:{status:'in_progress'}}}}}));
+  const result=spawnSync('npx',['--yes','tsx',CLI,'preflight',fx.runId],{cwd:fx.b,encoding:'utf8'});
+  assert.notEqual(result.status,0);
+  assert.match(result.stderr,/RUN_ACTIVE/);
 });
