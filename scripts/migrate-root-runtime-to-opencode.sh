@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-shot migration of the OpenCode/OpenChamber runtime from root to user opencode.
 # Source data is copied, not deleted. Re-run is safe: existing target files are not overwritten.
+# The currently running root services are deliberately left untouched so the invoking terminal survives.
 set -Eeuo pipefail
 umask 077
 
@@ -20,11 +21,7 @@ SOURCE_PROJECTS="${OPENCODE_SOURCE_PROJECTS:-$SOURCE_HOME/projects}"
 }
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  echo "Run this migration as root from SSH/external console." >&2
-  exit 2
-fi
-if [[ "${OPENCHAMBER_EMBEDDED_TERMINAL:-}" == 1 ]]; then
-  echo "Do not migrate from the embedded OpenChamber terminal. Use SSH/external console." >&2
+  echo "Run this migration with sudo/root. It will not stop the current OpenCode/OpenChamber services." >&2
   exit 2
 fi
 
@@ -59,7 +56,7 @@ TARGET_PROJECTS="$(realpath -m -- "$TARGET_PROJECTS")"
   echo 'Target projects must be inside the runtime home' >&2; exit 2;
 }
 
-# Provision package-install rights while still in the root bootstrap phase.
+# Provision only the narrow privileged helpers needed by the runtime user.
 SUDO_SETUP="$(dirname "${BASH_SOURCE[0]}")/setup-opencode-package-sudo.sh"
 if [[ -f "$SUDO_SETUP" ]]; then
   OPENCODE_RUNTIME_USER="$RUNTIME_USER" bash "$SUDO_SETUP"
@@ -74,7 +71,7 @@ else
   rm -f -- "$SUDO_SETUP_TMP"
 fi
 
-# Start/validate the new user manager before stopping the old runtime.
+# Start/validate the new user manager without touching the currently running root runtime.
 loginctl enable-linger "$RUNTIME_USER"
 systemctl start "user@${RUNTIME_UID}.service"
 RUNTIME_ENV=(env -i HOME="$RUNTIME_HOME" USER="$RUNTIME_USER" LOGNAME="$RUNTIME_USER"
@@ -87,37 +84,6 @@ runuser -u "$RUNTIME_USER" -- "${RUNTIME_ENV[@]}" node -e \
   'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' || {
   echo 'Install system-wide Node.js 22+ before migrating (root-private Node is not accessible).' >&2; exit 1;
 }
-STOPPED_USER_UNITS=()
-STOPPED_SYSTEM_UNITS=()
-ROOT_USER_ENV=(env XDG_RUNTIME_DIR=/run/user/0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus)
-recover_services() {
-  local rc=$?
-  trap - EXIT
-  if (( rc != 0 )); then
-    for unit in "${STOPPED_USER_UNITS[@]}"; do "${ROOT_USER_ENV[@]}" systemctl --user start "$unit" || true; done
-    for unit in "${STOPPED_SYSTEM_UNITS[@]}"; do systemctl start "$unit" || true; done
-    echo 'Migration failed; previously active root services were restarted. Source data is intact.' >&2
-  fi
-  exit "$rc"
-}
-trap recover_services EXIT
-
-# Stop root-owned user services that could keep the old runtime on the same port.
-if [[ -S /run/user/0/bus ]]; then
-  for unit in openchamber.service opencode-web.service opencode-web-reboot.path; do
-    if "${ROOT_USER_ENV[@]}" systemctl --user is-active --quiet "$unit"; then
-      STOPPED_USER_UNITS+=("$unit")
-      "${ROOT_USER_ENV[@]}" systemctl --user stop "$unit"
-    fi
-  done
-fi
-for unit in openchamber.service opencode-web.service; do
-  owner="$(systemctl show "$unit" -p User --value 2>/dev/null || true)"
-  if [[ "$owner" == root || -z "$owner" ]] && systemctl is-active --quiet "$unit"; then
-    STOPPED_SYSTEM_UNITS+=("$unit")
-    systemctl stop "$unit"
-  fi
-done
 
 copy_item() {
   local rel="$1" src="$SOURCE_HOME/$1" dst="$RUNTIME_HOME/$1"
@@ -231,33 +197,23 @@ EOF
 chown "$RUNTIME_USER:$RUNTIME_GROUP" "$STATE_DIR/root-user-migration.done"
 
 # Validate persisted GitHub auth when it existed under root. A missing token is not
-# destructive: the user can authenticate once in the new login shell.
+# destructive: the installer can temporarily inherit the invoking sudo user's token.
 if command -v gh >/dev/null 2>&1; then
   if runuser -u "$RUNTIME_USER" -- "${RUNTIME_ENV[@]}" gh auth status --hostname github.com >/dev/null 2>&1; then
     runuser -u "$RUNTIME_USER" -- "${RUNTIME_ENV[@]}" gh auth setup-git >/dev/null 2>&1 || true
     echo "GitHub CLI auth: available for $RUNTIME_USER"
   else
-    echo "GitHub CLI auth was not reusable. Run: sudo -iu $RUNTIME_USER gh auth login" >&2
+    echo "GitHub CLI auth was not reusable for $RUNTIME_USER; the installer may use the invoking user's gh token for this run." >&2
   fi
 fi
-for unit in "${STOPPED_USER_UNITS[@]}"; do "${ROOT_USER_ENV[@]}" systemctl --user disable "$unit"; done
-for unit in "${STOPPED_SYSTEM_UNITS[@]}"; do systemctl disable "$unit"; done
-trap - EXIT
 
 cat <<EOF
 
 Migration completed. Source data under $SOURCE_HOME was NOT deleted.
-Next:
-  sudo -iu $RUNTIME_USER
-  export OPENCODE_RUNTIME_USER=$RUNTIME_USER
-  export XDG_RUNTIME_DIR=/run/user/$RUNTIME_UID
-  export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$RUNTIME_UID/bus
-  export PATH=\"\$HOME/.local/bin:\$HOME/.opencode/bin:\$HOME/.bun/bin:\$PATH\"
-  gh auth status
-  # run the normal my-opencode/OpenChamber installer from this login shell
+The existing root OpenCode/OpenChamber services were NOT stopped or disabled, so this terminal stays connected.
+
+Next: run the installer from this same shell or from any sudo-capable user. The installer switches to '$RUNTIME_USER' itself and performs the legacy-service cutover only at final activation.
 
 Projects are now expected under:
   ${OPENCODE_TARGET_PROJECTS:-$RUNTIME_HOME/projects}
-
-Do not run the normal installer as root anymore.
 EOF
