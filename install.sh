@@ -24,7 +24,7 @@ reexec_as_runtime_user() {
   done
   sudo -v || { echo "Current user '$CURRENT_USER' must have sudo rights." >&2; exit 2; }
 
-  local runtime_uid script_copy rc token name source_file bootstrap_sha=''
+  local runtime_uid script_copy rc token name source_file bootstrap_sha='' token_file=''
   local -a pass_env=()
   runtime_uid="$(id -u "$RUNTIME_USER")"
   sudo loginctl enable-linger "$RUNTIME_USER" >/dev/null
@@ -51,7 +51,7 @@ reexec_as_runtime_user() {
 
   for name in $(compgen -e); do
     case "$name" in
-      OPENCODE_*|OPENCHAMBER_*|MY_OPENCODE_REF|EXPECTED_OPENCHAMBER_VERSION|LEGACY_BUN_INSTALL|GH_TOKEN|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
+      OPENCODE_*|OPENCHAMBER_*|MY_OPENCODE_REF|EXPECTED_OPENCHAMBER_VERSION|LEGACY_BUN_INSTALL|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
         pass_env+=("$name=${!name}")
         ;;
     esac
@@ -60,16 +60,22 @@ reexec_as_runtime_user() {
     pass_env+=("OPENCODE_CONFIG_REF=$bootstrap_sha" "MY_OPENCODE_REF=$bootstrap_sha")
   fi
 
-  # Prefer opencode's migrated gh auth. If it is unavailable, temporarily use
-  # the invoking sudo user's token without persisting/copying its credentials.
+  # Prefer opencode's migrated gh auth. If unavailable, hand the invoking
+  # sudo user's token over through a mode-0600 runtime file, never argv.
   if ! sudo -H -u "$RUNTIME_USER" env \
       HOME="$RUNTIME_HOME" USER="$RUNTIME_USER" LOGNAME="$RUNTIME_USER" \
       PATH="$RUNTIME_HOME/.local/bin:$RUNTIME_HOME/.opencode/bin:$RUNTIME_HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin" \
       XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" \
       gh auth status --hostname github.com >/dev/null 2>&1; then
-    if [[ -z "${GH_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1 && gh auth status --hostname github.com >/dev/null 2>&1; then
+    if [[ -n "${GH_TOKEN:-}" ]]; then
+      token="$GH_TOKEN"
+    elif command -v gh >/dev/null 2>&1 && gh auth status --hostname github.com >/dev/null 2>&1; then
       token="$(gh auth token --hostname github.com)"
-      [[ -z "$token" ]] || pass_env+=("GH_TOKEN=$token")
+    fi
+    if [[ -n "$token" ]]; then
+      token_file="/run/user/$runtime_uid/.my-opencode-gh-token.${BASHPID}.${RANDOM}"
+      printf '%s' "$token" | sudo -H -u "$RUNTIME_USER" sh -c 'umask 077; cat > "$1"' sh "$token_file"
+      pass_env+=("OPENCODE_INSTALL_GH_TOKEN_FILE=$token_file")
     fi
   fi
 
@@ -84,9 +90,17 @@ reexec_as_runtime_user() {
     rc=$?
   fi
   rm -f -- "$script_copy"
+  [[ -z "$token_file" ]] || sudo -H -u "$RUNTIME_USER" rm -f -- "$token_file" >/dev/null 2>&1 || true
   exit "$rc"
 }
 reexec_as_runtime_user "$@"
+
+if [[ -n "${OPENCODE_INSTALL_GH_TOKEN_FILE:-}" ]]; then
+  [[ -r "$OPENCODE_INSTALL_GH_TOKEN_FILE" ]] || { echo 'Temporary GitHub token handoff is unreadable.' >&2; exit 1; }
+  export GH_TOKEN="$(cat -- "$OPENCODE_INSTALL_GH_TOKEN_FILE")"
+  rm -f -- "$OPENCODE_INSTALL_GH_TOKEN_FILE"
+  unset OPENCODE_INSTALL_GH_TOKEN_FILE
+fi
 
 if [[ "$HOME" != "$RUNTIME_HOME" ]]; then
   echo "Invalid HOME for runtime user '$RUNTIME_USER': HOME='$HOME', expected='$RUNTIME_HOME'." >&2
