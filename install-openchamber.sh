@@ -234,11 +234,10 @@ trap 'rollback $?' ERR
 trap 'rollback 130' INT
 trap 'rollback 143' TERM
 
-# Only now, after packages/configs are fully staged and validated, stop the old
-# root runtime. If activation fails, rollback restores either the previous user
-# runtime or the exact legacy services that were active before this cutover.
-sudo -n /usr/local/sbin/opencode-runtime-cutover legacy-stop
+# Arm rollback before privileged cutover: even a partially failed legacy-stop
+# is followed by legacy-restore from the ERR trap.
 LEGACY_CUTOVER_ACTIVE=1
+sudo -n /usr/local/sbin/opencode-runtime-cutover legacy-stop
 systemctl --user daemon-reload
 systemctl --user enable --now opencode-web.service >/dev/null
 opencode_readiness
