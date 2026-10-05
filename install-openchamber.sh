@@ -23,14 +23,29 @@ reexec_as_runtime_user() {
   done
   sudo -v || { echo "Current user '$CURRENT_USER' must have sudo rights." >&2; exit 2; }
 
-  local runtime_uid script_copy rc token name
+  local runtime_uid script_copy rc token name source_file bootstrap_sha=''
   local -a pass_env=()
   runtime_uid="$(id -u "$RUNTIME_USER")"
   sudo loginctl enable-linger "$RUNTIME_USER" >/dev/null
   sudo systemctl start "user@${runtime_uid}.service"
 
   script_copy="$(mktemp /tmp/openchamber-install.XXXXXXXX)"
-  cp -- "${BASH_SOURCE[0]}" "$script_copy"
+  source_file="${BASH_SOURCE[0]:-}"
+  if [[ -n "$source_file" && -f "$source_file" ]]; then
+    cp -- "$source_file" "$script_copy"
+  else
+    command -v gh >/dev/null 2>&1 || {
+      rm -f -- "$script_copy"
+      echo 'Piped install from another user requires an authenticated GitHub CLI.' >&2
+      exit 1
+    }
+    local bootstrap_repo="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
+    local bootstrap_ref="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
+    bootstrap_sha="$(gh api "repos/$bootstrap_repo/commits/$bootstrap_ref" --jq .sha)"
+    [[ "$bootstrap_sha" =~ ^[a-f0-9]{40}$ ]] || { rm -f -- "$script_copy"; exit 1; }
+    gh api -H 'Accept: application/vnd.github.raw' \
+      "repos/$bootstrap_repo/contents/install-openchamber.sh?ref=$bootstrap_sha" > "$script_copy"
+  fi
   chmod 755 "$script_copy"
 
   for name in $(compgen -e); do
@@ -40,6 +55,9 @@ reexec_as_runtime_user() {
         ;;
     esac
   done
+  if [[ -n "$bootstrap_sha" ]]; then
+    pass_env+=("OPENCODE_CONFIG_REF=$bootstrap_sha" "MY_OPENCODE_REF=$bootstrap_sha")
+  fi
 
   # Prefer opencode's migrated gh auth. If unavailable, lend the invoking
   # sudo user's token to this installer process only; do not persist it.
