@@ -21,7 +21,6 @@ class MigrationTests(unittest.TestCase):
             'getent': 'echo "opencode:x:1234:1234::' + str(dst) + ':/bin/bash"',
             'chown': 'exit 0',
             'useradd': '[[ -z "${TEST_USER_CREATED:-}" ]] || touch "$TEST_USER_CREATED"',
-            'usermod': 'exit 0',
             'sudo': 'exit 0',
             'visudo': 'exit 0',
             'loginctl': 'exit 0',
@@ -54,6 +53,7 @@ exec "${args[@]}"
 
     def test_copy_relocates_links_and_runtime_paths_preserving_target(self):
         src, dst, bins, trace, env = self.fixture()
+        env['OPENCHAMBER_EMBEDDED_TERMINAL'] = '1'
         for home in (src, dst): (home / '.config').mkdir()
         (src / '.config/opencode.env').write_text(f'DATA_DIR={src}/projects\n')
         (src / '.config/gh').mkdir()
@@ -73,16 +73,24 @@ exec "${args[@]}"
         self.assertEqual((dst / 'projects/existing.txt').read_text(), 'target\n')
         self.assertTrue((src / '.config/gh/hosts.yml').exists())
         self.assertEqual((dst / '.config/gh/hosts.yml').stat().st_mode & 0o777, 0o600)
-        self.assertIn('disable openchamber.service', trace.read_text())
+        service_trace = trace.read_text()
+        self.assertIn('start user@1234.service', service_trace)
+        self.assertNotIn('openchamber.service', service_trace)
+        self.assertNotIn('opencode-web.service', service_trace)
+        self.assertNotIn('opencode-web-reboot.path', service_trace)
+        self.assertIn('were NOT stopped or disabled', result.stdout)
         self.assertEqual(self.run_script(env).returncode, 0)
         helper = Path(env['OPENCODE_SUDO_PREFIX']) / 'usr/local/sbin/opencode-install-packages'
-        self.assertEqual(subprocess.run(['bash',str(helper),'--check']).returncode,0)
-        self.assertEqual(subprocess.run(['bash',str(helper),'install','--option']).returncode,2)
+        cutover = Path(env['OPENCODE_SUDO_PREFIX']) / 'usr/local/sbin/opencode-runtime-cutover'
+        self.assertEqual(subprocess.run(['bash', str(helper), '--check']).returncode, 0)
+        self.assertEqual(subprocess.run(['bash', str(helper), 'install', '--option']).returncode, 2)
+        self.assertEqual(subprocess.run(['bash', str(cutover), '--check']).returncode, 0)
         policy = Path(env['OPENCODE_SUDO_PREFIX']) / 'etc/sudoers.d/opencode-packages-opencode'
-        self.assertIn('opencode ALL=(root) NOPASSWD:',policy.read_text())
-        self.assertEqual(policy.stat().st_mode & 0o777,0o440)
+        self.assertIn('opencode ALL=(root) NOPASSWD:', policy.read_text())
+        self.assertIn('opencode-runtime-cutover', policy.read_text())
+        self.assertEqual(policy.stat().st_mode & 0o777, 0o440)
 
-    def test_failure_restarts_services_without_disable(self):
+    def test_failure_does_not_touch_existing_runtime_services(self):
         src, dst, bins, trace, env = self.fixture()
         (src / '.local/bin').mkdir(parents=True)
         (src / '.local/bin/cli').write_text('fixture\n')
@@ -90,17 +98,19 @@ exec "${args[@]}"
         (dst / '.local/bin').symlink_to(bins)
         result = self.run_script(env)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('start openchamber.service', trace.read_text())
-        self.assertNotIn('disable openchamber.service', trace.read_text())
+        service_trace = trace.read_text()
+        self.assertIn('start user@1234.service', service_trace)
+        self.assertNotIn('openchamber.service', service_trace)
+        self.assertNotIn('opencode-web.service', service_trace)
         self.assertFalse((dst / '.local/state/my-opencode/root-user-migration.done').exists())
 
     def test_missing_user_is_created(self):
         src, dst, bins, trace, env = self.fixture()
-        env['TEST_CREATE_USER']='1'
-        result=self.run_script(env)
-        self.assertEqual(result.returncode,0,result.stderr)
+        env['TEST_CREATE_USER'] = '1'
+        result = self.run_script(env)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(Path(env['TEST_USER_CREATED']).exists())
-        self.assertIn('Creating runtime user: opencode',result.stdout)
+        self.assertIn('Creating runtime user: opencode', result.stdout)
 
     def test_invalid_options_do_not_stop_services(self):
         src, dst, bins, trace, env = self.fixture()
@@ -108,11 +118,11 @@ exec "${args[@]}"
         result = self.run_script(env)
         self.assertEqual(result.returncode, 2)
         self.assertFalse(trace.exists())
-        env['OPENCODE_MIGRATE_PROJECTS']='1'
-        env['OPENCODE_RUNTIME_USER']='wrong-user'
-        result=self.run_script(env)
-        self.assertEqual(result.returncode,2)
-        self.assertIn('required name is exactly opencode',result.stderr)
+        env['OPENCODE_MIGRATE_PROJECTS'] = '1'
+        env['OPENCODE_RUNTIME_USER'] = 'wrong-user'
+        result = self.run_script(env)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('required name is exactly opencode', result.stderr)
         self.assertFalse(trace.exists())
 
 
