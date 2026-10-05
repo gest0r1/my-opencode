@@ -11,18 +11,72 @@ for cmd in id getent cut; do
 done
 CURRENT_USER="$(id -un)"
 RUNTIME_HOME="$(getent passwd "$RUNTIME_USER" | cut -d: -f6 || true)"
-if [[ "$CURRENT_USER" != "$RUNTIME_USER" ]]; then
-  echo "OpenCode/OpenChamber must be installed and run as user '$RUNTIME_USER' (current: '$CURRENT_USER')." >&2
-  echo "Use: sudo -iu $RUNTIME_USER" >&2
+[[ -n "$RUNTIME_HOME" ]] || {
+  echo "Runtime user '$RUNTIME_USER' does not exist. Run scripts/migrate-root-runtime-to-opencode.sh first." >&2
   exit 2
-fi
-if [[ -z "$RUNTIME_HOME" || "$HOME" != "$RUNTIME_HOME" ]]; then
+}
+
+reexec_as_runtime_user() {
+  [[ "$CURRENT_USER" != "$RUNTIME_USER" ]] || return 0
+  for cmd in sudo loginctl systemctl mktemp cp chmod rm; do
+    command -v "$cmd" >/dev/null 2>&1 || { echo "Missing prerequisite for user switch: $cmd" >&2; exit 1; }
+  done
+  sudo -v || { echo "Current user '$CURRENT_USER' must have sudo rights." >&2; exit 2; }
+
+  local runtime_uid script_copy rc token name
+  local -a pass_env=()
+  runtime_uid="$(id -u "$RUNTIME_USER")"
+  sudo loginctl enable-linger "$RUNTIME_USER" >/dev/null
+  sudo systemctl start "user@${runtime_uid}.service"
+
+  script_copy="$(mktemp /tmp/openchamber-install.XXXXXXXX)"
+  cp -- "${BASH_SOURCE[0]}" "$script_copy"
+  chmod 755 "$script_copy"
+
+  for name in $(compgen -e); do
+    case "$name" in
+      OPENCODE_*|OPENCHAMBER_*|MY_OPENCODE_REF|EXPECTED_OPENCHAMBER_VERSION|LEGACY_BUN_INSTALL|GH_TOKEN|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
+        pass_env+=("$name=${!name}")
+        ;;
+    esac
+  done
+
+  # Prefer opencode's migrated gh auth. If unavailable, lend the invoking
+  # sudo user's token to this installer process only; do not persist it.
+  if ! sudo -H -u "$RUNTIME_USER" env \
+      HOME="$RUNTIME_HOME" USER="$RUNTIME_USER" LOGNAME="$RUNTIME_USER" \
+      PATH="$RUNTIME_HOME/.local/bin:$RUNTIME_HOME/.opencode/bin:$RUNTIME_HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin" \
+      XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" \
+      gh auth status --hostname github.com >/dev/null 2>&1; then
+    if [[ -z "${GH_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1 && gh auth status --hostname github.com >/dev/null 2>&1; then
+      token="$(gh auth token --hostname github.com)"
+      [[ -z "$token" ]] || pass_env+=("GH_TOKEN=$token")
+    fi
+  fi
+
+  echo "Switching installer runtime: $CURRENT_USER -> $RUNTIME_USER"
+  if sudo -H -u "$RUNTIME_USER" env \
+      HOME="$RUNTIME_HOME" USER="$RUNTIME_USER" LOGNAME="$RUNTIME_USER" \
+      PATH="$RUNTIME_HOME/.local/bin:$RUNTIME_HOME/.opencode/bin:$RUNTIME_HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin" \
+      XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" \
+      "${pass_env[@]}" bash "$script_copy" "$@"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  rm -f -- "$script_copy"
+  exit "$rc"
+}
+reexec_as_runtime_user "$@"
+
+if [[ "$HOME" != "$RUNTIME_HOME" ]]; then
   echo "Invalid HOME for runtime user '$RUNTIME_USER': HOME='$HOME', expected='$RUNTIME_HOME'." >&2
-  echo "Use a login shell: sudo -iu $RUNTIME_USER" >&2
   exit 2
 fi
-if ! command -v sudo >/dev/null || ! sudo -n /usr/local/sbin/opencode-install-packages --check >/dev/null 2>&1; then
-  echo 'Package installation sudo is not configured. Root must run scripts/setup-opencode-package-sudo.sh with the same OPENCODE_RUNTIME_USER before installation.' >&2
+if ! command -v sudo >/dev/null ||
+   ! sudo -n /usr/local/sbin/opencode-install-packages --check >/dev/null 2>&1 ||
+   ! sudo -n /usr/local/sbin/opencode-runtime-cutover --check >/dev/null 2>&1; then
+  echo 'Runtime sudo helpers are not configured. Run scripts/migrate-root-runtime-to-opencode.sh or scripts/setup-opencode-package-sudo.sh once with sudo/root.' >&2
   exit 2
 fi
 
@@ -37,7 +91,7 @@ STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode"
 STATE="$STATE_ROOT/openchamber-v2-install.state"
 HOST="${OPENCHAMBER_BIND_HOST:-172.18.0.1}"
 PORT="${OPENCHAMBER_BIND_PORT:-3000}"
-for cmd in gh mktemp readlink ln mv cp rm sed flock curl; do
+for cmd in gh mktemp readlink ln mv cp rm sed flock curl systemctl; do
   command -v "$cmd" >/dev/null || { echo "Missing prerequisite: $cmd" >&2; exit 1; }
 done
 TMP="$(mktemp -d /tmp/openchamber-v2.XXXXXXXX)"
@@ -80,7 +134,7 @@ export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:$HOME/.opencode/bin:$LEGACY_BUN_I
 bash +h "$TMP/install-openchamber-v2-core.sh" "$@"
 state_value() { [[ ! -f "$STATE" ]] || sed -n "s/^$1=//p" "$STATE" | head -1; }
 if [[ "$(state_value effective_restart_mode)" == defer ]]; then
-  echo 'PENDING APPLY: repeat installer from an external console with OPENCHAMBER_RESTART_MODE=now'
+  echo 'PENDING APPLY: repeat installer from an external console; the old runtime was left running and no service cutover was attempted.'
   exit 0
 fi
 native_startup() {
@@ -107,19 +161,56 @@ readiness() {
   fi
   return 1
 }
+opencode_readiness() {
+  local attempt
+  for ((attempt=0;attempt<20;attempt++)); do
+    systemctl --user is-active --quiet opencode-web.service && return 0
+    sleep 1
+  done
+  echo 'OpenCode user service failed to become active.' >&2
+  systemctl --user status opencode-web.service --no-pager -l >&2 || true
+  return 1
+}
+
+LEGACY_CUTOVER_ACTIVE=0
 rollback() {
-  local rc=${1:-$?}
+  local rc=${1:-$?} recovered=0
   trap - ERR INT TERM
   oc_rollback_activation
   if [[ -f "$TMP/state.before" ]]; then cp -p "$TMP/state.before" "$STATE"; else rm -f "$STATE"; fi
+
   if [[ -x "$OPENCHAMBER_MANAGED_BIN" ]]; then
-    native_startup && readiness || echo 'Previous binary restored; native service recovery failed' >&2
+    if systemctl --user enable --now opencode-web.service >/dev/null 2>&1 && opencode_readiness && native_startup && readiness; then
+      recovered=1
+    else
+      echo 'Previous user runtime recovery failed' >&2
+    fi
+  fi
+
+  if (( LEGACY_CUTOVER_ACTIVE == 1 )); then
+    if (( recovered == 1 )); then
+      sudo -n /usr/local/sbin/opencode-runtime-cutover legacy-commit || true
+    else
+      systemctl --user disable --now openchamber.service >/dev/null 2>&1 || true
+      systemctl --user disable --now opencode-web.service >/dev/null 2>&1 || true
+      sudo -n /usr/local/sbin/opencode-runtime-cutover legacy-restore || true
+    fi
   fi
   exit "$rc"
 }
 trap 'rollback $?' ERR
 trap 'rollback 130' INT
 trap 'rollback 143' TERM
+
+# Only now, after packages/configs are fully staged and validated, stop the old
+# root runtime. If activation fails, rollback restores either the previous user
+# runtime or the exact legacy services that were active before this cutover.
+sudo -n /usr/local/sbin/opencode-runtime-cutover legacy-stop
+LEGACY_CUTOVER_ACTIVE=1
+systemctl --user daemon-reload
+systemctl --user enable --now opencode-web.service >/dev/null
+opencode_readiness
+
 if [[ -x "$RELEASE_DIR/bin/openchamber" ]]; then
   if [[ "$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)" != "$RELEASE_DIR" ]]; then oc_activate_release "$RELEASE_DIR"; fi
 fi
@@ -127,10 +218,15 @@ fi
 oc_write_managed_launcher
 native_startup
 readiness
+systemctl --user is-enabled --quiet openchamber.service || { echo 'OpenChamber autostart is not enabled' >&2; false; }
+systemctl --user is-enabled --quiet opencode-web.service || { echo 'OpenCode autostart is not enabled' >&2; false; }
 oc_prune_releases
 oc_commit_activation
+sudo -n /usr/local/sbin/opencode-runtime-cutover legacy-commit
+LEGACY_CUTOVER_ACTIVE=0
 trap - ERR INT TERM
 # Core metadata is committed only after native startup readiness.
 sed -i 's/^service_restart_pending=.*/service_restart_pending=0/' "$STATE"
 oc_remove_legacy_bun_global
 echo "OpenChamber runtime committed: $(readlink -f "$OPENCHAMBER_CURRENT")"
+echo "Autostart enabled for OpenCode and OpenChamber under user $RUNTIME_USER."
