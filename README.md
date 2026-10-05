@@ -247,3 +247,45 @@ rm -f ~/.config/opencode-web.env
 ### Пользовательские плагины
 
 При обновлении `scripts/merge-user-plugins.mjs` переносит пользовательские plugin entries из JSON/JSONC и локальные файлы `plugins/` в staging до проверки зависимостей. V1 tuples нормализуются в V2 objects; дубли по package ID устраняются, обязательная запись репозитория имеет приоритет. Явные исключения задаёт `config/opencode/plugin-policy.json`. Некорректный config прерывает staging, активное поколение остаётся прежним.
+
+
+## Перенос root-runtime на отдельного пользователя
+
+Скрипт `scripts/migrate-root-runtime-to-opencode.sh` запускается **от root через SSH**,
+а обычный installer — **от выбранного пользователя**. Имя по умолчанию `opencode`;
+для пользователя `opencod` явно задайте `OPENCODE_RUNTIME_USER=opencod` в обоих шагах.
+До запуска нужен системный Node.js 22+; Node из `/root/.nvm` недоступен новому runtime.
+Скрипт копирует данные без удаления источника и без перезаписи имеющихся файлов назначения,
+переносит абсолютные symlinks и служебные пути, поднимает user systemd manager.
+При ошибке возвращает ранее активные root services; успешно перенесённые файлы остаются
+для повторного запуска. Root services отключаются только после успешного переноса.
+Проекты по умолчанию копируются из `/root/projects` в домашний каталог пользователя.
+
+```bash
+# root, внешняя SSH-консоль
+CONFIG_SHA="$(gh api repos/gest0r1/my-opencode/commits/main --jq .sha)"
+gh api -H 'Accept: application/vnd.github.raw' \
+  "repos/gest0r1/my-opencode/contents/scripts/migrate-root-runtime-to-opencode.sh?ref=$CONFIG_SHA" \
+  > /tmp/migrate-opencode-user.sh
+OPENCODE_RUNTIME_USER=opencod bash /tmp/migrate-opencode-user.sh
+sudo -iu opencod
+
+# opencod, новая login shell
+export OPENCODE_RUNTIME_USER=opencod
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:$PATH"
+gh auth status
+CONFIG_SHA="$(gh api repos/gest0r1/my-opencode/commits/main --jq .sha)"
+OPENCHAMBER_SHA="$(gh api repos/gest0r1/openchamber-ru/commits/main --jq .sha)"
+gh api -H 'Accept: application/vnd.github.raw' \
+  "repos/gest0r1/my-opencode/contents/scripts/cleanup-openchamber-v1-before-v2.sh?ref=$CONFIG_SHA" \
+  > /tmp/cleanup-opencode-v1.sh
+bash /tmp/cleanup-opencode-v1.sh
+gh api -H 'Accept: application/vnd.github.raw' \
+  "repos/gest0r1/my-opencode/contents/install-openchamber.sh?ref=$CONFIG_SHA" \
+  > /tmp/install-openchamber-v2.sh
+OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCHAMBER_REF="$OPENCHAMBER_SHA" \
+  OPENCHAMBER_PACKAGE_MODE=release OPENCHAMBER_RESTART_MODE=now \
+  bash /tmp/install-openchamber-v2.sh
+```
