@@ -252,8 +252,8 @@ rm -f ~/.config/opencode-web.env
 ## Перенос root-runtime на отдельного пользователя
 
 Скрипт `scripts/migrate-root-runtime-to-opencode.sh` запускается **от root через SSH**,
-а обычный installer — **от выбранного пользователя**. Имя по умолчанию `opencode`;
-для пользователя `opencod` явно задайте `OPENCODE_RUNTIME_USER=opencod` в обоих шагах.
+а обычный installer — **от пользователя `opencode`**. Допустимое имя только `opencode`: другое имя вызывает ошибку.
+Если пользователя нет, миграция создаёт его с домашним каталогом и bash.
 До запуска нужен системный Node.js 22+; Node из `/root/.nvm` недоступен новому runtime.
 Скрипт копирует данные без удаления источника и без перезаписи имеющихся файлов назначения,
 переносит абсолютные symlinks и служебные пути, поднимает user systemd manager.
@@ -267,11 +267,11 @@ CONFIG_SHA="$(gh api repos/gest0r1/my-opencode/commits/main --jq .sha)"
 gh api -H 'Accept: application/vnd.github.raw' \
   "repos/gest0r1/my-opencode/contents/scripts/migrate-root-runtime-to-opencode.sh?ref=$CONFIG_SHA" \
   > /tmp/migrate-opencode-user.sh
-OPENCODE_RUNTIME_USER=opencod bash /tmp/migrate-opencode-user.sh
-sudo -iu opencod
+OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCODE_RUNTIME_USER=opencode bash /tmp/migrate-opencode-user.sh
+sudo -iu opencode
 
-# opencod, новая login shell
-export OPENCODE_RUNTIME_USER=opencod
+# opencode, новая login shell
+export OPENCODE_RUNTIME_USER=opencode
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:$PATH"
@@ -289,3 +289,18 @@ OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCHAMBER_REF="$OPENCHAMBER_SHA" \
   OPENCHAMBER_PACKAGE_MODE=release OPENCHAMBER_RESTART_MODE=now \
   bash /tmp/install-openchamber-v2.sh
 ```
+
+При миграции root добавляет `opencode` в группу `sudo` и устанавливает
+root-owned helper с NOPASSWD только для установки пакетов из системных APT-репозиториев.
+Обычный installer проверяет доступ; сам он не может выдавать себе права root.
+Для уже созданного `opencode` отдельно выполните от root
+`scripts/setup-opencode-package-sudo.sh` с `OPENCODE_RUNTIME_USER=opencode`.
+
+```bash
+sudo -n /usr/local/sbin/opencode-install-packages --check
+sudo -n /usr/local/sbin/opencode-install-packages update
+sudo -n /usr/local/sbin/opencode-install-packages install python3-pip ffmpeg
+```
+
+OpenCode запрашивает подтверждение инструмента перед вызовом package helper.
+Произвольный root shell и APT-опции через helper не разрешены.

@@ -96,3 +96,19 @@ Manifest фиксирует `planning_base_sha` и `freshness_sensitive_paths`. 
 - `/pipeline-refresh` при релевантном main drift
 
 Общая `/pipeline` не используется.
+
+
+## Уточнения и граница заморозки
+
+До первого фактического старта стадии `agent`, меняющей исходники, PLAN редактируется
+в той же папке через `/pipeline-plan --revise RUN`. Пересматриваются только затронутые
+решения и проверки; техническая правка сохраняет approval, изменение согласованного
+поведения/объёма/ограничений требует нового approval.
+После старта совместимые уточнения владельца допускаются в любой момент через
+append-only amendment, в том числе с новыми hash-bound runtime work units.
+Количество work items не определяет необходимость replan. При несовместимом изменении
+после старта CLI `inherit-replan` создаёт новую папку и переносит только исторический
+контекст в `planning/inherited/`; старый RUN сохраняется.
+RUN и REFRESH используют единый `pipeline-reconcile-cli`: hash mismatch — сигнал
+для анализа diff против PLAN, а не автоматический replan. Только COMPATIBLE / PLAN_INVALID.
+`state=in_progress` без реального старта не означает активное выполнение.

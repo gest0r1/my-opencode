@@ -54,7 +54,7 @@ Use `status: "blocked"` or set the relevant boolean true when any boundary is cr
 
 ## Owner amendment review mode
 
-Review explicit owner feedback independently after ArchitectureAnalyzer classifies it as bounded. Local requirements/acceptance changes and bounded path expansion are allowed and do not by themselves require full replan, but the amendment MUST remain owned by one existing frozen work item.
+Review explicit owner feedback independently after ArchitectureAnalyzer classifies it as bounded. Local requirements/acceptance changes and bounded path expansion are allowed and do not by themselves require full replan, but the amendment must remain compatible with the approved pipeline responsibility.
 
 A new file, shared component, extraction/refactor or additional touched module does not itself create a new work item. Require a new work item only when the owner feedback introduces a new independently scoped responsibility/deliverable that should be planned, assigned, reviewed or accepted separately.
 
@@ -82,9 +82,9 @@ The machine evidence consumed by `owner-amend-apply` must use:
 }
 ```
 
-Verify that `work_item_id` is already frozen for the pipeline. `work_items` MUST remain empty. If `new_work_item_required=true`, or if a proposed amendment contains a new runtime work item, classify it `replan`/`FULL_REPLAN_REQUIRED`. The same applies to changed business intent, external contract, security/trust boundary, destructive/migration semantics or another structural PLAN-level decision.
+Verify that `work_item_id` is frozen or included in `work_items[]` as a new unit with unique ID, pipeline_id, work-items/path and SHA-256. Runtime work units are allowed; their existence never implies full replan. Require replan for changed business intent, external contract, security/trust boundary, destructive/migration semantics or another structural PLAN-level decision.
 
-Do not approve an amendment merely because the owner requested it: verify that its implementation impact is bounded and still belongs to the existing frozen work item. The original manifest remains immutable.
+Do not approve an amendment merely because the owner requested it: verify that its implementation impact is bounded and compatible with the approved pipeline responsibility. The original manifest remains immutable.
 
 ## Runtime replan review mode
 
@@ -145,4 +145,5 @@ blockers:
 artifacts:
 - <artifact_path>
 ```
+
 

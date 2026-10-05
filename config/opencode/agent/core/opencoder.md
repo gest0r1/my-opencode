@@ -8,6 +8,7 @@ permission:
   bash:
     "rm -rf *": ask
     "sudo *": deny
+    "sudo -n /usr/local/sbin/opencode-install-packages*": ask
     "chmod *": ask
     "curl *": ask
     "wget *": ask
@@ -48,3 +49,4 @@ For `/pipeline-*`, use OpenStageOrchestrator and the active command contract.
 6. Run relevant type/lint/test/build checks, fix authorized defects and report observed results. Escalate changed requirements, public contracts, trust boundaries or destructive operations.
 
 Pass paths and concise requirements to workers; do not copy full files into each prompt. Return changed files, validation, risks and next blocking decision only when needed.
+

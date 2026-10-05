@@ -5,6 +5,9 @@ set -Eeuo pipefail
 umask 077
 
 RUNTIME_USER="${OPENCODE_RUNTIME_USER:-opencode}"
+[[ "$RUNTIME_USER" == opencode ]] || {
+  echo "Invalid runtime user '$RUNTIME_USER': required name is exactly opencode" >&2; exit 2;
+}
 SOURCE_HOME="${OPENCODE_MIGRATION_SOURCE_HOME:-/root}"
 MIGRATE_PROJECTS="${OPENCODE_MIGRATE_PROJECTS:-1}"
 SOURCE_PROJECTS="${OPENCODE_SOURCE_PROJECTS:-$SOURCE_HOME/projects}"
@@ -55,6 +58,21 @@ TARGET_PROJECTS="$(realpath -m -- "$TARGET_PROJECTS")"
 [[ "$MIGRATE_PROJECTS" == 0 || "$TARGET_PROJECTS" == "$RUNTIME_HOME/"* ]] || {
   echo 'Target projects must be inside the runtime home' >&2; exit 2;
 }
+
+# Provision package-install rights while still in the root bootstrap phase.
+SUDO_SETUP="$(dirname "${BASH_SOURCE[0]}")/setup-opencode-package-sudo.sh"
+if [[ -f "$SUDO_SETUP" ]]; then
+  OPENCODE_RUNTIME_USER="$RUNTIME_USER" bash "$SUDO_SETUP"
+else
+  command -v gh >/dev/null || { echo 'GitHub CLI is required to fetch sudo bootstrap' >&2; exit 1; }
+  CONFIG_SHA="$(gh api "repos/${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}/commits/${OPENCODE_CONFIG_REF:-main}" --jq .sha)"
+  [[ "$CONFIG_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+  SUDO_SETUP_TMP="$(mktemp)"
+  gh api -H 'Accept: application/vnd.github.raw' \
+    "repos/${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}/contents/scripts/setup-opencode-package-sudo.sh?ref=$CONFIG_SHA" > "$SUDO_SETUP_TMP"
+  OPENCODE_RUNTIME_USER="$RUNTIME_USER" bash "$SUDO_SETUP_TMP"
+  rm -f -- "$SUDO_SETUP_TMP"
+fi
 
 # Start/validate the new user manager before stopping the old runtime.
 loginctl enable-linger "$RUNTIME_USER"

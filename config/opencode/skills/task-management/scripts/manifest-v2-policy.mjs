@@ -177,6 +177,10 @@ function assertConflictSerialization(manifest) {
 }
 
 function validatePlanningInputs(manifest) {
+  if (manifest.planning_scope !== undefined) {
+    if (!Array.isArray(manifest.planning_scope) || !manifest.planning_scope.length) throw new ManifestV2PolicyError('planning_scope must be a non-empty path-scope array');
+    assertSafePathArray(manifest.planning_scope, 'planning_scope');
+  }
   if (manifest.planning_inputs === undefined) return;
   const inputs = manifest.planning_inputs;
   if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs) || Object.keys(inputs).length === 0) {
@@ -800,4 +804,5 @@ export function validateManifestV2Policy(manifest, options = {}) {
   }
   return { checked_artifacts: true, project_policy: projectPolicy };
 }
+
 

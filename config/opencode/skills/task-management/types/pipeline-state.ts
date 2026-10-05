@@ -215,6 +215,7 @@ export interface PipelineManifest {
   source_issues?: PipelineIssueSource[];
   source_requirements_sha256?: string;
   planning_base_sha?: string;
+  planning_scope?: string[];
   planning_inputs?: Record<string, string[]>;
   freshness_sensitive_paths?: string[];
   work_items?: FrozenWorkItem[];
@@ -339,6 +340,9 @@ export interface SecurityFixPreflight {
 }
 
 export interface PipelineState {
+  reconciliations?: Array<{ path: string; sha256: string }>;
+  execution_started_at?: string;
+  implementation_started_at?: string;
   schema_version: number;
   run_id: string;
   manifest_file?: string;

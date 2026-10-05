@@ -1,3 +1,4 @@
+import { acceptedReconciliations } from './reconcile-evidence.ts';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { access, cp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -775,6 +776,14 @@ export async function initFromManifest(
     ),
     history: [],
   };
+  const revision = await readFile(join(dirname(absoluteManifestPath), 'planning/revision.json'), 'utf8').then(JSON.parse).catch((error) => {
+    if (error.code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (revision?.previous_approval === true && revision.owner_contract_changed === false) {
+    state.status = 'approved';
+    for (const pipeline of Object.values(state.pipelines)) pipeline.status = 'approved';
+  }
 
   const unlock = await acquireLock(stateRoot, manifest.run_id);
   try {
@@ -823,6 +832,7 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
       throw new StageCliError('Manifest changed since pipeline initialization');
     }
     const manifest = JSON.parse(manifestContent) as unknown;
+    await acceptedReconciliations(dirname(state.manifest_file), state, state.manifest_sha256);
     assertManifest(manifest);
     assertStateMatchesManifest(state, manifest);
     const { validateManifestV2Policy } = await import('./manifest-v2-policy.mjs');
@@ -946,7 +956,7 @@ function recalculateRunStatus(state: PipelineState): void {
     } else {
       // A blocked/failed pipeline may coexist with useful downstream/independent
       // work when its source-ready milestone was already reached.
-      state.status = 'in_progress';
+      state.status = state.execution_started_at || state.history.some(event => event.status === 'in_progress') ? 'in_progress' : 'approved';
     }
     return;
   }
@@ -1214,6 +1224,9 @@ export async function startStage(
     const expected = firstPendingStage(pipeline);
     if (expected !== stage) throw new StageCliError(`Stage is not next for ${pipeline.id}: expected=${expected ?? 'none'}`);
 
+    state.execution_started_at ??= now();
+    const spec = readFrozenManifestFromState(state).pipelines.find(p => p.id === pipeline.id);
+    if (spec?.executors?.[stage] === 'agent') state.implementation_started_at ??= now();
     pipeline.status = 'in_progress';
     runtime.status = 'in_progress';
     runtime.started_at = now();
@@ -1770,11 +1783,15 @@ export async function applyOwnerAmendment(
     const pipeline = getPipeline(state, pipelineId);
     const manifest = readFrozenManifestFromState(state);
     const source = pipeline.stages[stage];
-    if (!source || !['blocked', 'failed', 'in_progress'].includes(source.status)) {
+    if (!source || Object.values(state.pipelines).some(p => Object.values(p.stages).some(s => s.status === 'in_progress' && s !== source))) {
       throw new StageCliError('OWNER_AMENDMENT_REQUIRES_OWNER_CHECKPOINT: ' + pipelineId + '/' + stage);
+    }
+    for (const item of workItems) {
+      if (manifest.work_items?.some(w => w.id === item.id) || state.owner_amendments?.some(a => a.work_items.some(w => w.id === item.id))) throw new StageCliError('DUPLICATE_RUNTIME_WORK_ITEM: ' + item.id);
     }
     const targetStage = String(evidence.target_stage ?? '');
     const spec = manifest.pipelines.find((item) => item.id === pipelineId);
+    if (source.status === 'in_progress' && spec?.executors?.[stage] !== 'owner_acceptance') throw new StageCliError('STOP_ACTIVE_SOURCE_STAGE_BEFORE_OWNER_AMENDMENT');
     const targetIndex = pipeline.stage_order.indexOf(targetStage);
     if (!spec || targetIndex < 0 || spec.executors?.[targetStage] !== 'agent') {
       throw new StageCliError('OWNER_AMENDMENT_INVALID: target_stage must be an existing agent stage');

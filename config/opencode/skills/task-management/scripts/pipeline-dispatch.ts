@@ -17,16 +17,10 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   const executor = pipeline.executors[stage];
   if (!['agent', 'review'].includes(executor) || !roles.has(role) || (executor === 'review' && role !== 'CodeReviewer')) throw Error('INVALID_DISPATCH_ROLE');
 
-  // Owner amendments are overlays on existing frozen work items only. Keep this
-  // deterministic guard even though owner-amend-apply validates the same rule:
-  // imported/legacy/tampered state must never make a new runtime work item executable.
   const amendmentRecords = (state.owner_amendments ?? []).filter((a: any) => a.pipeline_id === pipelineId);
-  if (amendmentRecords.some((a: any) => (a.work_items ?? []).length > 0)) {
-    throw Error('FULL_REPLAN_REQUIRED_NEW_WORK_ITEM');
-  }
-
-  const frozen = manifest.work_items.find((w: { id: string }) => w.id === workItemId);
-  if (!frozen || !pipeline.work_items.includes(workItemId) || frozen.pipeline_id !== pipelineId) throw Error('WORK_ITEM_IDENTITY_MISMATCH');
+  const amendmentItems = amendmentRecords.flatMap((a: any) => a.work_items ?? []);
+  const frozen = manifest.work_items.find((w: { id: string }) => w.id === workItemId) ?? amendmentItems.find((w: any) => w.id === workItemId);
+  if (!frozen || frozen.pipeline_id !== pipelineId || (!pipeline.work_items.includes(workItemId) && !amendmentItems.some((w: any) => w.id === workItemId))) throw Error('WORK_ITEM_IDENTITY_MISMATCH');
   const workItemPath = resolve(dirname(state.manifest_file), frozen.path);
   const raw = await readFile(workItemPath, 'utf8');
   if (hash(raw) !== frozen.sha256) throw Error('WORK_ITEM_CHANGED');
@@ -53,11 +47,13 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     }
     let validated;
     try {
-      validated = validateOwnerAmendmentEvidence(evidence, manifest, pipelineId, amendment.source_stage);
+      validated = validateOwnerAmendmentEvidence(evidence, manifest, pipelineId, amendment.source_stage, amendmentRecords.filter((a: any) => a.revision < amendment.revision).flatMap((a: any) => a.work_items ?? []));
     } catch (error) {
       throw Error(error instanceof Error ? error.message : 'OWNER_AMENDMENT_EVIDENCE_INVALID');
     }
-    if (validated.work_item_id === workItemId) {
+    const normalize = (units: any[]) => units.map(({id,pipeline_id,path,sha256}) => ({id,pipeline_id,path,sha256}));
+    if (JSON.stringify(normalize(validated.work_items)) !== JSON.stringify(normalize(amendment.work_items ?? []))) throw Error('OWNER_AMENDMENT_WORK_ITEM_IDENTITY_CHANGED');
+    if (validated.work_item_id === workItemId || validated.work_items.some(w => w.id === workItemId)) {
       amendmentEvidence.push(file);
       relevantAmendments.push(amendment);
       amendmentPaths.push(...validated.paths);
@@ -87,3 +83,4 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     reuse: { eligible: executor === 'agent' && ['CoderAgent', 'TestEngineer', 'BuildAgent'].includes(role) },
     marker: `<pipeline_work_item id="${workItemId}"/>` };
 }
+

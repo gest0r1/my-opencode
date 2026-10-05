@@ -54,6 +54,15 @@ cat > "$TASK_TMP/bin/journalctl" <<'JOURNAL'
 printf 'journalctl %s\n' "$*" >> "$TRACE"
 echo 'simulated service journal'
 JOURNAL
+cat > "$TASK_TMP/bin/id" <<'ID'
+#!/bin/bash
+case "$1" in -un) echo opencode;; -u) echo 1234;; *) /usr/bin/id "$@";; esac
+ID
+cat > "$TASK_TMP/bin/getent" <<'GETENT'
+#!/bin/bash
+echo "opencode:x:1234:1234::$HOME:/bin/bash"
+GETENT
+printf '#!/bin/sh\nexit 0\n' > "$TASK_TMP/bin/sudo"
 printf '#!/bin/sh\nexit 0\n' > "$TASK_TMP/bin/sleep"
 chmod +x "$TASK_TMP/bin/"* "$TASK_TMP/cli"
 export CORE_FIXTURE="$TASK_TMP/core" CLI_FIXTURE="$TASK_TMP/cli"
@@ -83,3 +92,4 @@ grep -Fxq 'service_restart_pending=0' "$HOME/.local/state/my-opencode/openchambe
 [[ -d "$old" ]]
 ! grep -Eq '^systemctl .* (restart|stop|start|enable|daemon-reload)' "$TRACE"
 echo 'PASS: native activation, failed health rollback, defer, readiness commit and previous retention'
+

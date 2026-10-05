@@ -9,3 +9,6 @@ Shell execution has no interactive terminal. Use explicit arguments, script mode
 - `/pipeline-*` uses its command contract and deterministic CLI evidence. General-agent approval rules do not override an already approved RUN.
 
 Managed by gest0r1/my-opencode for OpenCode V2.
+
+
+For explicitly requested software installation, use `sudo -n /usr/local/sbin/opencode-install-packages update` and `sudo -n /usr/local/sbin/opencode-install-packages install <package>...`. The root bootstrap grants this package-only command without a password. Obtain the tool's requested confirmation; never bypass sudo policy or use arbitrary root shell commands.
