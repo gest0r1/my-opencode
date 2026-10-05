@@ -112,7 +112,7 @@ test('title uses unlimited LongCat instead of Muse or MiMo', () => {
 
 test('technical plan reviewer uses Claude Opus 5.5 without OpenAI reasoning options', () => {
   const path = 'config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md';
-  assert.equal(value(path, 'model'), 'anthropic/claude-opus-5-5');
+  assert.equal(value(path, 'model'), 'claude-code/claude-opus-5-5[1m]');
   assert.equal(value(path, 'reasoningEffort'), null);
 });
 

@@ -2,7 +2,7 @@
 name: SeniorTechnicalPlanReviewer
 description: Fresh review of technical plans, runtime-scope clarifications, and block-local runtime replans.
 mode: subagent
-model: anthropic/claude-opus-5-5
+model: claude-code/claude-opus-5-5[1m]
 permission:
   read: allow
   glob: allow
