@@ -80,7 +80,7 @@ printf 'official-installer %s\n' "$*" >> "$TRACE"
 mkdir -p "$HOME/.opencode/bin"
 cat > "$HOME/.opencode/bin/opencode" <<'INNER'
 #!/usr/bin/env bash
-printf '%s\n' 'opencode 2.0.21'
+if [[ "$1" == serve ]]; then echo '--hostname --port'; else printf '%s\n' 'opencode 2.0.21'; fi
 INNER
 chmod +x "$HOME/.opencode/bin/opencode"
 EOF
@@ -104,7 +104,7 @@ prepare_home() {
   printf '%s\n' '{}' > "$home/.config/opencode/opencode.json"
   cat > "$home/.opencode/bin/opencode" <<EOF
 #!/usr/bin/env bash
-printf '%s\\n' 'opencode $current_version'
+if [[ "\$1" == serve ]]; then echo '--hostname --port'; else printf '%s\\n' 'opencode $current_version'; fi
 EOF
   chmod +x "$home/.opencode/bin/opencode"
   cat > "$home/.local/state/my-opencode/openchamber-v2-install.state" <<EOF

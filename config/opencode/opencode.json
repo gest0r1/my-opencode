@@ -89,7 +89,9 @@
     "auto": true,
     "buffer": 10000
   },
-  "plugins": [],
+  "plugins": [
+    "@openchamber/opencode-claude@1.3.4"
+  ],
   "providers": {
     "openai": {
       "settings": {

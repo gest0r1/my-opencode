@@ -26,6 +26,9 @@ echo 'stalled dependency download'
 sleep 30
 BUN
 chmod +x "$TASK_TMP/bin/gh" "$TASK_TMP/bin/bun"
+mkdir -p "$TASK_TMP/home/.local/bin"
+cp "$TASK_TMP/bin/"* "$TASK_TMP/home/.local/bin/"
+ln -s "$(command -v node)" "$TASK_TMP/home/.local/bin/node"
 rc=0
 env HOME="$TASK_TMP/home" PATH="$TASK_TMP/bin:$PATH" SOURCE_ARCHIVE="$TASK_TMP/source.tar.gz" \
   OPENCODE_RESOLVED_CONFIG_SHA=1111111111111111111111111111111111111111 OPENCODE_SKIP_BINARY_INSTALL=1 \

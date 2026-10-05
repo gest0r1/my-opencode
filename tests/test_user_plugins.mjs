@@ -10,6 +10,11 @@ test('repo priority, options, versions, v1 tuples and exclusions', () => {
 test('JSONC keeps URLs and quoted comment text', () => {
   assert.deepEqual(parseConfig('{ // comment\n "plugins": ["https://host/plugin", "/*literal*/",],}'), { plugins: ['https://host/plugin', '/*literal*/'] });
 });
+test('managed Claude version retains subscription transport options', () => {
+  assert.deepEqual(mergePlugins({plugins: ['@openchamber/opencode-claude@1.3.4']},
+    {plugins: [{package: '@openchamber/opencode-claude@1.3.3', options: {transport: 'cli'}}]}),
+    [{package: '@openchamber/opencode-claude@1.3.4', options: {transport: 'cli'}}]);
+});
 test('fresh install, repeated update and local plugins remain available', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugins-')); const active = path.join(root, 'active'), staged = path.join(root, 'staged');
   try {

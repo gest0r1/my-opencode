@@ -26,7 +26,7 @@ def main():
     require(core, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"', "OpenCode pin")
     require(core, 'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.0}"',
             "OpenChamber pin")
-    require(core, 'HOST="${OPENCHAMBER_BIND_HOST:-172.18.0.1}"', "NPM bridge default")
+    require(core, 'HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"', "wildcard listener allows loopback callback")
     require(core, 'PORT="${OPENCHAMBER_BIND_PORT:-3000}"', "default port")
     require(wrapper, 'attempt<30', "bounded readiness retry")
     forbid(installer, '2.0.22', "unapproved OpenCode version bump")
@@ -36,7 +36,7 @@ def main():
             "exact config SHA resolution")
     require(wrapper, 'APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"',
             "exact OpenChamber SHA resolution")
-    require(wrapper, 'install-openchamber-v2-core.sh openchamber-runtime-store.sh', "exact core fetch")
+    require(wrapper, 'install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py verify-runtime-services.py', "exact core fetch")
     require(wrapper, 'contents/scripts/$file?ref=$CONFIG_SHA', "exact runtime helper fetch")
     require(wrapper, 'export OPENCODE_CONFIG_REF="$CONFIG_SHA"', "pinned config ref")
     require(wrapper, 'OPENCHAMBER_REF="$APP_SHA"', "pinned app ref")
@@ -124,4 +124,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

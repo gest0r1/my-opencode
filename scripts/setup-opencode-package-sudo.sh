@@ -27,6 +27,22 @@ POLICY="$PREFIX/etc/sudoers.d/opencode-packages-$RUNTIME_USER"
 TMP="$(mktemp -d)"
 trap 'rm -rf -- "$TMP"' EXIT
 
+# All privileged migration code is root-owned. Never execute scripts from a
+# runtime-writable home through a passwordless sudo helper.
+HELPER_DIR="$PREFIX/usr/local/lib/my-opencode"
+install -d -o root -g root -m 755 "$HELPER_DIR"
+for file in runtime-processes.py migrate-runtime-state.py finalize-runtime-migration.py bootstrap-runtime-tools.sh; do
+  source_file="$(dirname "${BASH_SOURCE[0]}")/$file"
+  if [[ ! -f "$source_file" ]]; then
+    command -v gh >/dev/null || { echo "Missing helper $file and GitHub CLI" >&2; exit 1; }
+    CONFIG_SHA="${CONFIG_SHA:-$(gh api "repos/${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}/commits/${OPENCODE_CONFIG_REF:-main}" --jq .sha)}"
+    [[ "$CONFIG_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+    source_file="$TMP/$file"
+    gh api -H 'Accept: application/vnd.github.raw' "repos/${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}/contents/scripts/$file?ref=$CONFIG_SHA" > "$source_file"
+  fi
+  install -o root -g root -m 755 "$source_file" "$HELPER_DIR/$file"
+done
+
 cat > "$TMP/package-helper" <<'HELPER'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -60,6 +76,8 @@ root_user_systemctl() {
 
 legacy_stop() {
   [[ ! -e "$STATE" ]] || { echo 'Legacy runtime cutover is already active' >&2; exit 2; }
+  console="$(python3 /usr/local/lib/my-opencode/runtime-processes.py --ancestor "$PPID")"
+  [[ "$console" == external ]] || { echo 'PENDING APPLY: use external SSH for cutover' >&2; return 1; }
   : > "$STATE"
   chmod 600 "$STATE"
 
@@ -73,12 +91,26 @@ legacy_stop() {
   fi
 
   for unit in openchamber.service opencode-web.service; do
-    owner="$(systemctl show "$unit" -p User --value 2>/dev/null || true)"
+    if systemctl cat "$unit" >/dev/null 2>&1; then
+      owner="$(systemctl show "$unit" -p User --value)"
+    else
+      continue
+    fi
     if [[ "$owner" == root || -z "$owner" ]] && systemctl is-active --quiet "$unit"; then
       printf 'system\t%s\n' "$unit" >> "$STATE"
       systemctl stop "$unit"
     fi
   done
+  # Retire a native background service that was not registered with systemd.
+  root_inventory="$(python3 /usr/local/lib/my-opencode/runtime-processes.py --uid 0)"
+  if [[ "$root_inventory" != '[]' && -x /root/.opencode/bin/opencode ]]; then
+    if env -i HOME=/root PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin /root/.opencode/bin/opencode service --help | grep -q stop; then
+      printf 'native\topencode\n' >> "$STATE"
+      env -i HOME=/root PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin /root/.opencode/bin/opencode service stop
+    fi
+  fi
+  python3 /usr/local/lib/my-opencode/runtime-processes.py --uid 0 --require-stopped
+  python3 /usr/local/lib/my-opencode/finalize-runtime-migration.py
 }
 
 legacy_restore() {
@@ -87,10 +119,13 @@ legacy_restore() {
     [[ -n "$scope" && -n "$unit" ]] || continue
     case "$scope" in
       user)
-        [[ -S "$ROOT_RUNTIME_DIR/bus" ]] && root_user_systemctl start "$unit" || true
+        [[ -S "$ROOT_RUNTIME_DIR/bus" ]] && root_user_systemctl start "$unit" || return 1
         ;;
       system)
-        systemctl start "$unit" || true
+        systemctl start "$unit" || return 1
+        ;;
+      native)
+        env -i HOME=/root PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin /root/.opencode/bin/opencode service start || return 1
         ;;
     esac
   done < "$STATE"
@@ -118,7 +153,7 @@ legacy_commit() {
 case "${1:-}" in
   --check)
     [[ "$#" == 1 ]] || exit 2
-    echo 'Runtime cutover sudo: READY'
+    echo 'Runtime cutover sudo: READY migration-v2'
     ;;
   legacy-stop)
     [[ "$#" == 1 ]] || exit 2

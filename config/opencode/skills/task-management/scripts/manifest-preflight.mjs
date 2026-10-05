@@ -1,3 +1,4 @@
+import { executablePath, checkProjectTooling } from './project-tooling.mjs';
 import { readFileSync, accessSync, constants } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
@@ -29,11 +30,8 @@ export function assertSafeGateInvocation(tokens, gate) {
 
 
 function executableOnPath(exe) {
-  if (isAbsolute(exe) || exe.includes('/')) return false;
-  return (process.env.PATH ?? '').split(delimiter).some((directory) => {
-    try { accessSync(join(directory || '.', exe), constants.X_OK); return true; }
-    catch { return false; }
-  });
+  executablePath(exe);
+  return true;
 }
 
 function runChecked(exe, args, cwd, label) {
@@ -170,6 +168,7 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
     throw new ManifestPreflightError(error instanceof Error ? error.message : String(error));
   }
   if (environment) {
+    if (usedInvocations.some(({tokens}) => ['pnpm', 'npm', 'npx', 'yarn', 'bun', 'corepack'].includes(tokens[0]))) checkProjectTooling(cwd);
     for (const { profile, gate, tokens } of usedInvocations) {
       if (!executableOnPath(tokens[0])) {
         throw new ManifestPreflightError(`EXECUTABLE_NOT_FOUND: ${tokens[0]} for ${profile}/${gate} is absent from runner PATH`);

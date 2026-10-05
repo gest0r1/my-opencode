@@ -246,14 +246,14 @@ export default Plugin.define({
     })
 
     const capabilityPreflight = async (sessionID: string) => {
-      const [tools, agentResult, skillResult] = await Promise.all([
-        plugin.tool.list(), plugin.agent.list(), plugin.skill.list(),
+      const [tools, agentResult, skillResult, modelResult] = await Promise.all([
+        plugin.tool.list(), plugin.agent.list(), plugin.skill.list(), plugin.model.list(),
       ])
       const agents = agentResult.data
       const parent = agents.find((x) => String(x.id) === "OpenStageOrchestrator")
       if (!parent) throw new Error("PIPELINE_CAPABILITY_UNAVAILABLE: primary OpenStageOrchestrator")
       return assertPipelineCapabilities({ tools, agents, skills: skillResult.data,
-        visibleTools: visibleBySession.get(sessionID), permissions: parent.permissions })
+        visibleTools: visibleBySession.get(sessionID), permissions: parent.permissions, models: modelResult.data })
     }
 
     await plugin.tool.transform((editor) => {
