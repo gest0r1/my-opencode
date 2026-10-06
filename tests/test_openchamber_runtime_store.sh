@@ -11,7 +11,6 @@ export EXPECTED_OPENCHAMBER_VERSION='2.1.0'
 # hard-code ~/.local/share/openchamber-v2.
 export OPENCHAMBER_RUNTIME_ROOT="$HOME/custom/openchamber-runtime"
 export BUN_INSTALL="$HOME/.bun"
-export LEGACY_BUN_INSTALL="$HOME/.bun"
 export SYSTEMCTL_LOG="$TMP/systemctl.log"
 mkdir -p "$HOME" "$TMP/bin"
 
@@ -75,3 +74,4 @@ oc_rollback_activation
 test "$(readlink -f "$OPENCHAMBER_CURRENT")" = "$r2"
 
 echo 'PASS: immutable OpenChamber runtime, binary rollback and bounded retention'
+

@@ -8,7 +8,6 @@ core = (ROOT / "scripts/install-openchamber-v2-core.sh").read_text()
 runtime_store = (ROOT / "scripts/openchamber-runtime-store.sh").read_text()
 config_bootstrap = (ROOT / "install.sh").read_text()
 config_generation = (ROOT / "scripts/install-opencode-generation.sh").read_text()
-cleanup = (ROOT / "scripts/cleanup-openchamber-v1-before-v2.sh").read_text()
 installer = wrapper + "\n" + core
 config_installer = config_bootstrap + "\n" + config_generation
 
@@ -23,7 +22,7 @@ def forbid(text: str, needle: str, label: str):
 
 def main():
     # Version/network contract.
-    require(core, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"', "OpenCode pin")
+    require(core, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.23}"', "OpenCode pin")
     require(core, 'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.0}"',
             "OpenChamber pin")
     require(core, 'HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"', "wildcard listener allows loopback callback")
@@ -107,20 +106,10 @@ def main():
             "current symlink")
     require(runtime_store, 'mv -Tf "$link_tmp" "$OPENCHAMBER_CURRENT"', "atomic current publish")
     require(runtime_store, 'oc_rollback_activation()', "runtime rollback")
-    require(runtime_store, 'oc_remove_legacy_bun_global()', "post-commit legacy Bun retirement")
 
-    # Migration cleanup remains explicit/separate and keeps credentials/rollback source.
-    require(cleanup, 'preserve_ui_password_only', "UI password migration")
-    require(cleanup, 'OPENCHAMBER_CLEANUP_RUNTIME_MODE', "console-safe cleanup mode")
-    require(cleanup, 'LEGACY_AGENT_ROOTS=(', "legacy agents")
-    require(cleanup, 'LEGACY_SKILL_ROOTS=(', "legacy skills")
-    require(cleanup, 'archive_lookup_root "$PLUGIN_ROOT"', "plugin lookup retirement")
-    require(cleanup, 'archive_lookup_root "$LEGACY_TOOL_ROOT"', "tool lookup retirement")
-    require(cleanup, 'retained as rollback source until atomic commit', "rollback source retention")
-    forbid(cleanup, 'bun remove -g @openchamber/web', "pre-migration runtime destruction")
-
-    print("PASS: V2 installer contract is incremental, ref-pinned, atomic and migration-safe")
+    print("PASS: V2 installer contract is incremental, ref-pinned, atomic and v2-only")
 
 
 if __name__ == "__main__":
     main()
+
