@@ -111,13 +111,22 @@ Respect the repository package-manager contract for `local_gate`. Before dispatc
 
 ### Early feedback during implementation
 
-The parent or permitted worker may run `gate-runner-cli.ts RUN PIPELINE GATE --advisory --command-index N` to execute one exact frozen test/typecheck/build command. `N` is zero-based. Choose a narrow relevant command; avoid full expensive suites on every dispatch. Evidence goes to `checks/` instead of `gates/`; neither PASS nor FAIL spends cycles or satisfies final acceptance. Do not run advisory runtime/install/deploy commands or checks while a conflicting writer is active. Finish known omissions before advancing dependent work. Repeated incompletion without progress triggers fresh authoritative review, rather than endless free redispatch.
+The parent or permitted worker may run `gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected`
+for frozen impacted tests, or `--advisory --command-index N` for one exact frozen command.
+Do not run checks concurrently with a conflicting source worker.
+
+Read `skills/task-management/gate-testing.md` for PLAN contract fields and diagnostic/resource rules.
+`DIAGNOSTIC_NO_PROGRESS` requires a concrete correction or a new recorded hypothesis under
+this RUN's `checks/` (pass `--hypothesis PATH`); if diagnosis is exhausted, dispatch independent
+review of code and tests. It is not a routine owner checkpoint. Do not weaken tests or
+rewrite a frozen manifest to bypass diagnostics. Authoritative invocation has no `--advisory`;
+only its complete final evidence satisfies the stage.
 
 ## Automatic repair loops — initial budget 5
 
 Implementation omissions, PARTIAL output, interruption recovery and parent-requested completion redispatch the same work item without `fix-cycle`. Advisory checks through the existing gate runner are free and do not complete stages. Only a fresh negative CodeReviewer or authoritative machine-gate result initiates a charged cycle. A repair cycle is one source-changing attempt that reaches its next authoritative review/gate result. The shared budget applies to both `technical_fix` and bounded `security_fix`. **Scope discovery/authorization happens before the cycle counter is consumed.** If the frozen DAG contains executor=`review`, that stage runs a fresh CodeReviewer. A cycle already started may finish through that review/gate even when its counter becomes `N/N`.
 
-`fix-cycle` on a review or machine gate reopens its preceding agent stage and all following stages, before or after publication. Dispatch the affected original work items on that agent stage, following their frozen dependencies. Preserve completed independent source work; if affected items cannot be identified safely, widen the repair coverage within approved scope. Its dispatch borrows the initiating gate's repair evidence, paths and loop number. A retry of the same accepted result while repair is open is idempotent. All findings and worker continuations before the next authoritative result remain that one cycle. Record the next cycle on the initiating gate only; reopening source work and running fresh review do not consume a second cycle. Never dispatch CoderAgent on a review stage or require a PLAN amendment merely to transport an approved fix. An older blocked checkpoint with an already charged cycle may resume that same attempt through fix-cycle only with identical hash-bound repair evidence and authorized paths after the current scope/security preflight; a fresh result or changed scope/evidence starts a new cycle.
+`fix-cycle` on a review or machine gate reopens its preceding agent stage and all following stages, before or after publication. Dispatch the affected original work items on that agent stage, following their frozen dependencies. Preserve completed independent source work; if affected items cannot be identified safely, widen the repair coverage within approved scope. Its dispatch borrows the initiating gate's repair evidence, paths and loop number. A retry of the same accepted result while repair is open is idempotent. All findings and worker continuations before the next authoritative result remain that one cycle. Record the next cycle on the initiating gate only; reopening source work and running fresh review do not consume a second cycle. Never dispatch CoderAgent on a review stage or require a PLAN amendment merely to transport an approved fix. A completed implementation stage and a preceding live-test PASS do not require owner amendment: a new bounded `technical_fix` review automatically reopens source through `fix-cycle`. Continue without asking for owner approval while scope/security and budget permit; owner amendments are for changed requirements, not residual or new defects in approved behavior. An older blocked checkpoint with an already charged cycle may resume that same attempt through fix-cycle only with identical hash-bound repair evidence and authorized paths after the current scope/security preflight; a fresh result or changed scope/evidence starts a new cycle.
 
 ### Source deletion and deferred decisions
 
@@ -159,7 +168,7 @@ If `git-worktree-cli verify` discovers an additional path after a cycle already 
 
 For a source-changing fix after `git_publish`, `fix-cycle` reopens the chain from the preceding source agent through `git_verify` through local fail-fast, publish, final CI and affected CD/runtime stages. Evidence for the previous candidate becomes stale.
 
-The default automatic budget is **5 cycles per stage/work-item**. On RUN start the owner may pre-authorize a higher ceiling with `--fix-cycles N` (maximum 20); OpenStage maps it to:
+The default automatic budget is **5 cycles per review/final machine gate**; agent, publication and owner-acceptance stages have no repair budget. On RUN start the owner may pre-authorize a higher ceiling with `--fix-cycles N` (maximum 20); OpenStage maps it to:
 
 ```text
 stage-cli fix-budget-set <run-id> --cycles N

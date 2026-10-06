@@ -143,7 +143,7 @@ New PLANs MUST use `schema_version: 2`, `planning_mode: "design-freeze"` and:
 
 - rules version recorded at approval for initial consistency; RUN later adopts externally changed live rules metadata without rewriting the manifest;
 - `git_setup`, base `allowed_change_paths`, `freshness_sensitive_paths`, and frozen per-gate `planning_inputs`; runtime scope extensions are machine-owned RUN state and are never written back into the manifest;
-- pipelines/DAG, source-ready `ready_after_stage` on every depended-on pipeline, explicit `deployable`, one integrated delivery sink per delivered product where practical, mandatory `deployment_validation` + owner-selected `testing_strategy` for deployable sinks, artifactless active `github_gates[stage_id]`, deferred `future_github_gates`, explicit `executors[stage_id]` including `owner_acceptance`, local-only `gate_profiles`, conflict metadata and work-item mappings;
+- pipelines/DAG, source-ready `ready_after_stage` on every depended-on pipeline, explicit `deployable`, one integrated delivery sink per delivered product where practical, mandatory `deployment_validation` + owner-selected `testing_strategy` for deployable sinks, artifactless active `github_gates[stage_id]`, deferred `future_github_gates`, explicit `executors[stage_id]` including `owner_acceptance`, local-only `gate_profiles`, optional frozen `gate_testing` (see `skills/task-management/gate-testing.md`), conflict metadata and work-item mappings;
 - `planning_readiness.design_freeze: true`;
 - `planning_readiness.required_gates[]` and a `ready` evidence record for every required gate;
 - path+SHA-256 for every gate artifact/review and required planning artifact;
@@ -173,6 +173,8 @@ Before freeze inspect the proposed project workflow:
 ```text
 npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts inspect <workflow> <terminal-job> --trigger <push|workflow_dispatch> [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode stateful --environment <env> --trusted-ref <ref> --concurrency-group <group>]
 ```
+
+TestEngineer/DevOps author the test/resource contract and transitive consumer coverage inside the approved work items; independent planning review checks it. Keep full required commands in `gate_profiles`; optional diagnostic filters never replace them. Missing impact coverage falls back to full tests. Do not retrofit frozen RUN manifests.
 
 For `local_gate`, `gate-runner-cli` still runs from project root with `shell:false`; one command-array item is one executable plus argv. No `cd`, `&&`, pipes, redirects, `$()` or stage-time dependency bootstrap/resolution. Only local-gate stages require a pipeline `profile` and `gate_profiles[profile][stage_id]`.
 

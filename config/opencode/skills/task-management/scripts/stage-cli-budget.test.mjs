@@ -344,7 +344,7 @@ test('owner can increase the fix budget before exhaustion', async () => {
   assert.equal(runtime.technical_fix_budget_grants[0].new_limit, 9);
 });
 
-test('RUN-level fix-budget-set raises all stage ceilings and never lowers them', async () => {
+test('RUN-level fix-budget-set raises only repair-stage ceilings and never lowers them', async () => {
   const fx = await fixture('budget-run-override');
 
   let result = run(fx.root, [
@@ -352,6 +352,8 @@ test('RUN-level fix-budget-set raises all stage ceilings and never lowers them',
   ]);
   assert.equal(result.status, 0, result.stderr);
   let state = JSON.parse(result.stdout);
+  assert.equal(state.pipelines.app.stages.implementation.technical_fix_limit, undefined);
+  assert.equal(state.pipelines.app.stages.implementation.technical_fix_budget_grants, undefined);
   let runtime = state.pipelines.app.stages['code-review'];
   assert.equal(runtime.technical_fix_limit, 12);
   assert.deepEqual(runtime.technical_fix_budget_grants[0], {
@@ -608,4 +610,26 @@ test('missing or positive review results never spend budget and free dispatch re
   const state = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'state.json'), 'utf8'));
   assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles ?? 0, 0);
   assert.equal(state.pipelines.app.stages['code-review'].status, 'in_progress');
+});
+
+test('live PASS followed by bounded review findings reopens completed implementation without owner amendment', async () => {
+  const fx = await fixture('live-pass-review-repair');
+  const cli = args => run(fx.root, [...args, '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  const review = await writeReview(fx, 'review-pass4.json', { status: 'technical_fix', live_pg: 'PASS', owner_decision_required: false,
+    findings: ['N3 lock order', 'R13 deadline', 'R10/R9 production barriers', 'R5 fairness'] });
+  let result = cli(['scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts']);
+  assert.equal(result.status, 0, result.stderr);
+  result = cli(['fix-cycle', fx.runId, 'code-review', '--evidence', review, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  let state = JSON.parse(result.stdout);
+  assert.equal(state.pipelines.app.stages.implementation.status, 'pending');
+  assert.equal(state.pipelines.app.stages.implementation.technical_fix_limit, undefined);
+  assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles, 1);
+  assert.equal(state.owner_amendments?.length ?? 0, 0);
+  result = cli(['start', fx.runId, 'implementation']); assert.equal(result.status, 0, result.stderr);
+  result = cli(['fix-budget-add', fx.runId, 'implementation', '--cycles', '5']);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /REPAIR_BUDGET_NOT_APPLICABLE/);
+  result = cli(['status', fx.runId]); assert.equal(result.status, 0, result.stderr);
+  const line = result.stdout.split('\n').find(line => line.includes('implementation:'));
+  assert.ok(!line.includes('fix_budget')); assert.match(line, /repair_from=code-review/);
 });

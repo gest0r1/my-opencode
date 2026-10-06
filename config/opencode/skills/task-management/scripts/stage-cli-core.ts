@@ -681,7 +681,10 @@ async function readState(stateRoot: string, runId: string): Promise<PipelineStat
 
 function createPipelineRuntime(pipeline: PipelineManifestPipeline): PipelineRuntime {
   const stageRuntime: Record<string, StageRuntime> = {};
-  for (const stage of pipeline.stages) stageRuntime[stage] = { status: 'pending', technical_fix_limit: DEFAULT_TECHNICAL_FIX_LIMIT };
+  for (const stage of pipeline.stages) stageRuntime[stage] = {
+    status: 'pending',
+    ...(hasRepairBudget(pipeline, stage) ? { technical_fix_limit: DEFAULT_TECHNICAL_FIX_LIMIT } : {}),
+  };
   return {
     id: pipeline.id,
     status: 'planned',
@@ -692,6 +695,11 @@ function createPipelineRuntime(pipeline: PipelineManifestPipeline): PipelineRunt
     ...(pipeline.ready_after_stage ? { ready_after_stage: pipeline.ready_after_stage } : {}),
     ...(pipeline.release_ready_after_stage ? { release_ready_after_stage: pipeline.release_ready_after_stage } : {}),
   };
+}
+
+function hasRepairBudget(pipeline: PipelineManifestPipeline, stage: string): boolean {
+  const executor = pipeline.executors?.[stage];
+  return executor !== 'agent' && executor !== 'owner_acceptance' && executor !== 'git_publish';
 }
 
 function sameStrings(a: string[] | undefined, b: string[] | undefined): boolean {
@@ -1319,11 +1327,14 @@ export async function setRunTechnicalFixBudget(
     throw new StageCliError(`fix-budget-set cycles must be an integer from 1 to ${MAX_TECHNICAL_FIX_LIMIT}`);
   }
   return updateState(stateRoot, runId, (state) => {
+    const manifest = readFrozenManifestFromState(state);
     if (state.status === 'completed') {
       throw new StageCliError(`Fix budget cannot change for completed run: ${runId}`);
     }
     for (const pipeline of Object.values(state.pipelines)) {
       for (const stage of pipeline.stage_order) {
+        const spec = manifest.pipelines.find((item) => item.id === pipeline.id);
+        if (!spec || !hasRepairBudget(spec, stage)) continue;
         const runtime = pipeline.stages[stage];
         if (!runtime) continue;
         const previousLimit = technicalFixLimit(runtime);
@@ -1460,6 +1471,8 @@ export async function grantTechnicalFixBudget(
   }
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
+    const spec = readFrozenManifestFromState(state).pipelines.find((item) => item.id === pipeline.id);
+    if (!spec || !hasRepairBudget(spec, stage)) throw new StageCliError('REPAIR_BUDGET_NOT_APPLICABLE: use the initiating review/gate stage');
     const runtime = pipeline.stages[stage];
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
@@ -1579,6 +1592,8 @@ export async function proposeRuntimeReplan(
 
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
+    const spec = readFrozenManifestFromState(state).pipelines.find((item) => item.id === pipeline.id);
+    if (!spec || !hasRepairBudget(spec, stage)) throw new StageCliError('REPAIR_BUDGET_NOT_APPLICABLE: use the initiating review/gate stage');
     const runtime = pipeline.stages[stage];
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
@@ -1622,6 +1637,8 @@ export async function approveRuntimeReplan(
   }
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
+    const spec = readFrozenManifestFromState(state).pipelines.find((item) => item.id === pipeline.id);
+    if (!spec || !hasRepairBudget(spec, stage)) throw new StageCliError('REPAIR_BUDGET_NOT_APPLICABLE: use the initiating review/gate stage');
     const runtime = pipeline.stages[stage];
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     const pending = activeRuntimeReplan(runtime);
@@ -2076,6 +2093,7 @@ function printState(state: PipelineState, asJson: boolean): void {
   console.log(`Pipeline run: ${state.run_id}`);
   console.log(`Status: ${state.status}`);
   if (state.active_stages?.length) console.log(`Active: ${state.active_stages.join(', ')}`);
+  const manifest = state.manifest_file ? readFrozenManifestFromState(state) : undefined;
   for (const pipeline of Object.values(state.pipelines)) {
     console.log(`\n${pipeline.id}: ${pipeline.status}`);
     for (const stage of pipeline.stage_order) {
@@ -2084,7 +2102,10 @@ function printState(state: PipelineState, asJson: boolean): void {
       const marker = status === 'completed' ? '✓' : status === 'in_progress' ? '→' : '○';
       const used = runtime?.technical_fix_cycles ?? 0;
       const limit = runtime ? technicalFixLimit(runtime) : DEFAULT_TECHNICAL_FIX_LIMIT;
-      console.log(`  ${marker} ${stage}: ${status} fix_budget=${used}/${limit}`);
+      const spec = manifest?.pipelines.find((item) => item.id === pipeline.id);
+      const budget = spec && hasRepairBudget(spec, stage) ? ` fix_budget=${used}/${limit}` : '';
+      const repair = runtime?.repair_origin_stage ? ` repair_from=${runtime.repair_origin_stage}` : '';
+      console.log(`  ${marker} ${stage}: ${status}${budget}${repair}`);
       const pendingReplan = runtime ? activeRuntimeReplan(runtime) : undefined;
       if (pendingReplan) console.log(`      runtime_replan=${pendingReplan.revision}:${pendingReplan.status}`);
     }

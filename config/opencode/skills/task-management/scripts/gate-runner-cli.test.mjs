@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, writeFile, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import test from 'node:test';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -142,4 +142,146 @@ test('advisory checks use a selected frozen command and cannot overwrite final e
   const blocked = run(runtime.root, [runtime.runId, 'app', 'runtime_install', '--advisory', '--state-root', runtime.stateRoot]);
   assert.notEqual(blocked.status, 0);
   assert.match(blocked.stderr, /advisory checks cannot/);
+});
+
+async function diagnosticFixture() {
+  const fx = await makeRun('pnpm exec vitest run --config vitest.unit.ts --passWithNoTests=false');
+  await mkdir(path.join(fx.root, 'bin'));
+  await mkdir(path.join(fx.root, 'src'));
+  await writeFile(path.join(fx.root, 'src/orders.ts'), 'initial\n');
+  await writeFile(path.join(fx.root, 'src/web.ts'), 'initial\n');
+  await writeFile(path.join(fx.root, 'bin/pnpm'), `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.appendFileSync('.tmp/calls.log', JSON.stringify(process.argv.slice(2)) + '\\n');
+if (fs.existsSync('.tmp/fail')) { console.error('FAIL orders invariant'); process.exit(1); }
+`, { mode: 0o755 });
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+  await unlink(state.manifest_file);
+  state.manifest_file = path.join(fx.stateRoot, fx.runId, 'manifest.json');
+  const git = (...args) => spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
+  assert.equal(git('init').status, 0);
+  git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
+  git('add', 'src', 'bin'); assert.equal(git('commit', '-m', 'base').status, 0);
+  manifest.git_setup = { base_sha: git('rev-parse', 'HEAD').stdout.trim() };
+  manifest.gate_profiles.default.build.push('pnpm exec vitest run --config vitest.web.ts --passWithNoTests=false');
+  manifest.gate_testing = { default: { build: { impact_groups: [
+    { inputs: ['src/orders.ts'], command_index: 0, test_files: ['test/orders.test.ts'] },
+    { inputs: ['src/web.ts'], command_index: 1 },
+  ] } } };
+  const content = JSON.stringify(manifest);
+  state.manifest_sha256 = sha256(content);
+  await writeFile(state.manifest_file, content); await writeFile(statePath, JSON.stringify(state));
+  await writeFile(path.join(fx.root, 'src/orders.ts'), 'changed\n');
+  return { ...fx, args: [fx.runId, 'app', 'build', '--state-root', fx.stateRoot], bin: path.join(fx.root, 'bin') };
+}
+
+test('affected advisory filters suites but authoritative invocation always runs the complete frozen set', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, [...fx.args, '--advisory', '--affected']);
+    assert.equal(result.status, 0, result.stderr);
+    let evidence = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(evidence.results.length, 1); assert.ok(evidence.results[0].argv.includes('test/orders.test.ts'));
+    assert.ok(evidence.results[0].duration_ms >= 0);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    evidence = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(evidence.results.length, 2); assert.ok(!evidence.results[0].argv.includes('test/orders.test.ts'));
+    assert.notEqual(run(fx.root, [...fx.args, '--affected']).status, 0);
+    await writeFile(path.join(fx.root, 'src/unmapped.ts'), 'unknown');
+    result = run(fx.root, [...fx.args, '--advisory', '--affected']); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('unchanged diagnostic failures cannot spin; a unique hypothesis permits one retry and source corrections resume', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    await writeFile(path.join(fx.root, '.tmp/fail'), 'yes');
+    const args = [...fx.args, '--advisory', '--command-index', '0'];
+    let result = run(fx.root, args); assert.notEqual(result.status, 0);
+    const evidenceFile = path.join(fx.stateRoot, fx.runId, 'checks/app-build.json');
+    const previous = await readFile(evidenceFile, 'utf8');
+    result = run(fx.root, args); assert.match(result.stderr, /DIAGNOSTIC_NO_PROGRESS/);
+    assert.equal(await readFile(evidenceFile, 'utf8'), previous);
+    result = run(fx.root, [...fx.args, '--advisory', '--command-index', '1']); assert.notEqual(result.status, 0);
+    result = run(fx.root, args); assert.match(result.stderr, /DIAGNOSTIC_NO_PROGRESS/); // changing command selection cannot erase a consumed failure
+    const hypothesis = path.join(fx.stateRoot, fx.runId, 'checks/hypothesis.md');
+    await writeFile(hypothesis, 'Check whether a transient startup race reproduces.');
+    result = run(fx.root, [...args, '--hypothesis', hypothesis]); assert.notEqual(result.status, 0); assert.doesNotMatch(result.stderr, /DIAGNOSTIC_NO_PROGRESS/);
+    result = run(fx.root, [...args, '--hypothesis', hypothesis]); assert.match(result.stderr, /DIAGNOSTIC_NO_PROGRESS/);
+    await writeFile(path.join(fx.root, 'src/orders.ts'), 'fixed\n'); await unlink(path.join(fx.root, '.tmp/fail'));
+    result = run(fx.root, args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(await readFile(evidenceFile, 'utf8')).status, 'PASS');
+  } finally { process.env.PATH = oldPath; }
+});
+
+async function attachPostgres(fx) {
+  await writeFile(path.join(fx.bin, 'docker'), `#!/usr/bin/env node
+const fs = require('node:fs'); const args = process.argv.slice(2);
+fs.appendFileSync('.tmp/docker.log', JSON.stringify(args) + '\\n');
+const state = '.tmp/docker-state.json';
+if (args[0] === 'context') console.log('unix:///var/run/docker.sock');
+if (args[0] === 'create') { fs.writeFileSync(state, JSON.stringify({owner: args[args.indexOf('--label') + 1].split('=')[1]})); console.log('b'.repeat(64)); }
+if (args[0] === 'port') console.log('127.0.0.1:55432');
+if (args[0] === 'inspect') console.log(JSON.parse(fs.readFileSync(state)).owner);
+if (args[0] === 'rm') fs.unlinkSync(state);
+`, { mode: 0o755 });
+  await writeFile(path.join(fx.bin, 'pnpm'), `#!/usr/bin/env node
+const fs = require('node:fs');
+if (!process.env.LIVE_PG_TEST || !process.env.DATABASE_URL?.includes('@127.0.0.1:55432/pipeline_live')) process.exit(2);
+fs.writeFileSync('.tmp/test-started', 'yes');
+console.log('database=' + process.env.DATABASE_URL);
+if (fs.existsSync('.tmp/sleep')) setInterval(() => {}, 1000);
+else if (fs.existsSync('.tmp/fail')) { console.error('FAIL live invariant'); process.exit(1); }
+`, { mode: 0o755 });
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+  manifest.gate_testing.default.build.live_postgres = { image: `postgres:16@sha256:${'a'.repeat(64)}`, command_indexes: [0, 1] };
+  const content = JSON.stringify(manifest); state.manifest_sha256 = sha256(content);
+  await writeFile(state.manifest_file, content); await writeFile(statePath, JSON.stringify(state));
+}
+
+test('runner provisions env and owned cleanup for both passing and failed live gates', async () => {
+  for (const fail of [false, true]) {
+    const fx = await diagnosticFixture(); await attachPostgres(fx);
+    const oldPath = process.env.PATH;
+    try {
+      process.env.PATH = `${fx.bin}:${oldPath}`;
+      if (fail) await writeFile(path.join(fx.root, '.tmp/fail'), 'yes');
+      const result = run(fx.root, fx.args);
+      assert.equal(result.status, fail ? 1 : 0, result.stderr);
+      const raw = await readFile(path.join(fx.stateRoot, fx.runId, 'gates/app-build.json'), 'utf8');
+      const evidence = JSON.parse(raw);
+      assert.equal(evidence.status, fail ? 'FAIL' : 'PASS'); assert.equal(evidence.cleanup_complete, true);
+      assert.match(evidence.results[0].stdout, /postgresql:\/\/\[REDACTED\]@/);
+      await assert.rejects(access(path.join(fx.root, '.tmp/docker-state.json')));
+      const calls = (await readFile(path.join(fx.root, '.tmp/docker.log'), 'utf8')).trim().split('\n').map(JSON.parse);
+      assert.equal(calls.at(-1)[0], 'rm'); assert.equal(calls.filter(call => call[0] === 'create').length, 1);
+    } finally { process.env.PATH = oldPath; }
+  }
+});
+
+test('SIGTERM stops the test tree, cleans its container and preserves failed evidence', async () => {
+  const fx = await diagnosticFixture(); await attachPostgres(fx);
+  await writeFile(path.join(fx.root, '.tmp/sleep'), 'yes');
+  const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), RUNNER, ...fx.args], { cwd: fx.root, env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}` }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let errors = ''; child.stderr.on('data', chunk => { errors += chunk; }); child.stdout.resume();
+  const done = new Promise((resolve, reject) => { child.on('error', reject); child.on('close', code => resolve(code)); });
+  let started = false;
+  for (let count = 0; count < 100; count++) {
+    try { await access(path.join(fx.root, '.tmp/test-started')); started = true; break; } catch {}
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  if (!started) child.kill('SIGKILL');
+  assert.equal(started, true, errors);
+  child.kill('SIGTERM'); assert.equal(await done, 1, errors);
+  const evidence = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'gates/app-build.json'), 'utf8'));
+  assert.equal(evidence.status, 'FAIL'); assert.equal(evidence.cleanup_complete, true);
+  assert.equal(evidence.results[0].exit_code, 130);
+  await assert.rejects(access(path.join(fx.root, '.tmp/docker-state.json')));
 });
