@@ -59,11 +59,12 @@ jobs:
           git config --global user.email 'pipeline-contract-ci@example.invalid'
 
       - name: Install pinned V2 runtime for behavioral tests
-        run: npm install --prefix config/opencode --ignore-scripts --no-package-lock
+        run: npm install --prefix config/opencode --ignore-scripts --no-package-lock --no-save tsx@4.23.15
 
       - name: Run pipeline contract tests
         env:
           NODE_NO_WARNINGS: '1'
+          PIPELINE_REAL_DOCKER: '1'
         run: |
           node --test \
             config/opencode/skills/task-management/scripts/config-security.test.mjs \
@@ -81,6 +82,7 @@ jobs:
             config/opencode/skills/task-management/scripts/owner-amendment-policy.test.mjs \
             config/opencode/skills/task-management/scripts/owner-amendment-git-gate.test.mjs \
             config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs \
+            config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs \
             config/opencode/skills/task-management/scripts/git-worktree-cli.test.mjs \
             config/opencode/skills/task-management/scripts/worktree-refresh.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-refresh-cli.test.mjs \

@@ -39,7 +39,7 @@ tags:
     Если есть `reconcile/NNN.json`, покажи результат COMPATIBLE/PLAN_INVALID, previous/new base, source digest, reason и действие: уточнение в той же папке до implementation или новый PLAN после старта. Старые refresh-артефакты отображай только как исторические.
 12. Для rules покажи `rules_source`, текущий `rules_file`, `rules_version` и hash из state. Эти поля — audit metadata текущей принятой версии rules; изменение hash/version между pipeline-командами само по себе не является blocker.
 13. Покажи `runtime_scope_extensions` отдельно от frozen manifest scope: class (`test|technical`), exact paths, reason и review evidence для technical. Если есть `scope_preflight`, покажи pipeline/stage/paths и отметь, что следующий matching `fix-cycle` его потребит. Если есть `security_fix_preflight`, отдельно покажи pipeline/stage, exact paths и evidence path/hash; это означает, что разрешён только matching `fix-cycle --repair-class security_fix`.
-14. Для каждого stage покажи общий automatic-repair budget (`technical_fix` + `security_fix`) как `used/limit`, историю `technical_fix_budget_grants` с `source` (`run_override|owner_direct|runtime_replan`) и активный `runtime_replan` (revision/status/evidence/owner_questions/granted_cycles). Default нового RUN = 5; ceiling выше 5 может быть заранее задан owner через `--fix-cycles N`. Явно различай `awaiting_owner_clarification` и `awaiting_owner_approval`; это не terminal full replan.
+14. Покажи CLI budget только для review/final machine gates; у agent/publication/owner acceptance бюджета нет. Старые значения implementation — исторические, не действующий лимит. Историю grants и активный runtime replan показывай из state, правила счёта — по RUN-команде. Явно различай `awaiting_owner_clarification` и `awaiting_owner_approval`; это не terminal full replan.
 15. Отдельно покажи integrated candidate: текущий `candidate_sha` и для каждого deployable pipeline — совпадает ли PASS `deployment_validation.stage` с этим SHA. Для `github_ci`/`github_dev` со статусом FAIL или BLOCKED покажи canonical evidence. Для FAIL: workflow run/attempt, failed jobs/steps, `validation_error` и diagnostics. Для BLOCKED: `failure_phase`, candidate/workflow identity и observed run ID/status, если run уже найден. Не проси пользователя вручную выгружать Actions logs, если deterministic CLI имеет доступ.
 
 ## Запрещено
@@ -55,4 +55,3 @@ tags:
 
 Используй русский читаемый вывод. При необходимости добавь JSON-вывод для
 машинной обработки, но не изменяй файлы.
-

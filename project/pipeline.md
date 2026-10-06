@@ -56,7 +56,7 @@ Release packaging отделён от candidate CI. Если проект реа
 
 ## Runtime fix budget
 
-RUN начинает каждый stage с общим budget **5 automatic repair cycles** для `technical_fix` и bounded `security_fix`. При запуске владелец может заранее увеличить потолок всего RUN:
+RUN назначает review/final machine gates budget **5 automatic repair cycles**; у implementation, publication и owner acceptance своего бюджета нет. Этот budget общий для `technical_fix` и bounded `security_fix`. При запуске владелец может заранее увеличить потолок всего RUN:
 
 ```text
 /pipeline-run <run-id> --unattended --fix-cycles 10
@@ -138,3 +138,5 @@ CodeReviewer получает dispatch по имени review-стадии с к
 Удаление точных Git-файлов, уже предусмотренное approved AC, выполняется `git-worktree-cli delete` с проверкой scope и доказательствами; повторное согласование не нужно.
 
 Новое действие, требующее решения, регистрируется `owner-decision-defer` с объектами, последствиями и подготовленной правкой. Безопасная независимая работа продолжается; зависимое действие ждёт. Все решения показываются одним checkpoint перед финальной проверкой. После явного ответа `owner-decision-resolve` продолжает существующий RUN и бюджет. Активную утечку secrets или опасное продолжающееся действие откладывать нельзя.
+
+Профиль выборочных и live-тестов: [gate-testing.md](../config/opencode/skills/task-management/gate-testing.md). RUN-команда описывает порядок вызовов; исполняемые правила принадлежат CLI, профиль тестов — этому контракту.

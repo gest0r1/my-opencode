@@ -188,7 +188,7 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
 
   assert.match(plan, /up to \*\*3 cycles\*\*/); // planning-gate revision budget remains separate
   assert.match(plan, /--fix-cycles <5\.\.20>/);
-  assert.match(run, /default automatic budget is \*\*5 cycles per stage\/work-item\*\*/i);
+  assert.match(run, /default automatic budget is \*\*5 cycles per review\/final machine gate\*\*/i);
   assert.match(run, /stage-cli fix-budget-set/);
   assert.match(run, /stage-cli fix-budget-add/);
   assert.match(run, /stage-cli security-fix-check/);
@@ -196,9 +196,9 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   assert.match(run, /stage-cli runtime-replan-propose/);
   assert.match(run, /stage-cli runtime-replan-approve/);
   assert.match(run, /`--unattended` never supplies runtime-replan approval/i);
-  assert.match(rules, /initial automatic fix budget is \*\*5 per stage\/work-item\*\*/i);
+  assert.match(rules, /Implementation continuations and advisory tests have no budget/i);
   assert.match(rules, /severity alone never forces a stop/i);
-  assert.match(status, /run_override\|owner_direct\|runtime_replan/);
+  assert.match(status, /правила счёта — по RUN-команде/);
   assert.match(reviewer, /ready_for_owner_approval/);
   assert.match(reviewer, /needs_owner_clarification/);
   assert.match(codeReviewer, /technical_fix \| security_fix \| replan/);

@@ -138,7 +138,7 @@ approved base/source -> final cumulative candidate SHA -> installed candidate SH
 - Review findings are `technical_fix | security_fix | replan | security_stop | scope_stop | secret_stop | destructive_stop | optional`.
 - `technical_fix` and bounded `security_fix` may be repaired automatically. `security_fix` is allowed only when deterministic `stage-cli security-fix-check` validates machine-readable review evidence proving: bounded remediation, no owner decision, no requirements/AC/external-contract/security-boundary change, no privilege expansion, no secret exposure and no destructive change.
 - Severity alone never forces a stop. A Critical/High security defect may remain `security_fix` when the frozen policy already determines the least-privilege/fail-closed remediation.
-- Before every automatic repair, RUN records the attempt through deterministic `stage-cli fix-cycle`; `security_fix` additionally uses `--repair-class security_fix`. Both classes consume the same budget. The initial automatic fix budget is **5 per stage/work-item**.
+- Only fresh negative review/final machine-gate evidence starts a charged repair through `stage-cli fix-cycle`; `security_fix` also uses `--repair-class security_fix`. Both classes share the initiating gate budget. Implementation continuations and advisory tests have no budget. Accounting, reopening and overrides are owned by stage-cli and the RUN command.
 - Owner may raise the run-wide ceiling at RUN start with `--fix-cycles N`; OpenStage maps that explicit owner option to deterministic `stage-cli fix-budget-set --cycles N`. The command only raises ceilings (maximum 20) and never lowers an existing stage budget. Per-stage `fix-budget-add` remains available during RUN.
 - Exhausting the current budget does not interrupt an already-started repair. That cycle continues through its frozen review/gates (executor=`review` runs CodeReviewer); the owner checkpoint occurs only if the resulting finding requires another automatic repair beyond the current limit.
 - At that checkpoint runtime replan may be offered, but ArchitectureAnalyzer/SeniorTechnicalPlanReviewer run only on explicit owner request. A plain `+N` grant means continue the current approach through deterministic `fix-budget-add`, without implicit architecture review. The owner may also grant `+N` cycles or request/approve runtime replan before exhaustion; deterministic owner commands update the current ceiling immediately.
@@ -184,4 +184,3 @@ approved base/source -> final cumulative candidate SHA -> installed candidate SH
 A run is complete only when all required DAG nodes/stages reach successful
 terminal state, required evidence exists, candidate/runtime conditions are
 satisfied where applicable, and no blocking decision/risk remains.
-

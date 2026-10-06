@@ -207,6 +207,12 @@ export interface PipelineManifest {
   git_setup?: GitSetup;
   allowed_change_paths?: string[];
   gate_profiles?: Record<string, Record<string, string[]>>;
+  gate_testing?: Record<string, Record<string, {
+    impact_groups?: Array<{ inputs: string[]; command_index: number; test_files?: string[] }>;
+    live_postgres?: { image: string; command_indexes: number[] };
+    timeout_seconds?: number;
+    report_files?: string[];
+  }>>;
   planning_mode?: string;
   planning_readiness?: PlanningReadinessV2 | unknown;
   open_decisions?: string[];

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { accessSync, constants, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { validateGateTesting } from './gate-testing-policy.mjs';
 
 export class ManifestV2PolicyError extends Error {}
 
@@ -780,6 +781,8 @@ export function validateManifestV2Policy(manifest, options = {}) {
   if (manifest.planning_mode !== 'design-freeze') {
     throw new ManifestV2PolicyError('schema v2 requires planning_mode=design-freeze');
   }
+  try { validateGateTesting(manifest); }
+  catch (error) { throw new ManifestV2PolicyError(error.message); }
   const cwd = options.cwd ?? process.cwd();
   const root = runRoot(manifest, cwd, options.manifestPath);
   validatePlanningReadiness(manifest, root);
@@ -829,6 +832,5 @@ export function validateManifestV2Policy(manifest, options = {}) {
   }
   return { checked_artifacts: true, project_policy: projectPolicy };
 }
-
 
 

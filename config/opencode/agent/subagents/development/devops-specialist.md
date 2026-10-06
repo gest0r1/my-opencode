@@ -11,6 +11,8 @@ permission:
     ExternalScout: allow
   bash:
     "*": deny
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "docker compose ps *": allow
     "docker compose logs *": allow
     "docker ps *": allow
@@ -51,6 +53,10 @@ inside the work item supplied by the parent.
 - The approved manifest is the authorization; do not ask for another approval.
 - Do not deploy, restart, apply, destroy, push, or mutate runtime/infrastructure
   directly. `gate-runner-cli` owns approved runtime mutation and machine evidence.
+  Scoped advisory test runs may invoke that trusted runner; the parent owns final gates.
+  Test impact/resource contracts are defined in `skills/task-management/gate-testing.md`.
+  Author tests and reviewed impact groups (including dependent consumers) within supplied scope;
+  never substitute a working database or widen Docker permissions.
 - Read-only operational commands may be used only to diagnose an observed issue.
 - Do not advance pipeline state or invoke another execution agent.
 - The parent verifies changed-file scope after source/config edits.

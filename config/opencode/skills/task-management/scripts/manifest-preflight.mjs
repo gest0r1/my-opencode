@@ -168,6 +168,8 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
     throw new ManifestPreflightError(error instanceof Error ? error.message : String(error));
   }
   if (environment) {
+    const usesLive = Object.entries(manifest.gate_testing ?? {}).some(([profile, gates]) => used.has(profile) && Object.values(gates).some(config => config.live_postgres));
+    if (usesLive && !executableOnPath('docker')) throw new ManifestPreflightError('EXECUTABLE_NOT_FOUND: docker is required by frozen live_postgres');
     if (usedInvocations.some(({tokens}) => ['pnpm', 'npm', 'npx', 'yarn', 'bun', 'corepack'].includes(tokens[0]))) checkProjectTooling(cwd);
     for (const { profile, gate, tokens } of usedInvocations) {
       if (!executableOnPath(tokens[0])) {
