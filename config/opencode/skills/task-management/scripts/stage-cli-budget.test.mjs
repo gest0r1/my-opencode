@@ -66,6 +66,32 @@ test('deferred owner decision lets repairs finish and blocks only the final gate
   assert.equal(JSON.parse(result.stdout).pipelines.app.stages['code-review'].technical_fix_cycles, 1);
 });
 
+test('legacy blocked review resumes its already charged attempt without spending another cycle', async () => {
+  const fx = await fixture('legacy-review-repair', ['implementation', 'code-review'], { implementation: 'agent', 'code-review': 'review' });
+  const cli = args => run(fx.root, [...args, '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  for (const [command, stage] of [['complete', 'implementation'], ['start', 'code-review']]) {
+    const result = cli([command, fx.runId, stage]); assert.equal(result.status, 0, result.stderr);
+  }
+  const evidence = await writeReview(fx, 'repair.json', { findings: ['bounded repair'] });
+  let result = cli(['scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts']); assert.equal(result.status, 0, result.stderr);
+  result = cli(['fix-cycle', fx.runId, 'code-review', '--evidence', evidence]); assert.equal(result.status, 0, result.stderr);
+  // Seed the valid persisted shape produced by the old transport bug.
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const old = JSON.parse(await readFile(statePath, 'utf8'));
+  old.pipelines.app.stages.implementation.status = 'completed';
+  delete old.pipelines.app.stages.implementation.repair_origin_stage;
+  old.pipelines.app.stages['code-review'].status = 'blocked';
+  old.pipelines.app.stages['code-review'].message = 'INVALID_DISPATCH_ROLE: repair transport unavailable';
+  old.pipelines.app.status = 'blocked'; old.status = 'blocked';
+  await writeFile(statePath, JSON.stringify(old));
+  result = cli(['scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts']); assert.equal(result.status, 0, result.stderr);
+  result = cli(['fix-cycle', fx.runId, 'code-review', '--evidence', evidence, '--json']); assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout);
+  assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles, 1);
+  assert.equal(state.pipelines.app.stages.implementation.status, 'pending');
+  assert.equal(state.pipelines.app.stages.implementation.repair_origin_stage, 'code-review');
+});
+
 test('review repairs reopen implementation and share the initiating gate budget through repeated reviews', async () => {
   const fx = await fixture('review-repair', ['implementation', 'code-review'], { implementation: 'agent', 'code-review': 'review' });
   let result = run(fx.root, ['complete', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
