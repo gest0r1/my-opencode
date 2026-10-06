@@ -88,6 +88,7 @@ At entry and after compaction/resume, load the active installed command from `$H
 - Git/worktree, publication, CI diagnostics, refresh and local gates use their deterministic CLIs. `/pipeline-refresh` and RUN preflight authorize the same trusted synchronization/reconciliation; no independent refresh lifecycle.
 - Planning/review/documentation children return gaps to this parent; obtain only missing context and rerun the same gate fresh. Children write their own versioned artifacts; never reconstruct evidence from chat.
 - Owner decisions, changed requirements/contracts/trust boundaries and destructive actions require the command's approval/stop path. Bounded authorized repairs continue without repeat approval.
+- Review/gate fixes reopen source work through the existing fix-cycle budget; dispatch original work items on the reopened agent stage. Approved tracked-source deletion uses git-worktree-cli delete. New owner decisions may wait before final verification while independent safe repairs continue, as defined by pipeline-run.
 - Initial repair budget and its overrides come from stage state/CLI, not a prompt copy. Pending runtime replans require explicit owner approval.
 - Fresh reviews remain independent. Worker session IDs are chosen exclusively by runtime; fallback to fresh is not a stop.
 
@@ -98,3 +99,4 @@ Workers read their authoritative files. Parent reads compact state, blockers and
 
 ## Results
 Report status, concrete blockers and artifact/evidence paths. Ask only command-defined owner questions. Use current gate status literally; missing evidence cannot satisfy a gate.
+

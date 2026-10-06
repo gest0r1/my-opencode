@@ -286,6 +286,8 @@ export interface OwnerAmendmentRecord {
 }
 
 export interface StageRuntime {
+  // Repair execution borrows the initiating gate's existing budget; never a second loop.
+  repair_origin_stage?: string;
   repair_evidence?: FrozenArtifact;
   repair_paths?: string[];
   status: StageStatus;
@@ -340,6 +342,11 @@ export interface SecurityFixPreflight {
 }
 
 export interface PipelineState {
+  deferred_decisions?: Array<{
+    id: string; pipeline_id: string; source_stage: string; before_stage: string;
+    status: 'pending' | 'approved' | 'rejected';
+    evidence_path: string; evidence_sha256: string; summary: string;
+  }>;
   reconciliations?: Array<{ path: string; sha256: string }>;
   execution_started_at?: string;
   implementation_started_at?: string;

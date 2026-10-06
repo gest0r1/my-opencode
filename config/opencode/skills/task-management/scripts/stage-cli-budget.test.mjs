@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, unlink, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,103 @@ import test from 'node:test';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STAGE_CLI = path.join(HERE, 'stage-cli.ts');
+
+test('approved source deletion removes tracked source, rejects scope escapes and is resumable', async () => {
+  const fx = await fixture('source-delete', ['implementation'], { implementation: 'agent' }, true);
+  const manifestPath = path.join(fx.root, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  // Source deletion follows the same canonical run layout as dispatch.
+  // Paths in a manifest resolve relative to its folder. Keep fixture evidence at root;
+  // place authorization in the same folder and use state-root for stage setup only.
+  const evidence = { kind: 'source_deletion', status: 'ready', run_id: fx.runId, pipeline_id: 'app', work_item_id: 'wi-app',
+    work_item_sha256: manifest.work_items[0].sha256, approved_requirement: true, owner_decision_required: false,
+    policy_basis: 'AC: remove obsolete source', paths: ['packages/db/src/obsolete.ts'] };
+  const file = path.join(fx.root, 'deletion.json'); await writeFile(file, JSON.stringify(evidence));
+  const remove = () => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'git-worktree-cli.ts'), 'delete', fx.runId,
+    '--pipeline', 'app', '--stage', 'implementation', '--work-item', 'wi-app', '--role', 'CoderAgent', '--evidence', file], { cwd: fx.root, encoding: 'utf8', env: process.env });
+  evidence.paths = ['packages/db/src/obsolete.ts', 'protected.ts']; await writeFile(file, JSON.stringify(evidence));
+  let result = remove(); assert.notEqual(result.status, 0); assert.match(result.stderr, /SOURCE_DELETE_OUTSIDE_SCOPE/);
+  assert.match(await readFile(path.join(fx.root, 'packages/db/src/obsolete.ts'), 'utf8'), /obsolete/);
+  evidence.paths = ['packages/db/src/obsolete.ts']; evidence.owner_decision_required = true; await writeFile(file, JSON.stringify(evidence));
+  result = remove(); assert.notEqual(result.status, 0); assert.match(result.stderr, /SOURCE_DELETE_AUTHORIZATION_REQUIRED/);
+  evidence.owner_decision_required = false; await writeFile(file, JSON.stringify(evidence));
+  await unlink(path.join(fx.root, evidence.paths[0]));
+  await symlink(path.join(fx.root, 'protected.ts'), path.join(fx.root, evidence.paths[0]));
+  result = remove(); assert.notEqual(result.status, 0); assert.match(result.stderr, /SOURCE_DELETE_REQUIRES_REGULAR_FILE/);
+  await unlink(path.join(fx.root, evidence.paths[0]));
+  await writeFile(path.join(fx.root, evidence.paths[0]), 'export const obsolete = true;\n');
+  result = remove(); assert.equal(result.status, 0, result.stderr);
+  await assert.rejects(readFile(path.join(fx.root, evidence.paths[0])), /ENOENT/);
+  result = remove(); assert.equal(result.status, 0, result.stderr);
+  evidence.paths = ['protected.ts']; await writeFile(file, JSON.stringify(evidence));
+  result = remove(); assert.notEqual(result.status, 0); assert.match(result.stderr, /SOURCE_DELETE_OUTSIDE_SCOPE/);
+  assert.equal(await readFile(path.join(fx.root, 'protected.ts'), 'utf8'), 'keep\n');
+});
+
+test('deferred owner decision lets repairs finish and blocks only the final gate', async () => {
+  const fx = await fixture('deferred-owner', ['implementation', 'code-review', 'final-test'], { implementation: 'agent', 'code-review': 'review', 'final-test': 'local_gate' });
+  const file = await writeReview(fx, 'decision.json', { kind: 'deferred_owner_decision', owner_decision_required: true,
+    independent_repairs_safe: true, action_executed: false, summary: 'Remove data?', paths: ['data.bin'], source_stage: 'code-review', before_stage: 'final-test' });
+  let result = run(fx.root, ['owner-decision-defer', fx.runId, 'delete-data', '--pipeline', 'app', '--evidence', file, '--state-root', fx.stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  for (const [command, stage] of [['complete', 'implementation'], ['start', 'code-review'], ['complete', 'code-review']]) {
+    result = run(fx.root, [command, fx.runId, stage, '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const state = JSON.parse(result.stdout);
+  assert.equal(state.pipelines.app.stages['final-test'].status, 'blocked');
+  assert.equal(state.pipelines.app.stages.implementation.status, 'completed');
+  result = run(fx.root, ['start', fx.runId, 'final-test', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  assert.notEqual(result.status, 0);
+  result = run(fx.root, ['owner-decision-resolve', fx.runId, 'delete-data', '--message', 'approve', '--state-root', fx.stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['fix-cycle', fx.runId, 'code-review', '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).pipelines.app.stages['code-review'].technical_fix_cycles, 1);
+});
+
+test('review repairs reopen implementation and share the initiating gate budget through repeated reviews', async () => {
+  const fx = await fixture('review-repair', ['implementation', 'code-review'], { implementation: 'agent', 'code-review': 'review' });
+  let result = run(fx.root, ['complete', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  for (let cycle = 1; cycle <= 5; cycle++) {
+    result = run(fx.root, ['start', fx.runId, 'code-review', '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
+    assert.equal(result.status, 0, result.stderr);
+    result = run(fx.root, ['scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+    assert.equal(result.status, 0, result.stderr);
+    const repairEvidence = await writeReview(fx, `review-${cycle}.json`, { findings: [`repair cycle ${cycle}`] });
+    result = run(fx.root, ['fix-cycle', fx.runId, 'code-review', '--pipeline', 'app', '--state-root', fx.stateRoot, '--evidence', repairEvidence, '--json']);
+    assert.equal(result.status, 0, result.stderr);
+    const state = JSON.parse(result.stdout);
+    assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles, cycle);
+    assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles ?? 0, 0);
+    assert.equal(state.pipelines.app.stages.implementation.status, 'pending');
+    assert.equal(state.pipelines.app.stages.implementation.repair_origin_stage, 'code-review');
+    const packet = run(fx.root, ['dispatch', fx.runId, '--pipeline', 'app', '--stage', 'implementation', '--work-item', 'wi-app', '--role', 'CoderAgent']);
+    assert.equal(packet.status, 0, packet.stderr);
+    const dispatched = JSON.parse(packet.stdout);
+    assert.equal(dispatched.loop, cycle);
+    assert.equal(dispatched.repair_origin_stage, 'code-review');
+    assert.deepEqual(dispatched.repair_paths, ['packages/db/src/change.ts']);
+    assert.ok(dispatched.evidence_paths.includes(repairEvidence));
+    const duplicate = run(fx.root, ['fix-cycle', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+    assert.notEqual(duplicate.status, 0);
+    assert.match(duplicate.stderr, /REPAIR_BUDGET_OWNER/);
+    result = run(fx.root, ['start', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+    assert.equal(result.status, 0, result.stderr);
+    result = run(fx.root, ['complete', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+    assert.equal(result.status, 0, result.stderr);
+  }
+  result = run(fx.root, ['start', fx.runId, 'code-review', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['fix-cycle', fx.runId, 'code-review', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /TECHNICAL_FIX_LIMIT_EXCEEDED/);
+});
 
 function run(cwd, args) {
   return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...args], {
@@ -26,7 +123,7 @@ async function frozen(root, relative, content) {
   await writeFile(file, content, 'utf8');
   return { path: relative, sha256: sha(content) };
 }
-async function fixture(runId) {
+async function fixture(runId, stages = ['implementation'], executors = { implementation: 'agent' }, sourceFiles = false) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'stage-cli-budget-'));
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const architecture = await frozen(root, 'planning/architecture.md', '# architecture\n');
@@ -63,12 +160,13 @@ async function fixture(runId) {
     },
     open_decisions: [],
     allowed_change_paths: ['packages/db/src/**'],
-    gate_profiles: {},
+    gate_profiles: stages.some(stage => executors[stage] === 'local_gate') ? { test: Object.fromEntries(stages.filter(stage => executors[stage] === 'local_gate').map(stage => [stage, ['npm test']])) } : {},
     pipelines: [{
       id: 'app',
+      ...(stages.some(stage => executors[stage] === 'local_gate') ? { profile: 'test' } : {}),
       deployable: false,
-      stages: ['implementation'],
-      executors: { implementation: 'agent' },
+      stages,
+      executors,
       work_items: ['wi-app'],
       decision_ids: [],
       research_ids: [],
@@ -77,6 +175,18 @@ async function fixture(runId) {
     work_items: [{ id: 'wi-app', pipeline_id: 'app', ...item }],
   };
   const manifestPath = path.join(root, 'manifest.json');
+  if (sourceFiles) {
+    await mkdir(path.join(root, 'packages/db/src'), { recursive: true });
+    await writeFile(path.join(root, 'packages/db/src/obsolete.ts'), 'export const obsolete = true;\n');
+    await writeFile(path.join(root, 'protected.ts'), 'keep\n');
+    const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(git('init', '-b', 'main').status, 0);
+    git('config', 'user.email', 'test@example.invalid'); git('config', 'user.name', 'Test');
+    git('add', '.'); assert.equal(git('commit', '-m', 'base').status, 0);
+    const base = git('rev-parse', 'HEAD').stdout.trim();
+    assert.equal(git('checkout', '-b', 'fix-source').status, 0);
+    manifest.git_setup = { base_sha: base, branch: 'fix-source' };
+  }
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
   let result = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
   assert.equal(result.status, 0, result.stderr);

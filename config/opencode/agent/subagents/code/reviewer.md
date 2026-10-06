@@ -42,6 +42,10 @@ Every finding is exactly one of:
 technical_fix | security_fix | replan | security_stop | scope_stop | secret_stop | destructive_stop | optional
 ```
 
+Deleting obsolete tracked source required by approved acceptance criteria is a scoped `technical_fix`, including replacement by upstream functionality. It is not a `destructive_stop` solely because files must disappear. When requested, return run-local `source_deletion` evidence with exact paths and the frozen work-item identity under the pipeline-run contract.
+
+For a new deletion requiring an owner decision, identify the affected requirement and dependency. Explicitly state whether independent repairs are safe; retain the unresolved finding while reviewing the rest. The parent defers safe decisions to the final verification checkpoint; active secret exposure or unsafe runtime actions still stop immediately.
+
 Use `security_fix` for a bounded security defect whose remediation is already
 determined by frozen AC/contracts/security rules and requires no owner judgement:
 no requirements/AC/external-contract/security-boundary change, no privilege
@@ -83,3 +87,4 @@ or security rule. Do not block merely because another architecture is preferable
 
 When requested, write evidence only below `.tmp/pipelines/{run-id}/**`.
 Return readiness plus concise actionable findings; never apply fixes or advance state.
+

@@ -19,7 +19,7 @@ def forbid(text: str, needle: str):
 
 
 def main():
-    require(provision, 'useradd --create-home --shell /bin/bash "$RUNTIME_USER"')
+    require(provision, 'if ! id opencode >/dev/null 2>&1; then useradd --create-home --shell /bin/bash opencode; fi')
     require(provision, 'setup-opencode-package-sudo.sh')
     require(setup, 'opencode-install-packages')
 
@@ -68,3 +68,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
