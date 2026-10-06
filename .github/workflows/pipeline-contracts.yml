@@ -13,6 +13,9 @@ on:
       - 'config/opencode/config/agent-metadata.json'
       - 'config/opencode/skills/task-management/**'
       - 'install.sh'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'install*.sh'
       - '.github/workflows/pipeline-*.yml'
   push:
     branches:
@@ -27,6 +30,9 @@ on:
       - 'config/opencode/command/pipeline-*.md'
       - 'config/opencode/config/agent-metadata.json'
       - 'config/opencode/skills/task-management/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'install*.sh'
       - '.github/workflows/pipeline-*.yml'
 
 concurrency:
@@ -89,3 +95,17 @@ jobs:
             config/opencode/skills/task-management/scripts/pipeline-agent-audit.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-runtime.test.mjs \
             config/opencode/skills/task-management/scripts/reuse-report.test.mjs
+
+
+      - name: Verify permanent installer contracts
+        run: |
+          python3 tests/test_standard_installer.py
+          python3 tests/test_runtime_user_install_contract.py
+          python3 tests/test_runtime_processes.py
+          bash tests/test_binary_only_installer.sh
+          bash tests/test_incremental_installer.sh
+          bash tests/test_native_activation.sh
+          bash tests/test_openchamber_runtime_store.sh
+          bash tests/test_dependency_installer.sh
+          bash tests/test_generation_timeout.sh
+          node --test tests/test_user_plugins.mjs tests/generation-state.test.mjs tests/trusted-paths.test.mjs
