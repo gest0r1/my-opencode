@@ -10,6 +10,9 @@ on:
       - install.sh
       - scripts/install-opencode-generation.sh
       - scripts/install-opencode-dependencies.sh
+      - config/systemd/opencode-web.service
+      - scripts/check-opencode-pins.mjs
+      - config/opencode/package.json
       - config/opencode/bun.lock
       - tests/test_dependency_installer.sh
       - tests/test_generation_timeout.sh
@@ -18,13 +21,12 @@ on:
       - scripts/install-opencode-agents.sh
       - scripts/retire-opencode-agent-copies.mjs
       - scripts/normalize-opencode-agent-permissions.mjs
-      - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
       - tests/test_incremental_installer.sh
       - tests/test_binary_only_installer.sh
       - tests/test_native_activation.sh
       - tests/test_openchamber_runtime_store.sh
-      - tests/test_agent_path_migration.sh
+      - tests/test_agent_installation.sh
       - tests/test_agent_permission_normalization.sh
       - .github/workflows/installer-contract.yml
   pull_request:
@@ -36,6 +38,9 @@ on:
       - install.sh
       - scripts/install-opencode-generation.sh
       - scripts/install-opencode-dependencies.sh
+      - config/systemd/opencode-web.service
+      - scripts/check-opencode-pins.mjs
+      - config/opencode/package.json
       - config/opencode/bun.lock
       - tests/test_dependency_installer.sh
       - tests/test_generation_timeout.sh
@@ -44,13 +49,12 @@ on:
       - scripts/install-opencode-agents.sh
       - scripts/retire-opencode-agent-copies.mjs
       - scripts/normalize-opencode-agent-permissions.mjs
-      - scripts/cleanup-openchamber-v1-before-v2.sh
       - tests/test_standard_installer.py
       - tests/test_incremental_installer.sh
       - tests/test_binary_only_installer.sh
       - tests/test_native_activation.sh
       - tests/test_openchamber_runtime_store.sh
-      - tests/test_agent_path_migration.sh
+      - tests/test_agent_installation.sh
       - tests/test_agent_permission_normalization.sh
 permissions:
   contents: read
@@ -65,7 +69,7 @@ jobs:
       - name: Validate canonical installer and config installer syntax
         run: |
           set -Eeuo pipefail
-          bash -n \
+          for file in \
             install-openchamber.sh \
             install.sh \
             scripts/install-opencode-generation.sh \
@@ -73,20 +77,21 @@ jobs:
             scripts/install-openchamber-v2-core.sh \
             scripts/openchamber-runtime-store.sh \
             scripts/install-opencode-agents.sh \
-            scripts/cleanup-openchamber-v1-before-v2.sh \
             tests/test_incremental_installer.sh \
             tests/test_binary_only_installer.sh \
             tests/test_openchamber_runtime_store.sh \
-            tests/test_agent_path_migration.sh \
-            tests/test_agent_permission_normalization.sh
+            tests/test_agent_installation.sh \
+            tests/test_agent_permission_normalization.sh; do
+            bash -n "$file"
+          done
           node --check scripts/normalize-opencode-agent-permissions.mjs
-          grep -Fq 'OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"' scripts/install-opencode-generation.sh
+          node scripts/check-opencode-pins.mjs
           grep -Fq 'bash -s -- --version "$OPENCODE_INSTALL_VERSION"' scripts/install-opencode-generation.sh
           git diff --check
-      - name: Verify standard OpenCode agent path migration
+      - name: Verify canonical OpenCode agent installation
         run: |
           set -Eeuo pipefail
-          bash tests/test_agent_path_migration.sh
+          bash tests/test_agent_installation.sh
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
           bash scripts/install-opencode-agents.sh config/opencode/agent "$tmp/agents"
