@@ -1765,7 +1765,18 @@ export async function recordTechnicalFixCycle(
       throw new StageCliError(`Fix cycle is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
     }
     const limit = technicalFixLimit(runtime);
-    const next = (runtime.technical_fix_cycles ?? 0) + 1;
+    // Older review repair checkpoints charged a cycle without reopening source.
+    // Resume that exact authorized attempt; a fresh review or changed scope/evidence
+    // still starts a new cycle. The source marker distinguishes repaired new runs.
+    const priorEvidence = runtime.repair_evidence;
+    const resumeChargedRepair = repairIndex < stageIndex &&
+      pipeline.stages[pipeline.stage_order[repairIndex]].status === 'completed' &&
+      !pipeline.stages[pipeline.stage_order[repairIndex]].repair_origin_stage &&
+      (runtime.technical_fix_cycles ?? 0) > 0 &&
+      priorEvidence && evidencePath && resolve(evidencePath) === resolve(priorEvidence.path) &&
+      sha256(readFileSync(resolve(evidencePath), 'utf8')) === priorEvidence.sha256 &&
+      JSON.stringify([...(runtime.repair_paths ?? [])].sort()) === JSON.stringify([...scopePreflight.paths].sort());
+    const next = (runtime.technical_fix_cycles ?? 0) + (resumeChargedRepair ? 0 : 1);
     if (next > limit) {
       throw new StageCliError(
         `TECHNICAL_FIX_LIMIT_EXCEEDED: ${pipeline.id}/${stage} used=${runtime.technical_fix_cycles ?? 0} limit=${limit}; owner may grant +N cycles or request runtime replan`,
