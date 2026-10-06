@@ -37,7 +37,7 @@ config/opencode/agent/                -> ~/.config/opencode/agents/
 config/agents/skills/                 -> ~/.agents/skills/
 ```
 
-Legacy agent roots `~/.opencode/agent/` и `~/.config/opencode/agent/` после миграции выводятся из active lookup path. Пользовательские агенты сначала переносятся в canonical plural path, а legacy roots архивируются в state backup.
+Пользовательские агенты сохраняются из canonical `~/.config/opencode/agents/`. Installer обновляет только свои managed agents; завершённая миграция singular roots больше не входит в установку.
 
 ## Credentials и runtime env
 
@@ -150,22 +150,18 @@ Canonical `install-openchamber.sh` независимо определяет и�
 
 Двигающиеся branch refs на границе транзакции разрешаются в exact SHA. Core/config/runtime helper далее получают только pinned SHA, поэтому branch update во время установки не смешивает разные поколения.
 
-## Миграция с 1.x
+## Локальный сервис OpenCode
 
-Полное удаление legacy runtime **не зашито скрыто** в основной installer. Для первой миграции предусмотрен отдельный cleanup script. Он сохраняет credentials/UI password, переносит пользовательские agents и архивирует legacy lookup roots.
+`config/systemd/opencode-web.service` — единственный шаблон user-service.
+Installer загружает его из того же pinned config SHA и задаёт `OPENCODE_WEB_PORT`
+(по умолчанию `4096`). OpenCode запускается через `serve` только на `127.0.0.1`.
+Штатное восстановление после сбоя выполняет systemd. Кастомный reboot-helper и
+Scheduler удалены; отдельного сервиса управления автозапуском нет.
 
-Для отдельной очистки legacy 1.x:
+## Обновление OpenCode
 
-```bash
-CONFIG_SHA="$(gh api \
-  'repos/gest0r1/my-opencode/commits/main' --jq .sha)"
-
-gh api -H 'Accept: application/vnd.github.raw' \
-  "repos/gest0r1/my-opencode/contents/scripts/cleanup-openchamber-v1-before-v2.sh?ref=$CONFIG_SHA" \
-  | bash
-```
-
-Если cleanup запускается из embedded terminal самого OpenChamber, режим `auto` не убивает активный runtime под текущей консолью: destructive runtime cleanup откладывается. Из SSH/внешней консоли можно явно использовать `OPENCHAMBER_CLEANUP_RUNTIME_MODE=now`.
+При обновлении upstream или дистрибутива обязательно выполнить
+[процедуру согласования версий](project/opencode-updates.md).
 
 ## Проверочная установка upgrade-веток
 

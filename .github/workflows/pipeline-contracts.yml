@@ -6,6 +6,9 @@ on:
       - 'config/opencode/agent/**'
       - 'config/opencode/opencode.json'
       - 'config/opencode/package.json'
+      - 'config/opencode/bun.lock'
+      - 'config/opencode/plugin-policy.json'
+      - 'config/systemd/**'
       - 'config/opencode/plugins/**'
       - 'config/opencode.env.example'
       - 'config/opencode/skills/**'
@@ -24,6 +27,9 @@ on:
       - 'config/opencode/agent/**'
       - 'config/opencode/opencode.json'
       - 'config/opencode/package.json'
+      - 'config/opencode/bun.lock'
+      - 'config/opencode/plugin-policy.json'
+      - 'config/systemd/**'
       - 'config/opencode/plugins/**'
       - 'config/opencode.env.example'
       - 'config/opencode/skills/**'
@@ -57,6 +63,9 @@ jobs:
         run: |
           git config --global user.name 'Pipeline Contract CI'
           git config --global user.email 'pipeline-contract-ci@example.invalid'
+
+      - name: Verify OpenCode pins
+        run: node scripts/check-opencode-pins.mjs
 
       - name: Install pinned V2 runtime for behavioral tests
         run: npm install --prefix config/opencode --ignore-scripts --no-package-lock --no-save tsx@4.23.15
@@ -104,6 +113,7 @@ jobs:
           python3 tests/test_standard_installer.py
           python3 tests/test_runtime_user_install_contract.py
           python3 tests/test_runtime_processes.py
+          bash tests/test_agent_installation.sh
           bash tests/test_binary_only_installer.sh
           bash tests/test_incremental_installer.sh
           bash tests/test_native_activation.sh

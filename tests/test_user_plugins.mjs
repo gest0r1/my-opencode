@@ -31,3 +31,20 @@ test('fresh install, repeated update and local plugins remain available', () => 
     assert.equal(fs.readFileSync(path.join(staged, 'opencode.json'), 'utf8'), before);
   } finally { fs.rmSync(root, { recursive: true }); }
 });
+
+
+test('retired reboot helper is excluded while independent user plugins survive', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'retired-plugin-'));
+  const active = path.join(root, 'active'), staged = path.join(root, 'staged');
+  try {
+    fs.mkdirSync(path.join(active, 'plugins/opencode-web-reboot'), { recursive: true });
+    fs.writeFileSync(path.join(active, 'plugins/opencode-web-reboot/index.js'), 'retired');
+    fs.writeFileSync(path.join(active, 'plugins/user.ts'), 'user');
+    fs.writeFileSync(path.join(active, 'opencode.json'), JSON.stringify({ plugins: ['./plugins/opencode-web-reboot', 'user-plugin'] }));
+    fs.mkdirSync(staged); fs.writeFileSync(path.join(staged, 'opencode.json'), '{"plugins":[]}');
+    preservePlugins(active, staged, new URL('../config/opencode/plugin-policy.json', import.meta.url));
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(staged, 'opencode.json'))).plugins, ['user-plugin']);
+    assert.equal(fs.existsSync(path.join(staged, 'plugins/opencode-web-reboot')), false);
+    assert.equal(fs.readFileSync(path.join(staged, 'plugins/user.ts'), 'utf8'), 'user');
+  } finally { fs.rmSync(root, { recursive: true }); }
+});

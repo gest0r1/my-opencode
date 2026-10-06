@@ -1,22 +1,17 @@
 #!/usr/bin/env bash
 # Install repository-managed OpenCode agents into the upstream global agents directory.
-# Existing legacy agent roots are migrated, then moved out of active lookup paths so OpenCode sees only the canonical agents tree.
 # OpenCode 2.x derives an agent ID from the path relative to agents/. Therefore
 # managed agents MUST be installed flat: agents/CoderAgent.md, not
 # agents/code/CoderAgent.md (which would register as code/CoderAgent).
 set -Eeuo pipefail
 
-if (( $# < 2 )); then
-  echo "Usage: install-opencode-agents.sh SOURCE_ROOT TARGET_ROOT [LEGACY_ROOT ...]" >&2
+if (( $# != 2 )); then
+  echo "Usage: install-opencode-agents.sh SOURCE_ROOT TARGET_ROOT" >&2
   exit 2
 fi
 
 SOURCE_ROOT=$1
 TARGET_ROOT=$2
-shift 2
-LEGACY_ROOTS=("$@")
-LEGACY_BACKUP_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode/legacy-agent-roots/$(date -u +%Y%m%dT%H%M%SZ)"
-ARCHIVE_LEGACY="${OPENCODE_ARCHIVE_LEGACY:-1}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 NORMALIZER="$SCRIPT_DIR/normalize-opencode-agent-permissions.mjs"
 TARGET_CONFIG="$(dirname "$TARGET_ROOT")/opencode.json"
@@ -87,36 +82,6 @@ install_managed() {
   cp -p "$file" "$destination"
 }
 
-migrate_legacy() {
-  local root=$1 file relative name destination basename
-  [[ -d "$root" ]] || return 0
-
-  while IFS= read -r -d '' file; do
-    relative=${file#"$root/"}
-    name=$(frontmatter_name "$file")
-    if [[ -z "$name" ]]; then
-      basename=${relative##*/}
-      name=${basename%.md}
-    fi
-    if ! validate_component "$name" 2>/dev/null; then
-      echo "Skipping legacy agent with unsafe name: $file" >&2
-      continue
-    fi
-
-    destination=$(destination_for "$name")
-    if [[ -e "$destination" ]]; then
-      echo "Legacy agent already has a standard-path counterpart, keeping existing file: $destination"
-      continue
-    fi
-    cp -p "$file" "$destination"
-    echo "Migrated legacy agent: $file -> $destination"
-  done < <(find "$root" -type f -name '*.md' -print0 | sort -z)
-}
-
-for legacy_root in "${LEGACY_ROOTS[@]}"; do
-  migrate_legacy "$legacy_root"
-done
-
 # Remove every previous distribution copy, including edited nested files.
 node "$SCRIPT_DIR/retire-opencode-agent-copies.mjs" "$SOURCE_ROOT" "$TARGET_ROOT"
 
@@ -140,32 +105,6 @@ if [[ -f "$TARGET_CONFIG" ]]; then
   node "$NORMALIZER" "$TARGET_CONFIG" "$TARGET_ROOT" "$SOURCE_ROOT"
 fi
 
-archive_legacy_root() {
-  local root=$1 relative safe_name destination
-  [[ -d "$root" ]] || return 0
-
-  relative=${root#"$HOME/"}
-  safe_name=${relative//\//__}
-  safe_name=${safe_name//./_}
-  mkdir -p "$LEGACY_BACKUP_ROOT"
-  destination="$LEGACY_BACKUP_ROOT/$safe_name"
-  [[ ! -e "$destination" ]] || destination="${destination}-${BASHPID}"
-
-  mv "$root" "$destination"
-  echo "Removed legacy agent lookup root: $root"
-  echo "Legacy agent backup: $destination"
-}
-
-# Managed files are installed successfully at this point. Remove the old lookup
-# roots from OpenCode discovery while keeping a rollback copy outside config.
-if [[ "$ARCHIVE_LEGACY" == "1" ]]; then
-  for legacy_root in "${LEGACY_ROOTS[@]}"; do
-    archive_legacy_root "$legacy_root"
-  done
-elif [[ "$ARCHIVE_LEGACY" != "0" ]]; then
-  echo "OPENCODE_ARCHIVE_LEGACY must be 0 or 1" >&2
-  exit 2
-fi
-
 echo "Installed ${#managed_names[@]} managed agents into $TARGET_ROOT"
+
 

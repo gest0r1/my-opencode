@@ -5,7 +5,6 @@
 : "${OPENCHAMBER_RUNTIME_ROOT:=$HOME/.local/share/openchamber-v2}"
 : "${EXPECTED_OPENCHAMBER_VERSION:?EXPECTED_OPENCHAMBER_VERSION is required}"
 : "${BUN_INSTALL:=$HOME/.bun}"
-: "${LEGACY_BUN_INSTALL:=$HOME/.bun}"
 
 OPENCHAMBER_RELEASES="$OPENCHAMBER_RUNTIME_ROOT/releases"
 OPENCHAMBER_CURRENT="$OPENCHAMBER_RUNTIME_ROOT/current"
@@ -140,16 +139,6 @@ oc_commit_activation() {
   OPENCHAMBER_RUNTIME_ACTIVATED=0
 }
 
-oc_remove_legacy_bun_global() {
-  # The immutable current runtime is healthy before this is called. Remove only
-  # the historical ~/.bun global package; never point Bun at the active
-  # immutable release prefix.
-  if [[ -x "$OPENCHAMBER_CURRENT_BIN" && "$LEGACY_BUN_INSTALL" != "$OPENCHAMBER_RUNTIME_ROOT"/* ]] &&
-     command -v bun >/dev/null 2>&1; then
-    BUN_INSTALL="$LEGACY_BUN_INSTALL" bun remove -g @openchamber/web >/dev/null 2>&1 || true
-  fi
-}
-
 oc_prune_releases() {
   local current previous keep dir
   current="$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)"
@@ -162,3 +151,4 @@ oc_prune_releases() {
     (( keep == 1 )) || rm -rf -- "$dir"
   done
 }
+

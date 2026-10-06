@@ -74,7 +74,7 @@ reexec_as_runtime_user() {
 
   for name in $(compgen -e); do
     case "$name" in
-      OPENCODE_*|OPENCHAMBER_*|MY_OPENCODE_REF|EXPECTED_OPENCHAMBER_VERSION|LEGACY_BUN_INSTALL|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
+      OPENCODE_*|OPENCHAMBER_*|MY_OPENCODE_REF|EXPECTED_OPENCHAMBER_VERSION|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
         pass_env+=("$name=${!name}")
         ;;
     esac
@@ -186,7 +186,7 @@ grep -q -- '--hostname' "$TMP_DIR/serve-help" && grep -q -- '--port' "$TMP_DIR/s
   echo 'Installed OpenCode does not support serve --hostname/--port' >&2
   exit 1
 }
-WEB_HOST="${OPENCODE_WEB_HOST:-127.0.0.1}"
+# The tracked V2 unit is the single service template. OpenCode stays local.
 WEB_PORT="${OPENCODE_WEB_PORT:-4096}"
 [[ "$WEB_PORT" =~ ^[0-9]+$ && "$WEB_PORT" -ge 1 && "$WEB_PORT" -le 65535 ]] || {
   echo 'OPENCODE_WEB_PORT must be 1..65535' >&2
@@ -196,30 +196,12 @@ USER_SYSTEMD_DIR="$HOME/.config/systemd/user"
 UNIT="$USER_SYSTEMD_DIR/opencode-web.service"
 mkdir -p "$USER_SYSTEMD_DIR"
 UNIT_TMP="$(mktemp "$USER_SYSTEMD_DIR/.opencode-web.service.XXXXXXXX")"
-cat > "$UNIT_TMP" <<EOF
-[Unit]
-Description=OpenCode Web Server
-After=network-online.target
-Wants=network-online.target
-StartLimitIntervalSec=60
-StartLimitBurst=10
-
-[Service]
-Type=simple
-WorkingDirectory=$HOME
-ExecStart=$HOME/.opencode/bin/opencode serve --port $WEB_PORT --hostname $WEB_HOST
-Environment="HOME=$HOME" "PATH=$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="XDG_CONFIG_HOME=$HOME/.config" "XDG_DATA_HOME=$HOME/.local/share" "XDG_STATE_HOME=$HOME/.local/state"
-EnvironmentFile=-$HOME/.config/opencode.env
-TimeoutStopSec=10
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-EOF
+gh api -H 'Accept: application/vnd.github.raw' \
+  "repos/$REPO/contents/config/systemd/opencode-web.service?ref=$CONFIG_SHA" \
+  | sed "s/OPENCODE_WEB_PORT=4096/OPENCODE_WEB_PORT=$WEB_PORT/" > "$UNIT_TMP"
 chmod 644 "$UNIT_TMP"
 mv -f "$UNIT_TMP" "$UNIT"
 systemctl --user daemon-reload
 systemctl --user enable opencode-web.service >/dev/null
 echo "OpenCode autostart enabled for user $RUNTIME_USER."
+

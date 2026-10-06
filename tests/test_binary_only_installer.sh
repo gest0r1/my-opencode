@@ -47,6 +47,10 @@ if [[ "${1:-}" == auth && "${2:-}" == status ]]; then
   exit 0
 fi
 if [[ "${1:-}" == api ]]; then
+  if [[ "$*" == *"contents/config/systemd/opencode-web.service?ref="* ]]; then
+    cat "$FAKE_UNIT"
+    exit 0
+  fi
   if [[ "$*" == *"contents/scripts/bootstrap-runtime-tools.sh?ref="* ]]; then
     printf 'ensure_runtime_node() { :; }\nensure_claude_cli() { :; }\nconfigure_server_browser() { :; }\n'
     exit 0
@@ -151,6 +155,7 @@ EOF
   TRACE="$trace" \
   FAKE_OFFICIAL_INSTALLER="$official" \
   FAKE_GENERATION="$generation" \
+  FAKE_UNIT="$ROOT/config/systemd/opencode-web.service" \
   OPENCODE_CONFIG_REPO='test/config' \
   OPENCODE_CONFIG_REF="$CONFIG_SHA" \
   OPENCHAMBER_REF="$openchamber_ref" \
@@ -175,5 +180,8 @@ dir="$(run_bootstrap identical 2.0.23 "$CONFIG_SHA" '' 0)"
 assert_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
 assert_contains "$dir/trace.log" 'generation skip_binary=1'
 assert_not_contains "$dir/trace.log" 'curl '
+assert_contains "$dir/home/.config/systemd/user/opencode-web.service" 'opencode serve'
+assert_contains "$dir/home/.config/systemd/user/opencode-web.service" '--hostname 127.0.0.1'
+assert_not_contains "$dir/home/.config/systemd/user/opencode-web.service" '0.0.0.0'
 echo 'PASS: every bootstrap refreshes config; unchanged binary is reused'
 

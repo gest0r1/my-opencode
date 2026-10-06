@@ -150,7 +150,7 @@ grep -Fq '/root/.config/opencode/skills/task-management/scripts/stage-cli.ts*' "
 real="$tmp/real"
 mkdir -p "$real/agents"
 cp config/opencode/opencode.json "$real/opencode.json"
-OPENCODE_ARCHIVE_LEGACY=0 bash scripts/install-opencode-agents.sh \
+bash scripts/install-opencode-agents.sh \
   config/opencode/agent "$real/agents"
 
 node - "$real/agents" <<'NODE'
@@ -228,3 +228,4 @@ console.log('PASS: all managed agents deny-or-ask on secrets, .git and node_modu
 NODE
 
 printf 'PASS: effects, catch-all precedence, managed ownership, delegation aliases, trusted skill paths and protected edit policy normalized\n'
+

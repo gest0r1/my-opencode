@@ -8,7 +8,7 @@ CONFIG_REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 CONFIG_REF="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
 APP_REPO="${OPENCHAMBER_REPO:-gest0r1/openchamber-ru}"
 APP_REF="${OPENCHAMBER_REF:-main}"
-OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"
+OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.23}"
 EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.0}"
 OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}"
 HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"
@@ -42,7 +42,7 @@ Usage: install-openchamber.sh [--opencode-update]
 Environment:
   OPENCODE_CONFIG_REF / MY_OPENCODE_REF
   OPENCHAMBER_REF
-  OPENCODE_INSTALL_VERSION (default: 2.0.21)
+  OPENCODE_INSTALL_VERSION (default: 2.0.23)
   OPENCHAMBER_EXPECTED_VERSION (default: 2.1.0)
   OPENCHAMBER_PACKAGE_MODE (auto|release|source; default: auto)
   OPENCHAMBER_BIND_HOST (default: 0.0.0.0)
@@ -187,9 +187,6 @@ prev_port="$(state_value bind_port)"
 prev_env_sha="$(state_value common_env_sha)"
 prev_runtime_pending="$(state_value runtime_pending)"
 prev_service_pending="$(state_value service_restart_pending)"
-legacy_restart_pending="$(state_value restart_pending)"
-if [[ -z "$prev_runtime_pending" && "$legacy_restart_pending" == 1 ]]; then prev_runtime_pending=1; fi
-if [[ -z "$prev_service_pending" && "$legacy_restart_pending" == 1 ]]; then prev_service_pending=1; fi
 prev_runtime_pending="${prev_runtime_pending:-0}"
 prev_service_pending="${prev_service_pending:-0}"
 
@@ -468,3 +465,4 @@ if [[ "$effective_restart_mode" == defer && "$runtime_needs_apply" == 1 && "$pac
 fi
 write_state "$runtime_pending" 1 "$PACKAGE_SOURCE_SHA" "$PACKAGE_FINGERPRINT" "$PACKAGE_SHA256"
 echo "Delivery prepared: config=$CONFIG_SHA OpenChamber=$APP_SHA OpenCode=$installed_opencode"
+

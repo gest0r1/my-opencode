@@ -4,14 +4,13 @@ set -Eeuo pipefail
 REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 REF="${OPENCODE_CONFIG_REF:-main}"
 OPENCODE_BIN="$HOME/.opencode/bin/opencode"
-OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.21}"
+OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.23}"
 
 CONFIG_HOME="$HOME/.config/opencode"
 CONFIG_PARENT="$HOME/.config"
 SKILLS_HOME="$HOME/.agents/skills"
 SKILLS_PARENT="$HOME/.agents"
 ENV_FILE="$HOME/.config/opencode.env"
-LEGACY_ENV_FILE="$HOME/.config/opencode-web.env"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode"
 
 BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
@@ -133,17 +132,13 @@ if [[ -d "$SRC/config/opencode/tool" ]]; then
     done
 fi
 
-# Preserve existing canonical user agents first; repo-managed agents overwrite
-# only their own names. Legacy roots are copied into staging but remain active
-# until the whole config transaction commits successfully.
+# Preserve canonical user agents; repository-managed names remain authoritative.
 if [[ -d "$CONFIG_HOME/agents" ]]; then
   cp -a "$CONFIG_HOME/agents/." "$STAGE_CONFIG/agents/"
 fi
-OPENCODE_ARCHIVE_LEGACY=0 bash "$SRC/scripts/install-opencode-agents.sh" \
+bash "$SRC/scripts/install-opencode-agents.sh" \
   "$SRC/config/opencode/agent" \
-  "$STAGE_CONFIG/agents" \
-  "$HOME/.opencode/agent" \
-  "$CONFIG_HOME/agent"
+  "$STAGE_CONFIG/agents"
 
 # Host-specific command spellings are derived only after source normalization.
 # User agents are excluded: materialize only the repository-managed catalog.
@@ -309,27 +304,12 @@ INSTALL_TRANSACTION_COMMITTED=1
 # path; remove them instead of leaving duplicate config/plugin/agent locations.
 rm -rf -- "$CONFIG_BACKUP" "$SKILLS_BACKUP"
 
-# ~/.config/opencode/agent was inside the old tree and disappeared with the
-# atomic swap. ~/.opencode/agent is outside it, so archive that one now, only
-# after successful commit.
-if [[ -d "$HOME/.opencode/agent" ]]; then
-  LEGACY_AGENT_BACKUP="$STATE_ROOT/legacy-agent-roots/$STAMP"
-  mkdir -p "$LEGACY_AGENT_BACKUP"
-  mv "$HOME/.opencode/agent" "$LEGACY_AGENT_BACKUP/home__opencode__agent"
-  echo "Legacy agent root archived: $HOME/.opencode/agent"
-fi
-
 # ---- Persistent env --------------------------------------------------------
 
 if [[ ! -f "$ENV_FILE" ]]; then
   ENV_NEW="$(mktemp "$CONFIG_PARENT/.opencode.env.XXXXXXXX")"
-  if [[ -f "$LEGACY_ENV_FILE" ]]; then
-    cp "$LEGACY_ENV_FILE" "$ENV_NEW"
-    echo "Мигрирован $LEGACY_ENV_FILE -> $ENV_FILE"
-  else
-    cp "$SRC/config/opencode.env.example" "$ENV_NEW"
-    echo "Создан $ENV_FILE — добавь необходимые MCP/интеграционные секреты."
-  fi
+  cp "$SRC/config/opencode.env.example" "$ENV_NEW"
+  echo "Создан $ENV_FILE — добавь необходимые MCP/интеграционные секреты."
   chmod 600 "$ENV_NEW"
   mv -f "$ENV_NEW" "$ENV_FILE"
 else
@@ -341,11 +321,6 @@ if [[ -f "$ENV_FILE" ]]; then
   grep -Ev '^[[:space:]]*(OPENAI_API_KEY|OPENCODE_API_KEY|YONOTE_API_KEY|YANDEX_METRIKA_TOKEN)=' "$ENV_FILE" > "$ENV_TMP" || true
   chmod 600 "$ENV_TMP"
   mv -f "$ENV_TMP" "$ENV_FILE"
-fi
-
-if [[ -f "$LEGACY_ENV_FILE" ]]; then
-  rm -f "$LEGACY_ENV_FILE"
-  echo "Удалён legacy runtime-файл: $LEGACY_ENV_FILE"
 fi
 
 # ---- Shell env + managed launcher -----------------------------------------
@@ -467,3 +442,4 @@ rm -f -- "$STATE_ROOT/config-generation.json"
 
 echo "Готово: OpenCode и конфигурация $REPO@$REF установлены атомарно."
 echo "Проверка: $OPENCODE_BIN --version -> $("$OPENCODE_BIN" --version)"
+

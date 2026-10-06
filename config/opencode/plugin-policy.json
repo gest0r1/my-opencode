@@ -1,4 +1,9 @@
 {
-  "excluded": [],
-  "excluded_local": ["shell-strategy"]
+  "excluded": [
+    "./plugins/opencode-web-reboot"
+  ],
+  "excluded_local": [
+    "shell-strategy",
+    "opencode-web-reboot"
+  ]
 }

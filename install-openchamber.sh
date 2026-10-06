@@ -74,7 +74,7 @@ reexec_as_runtime_user() {
 
   for name in $(compgen -e); do
     case "$name" in
-      OPENCODE_*|OPENCHAMBER_*|MY_OPENCODE_REF|EXPECTED_OPENCHAMBER_VERSION|LEGACY_BUN_INSTALL|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
+      OPENCODE_*|OPENCHAMBER_*|MY_OPENCODE_REF|EXPECTED_OPENCHAMBER_VERSION|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
         pass_env+=("$name=${!name}")
         ;;
     esac
@@ -145,7 +145,6 @@ export OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.23}"
 export OPENCHAMBER_EXPECTED_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.1}"
 EXPECTED_OPENCHAMBER_VERSION="$OPENCHAMBER_EXPECTED_VERSION"
 OPENCHAMBER_RUNTIME_ROOT="${OPENCHAMBER_RUNTIME_ROOT:-$HOME/.local/share/openchamber-v2}"
-LEGACY_BUN_INSTALL="${LEGACY_BUN_INSTALL:-$HOME/.bun}"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode"
 STATE="$STATE_ROOT/openchamber-v2-install.state"
 HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"
@@ -174,7 +173,7 @@ source "$TMP/bootstrap-runtime-tools.sh"
 ensure_runtime_node
 
 export OPENCODE_CONFIG_REF="$CONFIG_SHA" MY_OPENCODE_REF="$CONFIG_SHA" OPENCHAMBER_REF="$APP_SHA"
-export EXPECTED_OPENCHAMBER_VERSION OPENCHAMBER_RUNTIME_ROOT LEGACY_BUN_INSTALL
+export EXPECTED_OPENCHAMBER_VERSION OPENCHAMBER_RUNTIME_ROOT
 source "$TMP/openchamber-runtime-store.sh"
 oc_runtime_init
 
@@ -184,7 +183,6 @@ flock -x 8
 
 # Preserve native configuration; explicit caller values win.
 NATIVE_ENV="$HOME/.config/openchamber/startup.env"
-LEGACY_ENV="$HOME/.config/openchamber-live.env"
 read_env_value() {
   [[ -f "$1" ]] || return 0
   (set +u; unset "$2"; source "$1" >/dev/null 2>&1; printf '%s' "${!2:-}")
@@ -192,9 +190,6 @@ read_env_value() {
 for key in OPENCHAMBER_UI_PASSWORD OPENCHAMBER_DATA_DIR OPENCHAMBER_API_ONLY; do
   if [[ -z "${!key:-}" ]]; then
     value="$(read_env_value "$NATIVE_ENV" "$key")"
-    if [[ -z "$value" && "$key" == OPENCHAMBER_UI_PASSWORD ]]; then
-      value="$(read_env_value "$LEGACY_ENV" "$key")"
-    fi
     [[ -z "$value" ]] || export "$key=$value"
   fi
 done
@@ -205,7 +200,7 @@ fi
 export OPENCODE_BINARY="$HOME/.opencode/bin/opencode"
 RELEASE_DIR="$OPENCHAMBER_RELEASES/$APP_SHA"
 export BUN_INSTALL="$RELEASE_DIR"
-export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:$HOME/.opencode/bin:$LEGACY_BUN_INSTALL/bin:$PATH"
+export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:$PATH"
 
 [[ ! -f "$STATE" ]] || cp -p "$STATE" "$TMP/state.before"
 bash +h "$TMP/install-openchamber-v2-core.sh" "$@"
@@ -343,6 +338,6 @@ trap - ERR INT TERM
 
 # Core metadata is committed only after native startup readiness.
 sed -i 's/^service_restart_pending=.*/service_restart_pending=0/' "$STATE"
-oc_remove_legacy_bun_global
 echo "OpenChamber runtime committed: $(readlink -f "$OPENCHAMBER_CURRENT")"
 echo "Autostart enabled for OpenCode and OpenChamber under user $RUNTIME_USER."
+
