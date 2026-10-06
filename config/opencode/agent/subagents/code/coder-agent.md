@@ -7,6 +7,8 @@ temperature: 0
 permission:
   bash:
     "*": deny
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "bash $HOME/.config/opencode/skills/task-management/router.sh complete*": allow
     "bash $HOME/.config/opencode/skills/task-management/router.sh status*": allow
   edit:
@@ -69,4 +71,8 @@ fact that is not already present in the supplied evidence.
 6. Return changed files, concise implementation summary, unresolved risks and
    any machine gate the parent must run.
 
-Do not claim build/test PASS unless the parent provides deterministic gate evidence.
+Report advisory check results with their evidence paths; claim final build/test PASS only from authoritative gate evidence.
+
+## Early checks
+
+Use the parent-supplied frozen gate/profile through `gate-runner-cli.ts RUN PIPELINE GATE --advisory --command-index N` for the narrow relevant test/typecheck command. No arbitrary shell, package-manager substitution or runtime/install/deploy actions. Advisory results live in `checks/`, never complete a stage or spend a fix cycle, and never replace final gates. Finish PARTIAL work and corrections in the current attempt; report repeat failure without progress to the parent for fresh review. Do not run checks concurrently with a conflicting source worker.

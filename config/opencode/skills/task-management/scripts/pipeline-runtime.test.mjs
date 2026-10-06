@@ -94,8 +94,9 @@ async function baseManifest(root, runId, pipelines) {
 test('validated dispatch resumes only the same healthy worker with frozen repair evidence', async () => {
  const previousCwd = process.cwd(), root = await tempProject();
  try {
-  const manifest = await baseManifest(root,'runtime-test',[{id:'p',stages:['implementation']}]);
+  const manifest = await baseManifest(root,'runtime-test',[{id:'p',stages:['implementation', 'code-review']}]);
   manifest.allowed_change_paths=['src/**'];
+  manifest.pipelines[0].executors['code-review']='review';
   const manifestPath=await writeManifest(root,manifest);
   run(root,['init',manifestPath]); run(root,['approve','runtime-test']); run(root,['start','runtime-test','implementation','--pipeline','p']);
   process.chdir(root);
@@ -107,8 +108,13 @@ test('validated dispatch resumes only the same healthy worker with frozen repair
   await sessionHooks.context({sessionID:'worker',agent:'CoderAgent',model:{providerID:'test',modelID:'test'},system:[],messages:[{text:'history'}],tools:{}});
   await hooks['execute.after']({...e,status:'completed',result:{metadata:{sessionID:'worker'},content:'done'}});
   await writeFile(path.join(root,'review.json'),'{"status":"technical_fix"}');
-  run(root,['scope-check','runtime-test','implementation','src/a.ts','--pipeline','p']);
-  run(root,['fix-cycle','runtime-test','implementation','--pipeline','p','--evidence',path.join(root,'review.json')]);
+  run(root,['complete','runtime-test','implementation','--pipeline','p']);
+  run(root,['start','runtime-test','code-review','--pipeline','p']);
+  const reviewPacket = await dispatchPacket(root,'runtime-test','p','code-review','code-review','CodeReviewer');
+  assert.equal(reviewPacket.review_work_items[0].id, 'wi-p');
+  assert.equal(reviewPacket.reuse.eligible, false);
+  run(root,['scope-check','runtime-test','code-review','src/a.ts','--pipeline','p']);
+  run(root,['fix-cycle','runtime-test','code-review','--pipeline','p','--evidence',path.join(root,'review.json')]);
   e={tool:'subagent',sessionID:'parent',id:'repair',input:input()};await hooks['execute.before'](e);
   assert.equal(e.input.sessionID,'worker');assert.match(e.input.prompt,/session_reuse_delta/);
   await hooks['execute.after']({...e,status:'completed',result:{metadata:{sessionID:'worker'},content:'fixed'}});
@@ -121,3 +127,4 @@ test('validated dispatch resumes only the same healthy worker with frozen repair
   await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent'),/REPAIR_EVIDENCE_CHANGED/);
  } finally {process.chdir(previousCwd); await rm(root,{recursive:true,force:true});}
 });
+

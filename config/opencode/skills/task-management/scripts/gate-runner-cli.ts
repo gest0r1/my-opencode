@@ -125,11 +125,12 @@ async function main(): Promise<void> {
   const runId = args[0];
   const pipelineId = args[1];
   const gate = args[2];
+  const advisory = args.includes('--advisory');
   let stateRoot = DEFAULT_STATE_ROOT;
   const stateRootIndex = args.indexOf('--state-root');
   if (stateRootIndex >= 0) stateRoot = args[stateRootIndex + 1] ?? DEFAULT_STATE_ROOT;
   if (!runId || !pipelineId || !gate) {
-    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>]');
+    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>] [--advisory]');
   }
 
   const stateFile = join(resolve(stateRoot), runId, 'state.json');
@@ -149,19 +150,26 @@ async function main(): Promise<void> {
   const pipeline = manifest.pipelines.find((item) => item.id === pipelineId);
   if (!pipeline) throw new GateRunnerError(`pipeline not found: ${pipelineId}`);
   if (!pipeline.profile) throw new GateRunnerError(`pipeline has no gate profile: ${pipelineId}`);
-  const commands = manifest.gate_profiles?.[pipeline.profile]?.[gate];
+  let commands = manifest.gate_profiles?.[pipeline.profile]?.[gate];
   if (!Array.isArray(commands) || commands.length === 0) {
     throw new GateRunnerError(`no executable gate commands: profile=${pipeline.profile} gate=${gate}`);
   }
 
-  const candidateSha = await loadCandidate(state.manifest_file);
+  if (advisory && RUNTIME_GATE.test(gate)) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
+  const selection = args.indexOf('--command-index');
+  if (selection >= 0) {
+    const index = Number(args[selection + 1]);
+    if (!advisory || !Number.isInteger(index) || index < 0 || index >= commands.length) throw new GateRunnerError('command-index requires an advisory check and a valid frozen command index');
+    commands = [commands[index]];
+  }
+  const candidateSha = advisory ? undefined : await loadCandidate(state.manifest_file);
   const invocations = commands.map((command) => {
     const tokens = substituteCandidate(tokenizeCommand(command), candidateSha);
     assertSafeInvocation(tokens, gate);
     return { command, exe: tokens[0] as string, args: tokens.slice(1) };
   });
 
-  const evidenceFile = join(resolve(stateRoot), runId, 'gates', `${pipelineId}-${gate}.json`);
+  const evidenceFile = join(resolve(stateRoot), runId, advisory ? 'checks' : 'gates', `${pipelineId}-${gate}.json`);
   await mkdir(dirname(evidenceFile), { recursive: true });
   const releaseLocks = RUNTIME_GATE.test(gate) ? pipeline.runtime_locks ?? [] : [];
   const release = await acquireRuntimeLocks(stateRoot, runId, releaseLocks);
@@ -183,14 +191,14 @@ async function main(): Promise<void> {
         stderr_sha256: sha256(result.stderr),
       });
       if (result.exit_code !== 0) {
-        await writeFile(evidenceFile, `${JSON.stringify({ status: 'FAIL', run_id: runId, pipeline_id: pipelineId, gate, runtime_locks: releaseLocks, results }, null, 2)}\n`, 'utf8');
+        await writeFile(evidenceFile, `${JSON.stringify({ status: 'FAIL', purpose: advisory ? 'advisory' : 'authoritative', run_id: runId, pipeline_id: pipelineId, gate, runtime_locks: releaseLocks, results }, null, 2)}\n`, 'utf8');
         throw new GateRunnerError(`gate command failed (${result.exit_code}): ${invocation.command}; evidence=${evidenceFile}`);
       }
     }
 
     await writeFile(
       evidenceFile,
-      `${JSON.stringify({ status: 'PASS', run_id: runId, pipeline_id: pipelineId, gate, runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, results }, null, 2)}\n`,
+      `${JSON.stringify({ status: 'PASS', purpose: advisory ? 'advisory' : 'authoritative', run_id: runId, pipeline_id: pipelineId, gate, runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, results }, null, 2)}\n`,
       'utf8',
     );
   } finally {
@@ -204,3 +212,4 @@ main().catch((error: unknown) => {
   console.error(`BLOCKED: gate_runner: ${message}`);
   process.exitCode = 1;
 });
+

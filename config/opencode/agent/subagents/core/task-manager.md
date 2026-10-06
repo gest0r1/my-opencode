@@ -46,7 +46,7 @@ Each atomic item contains:
 - allowed path subset for known implementation files/components; do not invent broad test globs merely to predict future RUN fixes;
 - decision_ids, research_ids, contract_ids.
 
-The index lists every work item and pipeline mapping. Do not write source/docs,
+The frozen work-item files are authoritative for dependencies and contract references. The index is their generated summary, not a second independently authored DAG. Generate pipeline membership from every catalog item; preserve dependency order, including CI/bootstrap/release tasks. Reference the exact authoritative schema/contract paths and symbols; never invent interface fields. The index lists every work item and pipeline mapping. Do not write source/docs,
 manifest/state or Git commands. OpenStage freezes path+SHA-256 of every item and index.
 
 Return only:

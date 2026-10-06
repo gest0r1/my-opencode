@@ -21,12 +21,13 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
 
   const amendmentRecords = (state.owner_amendments ?? []).filter((a: any) => a.pipeline_id === pipelineId);
   const amendmentItems = amendmentRecords.flatMap((a: any) => a.work_items ?? []);
-  const frozen = manifest.work_items.find((w: { id: string }) => w.id === workItemId) ?? amendmentItems.find((w: any) => w.id === workItemId);
-  if (!frozen || frozen.pipeline_id !== pipelineId || (!pipeline.work_items.includes(workItemId) && !amendmentItems.some((w: any) => w.id === workItemId))) throw Error('WORK_ITEM_IDENTITY_MISMATCH');
-  const workItemPath = resolve(dirname(state.manifest_file), frozen.path);
+  const stageReview = executor === 'review' && workItemId === stage;
+  const frozen = stageReview ? { id: stage, pipeline_id: pipelineId, path: '', sha256: state.manifest_sha256 } : manifest.work_items.find((w: { id: string }) => w.id === workItemId) ?? amendmentItems.find((w: any) => w.id === workItemId);
+  if (!frozen || frozen.pipeline_id !== pipelineId || (!stageReview && !pipeline.work_items.includes(workItemId) && !amendmentItems.some((w: any) => w.id === workItemId))) throw Error('WORK_ITEM_IDENTITY_MISMATCH');
+  const workItemPath = stageReview ? state.manifest_file : resolve(dirname(state.manifest_file), frozen.path);
   const raw = await readFile(workItemPath, 'utf8');
   if (hash(raw) !== frozen.sha256) throw Error('WORK_ITEM_CHANGED');
-  const item = JSON.parse(raw);
+  const item = stageReview ? {} : JSON.parse(raw);
   if (item.role && item.role !== role) throw Error('WORK_ITEM_ROLE_MISMATCH');
 
   const amendmentEvidence: string[] = [];
@@ -55,7 +56,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     }
     const normalize = (units: any[]) => units.map(({id,pipeline_id,path,sha256}) => ({id,pipeline_id,path,sha256}));
     if (JSON.stringify(normalize(validated.work_items)) !== JSON.stringify(normalize(amendment.work_items ?? []))) throw Error('OWNER_AMENDMENT_WORK_ITEM_IDENTITY_CHANGED');
-    if (validated.work_item_id === workItemId || validated.work_items.some(w => w.id === workItemId)) {
+    if (stageReview || validated.work_item_id === workItemId || validated.work_items.some(w => w.id === workItemId)) {
       amendmentEvidence.push(file);
       relevantAmendments.push(amendment);
       amendmentPaths.push(...validated.paths);
@@ -78,6 +79,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   const revision = hash(JSON.stringify({ manifest: state.manifest_sha256, runtime, repairRuntime, effectiveScope, ownerAmendments: relevantAmendments }));
   return { run_id: run, pipeline_id: pipelineId, stage, executor, role, work_item_id: workItemId,
     work_item_path: workItemPath, work_item_sha256: frozen.sha256, authoritative_paths: [state.manifest_file, state.rules_file, ...referencePaths, ...amendmentEvidence],
+    review_work_items: stageReview ? [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems].map((w: any) => ({ id: w.id, path: resolve(dirname(state.manifest_file), w.path), sha256: w.sha256 })) : undefined,
     context_paths: (item.context_files ?? []).map((p: string) => resolve(root, p)), reference_paths: (item.reference_files ?? []).map((p: string) => resolve(root, p)),
     decision_ids: item.decision_ids ?? pipeline.decision_ids ?? [], research_ids: item.research_ids ?? pipeline.research_ids ?? [], contract_ids: item.contract_ids ?? pipeline.contract_ids ?? [],
     effective_scope: effectiveScope, repair_paths: [...new Set([...(repairRuntime?.repair_paths ?? []), ...amendmentPaths])], state_revision: revision, loop: repairRuntime?.technical_fix_cycles ?? 0,

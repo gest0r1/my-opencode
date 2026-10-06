@@ -7,6 +7,8 @@ temperature: 0.1
 permission:
   bash:
     "*": deny
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "tsc*": allow
     "npx tsc*": allow
     "mypy*": allow
@@ -48,3 +50,7 @@ Diagnose build/typecheck behavior for the work item supplied by the parent.
 
 Return the command family/project configuration identified, errors with file/line
 when available, and interpretation of supplied deterministic evidence.
+
+## Early checks
+
+Use the parent-supplied frozen gate/profile through `gate-runner-cli.ts RUN PIPELINE GATE --advisory --command-index N` for the narrow relevant test/typecheck command. No arbitrary shell, package-manager substitution or runtime/install/deploy actions. Advisory results live in `checks/`, never complete a stage or spend a fix cycle, and never replace final gates. Finish PARTIAL work and corrections in the current attempt; report repeat failure without progress to the parent for fresh review. Do not run checks concurrently with a conflicting source worker.

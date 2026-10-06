@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+let reviewSequence = 0;
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, writeFile, unlink, symlink } from 'node:fs/promises';
 import os from 'node:os';
@@ -134,6 +136,11 @@ test('review repairs reopen implementation and share the initiating gate budget 
 });
 
 function run(cwd, args) {
+  if (args[0] === 'fix-cycle' && args[2] === 'code-review' && !args.includes('--evidence')) {
+    const file = path.join(cwd, 'review-result.json');
+    writeFileSync(file, JSON.stringify({ status: 'needs_revision', run_id: args[1], pipeline_id: 'app', stage: 'code-review', result_id: ++reviewSequence }));
+    args = [...args, '--evidence', file];
+  }
   return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...args], {
     cwd,
     encoding: 'utf8',
@@ -149,7 +156,7 @@ async function frozen(root, relative, content) {
   await writeFile(file, content, 'utf8');
   return { path: relative, sha256: sha(content) };
 }
-async function fixture(runId, stages = ['implementation'], executors = { implementation: 'agent' }, sourceFiles = false) {
+async function fixture(runId, stages = ['implementation', 'code-review'], executors = { implementation: 'agent', 'code-review': 'review' }, sourceFiles = false) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'stage-cli-budget-'));
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const architecture = await frozen(root, 'planning/architecture.md', '# architecture\n');
@@ -220,28 +227,38 @@ async function fixture(runId, stages = ['implementation'], executors = { impleme
   assert.equal(result.status, 0, result.stderr);
   result = run(root, ['start', runId, 'implementation', '--pipeline', 'app', '--state-root', stateRoot, '--json']);
   assert.equal(result.status, 0, result.stderr);
+  if (stages.includes('code-review') && !['review-repair', 'legacy-review-repair', 'deferred-owner'].includes(runId)) {
+    result = run(root, ['complete', runId, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
+    assert.equal(result.status, 0, result.stderr);
+    result = run(root, ['start', runId, 'code-review', '--pipeline', 'app', '--state-root', stateRoot]);
+    assert.equal(result.status, 0, result.stderr);
+  }
   return { root, stateRoot, runId };
 }
 async function exhaustFive(fx) {
   for (let cycle = 1; cycle <= 5; cycle += 1) {
     let result = run(fx.root, [
-      'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
+      'scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts',
       '--pipeline', 'app', '--state-root', fx.stateRoot,
     ]);
     assert.equal(result.status, 0, result.stderr);
     result = run(fx.root, [
-      'fix-cycle', fx.runId, 'implementation',
+      'fix-cycle', fx.runId, 'code-review',
       '--pipeline', 'app', '--state-root', fx.stateRoot, '--json',
     ]);
     assert.equal(result.status, 0, result.stderr);
     const state = JSON.parse(result.stdout);
-    assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, cycle);
-    assert.equal(state.pipelines.app.stages.implementation.technical_fix_limit, 5);
+    assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles, cycle);
+    assert.equal(state.pipelines.app.stages['code-review'].technical_fix_limit, 5);
+    for (const [command, stage] of [['start', 'implementation'], ['complete', 'implementation'], ['start', 'code-review']]) {
+      const next = run(fx.root, [command, fx.runId, stage, '--pipeline', 'app', '--state-root', fx.stateRoot]);
+      assert.equal(next.status, 0, next.stderr);
+    }
   }
 }
 async function writeReview(fx, name, review) {
   const file = path.join(fx.stateRoot, fx.runId, name);
-  await writeFile(file, JSON.stringify(review, null, 2) + '\n');
+  await writeFile(file, JSON.stringify({ status: 'needs_revision', ...review }, null, 2) + '\n');
   return file;
 }
 function reviewBase(fx, status) {
@@ -249,7 +266,7 @@ function reviewBase(fx, status) {
     kind: 'runtime_replan',
     status,
     pipeline_id: 'app',
-    stage: 'implementation',
+    stage: 'code-review',
     summary: 'Change the technical approach for this block without changing frozen product behavior.',
     owner_questions: [],
     requirements_changed: false,
@@ -265,24 +282,24 @@ test('initial budget is 5 and owner can grant +3 after exhaustion', async () => 
   await exhaustFive(fx);
 
   let result = run(fx.root, [
-    'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
+    'scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts',
     '--pipeline', 'app', '--state-root', fx.stateRoot,
   ]);
   assert.equal(result.status, 0, result.stderr);
   result = run(fx.root, [
-    'fix-cycle', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot,
+    'fix-cycle', fx.runId, 'code-review', '--pipeline', 'app', '--state-root', fx.stateRoot,
   ]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /TECHNICAL_FIX_LIMIT_EXCEEDED/);
   assert.match(result.stderr, /owner may grant \+N cycles or request runtime replan/);
 
   result = run(fx.root, [
-    'fix-budget-add', fx.runId, 'implementation',
+    'fix-budget-add', fx.runId, 'code-review',
     '--pipeline', 'app', '--cycles', '3', '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
   let state = JSON.parse(result.stdout);
-  let runtime = state.pipelines.app.stages.implementation;
+  let runtime = state.pipelines.app.stages['code-review'];
   assert.equal(runtime.technical_fix_cycles, 5);
   assert.equal(runtime.technical_fix_limit, 8);
   assert.deepEqual(runtime.technical_fix_budget_grants[0], {
@@ -294,17 +311,17 @@ test('initial budget is 5 and owner can grant +3 after exhaustion', async () => 
   });
 
   result = run(fx.root, [
-    'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
+    'scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts',
     '--pipeline', 'app', '--state-root', fx.stateRoot,
   ]);
   assert.equal(result.status, 0, result.stderr);
   result = run(fx.root, [
-    'fix-cycle', fx.runId, 'implementation',
+    'fix-cycle', fx.runId, 'code-review',
     '--pipeline', 'app', '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
   state = JSON.parse(result.stdout);
-  runtime = state.pipelines.app.stages.implementation;
+  runtime = state.pipelines.app.stages['code-review'];
   assert.equal(runtime.technical_fix_cycles, 6);
   assert.equal(runtime.technical_fix_limit, 8);
   assert.match(runtime.message, /cycle 6\/8/);
@@ -313,12 +330,12 @@ test('initial budget is 5 and owner can grant +3 after exhaustion', async () => 
 test('owner can increase the fix budget before exhaustion', async () => {
   const fx = await fixture('budget-not-exhausted');
   const result = run(fx.root, [
-    'fix-budget-add', fx.runId, 'implementation',
+    'fix-budget-add', fx.runId, 'code-review',
     '--pipeline', 'app', '--cycles', '4', '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(result.stdout);
-  const runtime = state.pipelines.app.stages.implementation;
+  const runtime = state.pipelines.app.stages['code-review'];
   assert.equal(runtime.technical_fix_cycles ?? 0, 0);
   assert.equal(runtime.technical_fix_limit, 9);
   assert.equal(runtime.technical_fix_budget_grants[0].source, 'owner_direct');
@@ -335,7 +352,7 @@ test('RUN-level fix-budget-set raises all stage ceilings and never lowers them',
   ]);
   assert.equal(result.status, 0, result.stderr);
   let state = JSON.parse(result.stdout);
-  let runtime = state.pipelines.app.stages.implementation;
+  let runtime = state.pipelines.app.stages['code-review'];
   assert.equal(runtime.technical_fix_limit, 12);
   assert.deepEqual(runtime.technical_fix_budget_grants[0], {
     timestamp: runtime.technical_fix_budget_grants[0].timestamp,
@@ -350,7 +367,7 @@ test('RUN-level fix-budget-set raises all stage ceilings and never lowers them',
   ]);
   assert.equal(result.status, 0, result.stderr);
   state = JSON.parse(result.stdout);
-  runtime = state.pipelines.app.stages.implementation;
+  runtime = state.pipelines.app.stages['code-review'];
   assert.equal(runtime.technical_fix_limit, 12);
   assert.equal(runtime.technical_fix_budget_grants.length, 1);
 });
@@ -364,7 +381,7 @@ test('automatic repair budget has a hard ceiling of 20', async () => {
   assert.equal(result.status, 0, result.stderr);
 
   result = run(fx.root, [
-    'fix-budget-add', fx.runId, 'implementation',
+    'fix-budget-add', fx.runId, 'code-review',
     '--pipeline', 'app', '--cycles', '1', '--state-root', fx.stateRoot,
   ]);
   assert.notEqual(result.status, 0);
@@ -373,10 +390,10 @@ test('automatic repair budget has a hard ceiling of 20', async () => {
 
 test('bounded security_fix requires deterministic evidence and consumes the shared fix budget', async () => {
   const fx = await fixture('security-fix-cycle');
-  const evidence = await writeReview(fx, 'security-fix-app-implementation-1.json', {
+  const evidence = await writeReview(fx, 'security-fix-app-code-review-1.json', {
     kind: 'security_fix',
     pipeline_id: 'app',
-    stage: 'implementation',
+    stage: 'code-review',
     paths: ['packages/db/src/change.ts'],
     policy_basis: ['CT-08', 'least-privilege EXECUTE'],
     bounded_remediation: true,
@@ -391,7 +408,7 @@ test('bounded security_fix requires deterministic evidence and consumes the shar
   });
 
   let result = run(fx.root, [
-    'security-fix-check', fx.runId, 'implementation',
+    'security-fix-check', fx.runId, 'code-review',
     '--pipeline', 'app', '--evidence', evidence, '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
@@ -399,36 +416,36 @@ test('bounded security_fix requires deterministic evidence and consumes the shar
   assert.equal(state.security_fix_preflight.pipeline_id, 'app');
 
   result = run(fx.root, [
-    'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
+    'scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts',
     '--pipeline', 'app', '--state-root', fx.stateRoot,
   ]);
   assert.equal(result.status, 0, result.stderr);
 
   result = run(fx.root, [
-    'fix-cycle', fx.runId, 'implementation',
+    'fix-cycle', fx.runId, 'code-review',
     '--pipeline', 'app', '--state-root', fx.stateRoot,
   ]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /SECURITY_FIX_REPAIR_CLASS_REQUIRED/);
 
   result = run(fx.root, [
-    'fix-cycle', fx.runId, 'implementation', '--repair-class', 'security_fix',
+    'fix-cycle', fx.runId, 'code-review', '--repair-class', 'security_fix',
     '--pipeline', 'app', '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
   state = JSON.parse(result.stdout);
-  assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, 1);
-  assert.equal(state.pipelines.app.stages.implementation.technical_fix_limit, 5);
-  assert.match(state.pipelines.app.stages.implementation.message, /security_fix cycle 1\/5/);
+  assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles, 1);
+  assert.equal(state.pipelines.app.stages['code-review'].technical_fix_limit, 5);
+  assert.match(state.pipelines.app.stages['code-review'].message, /security_fix cycle 1\/5/);
   assert.equal(state.security_fix_preflight, undefined);
 });
 
 test('security_fix authorization rejects privilege expansion and owner decisions', async () => {
   const fx = await fixture('security-fix-stop');
-  const evidence = await writeReview(fx, 'security-fix-app-implementation-stop.json', {
+  const evidence = await writeReview(fx, 'security-fix-app-code-review-stop.json', {
     kind: 'security_fix',
     pipeline_id: 'app',
-    stage: 'implementation',
+    stage: 'code-review',
     paths: ['packages/db/src/change.ts'],
     policy_basis: ['security policy'],
     bounded_remediation: true,
@@ -443,7 +460,7 @@ test('security_fix authorization rejects privilege expansion and owner decisions
   });
 
   const result = run(fx.root, [
-    'security-fix-check', fx.runId, 'implementation',
+    'security-fix-check', fx.runId, 'code-review',
     '--pipeline', 'app', '--evidence', evidence, '--state-root', fx.stateRoot,
   ]);
   assert.notEqual(result.status, 0);
@@ -452,31 +469,31 @@ test('security_fix authorization rejects privilege expansion and owner decisions
 
 test('runtime replan clarification can start before exhaustion but does not grant cycles', async () => {
   const fx = await fixture('runtime-replan-clarification');
-  const evidence = await writeReview(fx, 'runtime-replan-app-implementation-1.json', {
+  const evidence = await writeReview(fx, 'runtime-replan-app-code-review-1.json', {
     ...reviewBase(fx, 'needs_owner_clarification'),
     owner_questions: ['Use approach A or B for this block?'],
   });
 
   let result = run(fx.root, [
-    'runtime-replan-propose', fx.runId, 'implementation',
+    'runtime-replan-propose', fx.runId, 'code-review',
     '--pipeline', 'app', '--evidence', evidence, '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
   let state = JSON.parse(result.stdout);
-  let runtime = state.pipelines.app.stages.implementation;
+  let runtime = state.pipelines.app.stages['code-review'];
   assert.equal(runtime.technical_fix_limit, 5);
   assert.equal(runtime.runtime_replans[0].status, 'awaiting_owner_clarification');
   assert.deepEqual(runtime.runtime_replans[0].owner_questions, ['Use approach A or B for this block?']);
 
   result = run(fx.root, [
-    'runtime-replan-approve', fx.runId, 'implementation',
+    'runtime-replan-approve', fx.runId, 'code-review',
     '--pipeline', 'app', '--cycles', '3', '--state-root', fx.stateRoot,
   ]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /OWNER_CLARIFICATION_REQUIRED/);
 
   result = run(fx.root, [
-    'fix-budget-add', fx.runId, 'implementation',
+    'fix-budget-add', fx.runId, 'code-review',
     '--pipeline', 'app', '--cycles', '3', '--state-root', fx.stateRoot,
   ]);
   assert.notEqual(result.status, 0);
@@ -488,32 +505,32 @@ test('runtime replan approval can add cycles before exhaustion (5/6 -> 5/10)', a
   await exhaustFive(fx);
 
   let result = run(fx.root, [
-    'fix-budget-add', fx.runId, 'implementation',
+    'fix-budget-add', fx.runId, 'code-review',
     '--pipeline', 'app', '--cycles', '1', '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
 
-  const first = await writeReview(fx, 'runtime-replan-app-implementation-1.json', {
+  const first = await writeReview(fx, 'runtime-replan-app-code-review-1.json', {
     ...reviewBase(fx, 'needs_owner_clarification'),
     owner_questions: ['Confirm whether the block may replace the internal helper.'],
   });
   result = run(fx.root, [
-    'runtime-replan-propose', fx.runId, 'implementation',
+    'runtime-replan-propose', fx.runId, 'code-review',
     '--pipeline', 'app', '--evidence', first, '--state-root', fx.stateRoot,
   ]);
   assert.equal(result.status, 0, result.stderr);
 
-  const second = await writeReview(fx, 'runtime-replan-app-implementation-2.json', {
+  const second = await writeReview(fx, 'runtime-replan-app-code-review-2.json', {
     ...reviewBase(fx, 'ready_for_owner_approval'),
     summary: 'Use the reviewed replacement helper and keep all frozen behavior unchanged.',
   });
   result = run(fx.root, [
-    'runtime-replan-propose', fx.runId, 'implementation',
+    'runtime-replan-propose', fx.runId, 'code-review',
     '--pipeline', 'app', '--evidence', second, '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
   let state = JSON.parse(result.stdout);
-  let runtime = state.pipelines.app.stages.implementation;
+  let runtime = state.pipelines.app.stages['code-review'];
   assert.equal(runtime.technical_fix_cycles, 5);
   assert.equal(runtime.technical_fix_limit, 6);
   assert.equal(runtime.runtime_replans.length, 2);
@@ -522,12 +539,12 @@ test('runtime replan approval can add cycles before exhaustion (5/6 -> 5/10)', a
   assert.equal(state.scope_preflight, undefined);
 
   result = run(fx.root, [
-    'runtime-replan-approve', fx.runId, 'implementation',
+    'runtime-replan-approve', fx.runId, 'code-review',
     '--pipeline', 'app', '--cycles', '4', '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
   state = JSON.parse(result.stdout);
-  runtime = state.pipelines.app.stages.implementation;
+  runtime = state.pipelines.app.stages['code-review'];
   assert.equal(runtime.technical_fix_cycles, 5);
   assert.equal(runtime.technical_fix_limit, 10);
   assert.equal(runtime.runtime_replans[1].status, 'approved');
@@ -537,30 +554,30 @@ test('runtime replan approval can add cycles before exhaustion (5/6 -> 5/10)', a
   assert.equal(runtime.technical_fix_budget_grants[1].runtime_replan_revision, 2);
 
   result = run(fx.root, [
-    'scope-check', fx.runId, 'implementation', 'packages/db/src/change.ts',
+    'scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts',
     '--pipeline', 'app', '--state-root', fx.stateRoot,
   ]);
   assert.equal(result.status, 0, result.stderr);
   result = run(fx.root, [
-    'fix-cycle', fx.runId, 'implementation',
+    'fix-cycle', fx.runId, 'code-review',
     '--pipeline', 'app', '--state-root', fx.stateRoot, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
   state = JSON.parse(result.stdout);
-  assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, 6);
-  assert.equal(state.pipelines.app.stages.implementation.technical_fix_limit, 10);
+  assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles, 6);
+  assert.equal(state.pipelines.app.stages['code-review'].technical_fix_limit, 10);
 });
 
 test('runtime replan cannot cross frozen PLAN boundaries', async () => {
   const fx = await fixture('runtime-replan-full-plan');
   await exhaustFive(fx);
-  const evidence = await writeReview(fx, 'runtime-replan-app-implementation-1.json', {
+  const evidence = await writeReview(fx, 'runtime-replan-app-code-review-1.json', {
     ...reviewBase(fx, 'ready_for_owner_approval'),
     acceptance_criteria_changed: true,
   });
 
   const result = run(fx.root, [
-    'runtime-replan-propose', fx.runId, 'implementation',
+    'runtime-replan-propose', fx.runId, 'code-review',
     '--pipeline', 'app', '--evidence', evidence, '--state-root', fx.stateRoot,
   ]);
   assert.notEqual(result.status, 0);
@@ -573,9 +590,22 @@ test('runtime replan evidence must be run-owned', async () => {
   const outside = path.join(fx.root, 'outside-review.json');
   await writeFile(outside, JSON.stringify(reviewBase(fx, 'ready_for_owner_approval')) + '\n');
   const result = run(fx.root, [
-    'runtime-replan-propose', fx.runId, 'implementation',
+    'runtime-replan-propose', fx.runId, 'code-review',
     '--pipeline', 'app', '--evidence', outside, '--state-root', fx.stateRoot,
   ]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /must live inside the current run directory/);
+});
+
+test('missing or positive review results never spend budget and free dispatch remains possible', async () => {
+  const fx = await fixture('negative-result-only');
+  const raw = args => spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...args, '--pipeline', 'app', '--state-root', fx.stateRoot], { cwd: fx.root, encoding: 'utf8', env: process.env });
+  let result = raw(['fix-cycle', fx.runId, 'code-review']);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /REPAIR_RESULT_REQUIRED/);
+  const evidence = await writeReview(fx, 'positive.json', { status: 'PASS' });
+  result = raw(['fix-cycle', fx.runId, 'code-review', '--evidence', evidence]);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /REPAIR_RESULT_REQUIRED/);
+  const state = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'state.json'), 'utf8'));
+  assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles ?? 0, 0);
+  assert.equal(state.pipelines.app.stages['code-review'].status, 'in_progress');
 });

@@ -88,3 +88,4 @@ or security rule. Do not block merely because another architecture is preferable
 When requested, write evidence only below `.tmp/pipelines/{run-id}/**`.
 Return readiness plus concise actionable findings; never apply fixes or advance state.
 
+For RUN reviews write an explicit `status: needs_revision|ready` verdict (or JSON equivalent) with findings and affected work-item IDs/paths. Review packets may use the stage name as identity and include `review_work_items`; no standalone review task file is required. Classify missing implementation separately from owner decisions. Repeated transport or environment failure is not a negative code-review result.

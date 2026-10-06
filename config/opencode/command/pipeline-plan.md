@@ -240,3 +240,10 @@ PR CI requires an existing PR number frozen as `github_gates.<stage>.pr_number` 
 ## Freeze boundary and owner clarifications
 
 Owner may clarify in the current session at any time. Before implementation starts, refine this PLAN in the same folder. Frozen runtime starts at the first `stage-cli start` whose executor is `agent` (source implementation, including bootstrap), not at approval, command invocation, preflight, reconciliation or review. After that boundary keep manifest immutable and use accepted amendments. File/component/work-unit count is never a reason for full replan by itself. A new PLAN is required after start only for an incompatible business/architecture/external-contract/security/destructive boundary or an unresolved owner decision.
+
+
+## Executable completeness before approval
+
+Use frozen work-item files as the single source for dependencies and interface/schema references; derive the index and `pipelines[].work_items` summaries from the complete catalog, including bootstrap/release work. Existing PLAN preflight rejects unbound items, duplicate mappings, missing/cyclic dependencies and incorrect in-pipeline order. Every implementation item needs an agent executor; review packets derive from stages and do not require separate synthetic tasks.
+
+The existing technical review must trace mandatory acceptance checks to executable frozen gate commands, including live services/database suites. Missing prerequisites/suites or skipped mandatory tests must fail in the project test runner; a generic passing test command is insufficient. Freeze narrow optional diagnostic commands for early feedback where useful; advisory execution never replaces final gates. Refer to exact contract/schema paths and symbols instead of duplicating their definitions across work items.
