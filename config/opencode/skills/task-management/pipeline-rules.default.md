@@ -132,6 +132,9 @@ approved base/source -> final cumulative candidate SHA -> installed candidate SH
 
 ## Review findings and fix cycles
 
+- Gate findings use the existing automatic repair budget. `fix-cycle` reopens the preceding source agent and subsequent review/gates; its dispatch borrows the initiating gate's evidence and loop count. No separate repair stage or budget is introduced.
+- Already-approved tracked source deletion uses the scoped Git deletion CLI and is not destructive runtime remediation. New owner decisions may be deferred until a frozen final gate when independent repairs are proven safe; the pending action remains unexecuted and the final gate blocks until owner resolution. This never defers active secret exposure or unsafe runtime continuation.
+
 - Review findings are `technical_fix | security_fix | replan | security_stop | scope_stop | secret_stop | destructive_stop | optional`.
 - `technical_fix` and bounded `security_fix` may be repaired automatically. `security_fix` is allowed only when deterministic `stage-cli security-fix-check` validates machine-readable review evidence proving: bounded remediation, no owner decision, no requirements/AC/external-contract/security-boundary change, no privilege expansion, no secret exposure and no destructive change.
 - Severity alone never forces a stop. A Critical/High security defect may remain `security_fix` when the frozen policy already determines the least-privilege/fail-closed remediation.

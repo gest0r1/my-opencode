@@ -1264,7 +1264,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
   assert.equal(evidence.gate, 'owner_acceptance');
 });
 
-test('technical fix after publish reopens verify and publish before GitHub CI', async () => {
+test('technical fix after publish reopens source, verify and publish before GitHub CI', async () => {
   const fx = await fixture('v2-fix-invalidates-published-chain');
   fx.manifest.pipelines[0].stages = ['implementation', 'git-verify', 'publish', 'tests'];
   fx.manifest.pipelines[0].executors = {
@@ -1340,7 +1340,10 @@ test('technical fix after publish reopens verify and publish before GitHub CI', 
 
   result = invoke(['next', fx.manifest.run_id, '--json']);
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout).runnable, [{ pipeline_id: 'app', stage: 'git-verify' }]);
+  assert.equal(state.pipelines.app.stages.implementation.status, 'pending');
+  assert.equal(state.pipelines.app.stages.implementation.repair_origin_stage, 'tests');
+  assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles ?? 0, 0);
+  assert.deepEqual(JSON.parse(result.stdout).runnable, [{ pipeline_id: 'app', stage: 'implementation' }]);
 });
 
 test('automatic repair counter permits exactly five default cycles and blocks the sixth', async () => {
@@ -1471,3 +1474,4 @@ test('schema v2 validates preserved baseline shape and reason-coded lineage', as
     'PASS',
   );
 });
+

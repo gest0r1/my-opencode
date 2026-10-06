@@ -1024,6 +1024,16 @@ async function updateState(
     }
     const before = new Map(Object.values(state.pipelines).map((pipeline) => [pipeline.id, pipeline.status]));
     updater(state);
+    for (const decision of state.deferred_decisions ?? []) {
+      if (decision.status !== 'pending') continue;
+      const pipeline = state.pipelines[decision.pipeline_id];
+      if (pipeline && firstPendingStage(pipeline) === decision.before_stage) {
+        pipeline.stages[decision.before_stage].status = 'blocked';
+        pipeline.stages[decision.before_stage].message = 'DEFERRED_OWNER_DECISION_REQUIRED';
+        pipeline.status = 'blocked';
+        addHistory(state, pipeline.id, decision.before_stage, 'blocked', `deferred owner decision ${decision.id}`);
+      }
+    }
     recalculateRunStatus(state);
     queuePipelineStatusTransitions(state, before);
     state.updated_at = now();
@@ -1651,6 +1661,55 @@ export async function approveRuntimeReplan(
   });
 }
 
+export async function deferOwnerDecision(stateRoot: string, runId: string, id: string, evidencePath: string, pipelineId: string): Promise<PipelineState> {
+  return updateState(stateRoot, runId, state => {
+    const file = resolve(evidencePath);
+    if (!state.manifest_file || !file.startsWith(dirname(resolve(state.manifest_file)) + '/')) throw new StageCliError('DEFERRED_DECISION_EVIDENCE_OUTSIDE_RUN');
+    const raw = readFileSync(file, 'utf8');
+    const evidence = JSON.parse(raw);
+    const pipeline = getPipeline(state, pipelineId);
+    const spec = readFrozenManifestFromState(state).pipelines.find(p => p.id === pipelineId);
+    if (!/^[A-Za-z0-9._-]+$/.test(id) || evidence.kind !== 'deferred_owner_decision' || evidence.owner_decision_required !== true ||
+        evidence.independent_repairs_safe !== true || evidence.action_executed !== false ||
+        typeof evidence.summary !== 'string' || !evidence.summary.trim() ||
+        !Array.isArray(evidence.paths) || !evidence.paths.length || evidence.paths.some((path: unknown) => typeof path !== 'string' || !path || path.startsWith('/') || path.split('/').includes('..')) ||
+        !pipeline.stages[evidence.source_stage] || !['review', 'agent'].includes(spec?.executors?.[evidence.source_stage] ?? '') ||
+        !['git_verify', 'local_gate', 'github_ci'].includes(spec?.executors?.[evidence.before_stage] ?? '') ||
+        pipeline.stage_order.indexOf(evidence.before_stage) <= pipeline.stage_order.indexOf(evidence.source_stage) ||
+        pipeline.stages[evidence.before_stage].status !== 'pending') throw new StageCliError('DEFERRED_DECISION_INVALID');
+    state.deferred_decisions ??= [];
+    const existing = state.deferred_decisions.find(d => d.id === id);
+    if (existing) {
+      if (existing.evidence_sha256 !== sha256(raw)) throw new StageCliError('DEFERRED_DECISION_CHANGED');
+      return;
+    }
+    state.deferred_decisions.push({ id, pipeline_id: pipelineId, source_stage: evidence.source_stage, before_stage: evidence.before_stage,
+      status: 'pending', evidence_path: file, evidence_sha256: sha256(raw), summary: evidence.summary });
+  });
+}
+
+export async function resolveOwnerDecision(stateRoot: string, runId: string, id: string, result: string): Promise<PipelineState> {
+  if (!['approve', 'reject'].includes(result)) throw new StageCliError('owner-decision-resolve requires --message approve|reject after an explicit owner response');
+  return updateState(stateRoot, runId, state => {
+    const decision = state.deferred_decisions?.find(d => d.id === id);
+    if (!decision || decision.status !== 'pending') throw new StageCliError('DEFERRED_DECISION_NOT_PENDING');
+    if (sha256(readFileSync(decision.evidence_path, 'utf8')) !== decision.evidence_sha256) throw new StageCliError('DEFERRED_DECISION_EVIDENCE_CHANGED');
+    decision.status = result === 'approve' ? 'approved' : 'rejected';
+    const pipeline = state.pipelines[decision.pipeline_id];
+    if (pipeline.stages[decision.before_stage].status !== 'blocked') throw new StageCliError('DEFERRED_CHECKPOINT_NOT_REACHED');
+    if (result === 'reject') {
+      pipeline.stages[decision.before_stage].message = 'OWNER_AMENDMENT_REQUIRED: rejected deferred action';
+      return;
+    }
+    if (state.deferred_decisions?.some(d => d.pipeline_id === decision.pipeline_id && d.before_stage === decision.before_stage && d.status !== 'approved')) return;
+    pipeline.stages[decision.before_stage].status = 'pending';
+    pipeline.stages[decision.source_stage].status = 'blocked';
+    pipeline.stages[decision.source_stage].message = 'Owner approved deferred action; resume the existing fix loop after scope/security authorization';
+    pipeline.status = 'blocked';
+    addHistory(state, pipeline.id, decision.source_stage, 'blocked', `owner approved deferred decision ${id}`);
+  });
+}
+
 export async function recordTechnicalFixCycle(
   stateRoot: string,
   runId: string,
@@ -1663,6 +1722,24 @@ export async function recordTechnicalFixCycle(
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    if (runtime.repair_origin_stage && runtime.repair_origin_stage !== stage) {
+      throw new StageCliError(`REPAIR_BUDGET_OWNER: record the next fix-cycle on ${pipeline.id}/${runtime.repair_origin_stage}`);
+    }
+    if (activeRuntimeReplan(runtime)) throw new StageCliError('RUNTIME_REPLAN_APPROVAL_REQUIRED');
+    const manifest = readFrozenManifestFromState(state);
+    const spec = manifest.pipelines.find((item) => item.id === pipeline.id);
+    const stageIndex = pipeline.stage_order.indexOf(stage);
+    let repairIndex = stageIndex;
+    if (spec?.executors?.[stage] !== 'agent') {
+      repairIndex = -1;
+      for (let index = stageIndex - 1; index >= 0; index -= 1) {
+        if (spec?.executors?.[pipeline.stage_order[index]] === 'agent') {
+          repairIndex = index;
+          break;
+        }
+      }
+      if (repairIndex < 0) throw new StageCliError(`REPAIR_TARGET_MISSING: ${pipeline.id}/${stage} has no preceding agent stage`);
+    }
     const scopePreflight = state.scope_preflight;
     if (!scopePreflight || scopePreflight.pipeline_id !== pipeline.id || scopePreflight.stage !== stage) {
       throw new StageCliError(
@@ -1705,46 +1782,23 @@ export async function recordTechnicalFixCycle(
     state.scope_preflight = undefined;
     if (repairClass === 'security_fix') state.security_fix_preflight = undefined;
 
-    // If this fix happens after a candidate was already published, the source-changing
-    // repair must force a fresh verify -> publish -> GitHub CI/DEV chain. We invalidate
-    // state transitions, not historical evidence files; stale files remain audit history
-    // and completion guards reject them until replaced by evidence for the new candidate.
-    if (state.manifest_file) {
-      let manifest: PipelineManifest | undefined;
-      try {
-        manifest = JSON.parse(readFileSync(state.manifest_file, 'utf8')) as PipelineManifest;
-      } catch {}
-      const spec = manifest?.pipelines?.find((item) => item.id === pipeline.id);
-      const stageIndex = pipeline.stage_order.indexOf(stage);
-      const completedPublishIndex = spec
-        ? pipeline.stage_order.findIndex((name, index) =>
-            index < stageIndex &&
-            spec.executors?.[name] === 'git_publish' &&
-            pipeline.stages[name]?.status === 'completed')
-        : -1;
-      if (spec && completedPublishIndex >= 0) {
-        let resetIndex = completedPublishIndex;
-        for (let index = completedPublishIndex - 1; index >= 0; index -= 1) {
-          const name = pipeline.stage_order[index];
-          if (spec.executors?.[name] === 'git_verify') {
-            resetIndex = index;
-            break;
-          }
-          if (spec.executors?.[name] === 'agent') break;
-        }
-        for (const name of pipeline.stage_order.slice(resetIndex)) {
-          const item = pipeline.stages[name];
-          if (!item) continue;
-          item.status = 'pending';
-          item.started_at = undefined;
-          item.completed_at = undefined;
-          item.evidence = undefined;
-          if (name !== stage) item.message = undefined;
-          addHistory(state, pipeline.id, name, 'pending', `invalidated by ${repairClass} cycle ${next}/${limit} for ${stage}`);
-        }
-        pipeline.status = 'approved';
-        pipeline.current_stage = undefined;
+    // Reopen the existing source -> review/gates chain, before or after publication.
+    // The initiating gate keeps its budget and repair evidence. The source executor
+    // only borrows that identity for dispatch; no new stage, work item or counter.
+    if (repairIndex < stageIndex) {
+      for (const name of pipeline.stage_order.slice(repairIndex)) {
+        const item = pipeline.stages[name];
+        item.status = 'pending';
+        item.started_at = undefined;
+        item.completed_at = undefined;
+        item.evidence = undefined;
+        item.repair_origin_stage = undefined;
+        if (name !== stage) item.message = undefined;
+        addHistory(state, pipeline.id, name, 'pending', `invalidated by ${repairClass} cycle ${next}/${limit} for ${stage}`);
       }
+      pipeline.stages[pipeline.stage_order[repairIndex]].repair_origin_stage = stage;
+      pipeline.status = 'approved';
+      pipeline.current_stage = undefined;
     }
   });
 }
@@ -2195,6 +2249,16 @@ export async function runCli(args: string[]): Promise<void> {
       await authorizeSecurityFix(options.stateRoot, runId, stage, options.evidencePath, options.pipelineId),
       options.json,
     );
+    return;
+  }
+  if (command === 'owner-decision-defer') {
+    if (!positional[2] || !options.pipelineId || !options.evidencePath) throw new StageCliError('owner-decision-defer requires <id> --pipeline <id> --evidence <file>');
+    printState(await deferOwnerDecision(options.stateRoot, runId, positional[2], options.evidencePath, options.pipelineId), options.json);
+    return;
+  }
+  if (command === 'owner-decision-resolve') {
+    if (!positional[2] || !options.message) throw new StageCliError('owner-decision-resolve requires <id> --message approve|reject');
+    printState(await resolveOwnerDecision(options.stateRoot, runId, positional[2], options.message), options.json);
     return;
   }
   if (command === 'fix-cycle') {
