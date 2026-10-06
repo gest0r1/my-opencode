@@ -47,6 +47,10 @@ if [[ "${1:-}" == auth && "${2:-}" == status ]]; then
   exit 0
 fi
 if [[ "${1:-}" == api ]]; then
+  if [[ "$*" == *"contents/scripts/bootstrap-runtime-tools.sh?ref="* ]]; then
+    printf 'ensure_runtime_node() { :; }\nensure_claude_cli() { :; }\nconfigure_server_browser() { :; }\n'
+    exit 0
+  fi
   if [[ "$*" == *"contents/scripts/install-opencode-generation.sh?ref="* ]]; then
     cat "$FAKE_GENERATION"
     exit 0
@@ -68,6 +72,11 @@ echo "unexpected curl: $*" >&2
 exit 92
 EOF
 
+  cat > "$fakebin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+printf 'systemctl %s\n' "$*" >> "$TRACE"
+EOF
+  chmod +x "$fakebin/systemctl"
   chmod +x "$fakebin/gh" "$fakebin/curl"
 }
 
@@ -80,7 +89,7 @@ printf 'official-installer %s\n' "$*" >> "$TRACE"
 mkdir -p "$HOME/.opencode/bin"
 cat > "$HOME/.opencode/bin/opencode" <<'INNER'
 #!/usr/bin/env bash
-if [[ "$1" == serve ]]; then echo '--hostname --port'; else printf '%s\n' 'opencode 2.0.21'; fi
+if [[ "$1" == serve ]]; then echo '--hostname --port'; else printf '%s\n' 'opencode 2.0.23'; fi
 INNER
 chmod +x "$HOME/.opencode/bin/opencode"
 EOF
@@ -160,10 +169,11 @@ dir="$(run_bootstrap older-binary 2.0.20 "$CONFIG_SHA" "$APP_SHA" 0)"
 assert_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
 assert_contains "$dir/trace.log" 'generation skip_binary=0'
 assert_not_contains "$dir/trace.log" 'curl '
-dir="$(run_bootstrap config-only 2.0.21 "$CONFIG_SHA" "$APP_SHA" 1)"
+dir="$(run_bootstrap config-only 2.0.23 "$CONFIG_SHA" "$APP_SHA" 1)"
 assert_contains "$dir/trace.log" 'generation skip_binary=1'
-dir="$(run_bootstrap identical 2.0.21 "$CONFIG_SHA" '' 0)"
+dir="$(run_bootstrap identical 2.0.23 "$CONFIG_SHA" '' 0)"
 assert_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
 assert_contains "$dir/trace.log" 'generation skip_binary=1'
 assert_not_contains "$dir/trace.log" 'curl '
 echo 'PASS: every bootstrap refreshes config; unchanged binary is reused'
+
