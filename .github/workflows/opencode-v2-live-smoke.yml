@@ -32,10 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install OpenCode 2.0.21 with this branch config
+      - name: Read the distribution OpenCode pin
+        id: pin
+        run: |
+          node scripts/check-opencode-pins.mjs
+          echo "version=$(node -p 'require("./config/opencode/package.json").dependencies["@opencode/plugin"]')" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned OpenCode with this branch config
         env:
           OPENCODE_CONFIG_REF: ${{ github.sha }}
-          OPENCODE_INSTALL_VERSION: 2.0.21
+          OPENCODE_INSTALL_VERSION: ${{ steps.pin.outputs.version }}
         run: |
           set -Eeuo pipefail
           # Reproduce the previous installation: nested edited distribution copies.
@@ -49,7 +55,7 @@ jobs:
           set -Eeuo pipefail
           export PATH="$HOME/.opencode/bin:$HOME/.bun/bin:$PATH"
           version="$(opencode --version | sed -E 's/^opencode[[:space:]]+v?//; s/^v//')"
-          test "$version" = "2.0.21"
+          test "$version" = "$(node -p 'require("./config/opencode/package.json").dependencies["@opencode/plugin"]')"
 
           timeout 45s opencode debug config > /tmp/opencode-config.json 2> /tmp/opencode-config.err
           test -s /tmp/opencode-config.json
@@ -356,7 +362,7 @@ jobs:
       - name: Prove identical upgrade refreshes config and reuses binary
         env:
           OPENCODE_CONFIG_REF: ${{ github.sha }}
-          OPENCODE_INSTALL_VERSION: 2.0.21
+          OPENCODE_INSTALL_VERSION: ${{ steps.pin.outputs.version }}
         run: |
           set -Eeuo pipefail
           cp "$HOME/.config/opencode/opencode.json" /tmp/opencode-config-before.json
