@@ -9,11 +9,11 @@
 
 ## Целевые версии ветки 2.x
 
-- OpenCode: `2.0.21`
-- OpenChamber RU: `2.1.0`
+- OpenCode: `2.0.23`
+- OpenChamber RU: `2.1.1`
 - архитектура runtime: Linux x64
 
-`main` не обновляется до завершения проверки. Рабочие upgrade-ветки:
+Версии включены в `main`; связанные репозитории:
 
 - `gest0r1/my-opencode@main`
 - `gest0r1/openchamber-ru@main`
@@ -72,14 +72,14 @@ Legacy `~/.config/opencode-web.env` мигрируется и выводится
 gh auth login
 ```
 
-После merge 2.x в `main` каноническая команда будет:
+Каноническая команда:
 
 ```bash
 gh api -H 'Accept: application/vnd.github.raw' \
   'repos/gest0r1/my-opencode/contents/install.sh?ref=main' | bash
 ```
 
-До merge для проверки upgrade-ветки:
+Для явного выбора config ref:
 
 ```bash
 gh api -H 'Accept: application/vnd.github.raw' \
@@ -87,7 +87,7 @@ gh api -H 'Accept: application/vnd.github.raw' \
   | OPENCODE_CONFIG_REF=main bash
 ```
 
-Standalone `install.sh` делегирует полную установку в `scripts/install-opencode-generation.sh`: устанавливает OpenCode `2.0.21`, атомарно подготавливает и переключает config/skills generation, нормализует OpenCode 2.x paths и сохраняет существующие credentials/runtime secrets. Binary-only fast path используется только из pinned OpenChamber orchestration, когда state подтверждает, что exact config SHA уже активен.
+Standalone `install.sh` делегирует полную установку в `scripts/install-opencode-generation.sh`: устанавливает OpenCode `2.0.23`, атомарно подготавливает и переключает config/skills generation, нормализует OpenCode 2.x paths и сохраняет существующие credentials/runtime secrets. Binary-only fast path используется только из pinned OpenChamber orchestration, когда state подтверждает, что exact config SHA уже активен.
 
 ## OpenCode + OpenChamber RU 2.x
 
@@ -142,7 +142,7 @@ Canonical `install-openchamber.sh` независимо определяет и�
 | Состояние | Действие |
 |---|---|
 | Ничего не изменилось | config обновляется атомарно с сохранением пользовательских plugins; OpenCode binary, release lookup и OpenChamber package переиспользуются; native startup перезапускает сервис для загрузки config |
-| Изменился только private config, OpenCode `2.0.21` уже установлен | запускается config-only install с `OPENCODE_SKIP_BINARY_INSTALL=1`; официальный binary installer не вызывается |
+| Изменился только private config, OpenCode `2.0.23` уже установлен | запускается config-only install с `OPENCODE_SKIP_BINARY_INSTALL=1`; официальный binary installer не вызывается |
 | Требуется обновить только OpenCode binary, а pinned `config_sha` уже активен | config обновляется; официальный OpenCode installer обновляет binary с backup/rollback и version validation |
 | Изменился OpenChamber source SHA, но `runtime_fingerprint/package_source_sha` прежние | скачивается только маленький exact-SHA manifest; OpenChamber package не скачивается и не переустанавливается |
 | Изменился runtime package | используется verified local cache либо скачивается новый `.tgz`, затем проверяется SHA-256 |
@@ -154,7 +154,7 @@ Canonical `install-openchamber.sh` независимо определяет и�
 
 Полное удаление legacy runtime **не зашито скрыто** в основной installer. Для первой миграции предусмотрен отдельный cleanup script. Он сохраняет credentials/UI password, переносит пользовательские agents и архивирует legacy lookup roots.
 
-До merge, для текущей upgrade-ветки:
+Для отдельной очистки legacy 1.x:
 
 ```bash
 CONFIG_SHA="$(gh api \
@@ -207,13 +207,13 @@ ss -lnt | grep '172.18.0.1:3000'
 Ожидаемые версии:
 
 ```text
-OpenCode 2.0.21
-OpenChamber 2.1.0
+OpenCode 2.0.23
+OpenChamber 2.1.1
 ```
 
 ## Повторные обновления
 
-После merge в `main` используется тот же `install-openchamber.sh`. Отдельный clone и `git pull` на сервере не нужны.
+Для обновления из `main` используется тот же `install-openchamber.sh`. Отдельный clone и `git pull` на сервере не нужны.
 
 Встроенный `openchamber update` не является каноническим механизмом для нашего fork: установка должна идти через verified release manifest/package из `gest0r1/openchamber-ru`.
 

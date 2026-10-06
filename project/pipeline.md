@@ -52,7 +52,7 @@ Release packaging отделён от candidate CI. Если проект реа
 
 До owner approval обязательны `stage-cli plan-run-preflight`, `git-worktree-cli adopt` и `git-worktree-cli verify`. Поэтому schema/scope/baseline ошибки должны обнаруживаться до утверждения.
 
-После `init` frozen manifest не правится. Коррекция frozen V2 создаётся командой `stage-cli supersede <old-run> <new-run> --reason <code>`: копируется только planning/source/work-item контекст, но не state/candidate/gate/GitHub evidence. Для каждого нового run сохраняется reason-coded lineage.
+До фактического старта implementation технические коррекции выполняются в том же PLAN через `revise-plan`. После старта frozen manifest не переписывается: совместимые уточнения используют amendments; несовместимые — `inherit-replan` с историческим контекстом. Старые PASS/candidate/CI не становятся доказательствами нового RUN. Legacy `supersede` не используется для новых перепланирований.
 
 ## Runtime fix budget
 
@@ -82,7 +82,7 @@ If the owner or distribution changes rules while the pipeline is stopped, the ne
 
 ## Main freshness
 
-Manifest фиксирует `planning_base_sha` и `freshness_sensitive_paths`. `git-worktree-cli freshness` в начале RUN, пока worktree чистый, fetch'ит `origin/main`: релевантный drift → `STALE_PLAN` и replan; нерелевантный → deterministic merge и `run_base_sha` в `git-runtime.json`/state; frozen manifest не меняется.
+Manifest фиксирует `planning_base_sha` и `freshness_sensitive_paths`. `git-worktree-cli freshness` в начале RUN, пока worktree чистый, fetch'ит `origin/main`: релевантный drift → reconciliation точного diff с approved PLAN, а не автоматический replan; нерелевантный → deterministic merge и `run_base_sha` в `git-runtime.json`/state; frozen manifest не меняется.
 
 ## GitHub audit
 
@@ -112,3 +112,29 @@ append-only amendment, в том числе с новыми hash-bound runtime w
 RUN и REFRESH используют единый `pipeline-reconcile-cli`: hash mismatch — сигнал
 для анализа diff против PLAN, а не автоматический replan. Только COMPATIBLE / PLAN_INVALID.
 `state=in_progress` без реального старта не означает активное выполнение.
+
+## Доделка, fix loop и ранние проверки
+
+Первичная реализация, PARTIAL, прерывание worker и недоделки, найденные оркестратором, продолжаются тем же dispatch бесплатно. Начать платный по бюджету fix cycle можно только по свежему отрицательному результату CodeReviewer либо финального machine gate, с `--evidence`. Один цикл включает все findings, workers и доделки до следующего результата проверки. Счётчик принадлежит инициировавшей проверке; implementation его не увеличивает. Повтор одного принятого результата во время открытого ремонта идемпотентен.
+
+`fix-cycle` переоткрывает source → review → verification/publish/CI до и после публикации. Worker получает findings и разрешённые пути. Доделываются затронутые work items с учётом зависимостей; независимая готовая реализация сохраняется. Старые доказательства downstream-проверок инвалидируются.
+
+Для ранней обратной связи родитель или разрешённый worker запускает существующий runner:
+
+```text
+gate-runner-cli.ts RUN PIPELINE GATE --advisory --command-index N
+```
+
+Выполняется одна точная замороженная команда (индекс с нуля). Результат в `checks/` не списывает цикл и не заменяет финальные `gates/`/CI. Runtime/install/deploy в advisory запрещены. При повторных недоделках без прогресса запускается свежее ревью.
+
+## Полнота PLAN и dispatch
+
+Файлы work items — источник зависимостей и ссылок на точную схему/контракты. Index и списки pipeline генерируются из каталога, не составляются как отдельные DAG. Preflight проверяет привязку каждого item к исполнимой pipeline, дубли, существование зависимостей, циклы и порядок. G/H не могут оставаться в каталоге вне исполнимой привязки.
+
+CodeReviewer получает dispatch по имени review-стадии с каталогом проверяемых work items; отдельная фиктивная review-задача не нужна. Existing technical review сверяет обязательные проверки AC с исполняемыми gate-командами, включая live suites. Отсутствие обязательных prerequisites/suites и skip должны приводить к FAIL в тестовом runner проекта.
+
+## Удаление и отложенные решения
+
+Удаление точных Git-файлов, уже предусмотренное approved AC, выполняется `git-worktree-cli delete` с проверкой scope и доказательствами; повторное согласование не нужно.
+
+Новое действие, требующее решения, регистрируется `owner-decision-defer` с объектами, последствиями и подготовленной правкой. Безопасная независимая работа продолжается; зависимое действие ждёт. Все решения показываются одним checkpoint перед финальной проверкой. После явного ответа `owner-decision-resolve` продолжает существующий RUN и бюджет. Активную утечку secrets или опасное продолжающееся действие откладывать нельзя.

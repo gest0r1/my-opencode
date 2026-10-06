@@ -269,8 +269,33 @@ function validateWorkItems(manifest, root) {
       throw new ManifestV2PolicyError(`work item references unknown pipeline: ${item.id} -> ${String(item.pipeline_id)}`);
     }
     readFrozenArtifact(root, item, `work_items.${item.id}`);
+    const pipeline = pipelines.get(item.pipeline_id);
+    if (!pipeline.work_items?.includes(item.id)) throw new ManifestV2PolicyError(`UNBOUND_WORK_ITEM: ${item.id}`);
+    if (!Object.values(pipeline.executors ?? {}).includes('agent')) throw new ManifestV2PolicyError(`WORK_ITEM_NOT_EXECUTABLE: ${item.id}`);
   }
+  const records = new Map(manifest.work_items.map(item => [item.id, JSON.parse(readFileSync(resolve(root, item.path), 'utf8'))]));
+  const visited = new Set(), visiting = new Set();
+  const visit = id => {
+    if (visiting.has(id)) throw new ManifestV2PolicyError(`WORK_ITEM_DEPENDENCY_CYCLE: ${id}`);
+    if (visited.has(id)) return;
+    visiting.add(id);
+    const dependencies = records.get(id).depends_on ?? [];
+    if (!Array.isArray(dependencies)) throw new ManifestV2PolicyError(`INVALID_WORK_ITEM_DEPENDENCIES: ${id}`);
+    for (const dependency of dependencies) {
+      if (!records.has(dependency)) throw new ManifestV2PolicyError(`UNKNOWN_WORK_ITEM_DEPENDENCY: ${id}/${dependency}`);
+      visit(dependency);
+    }
+    visiting.delete(id); visited.add(id);
+  };
+  for (const id of records.keys()) visit(id);
   for (const pipeline of manifest.pipelines ?? []) {
+    if (new Set(pipeline.work_items ?? []).size !== (pipeline.work_items ?? []).length) throw new ManifestV2PolicyError(`DUPLICATE_WORK_ITEM_MAPPING: ${pipeline.id}`);
+    for (const [index, id] of (pipeline.work_items ?? []).entries()) {
+      for (const dependency of records.get(id)?.depends_on ?? []) {
+        const dependencyIndex = pipeline.work_items.indexOf(dependency);
+        if (dependencyIndex >= index) throw new ManifestV2PolicyError(`WORK_ITEM_DEPENDENCY_ORDER: ${id}/${dependency}`);
+      }
+    }
     if (!Array.isArray(pipeline.work_items) || pipeline.work_items.length === 0) {
       throw new ManifestV2PolicyError(`pipeline must reference at least one frozen work item: ${pipeline.id}`);
     }
@@ -804,5 +829,6 @@ export function validateManifestV2Policy(manifest, options = {}) {
   }
   return { checked_artifacts: true, project_policy: projectPolicy };
 }
+
 
 

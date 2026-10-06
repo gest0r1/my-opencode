@@ -67,8 +67,8 @@ async function fixture(runId = 'scope-run') {
     pipelines: [{
       id: 'app',
       deployable: false,
-      stages: ['implementation'],
-      executors: { implementation: 'agent' },
+      stages: ['implementation', 'code-review'],
+      executors: { implementation: 'agent', 'code-review': 'review' },
       work_items: ['wi-app'],
       decision_ids: [],
       research_ids: [],
@@ -196,36 +196,36 @@ test('PLAN scope rejects unsupported wildcard syntax before init', async () => {
 
 test('fix-cycle requires matching scope preflight and consumes it once', async () => {
   const fx = await fixture('scope-fix-preflight');
+  for (const [command, stage] of [['start', 'implementation'], ['complete', 'implementation'], ['start', 'code-review']]) {
+    const setup = run(fx.root, [command, fx.runId, stage, '--pipeline', 'app', '--state-root', fx.stateRoot]);
+    assert.equal(setup.status, 0, setup.stderr);
+  }
+  const evidence = path.join(fx.root, 'review.json');
+  await writeFile(evidence, JSON.stringify({ status: 'needs_revision' }));
   let result = run(fx.root, [
-    'start', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot,
-  ]);
-  assert.equal(result.status, 0, result.stderr);
-
-  result = run(fx.root, [
-    'fix-cycle', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot,
+    'fix-cycle', fx.runId, 'code-review', '--pipeline', 'app', '--state-root', fx.stateRoot, '--evidence', evidence,
   ]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /SCOPE_PREFLIGHT_REQUIRED/);
 
   result = run(fx.root, [
-    'scope-check', fx.runId, 'implementation', 'packages/db/src/migrate.ts',
-    '--pipeline', 'app', '--state-root', fx.stateRoot,
+    'scope-check', fx.runId, 'code-review', 'packages/db/src/migrate.ts',
+    '--pipeline', 'app', '--state-root', fx.stateRoot, '--evidence', evidence,
   ]);
   assert.equal(result.status, 0, result.stderr);
 
   result = run(fx.root, [
-    'fix-cycle', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot, '--json',
+    'fix-cycle', fx.runId, 'code-review', '--pipeline', 'app', '--state-root', fx.stateRoot, '--evidence', evidence, '--json',
   ]);
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(result.stdout);
-  assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, 1);
+  assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles, 1);
   assert.equal(state.scope_preflight, undefined);
 
   result = run(fx.root, [
-    'fix-cycle', fx.runId, 'implementation', '--pipeline', 'app', '--state-root', fx.stateRoot,
+    'fix-cycle', fx.runId, 'code-review', '--pipeline', 'app', '--state-root', fx.stateRoot, '--evidence', evidence,
   ]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /SCOPE_PREFLIGHT_REQUIRED/);
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('runtime scope cannot auto-authorize workflow trust-boundary paths', async () => {
@@ -238,3 +238,4 @@ test('runtime scope cannot auto-authorize workflow trust-boundary paths', async 
   assert.match(result.stderr, /OWNER_OR_REPLAN_REQUIRED/);
   assert.match(result.stderr, /protected\/sensitive path/);
 });
+

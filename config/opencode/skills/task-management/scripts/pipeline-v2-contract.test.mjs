@@ -1330,7 +1330,9 @@ test('technical fix after publish reopens source, verify and publish before GitH
 
   result = invoke(['scope-check', fx.manifest.run_id, 'tests', 'src/app.ts', '--pipeline', 'app', '--json']);
   assert.equal(result.status, 0, result.stderr);
-  result = invoke(['fix-cycle', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--json']);
+  const repairEvidence = path.join(fx.runRoot, 'failed-tests.json');
+  await writeFile(repairEvidence, JSON.stringify({ status: 'FAIL', run_id: fx.manifest.run_id, pipeline_id: 'app', gate: 'github_actions', stage: 'tests' }));
+  result = invoke(['fix-cycle', fx.manifest.run_id, 'tests', '--pipeline', 'app', '--evidence', repairEvidence, '--json']);
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(result.stdout);
   assert.equal(state.pipelines.app.stages['git-verify'].status, 'pending');
@@ -1346,43 +1348,23 @@ test('technical fix after publish reopens source, verify and publish before GitH
   assert.deepEqual(JSON.parse(result.stdout).runnable, [{ pipeline_id: 'app', stage: 'implementation' }]);
 });
 
-test('automatic repair counter permits exactly five default cycles and blocks the sixth', async () => {
-  const fx = await fixture('v2-fix-cycle-limit');
-  const stateRoot = path.join(fx.root, '.tmp', 'fix-cycle-state');
-
-  let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
-  assert.equal(result.status, 0, result.stderr);
-  result = run(fx.root, ['approve', fx.manifest.run_id, '--state-root', stateRoot]);
-  assert.equal(result.status, 0, result.stderr);
-  result = run(fx.root, ['start', fx.manifest.run_id, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
-  assert.equal(result.status, 0, result.stderr);
-
-  for (let cycle = 1; cycle <= 5; cycle += 1) {
-    result = run(fx.root, [
-      'scope-check', fx.manifest.run_id, 'implementation', 'src/app.ts', '--pipeline', 'app',
-      '--state-root', stateRoot, '--json',
-    ]);
+test('implementation continuation cannot spend a repair cycle', async () => {
+  const fx = await fixture('free-implementation');
+  const stateRoot = path.join(fx.root, '.tmp', 'pipelines');
+  for (const args of [['init', fx.manifestPath], ['approve', fx.manifest.run_id], ['start', fx.manifest.run_id, 'implementation', '--pipeline', 'app']]) {
+    const result = run(fx.root, [...args, '--state-root', stateRoot]);
     assert.equal(result.status, 0, result.stderr);
-    result = run(fx.root, [
-      'fix-cycle', fx.manifest.run_id, 'implementation', '--pipeline', 'app',
-      '--state-root', stateRoot, '--json',
-    ]);
-    assert.equal(result.status, 0, result.stderr);
-    const state = JSON.parse(result.stdout);
-    assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles, cycle);
   }
-
-  result = run(fx.root, [
-    'scope-check', fx.manifest.run_id, 'implementation', 'src/app.ts', '--pipeline', 'app',
-    '--state-root', stateRoot,
-  ]);
-  assert.equal(result.status, 0, result.stderr);
-  result = run(fx.root, [
-    'fix-cycle', fx.manifest.run_id, 'implementation', '--pipeline', 'app',
-    '--state-root', stateRoot,
-  ]);
+  for (let continuation = 0; continuation < 3; continuation++) {
+    const packet = run(fx.root, ['dispatch', fx.manifest.run_id, '--pipeline', 'app', '--stage', 'implementation', '--work-item', 'wi-1', '--role', 'CoderAgent']);
+    assert.equal(packet.status, 0, packet.stderr);
+    assert.equal(JSON.parse(packet.stdout).loop, 0);
+  }
+  const result = run(fx.root, ['fix-cycle', fx.manifest.run_id, 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /TECHNICAL_FIX_LIMIT_EXCEEDED/);
+  assert.match(result.stderr, /IMPLEMENTATION_CONTINUATION/);
+  const state = JSON.parse(await readFile(path.join(stateRoot, fx.manifest.run_id, 'state.json'), 'utf8'));
+  assert.equal(state.pipelines.app.stages.implementation.technical_fix_cycles ?? 0, 0);
 });
 
 
@@ -1475,3 +1457,22 @@ test('schema v2 validates preserved baseline shape and reason-coded lineage', as
   );
 });
 
+
+test('PLAN rejects orphaned work items, missing dependencies, cycles and reversed order before init', async () => {
+  const fx = await fixture('complete-work-item-catalog');
+  const itemFile = path.join(fx.runRoot, 'work-items/wi-2.json');
+  const content = JSON.stringify({id:'wi-2',pipeline_id:'app',depends_on:['wi-1']});
+  await writeFile(itemFile, content);
+  fx.manifest.work_items.push({id:'wi-2',pipeline_id:'app',path:'work-items/wi-2.json',sha256:sha(content)});
+  assert.throws(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}), /UNBOUND_WORK_ITEM/);
+  fx.manifest.pipelines[0].work_items.push('wi-2');
+  assert.doesNotThrow(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}));
+  fx.manifest.pipelines[0].work_items.reverse();
+  assert.throws(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}), /DEPENDENCY_ORDER/);
+  fx.manifest.pipelines[0].work_items.reverse();
+  for (const dependency of ['missing','wi-2']) {
+    const data = JSON.stringify({id:'wi-2',pipeline_id:'app',depends_on:[dependency]});
+    await writeFile(itemFile, data); fx.manifest.work_items[1].sha256=sha(data);
+    assert.throws(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}), dependency==='missing' ? /UNKNOWN_WORK_ITEM_DEPENDENCY/ : /DEPENDENCY_CYCLE/);
+  }
+});

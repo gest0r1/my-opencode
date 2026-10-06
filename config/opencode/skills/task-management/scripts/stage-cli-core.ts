@@ -1740,6 +1740,33 @@ export async function recordTechnicalFixCycle(
       }
       if (repairIndex < 0) throw new StageCliError(`REPAIR_TARGET_MISSING: ${pipeline.id}/${stage} has no preceding agent stage`);
     }
+    if (spec?.executors?.[stage] === 'agent') {
+      throw new StageCliError('IMPLEMENTATION_CONTINUATION: redispatch the same work item; implementation completion does not spend a fix cycle');
+    }
+    const repairFile = evidencePath ?? (repairClass === 'security_fix' ? state.security_fix_preflight?.evidence_path : undefined);
+    if (!repairFile) throw new StageCliError('REPAIR_RESULT_REQUIRED: provide fresh negative review/gate evidence');
+    const absoluteRepair = resolve(repairFile);
+    if (!absoluteRepair.startsWith(resolve(process.cwd()) + '/')) throw new StageCliError('REPAIR_EVIDENCE_OUTSIDE_PROJECT');
+    const repairRaw = readFileSync(absoluteRepair, 'utf8');
+    let result: any;
+    try { result = JSON.parse(repairRaw); } catch {
+      const verdict = /^\s*(?:[-*]\s*)?(?:\*\*)?(?:status|result|verdict|classification)(?:\*\*)?\s*:\s*(?:\*\*)?(FAIL|needs_revision|not ready|technical_fix|security_fix)\b/im.exec(repairRaw);
+      if (!verdict) throw new StageCliError('REPAIR_RESULT_REQUIRED: review must state a negative verdict');
+      result = { status: verdict[1] };
+    }
+    if ((result.run_id && result.run_id !== runId) || (result.pipeline_id && result.pipeline_id !== pipeline.id) || (result.stage && result.stage !== stage) || (!result.stage && result.gate && result.gate !== stage)) throw new StageCliError('REPAIR_RESULT_IDENTITY_MISMATCH');
+    const verdict = String(result.status ?? result.result ?? result.verdict ?? result.classification ?? '').toLowerCase();
+    if (!['fail', 'failed', 'needs_revision', 'not ready', 'technical_fix', 'security_fix'].includes(verdict) && !(repairClass === 'security_fix' && result.kind === 'security_fix')) throw new StageCliError('REPAIR_RESULT_REQUIRED: PASS/partial/transport failure is not a negative review');
+    if (spec?.executors?.[stage] !== 'review' && (result.status !== 'FAIL' || result.run_id !== runId || result.pipeline_id !== pipeline.id || (result.stage ?? result.gate) !== stage || result.purpose === 'advisory')) throw new StageCliError('REPAIR_MACHINE_RESULT_REQUIRED: use failed authoritative gate evidence');
+    const repairHash = sha256(repairRaw);
+    // Retries of the same accepted result are idempotent while its repair is open.
+    // A newly started review must produce fresh evidence rather than reusing a consumed result.
+    if (runtime.repair_evidence?.path === absoluteRepair && runtime.repair_evidence.sha256 === repairHash &&
+        pipeline.stages[pipeline.stage_order[repairIndex]].repair_origin_stage === stage) {
+      if (runtime.started_at) throw new StageCliError('REPAIR_RESULT_ALREADY_CONSUMED: obtain a fresh review/gate result');
+      if (state.scope_preflight?.stage === stage && JSON.stringify([...state.scope_preflight.paths].sort()) !== JSON.stringify([...(runtime.repair_paths ?? [])].sort())) throw new StageCliError('REPAIR_RESULT_SCOPE_CHANGED: obtain fresh review for a new attempt');
+      return;
+    }
     const scopePreflight = state.scope_preflight;
     if (!scopePreflight || scopePreflight.pipeline_id !== pipeline.id || scopePreflight.stage !== stage) {
       throw new StageCliError(
@@ -1749,6 +1776,7 @@ export async function recordTechnicalFixCycle(
     const securityFixPreflight = state.security_fix_preflight;
     if (repairClass === 'security_fix') {
       if (!securityFixPreflight ||
+          securityFixPreflight.evidence_sha256 !== sha256(readFileSync(securityFixPreflight.evidence_path, 'utf8')) ||
           securityFixPreflight.pipeline_id !== pipeline.id ||
           securityFixPreflight.stage !== stage ||
           JSON.stringify([...securityFixPreflight.paths].sort()) !== JSON.stringify([...scopePreflight.paths].sort())) {
@@ -1782,11 +1810,7 @@ export async function recordTechnicalFixCycle(
         `TECHNICAL_FIX_LIMIT_EXCEEDED: ${pipeline.id}/${stage} used=${runtime.technical_fix_cycles ?? 0} limit=${limit}; owner may grant +N cycles or request runtime replan`,
       );
     }
-    if (evidencePath) {
-      const absolute = resolve(evidencePath);
-      if (!absolute.startsWith(resolve(process.cwd()) + '/')) throw new StageCliError('REPAIR_EVIDENCE_OUTSIDE_PROJECT');
-      runtime.repair_evidence = { path: absolute, sha256: sha256(readFileSync(absolute, 'utf8')) };
-    } else runtime.repair_evidence = undefined;
+    runtime.repair_evidence = { path: absoluteRepair, sha256: repairHash };
     runtime.repair_paths = [...scopePreflight.paths];
     runtime.technical_fix_cycles = next;
     runtime.message = `${repairClass} cycle ${next}/${limit}`;
@@ -2113,7 +2137,7 @@ function usage(): string {
     '  stage-cli scope-check <run-id> <stage> <path>... [--pipeline <id>] [--json]',
     '  stage-cli scope-extend <run-id> <stage> <path>... --class technical --evidence <run-artifact.json> [--pipeline <id>] [--json]',
     '  stage-cli security-fix-check <run-id> <stage> --pipeline <id> --evidence <review.json> [--json]',
-    '  stage-cli fix-cycle <run-id> <stage> [--pipeline <id>] [--repair-class technical_fix|security_fix] [--json]',
+    '  stage-cli fix-cycle <run-id> <stage> --evidence <negative-result> [--pipeline <id>] [--repair-class technical_fix|security_fix] [--json]',
     '  stage-cli fix-budget-set <run-id> --cycles <1..20> [--json]',
     '  stage-cli fix-budget-add <run-id> <stage> --pipeline <id> --cycles <1..20> [--json]',
     '  stage-cli runtime-replan-propose <run-id> <stage> --pipeline <id> --evidence <review.json> [--json]',

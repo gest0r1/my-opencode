@@ -20,3 +20,8 @@ test('preflight checks exact worker IDs and live availability, including permiss
   assert.throws(() => assertPipelineCapabilities({ ...valid, agents: valid.agents.map(x => ({ ...x, mode: 'primary' })) }), /subagent/);
   assert.equal(valid.permissions.every(x => x.action === 'subagent'), true);
 });
+
+
+test('a live tool-level denial overrides worker delegation grants', () => {
+  assert.throws(() => assertPipelineCapabilities({ ...valid, permissions: [...valid.permissions, {action: "subagent", resource: "*", effect: "deny"}] }), /permission:subagent:CoderAgent:deny/);
+});

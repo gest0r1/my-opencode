@@ -16,3 +16,6 @@ Use the same reconciliation as `/pipeline-run`; no separate refresh lifecycle or
 6. `PLAN_INVALID` before the first source-changing `agent` stage: revise PLAN in this folder, invalidate affected gates and repeat only those checks. If owner-approved behavior/scope/constraints changed, reset approval; technical corrections retain approval. After implementation began, create a new PLAN directory through `inherit-replan`; old run remains unchanged and only reusable context goes to `planning/inherited/`.
 
 No `BOUNDED_IMPACT`, `affected_gates` refresh lifecycle, refresh lineage run, `refresh_revalidation`, or `/pipeline-plan --refresh`. Return the command `/pipeline-run <same-run-id>` when compatible; refresh never starts execution itself.
+
+
+After refresh, RUN completion redispatch and advisory checks remain free; only a fresh negative review/final machine gate initiates an existing fix cycle. Compatibility evidence or a hash mismatch alone spends no cycle. See `pipeline-run.md` for the single accounting contract; refresh does not create another budget.

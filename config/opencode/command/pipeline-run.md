@@ -59,9 +59,9 @@ Pending GitHub outbox events must be zero before publish/PR handoff.
 
 ## Compact dispatch and reuse
 
-When calling `stage-cli fix-cycle`, include `--evidence <fresh-review-artifact>` for the repair that follows that review. The CLI freezes its hash and the scope preflight paths. The runtime uses this verified delta; absent evidence safely starts a fresh worker.
+When calling `stage-cli fix-cycle`, include `--evidence <fresh-review-artifact>` for the repair that follows that review. The CLI freezes its hash and the scope preflight paths. The runtime uses this verified delta; negative result evidence is mandatory for a new charged cycle; missing/PASS/partial/transport evidence cannot charge it.
 
-For each frozen agent/review work item, call `stage-cli dispatch <run-id> --pipeline <id> --stage <stage> --work-item <id> --role <registered-role> --json` after stage start. Pass its paths and the markers `<pipeline_work_item id="ID"/>` and `<pipeline_dispatch run="RUN" pipeline="PIPELINE" stage="STAGE"/>` to `subagent`. The runtime hook validates fresh machine state, automatically prepares baseline/repair identity and injects the dispatch packet. `pipeline_runtime_prepare` is optional compatibility tooling, not an LLM-dependent prerequisite. Never invent `sessionID`.
+For each frozen agent work item, call `stage-cli dispatch <run-id> --pipeline <id> --stage <stage> --work-item <id> --role <registered-role> --json` after stage start. Pass its paths and the markers `<pipeline_work_item id="ID"/>` and `<pipeline_dispatch run="RUN" pipeline="PIPELINE" stage="STAGE"/>` to `subagent`. The runtime hook validates fresh machine state, automatically prepares baseline/repair identity and injects the dispatch packet. `pipeline_runtime_prepare` is optional compatibility tooling, not an LLM-dependent prerequisite. For executor=`review`, use the stage name as `--work-item`, role `CodeReviewer`, and the same markers. The CLI derives `review_work_items` from the frozen catalog; do not create a synthetic review task or bypass dispatch. Never invent `sessionID`.
 
 The worker reads authoritative paths itself. OpenStage reads compact state, blockers and evidence paths. `--no-session-reuse` disables resume in runtime; reviewer/planning sessions remain fresh. Export metrics with `reuse-report.mjs`; see `project/reuse-analysis.md` in the distribution README. Missing/unavailable child sessions fall back fresh before execution; worker failures retain normal repair semantics.
 
@@ -109,11 +109,15 @@ Never replace a missing, incompatible or failed **final** GitHub CI workflow wit
 
 Respect the repository package-manager contract for `local_gate`. Before dispatch, `stage-cli prepare-environment <manifest>` may install the exact packageManager version into the runtime user's managed cache, then rerun environment preflight. This is authorized environment preparation, not a technical-fix cycle or replan; never mutate package.json/lockfiles or substitute another manager. Missing unrepairable tooling, incompatible Node, registry/auth failures or unsupported pins remain environment BLOCKED. Do not ask the owner to install a user-local pinned manager that this deterministic command can prepare.
 
+### Early feedback during implementation
+
+The parent or permitted worker may run `gate-runner-cli.ts RUN PIPELINE GATE --advisory --command-index N` to execute one exact frozen test/typecheck/build command. `N` is zero-based. Choose a narrow relevant command; avoid full expensive suites on every dispatch. Evidence goes to `checks/` instead of `gates/`; neither PASS nor FAIL spends cycles or satisfies final acceptance. Do not run advisory runtime/install/deploy commands or checks while a conflicting writer is active. Finish known omissions before advancing dependent work. Repeated incompletion without progress triggers fresh authoritative review, rather than endless free redispatch.
+
 ## Automatic repair loops — initial budget 5
 
-A repair cycle is one source-changing attempt that reaches its next authoritative review/gate result. The shared budget applies to both `technical_fix` and bounded `security_fix`. **Scope discovery/authorization happens before the cycle counter is consumed.** If the frozen DAG contains executor=`review`, that stage runs a fresh CodeReviewer. A cycle already started may finish through that review/gate even when its counter becomes `N/N`.
+Implementation omissions, PARTIAL output, interruption recovery and parent-requested completion redispatch the same work item without `fix-cycle`. Advisory checks through the existing gate runner are free and do not complete stages. Only a fresh negative CodeReviewer or authoritative machine-gate result initiates a charged cycle. A repair cycle is one source-changing attempt that reaches its next authoritative review/gate result. The shared budget applies to both `technical_fix` and bounded `security_fix`. **Scope discovery/authorization happens before the cycle counter is consumed.** If the frozen DAG contains executor=`review`, that stage runs a fresh CodeReviewer. A cycle already started may finish through that review/gate even when its counter becomes `N/N`.
 
-`fix-cycle` on a review or machine gate reopens its preceding agent stage and all following stages, before or after publication. Dispatch the original work items on that agent stage. Its dispatch borrows the initiating gate's repair evidence, paths and loop number. Record the next cycle on the initiating gate only; reopening source work and running fresh review do not consume a second cycle. Never dispatch CoderAgent on a review stage or require a PLAN amendment merely to transport an approved fix. An older blocked checkpoint with an already charged cycle may resume that same attempt through fix-cycle only with identical hash-bound repair evidence and authorized paths after the current scope/security preflight; a fresh result or changed scope/evidence starts a new cycle.
+`fix-cycle` on a review or machine gate reopens its preceding agent stage and all following stages, before or after publication. Dispatch the affected original work items on that agent stage, following their frozen dependencies. Preserve completed independent source work; if affected items cannot be identified safely, widen the repair coverage within approved scope. Its dispatch borrows the initiating gate's repair evidence, paths and loop number. A retry of the same accepted result while repair is open is idempotent. All findings and worker continuations before the next authoritative result remain that one cycle. Record the next cycle on the initiating gate only; reopening source work and running fresh review do not consume a second cycle. Never dispatch CoderAgent on a review stage or require a PLAN amendment merely to transport an approved fix. An older blocked checkpoint with an already charged cycle may resume that same attempt through fix-cycle only with identical hash-bound repair evidence and authorized paths after the current scope/security preflight; a fresh result or changed scope/evidence starts a new cycle.
 
 ### Source deletion and deferred decisions
 
@@ -129,7 +133,7 @@ For `technical_fix`:
 2. identify exact repository paths before source mutation;
 3. call `stage-cli scope-check <run-id> <stage> <path>... --pipeline <id> --json`;
 4. when it returns `TECHNICAL_SCOPE_REVIEW_REQUIRED`, run fresh ArchitectureAnalyzer + SeniorTechnicalPlanReviewer and use `stage-cli scope-extend ... --class technical --evidence <review.json>` only when that evidence proves a decision-free bounded clarification;
-5. Only after scope preflight PASS call `stage-cli fix-cycle <run-id> <stage> --pipeline <id>`.
+5. Only after scope preflight PASS call `stage-cli fix-cycle <run-id> <stage> --pipeline <id> --evidence <negative-review-or-gate-result>`. Charge on the checking stage, never on implementation.
 
 For a CodeReviewer finding classified `security_fix`, do **not** stop merely because severity is Critical/High. Autonomous security repair is allowed only when the frozen contract already determines the safe remediation. CodeReviewer must write machine-readable evidence proving all of:
 
@@ -153,7 +157,7 @@ stage-cli fix-cycle <run-id> <stage> --pipeline <id> --repair-class security_fix
 
 If `git-worktree-cli verify` discovers an additional path after a cycle already started, resolve it through the same scope-check/review flow inside the **same** cycle and continue that cycle. A real protected/sensitive/owner/replan requirement stops the RUN.
 
-For a source-changing fix after `git_publish`, `fix-cycle` reopens the chain from the preceding `git_verify` through local fail-fast, publish, final CI and affected CD/runtime stages. Evidence for the previous candidate becomes stale.
+For a source-changing fix after `git_publish`, `fix-cycle` reopens the chain from the preceding source agent through `git_verify` through local fail-fast, publish, final CI and affected CD/runtime stages. Evidence for the previous candidate becomes stale.
 
 The default automatic budget is **5 cycles per stage/work-item**. On RUN start the owner may pre-authorize a higher ceiling with `--fix-cycles N` (maximum 20); OpenStage maps it to:
 

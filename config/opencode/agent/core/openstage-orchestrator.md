@@ -100,3 +100,4 @@ Workers read their authoritative files. Parent reads compact state, blockers and
 ## Results
 Report status, concrete blockers and artifact/evidence paths. Ask only command-defined owner questions. Use current gate status literally; missing evidence cannot satisfy a gate.
 
+Implementation PARTIAL/interruption/parent-found omissions are continued with the same work-item dispatch and cost no fix cycle. Only fresh negative reviewer/final machine-gate evidence can initiate `fix-cycle`; redispatch and advisory checks stay within that attempt. Review dispatch uses the stage name as work-item ID and derives its packet from frozen implementation work items. Read the canonical RUN command for accounting and deferred decisions.

@@ -121,3 +121,25 @@ test('runner executes frozen uv pytest and rejects every non-pytest uv form', as
     }
   } finally { process.env.PATH = oldPath; }
 });
+
+
+test('advisory checks use a selected frozen command and cannot overwrite final evidence', async () => {
+  const fixture = await makeRun('bash -n check.sh');
+  await writeFile(path.join(fixture.root, 'check.sh'), '#!/bin/bash\necho ok\n');
+  const args = [fixture.runId, 'app', 'build', '--state-root', fixture.stateRoot];
+  const final = run(fixture.root, args); assert.equal(final.status, 0, final.stderr);
+  const finalPath = JSON.parse(final.stdout).evidence;
+  const previous = await readFile(finalPath, 'utf8');
+  const early = run(fixture.root, [...args, '--advisory', '--command-index', '0']);
+  assert.equal(early.status, 0, early.stderr);
+  const earlyPath = JSON.parse(early.stdout).evidence;
+  assert.match(earlyPath, /checks/);
+  assert.equal(JSON.parse(await readFile(earlyPath, 'utf8')).purpose, 'advisory');
+  assert.equal(await readFile(finalPath, 'utf8'), previous);
+  assert.notEqual(run(fixture.root, [...args, '--advisory', '--command-index', '2']).status, 0);
+  assert.notEqual(run(fixture.root, [...args, '--command-index', '0']).status, 0);
+  const runtime = await makeRun('bash scripts/install.sh', 'runtime_install');
+  const blocked = run(runtime.root, [runtime.runId, 'app', 'runtime_install', '--advisory', '--state-root', runtime.stateRoot]);
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.stderr, /advisory checks cannot/);
+});
