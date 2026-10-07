@@ -353,3 +353,11 @@ Supersede copies only planning/source/work-item artifacts. Runtime state, locks,
 
 PR CI uses `trigger: pull_request`, `pr_number: <existing PR number>`. The gate uses authenticated `gh api` and binds PR repository, head branch/head SHA, base SHA and Actions association to the exact frozen candidate. Both direct head SHA and that PR's current merge SHA are accepted. A foreign/stale/unassociated run fails closed. Push and DEV contracts keep their existing SHA/trust rules; workflow bootstrap still requires push.
 
+
+## External research within existing gates
+
+ExternalScout on the existing inexpensive model checks docs, libraries and GitHub implementations before material external design choices. It requests broad WebResearcher research through OpenStage only for incomplete/conflicting docs, requirements-based comparison, nontrivial guarantees or remaining decision-relevant uncertainty. No separate stage is added. Both persist versioned evidence; WebResearcher writes below `planning/research/`.
+
+ArchitectureAnalyzer receives research before selecting an approach and may directly clarify missing details. Consider project reuse, ready-made library, external approach adaptation, then custom implementation; justify the choice and rejected applicable alternatives. Coder and technical reviewers have the same targeted documentation/code access. Review independence and scope rules remain unchanged.
+
+`pipeline_runtime_preflight` accepts optional `research_agents` to check selected live tools, delegation, models and role permissions. It checks catalog/permission availability; real source retrieval still determines whether research succeeded. Unselected research does not block trivial work. RUN adds evidence without rewriting frozen artifacts.

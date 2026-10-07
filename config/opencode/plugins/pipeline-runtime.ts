@@ -245,7 +245,7 @@ export default Plugin.define({
       }
     })
 
-    const capabilityPreflight = async (sessionID: string) => {
+    const capabilityPreflight = async (sessionID: string, researchAgents: string[] = []) => {
       const [tools, agentResult, skillResult, modelResult] = await Promise.all([
         plugin.tool.list(), plugin.agent.list(), plugin.skill.list(), plugin.model.list(),
       ])
@@ -253,7 +253,7 @@ export default Plugin.define({
       const parent = agents.find((x) => String(x.id) === "OpenStageOrchestrator")
       if (!parent) throw new Error("PIPELINE_CAPABILITY_UNAVAILABLE: primary OpenStageOrchestrator")
       return assertPipelineCapabilities({ tools, agents, skills: skillResult.data,
-        visibleTools: visibleBySession.get(sessionID), permissions: parent.permissions, models: modelResult.data })
+        visibleTools: visibleBySession.get(sessionID), permissions: parent.permissions, models: modelResult.data, researchAgents })
     }
 
     await plugin.tool.transform((editor) => {
@@ -261,8 +261,9 @@ export default Plugin.define({
         name: "pipeline_runtime_preflight",
         options: { codemode: false },
         description: "Check live pipeline tools, skills, exact subagent IDs and delegation permissions before PLAN/RUN. BLOCKED is authoritative; never widen write permissions as fallback.",
-        input: { type: "object", properties: {}, additionalProperties: false },
-        execute: async (_args, context) => ({ content: JSON.stringify(await capabilityPreflight(String(context.sessionID))) }),
+        input: { type: "object", properties: { research_agents: { type: "array", uniqueItems: true,
+          items: { type: "string", enum: ["ExternalScout", "WebResearcher", "ArchitectureAnalyzer", "CoderAgent", "CodeReviewer", "SeniorTechnicalPlanReviewer"] } } }, additionalProperties: false },
+        execute: async (args, context) => ({ content: JSON.stringify(await capabilityPreflight(String(context.sessionID), args.research_agents)) }),
       })
       editor.add({
         name: "pipeline_runtime_prepare",

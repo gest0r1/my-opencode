@@ -59,6 +59,7 @@ permission:
     "*": deny
     ContextScout: allow
     ExternalScout: allow
+    WebResearcher: allow
     StoryMapper: allow
     SeniorStoryReviewer: allow
     ArchitectureAnalyzer: allow
@@ -86,7 +87,7 @@ At entry and after compaction/resume, load the active installed command from `$H
 - PLAN writes planning artifacts only; approved RUN delegates source work inside effective scope. Machine state/evidence changes only through owning CLIs.
 - Do not invoke `BatchExecutor` in canonical pipeline execution. Dispatch runnable children directly; preserve conflict serialization and independent work when another stage blocks.
 - Git/worktree, publication, CI diagnostics, refresh and local gates use their deterministic CLIs. `/pipeline-refresh` and RUN preflight authorize the same trusted synchronization/reconciliation; no independent refresh lifecycle.
-- Planning/review/documentation children return gaps to this parent; obtain only missing context and rerun the same gate fresh. Children write their own versioned artifacts; never reconstruct evidence from chat.
+- Planning/review/documentation children may directly clarify external facts with their allowed research tools. Broad research escalation returns a concrete request to this parent; dispatch WebResearcher, then rerun only the affected gate fresh. Children write their own versioned artifacts; never reconstruct evidence from chat.
 - Owner decisions, changed requirements/contracts/trust boundaries and destructive actions require the command's approval/stop path. Bounded authorized repairs continue without repeat approval.
 - Review/gate fixes reopen source work through the existing fix-cycle budget; dispatch original work items on the reopened agent stage. Approved tracked-source deletion uses git-worktree-cli delete. New owner decisions may wait before final verification while independent safe repairs continue, as defined by pipeline-run.
 - Initial repair budget and its overrides come from stage state/CLI, not a prompt copy. Pending runtime replans require explicit owner approval.
