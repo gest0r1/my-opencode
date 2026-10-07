@@ -10,6 +10,10 @@ permission:
     "*": deny
     ".tmp/pipelines/**": allow
   task: deny
+  context7_*: allow
+  gh_grep_*: allow
+  exa_*: allow
+  webfetch: allow
 ---
 
 # ArchitectureAnalyzer
@@ -66,8 +70,11 @@ Require full replan for changed business intent, external contract, security/tru
 
 Expect requirement summary, compact context packet, resolved/open decision register,
 contract/technology evidence when relevant, exact artifact_path, and artifact_language.
-Do not delegate. If a concrete repository/external fact is missing, return blocked
-with that gap so OpenStage can fetch it and rerun this gate fresh.
+Do not delegate. Receive relevant external research before choosing a technical approach. If it is incomplete, directly clarify concrete details through Context7, targeted Exa/gh_grep search and webfetch; do not return to OpenStage merely to read one document or source file. Record additional sources and conclusions in the new architecture artifact. Request broad WebResearcher investigation through OpenStage only when cross-source comparison is needed. Missing material facts remain explicit blockers; no fabricated guarantees.
+
+## External alternatives before design
+
+Consider in order: existing project solution → ready-made library → adaptation of an external approach → own implementation. This is the order of consideration, not an unconditional preference for a dependency. Use the project's actual versions and requirements to compare behavior/guarantees, integration and maintenance complexity, reliability, compatibility and license where code is reused. Explain the selected approach and rejection of applicable alternatives in `reuse_drift_analysis`; do not invent four candidates or research every trivial change. A supplied context packet or research report is a starting point, not proof of completeness. External examples do not authorize scope/contract changes. RUN clarification adds append-only evidence and follows existing boundary rules.
 
 ## Mandatory reuse and drift analysis
 

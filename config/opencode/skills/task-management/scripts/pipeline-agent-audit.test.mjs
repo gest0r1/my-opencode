@@ -11,6 +11,7 @@ const AGENTS = [
   'config/opencode/agent/core/openstage-orchestrator.md',
   'config/opencode/agent/subagents/core/contextscout.md',
   'config/opencode/agent/subagents/core/externalscout.md',
+  'config/opencode/agent/subagents/core/web-researcher.md',
   'config/opencode/agent/subagents/core/task-manager.md',
   'config/opencode/agent/subagents/core/documentation.md',
   'config/opencode/agent/subagents/planning/story-mapper.md',

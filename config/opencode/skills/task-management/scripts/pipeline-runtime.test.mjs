@@ -128,3 +128,28 @@ test('validated dispatch resumes only the same healthy worker with frozen repair
  } finally {process.chdir(previousCwd); await rm(root,{recursive:true,force:true});}
 });
 
+test('runtime preflight forwards selected research roles and checks their effective access', async () => {
+ const root = await tempProject();
+ try {
+  const registered = new Map();
+  const ids = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist', 'WebResearcher'];
+  let denied = false;
+  const parent = {id:'OpenStageOrchestrator', mode:'primary', permissions:ids.map(resource => ({action:'subagent', resource, effect:'allow'}))};
+  await runtime.setup({location:{directory:root},
+   tool:{hook:async()=>{}, transform:async fn=>fn({add:t=>registered.set(t.name,t)}),
+    list:async()=>['read','shell','subagent','pipeline_runtime_prepare','webfetch','gh_grep_searchGitHub'].map(id=>({id}))},
+   session:{hook:async()=>{}},
+   agent:{list:async()=>({data:[parent,...ids.map(id=>({id,mode:'subagent',permissions:[
+    {action:'webfetch',resource:'*',effect:denied?'deny':'allow'}, {action:'gh_grep_*',resource:'*',effect:'allow'}]}))]})},
+   skill:{list:async()=>({data:[{name:'task-management'}]})},
+   model:{list:async()=>({data:[{providerID:'test',id:'test'}]})},
+  });
+  const preflight=registered.get('pipeline_runtime_preflight');
+  assert.ok(preflight.input.properties.research_agents.items.enum.includes('ArchitectureAnalyzer'));
+  const result=await preflight.execute({research_agents:['ArchitectureAnalyzer','WebResearcher']},{sessionID:'parent'});
+  assert.deepEqual(JSON.parse(result.content).research_checked.map(r=>r.agent),['ArchitectureAnalyzer','WebResearcher']);
+  denied=true;
+  await assert.rejects(preflight.execute({research_agents:['ArchitectureAnalyzer']},{sessionID:'parent'}), /research:ArchitectureAnalyzer:webfetch/);
+  assert.equal(JSON.parse((await preflight.execute({}, {sessionID:'parent'})).content).status,'PASS');
+ } finally {await rm(root,{recursive:true,force:true});}
+});

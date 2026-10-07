@@ -245,3 +245,5 @@ rm -f ~/.config/opencode-web.env
 При обновлении `scripts/merge-user-plugins.mjs` переносит пользовательские plugin entries из JSON/JSONC и локальные файлы `plugins/` в staging до проверки зависимостей. V1 tuples нормализуются в V2 objects; дубли по package ID устраняются, обязательная запись репозитория имеет приоритет. Явные исключения задаёт `config/opencode/plugin-policy.json`. Некорректный config прерывает staging, активное поколение остаётся прежним.
 
 Выборочные диагностики и временная БД для live-тестов: [контракт тестирования](config/opencode/skills/task-management/gate-testing.md). Аудит остатков v1: [проверка и варианты очистки](project/v1-audit.md).
+
+Исследование документации, библиотек и GitHub встроено в существующие гейты: [механика и права](config/opencode/PIPELINE.md#external-research-within-existing-gates).
