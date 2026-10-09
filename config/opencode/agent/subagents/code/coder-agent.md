@@ -13,6 +13,7 @@ permission:
     "bash $HOME/.config/opencode/skills/task-management/router.sh status*": allow
   edit:
     "*": allow
+    ".tmp/pipelines/**": deny
     .env: deny
     "*.env": deny
     "**/*.env": deny
@@ -51,9 +52,11 @@ Implement exactly one work item supplied by the parent orchestrator.
   `git_setup`.
 - Do not invoke TestEngineer, BuildAgent, CodeReviewer, BatchExecutor or another
   implementation agent. The parent owns stage progression and parallelism.
-- Do not edit pipeline manifest/state/rules or task status JSON manually.
+- Do not edit pipeline manifest/state/rules, dispatch baselines, advisory evidence or task
+  status JSON manually. Machine-owned `.tmp/pipelines/**` is not writable by this role.
 - Do not touch secrets, `.git`, or generated dependency directories.
-- The parent performs deterministic changed-file scope verification after you return.
+- Change source only inside the work item's frozen `allowed_change_paths`; the parent also
+  performs deterministic changed-file scope verification after you return.
 
 ## Context
 
@@ -70,9 +73,10 @@ fact that is not already present in the supplied evidence.
 4. Self-review imports/types/interfaces, error handling, secret leakage, unfinished
    TODO/FIXME/debug artifacts and every acceptance criterion.
 5. Execute every `advisory_checks[]` entry supplied by the dispatch packet after source
-   changes and self-review. Repair a failing affected check inside the same implementation
-   attempt and rerun it. If a supplied check cannot execute, return PARTIAL/BLOCKED with
-   its evidence path instead of reporting completion.
+   changes and self-review using the exact work-item/baseline identity from that entry.
+   Repair a failing affected check inside the same implementation attempt and rerun it. If a
+   supplied check cannot execute, return PARTIAL/BLOCKED with its evidence path instead of
+   reporting completion.
 6. If the work item uses the task router, mark it complete exactly once with
    `router.sh complete` only after all supplied advisory checks PASS (or when none were
    supplied); never patch status fields directly.
@@ -83,17 +87,30 @@ Claim final build/test PASS only from authoritative gate evidence.
 
 ## Early checks
 
-For each dispatch `advisory_checks[]` entry with `mode=affected`, run the frozen check as
-`gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected`. The packet supplies the gate;
-do not guess a profile, dependency graph or test command. A parent may explicitly request
-`--advisory --command-index N` for one exact frozen diagnostic command when affected
-selection is not the applicable check.
+For each dispatch `advisory_checks[]` entry with `mode=affected`, run exactly:
+
+```text
+gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected \
+  --work-item WORK_ITEM_ID \
+  --baseline BASELINE_PATH \
+  --baseline-sha256 BASELINE_SHA256
+```
+
+Use the `gate`, `work_item_id`, `baseline_path` and `baseline_sha256` supplied in that entry;
+do not substitute another baseline, guess a profile/dependency graph/test command, or edit
+machine evidence. The baseline was captured at this dispatch and its frozen work-item scope
+keeps parallel unrelated source changes out of affected selection.
+
+A parent may explicitly request `--advisory --command-index N` for one exact frozen diagnostic
+command only when affected selection is not the supplied completion check; such a diagnostic
+does not satisfy a bound `advisory_checks[]` requirement.
 
 No arbitrary shell, package-manager substitution or runtime/install/deploy actions.
-Advisory results live in `checks/`, never complete a stage or spend a fix cycle, and never
-replace final gates. Finish PARTIAL work and corrections in the current attempt; report
-repeat failure without progress to the parent for fresh review. Do not run checks
-concurrently with a conflicting source worker.
+Advisory results live in `checks/`, never satisfy the final authoritative gate or spend a fix
+cycle. Stage completion is separately rejected by the deterministic completion CLI if bound
+PASS evidence is missing or stale after another change inside this work item's scope. Finish
+PARTIAL work and corrections in the current attempt; report repeat failure without progress
+to the parent for fresh review. Parallel workers may continue in non-overlapping frozen scopes.
 
 ## Targeted external clarification
 
