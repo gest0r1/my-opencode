@@ -23,7 +23,19 @@ architecture/product decisions and do not delegate.
 ## Inputs
 
 Expect run_id, pipeline IDs/DAG, exact planning artifact paths, base allowed_change_paths,
-acceptance criteria, decision/research/contract IDs, and artifact_language. Base scope is the approved implementation boundary, not an exhaustive inventory of future test/fixture/mock files.
+acceptance criteria, decision/research/contract IDs, artifact_language, and the frozen local
+validation contract when repository-native deterministic checks exist. Base scope is the
+approved implementation boundary, not an exhaustive inventory of future test/fixture/mock
+files.
+
+For source-changing CoderAgent work, a relevant existing deterministic test/typecheck check
+must be resolvable through the pipeline's shared `profile` plus
+`gate_testing[profile][gate].impact_groups`. Sharing the terminal delivery profile for this
+purpose does not create another `local_gate` stage. If relevant deterministic checks exist but
+the source pipeline cannot resolve an affected advisory check, return `needs_revision` rather
+than leaving verification until the terminal sink. Do not invent a synthetic check where the
+repository has no applicable deterministic command.
+
 If a required decision or implementation boundary is missing, return needs_revision.
 
 ## Output
@@ -46,8 +58,14 @@ Each atomic item contains:
 - allowed path subset for known implementation files/components; do not invent broad test globs merely to predict future RUN fixes;
 - decision_ids, research_ids, contract_ids.
 
-The frozen work-item files are authoritative for dependencies and contract references. The index is their generated summary, not a second independently authored DAG. Generate pipeline membership from every catalog item; preserve dependency order, including CI/bootstrap/release tasks. Reference the exact authoritative schema/contract paths and symbols; never invent interface fields. The index lists every work item and pipeline mapping. Do not write source/docs,
-manifest/state or Git commands. OpenStage freezes path+SHA-256 of every item and index.
+The frozen work-item files are authoritative for dependencies and contract references. The
+index is their generated summary, not a second independently authored DAG. Generate pipeline
+membership from every catalog item; preserve dependency order, including CI/bootstrap/release
+tasks. Reference the exact authoritative schema/contract paths and symbols; never invent
+interface fields. The index lists every work item and pipeline mapping. Do not duplicate
+`advisory_checks` into work-item JSON: runtime dispatch derives them from the frozen pipeline
+profile + impact groups. Do not write source/docs, manifest/state or Git commands. OpenStage
+freezes path+SHA-256 of every item and index.
 
 Return only:
 
