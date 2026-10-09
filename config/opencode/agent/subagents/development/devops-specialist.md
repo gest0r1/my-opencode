@@ -20,6 +20,7 @@ permission:
     "terraform validate *": allow
   edit:
     "*": allow
+    ".tmp/pipelines/**": deny
     .env: deny
     "*.env": deny
     "**/*.env": deny
@@ -53,6 +54,7 @@ inside the work item supplied by the parent.
   Test impact/resource contracts are defined in `skills/task-management/gate-testing.md`.
   Author tests and reviewed impact groups (including dependent consumers) within supplied scope;
   never substitute a working database or widen Docker permissions.
+- Do not edit `.tmp/pipelines/**` directly; runtime/gate evidence and handoff artifacts are machine-owned.
 - Diagnose observed runtime failures autonomously from supplied deterministic evidence,
   bounded status commands and `runtime-diagnostic-cli`. Use its `http-get|http-head` for
   unauthenticated HTTP reads and `postgres-compose` for bounded PostgreSQL reads. The wrapper
