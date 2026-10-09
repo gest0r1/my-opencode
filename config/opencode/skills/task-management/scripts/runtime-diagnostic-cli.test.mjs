@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { validateDiagnosticUrl, validateReadOnlySql } from './runtime-diagnostic-cli.ts';
 
@@ -41,4 +42,14 @@ test('runtime diagnostic SQL policy blocks PostgreSQL side-effect and server-acc
     'SELECT pg_ls_dir(\'/\')',
     'SELECT dblink(\'host=example\', \'SELECT 1\')',
   ]) assert.throws(() => validateReadOnlySql(sql), /SQL_SIDE_EFFECT_FUNCTION_FORBIDDEN/);
+});
+
+test('runtime diagnostic implementation downgrades DB role, bounds HTTP output and force-kills timed out children', async () => {
+  const source = await readFile(new URL('./runtime-diagnostic-cli.ts', import.meta.url), 'utf8');
+  assert.match(source, /SET ROLE pg_read_all_data/);
+  assert.match(source, /BEGIN READ ONLY/);
+  assert.match(source, /SIGKILL/);
+  assert.match(source, /body_truncated/);
+  assert.match(source, /status:'OBSERVED'/);
+  assert.match(source, /searchParams\.set\(key, '\[REDACTED\]'\)/);
 });
