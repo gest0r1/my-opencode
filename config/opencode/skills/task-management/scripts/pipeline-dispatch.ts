@@ -1,14 +1,41 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
 import { resolve, dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { computeRunnable, validateState } from './stage-cli-core.ts';
 import { validateOwnerAmendmentEvidence } from './owner-amendment-policy.ts';
+import { sourceInventory } from './gate-diagnostics.mjs';
 
 const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 
-function affectedAdvisoryChecks(manifest: any, pipeline: any, role: string) {
-  if (role !== 'CoderAgent' || typeof pipeline?.profile !== 'string' || !pipeline.profile) return [];
+function scopePath(value: unknown): value is string {
+  if (typeof value !== 'string' || !value || value.startsWith('/') || value.includes('\\') || value.includes('\0')) return false;
+  const parts = value.replace(/\/\*\*$/, '').split('/');
+  return !parts.includes('..') && !parts.includes('.git') && !/[?*\[\]{}]/.test(value.endsWith('/**') ? value.slice(0, -3) : value);
+}
+
+function scopeContained(child: string, parent: string): boolean {
+  if (parent.endsWith('/**')) {
+    const base = parent.slice(0, -3).replace(/\/$/, '');
+    const childBase = child.endsWith('/**') ? child.slice(0, -3).replace(/\/$/, '') : child;
+    return childBase === base || childBase.startsWith(`${base}/`);
+  }
+  return child === parent;
+}
+
+function coderScope(item: any, effectiveScope: string[]): string[] {
+  if (!Array.isArray(item?.allowed_change_paths) || item.allowed_change_paths.length === 0 ||
+      item.allowed_change_paths.some((value: unknown) => !scopePath(value))) return [];
+  const scope = [...new Set(item.allowed_change_paths as string[])];
+  if (scope.some(child => !effectiveScope.some(parent => scopeContained(child, parent)))) {
+    throw Error('WORK_ITEM_SCOPE_OUTSIDE_EFFECTIVE_SCOPE');
+  }
+  return scope;
+}
+
+function affectedAdvisoryChecks(manifest: any, pipeline: any, role: string, itemScope: string[]) {
+  if (role !== 'CoderAgent' || itemScope.length === 0 || typeof pipeline?.profile !== 'string' || !pipeline.profile) return [];
   const profile = pipeline.profile;
   const commands = manifest.gate_profiles?.[profile];
   const testing = manifest.gate_testing?.[profile];
@@ -19,6 +46,32 @@ function affectedAdvisoryChecks(manifest: any, pipeline: any, role: string) {
         !Array.isArray(impactGroups) || impactGroups.length === 0) return [];
     return [{ gate, mode: 'affected' as const }];
   });
+}
+
+function inventoryInvoke(root: string, exe: string, argv: string[]) {
+  if (exe !== 'git') return Promise.resolve({ exit_code: 1, stdout: '', stderr: 'unsupported executable', truncated: false });
+  const result = spawnSync(exe, argv, { cwd: root, shell: false, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, timeout: 30_000 });
+  const stdout = String(result.stdout ?? '');
+  return Promise.resolve({
+    exit_code: result.status ?? (result.error ? 1 : 0),
+    stdout,
+    stderr: String(result.stderr ?? result.error?.message ?? ''),
+    truncated: stdout.length >= 2 * 1024 * 1024,
+  });
+}
+
+async function writeBaseline(root: string, run: string, payload: Record<string, unknown>): Promise<{path:string;sha256:string}> {
+  const runRoot = resolve(root, '.tmp/pipelines', run);
+  const directory = join(runRoot, 'checks', 'baselines');
+  await mkdir(directory, { recursive: true });
+  const identity = hash(JSON.stringify([payload.pipeline_id, payload.stage, payload.work_item_id])).slice(0, 24);
+  const relative = `checks/baselines/${identity}.json`;
+  const target = join(runRoot, relative);
+  const content = `${JSON.stringify(payload, null, 2)}\n`;
+  const temporary = `${target}.tmp-${process.pid}`;
+  await writeFile(temporary, content, 'utf8');
+  await rename(temporary, target);
+  return { path: relative, sha256: hash(content) };
 }
 
 export async function dispatchPacket(root: string, run: string, pipelineId: string, stage: string, workItemId: string, role: string) {
@@ -92,13 +145,33 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     evidencePaths.push(file);
   }
   const revision = hash(JSON.stringify({ manifest: state.manifest_sha256, runtime, repairRuntime, effectiveScope, ownerAmendments: relevantAmendments }));
-  const advisoryChecks = affectedAdvisoryChecks(manifest, pipeline, role);
+  const itemScope = role === 'CoderAgent' ? coderScope(item, effectiveScope) : [];
+  const baseChecks = affectedAdvisoryChecks(manifest, pipeline, role, itemScope);
+  let advisoryChecks: Array<Record<string, unknown>> = [];
+  if (baseChecks.length) {
+    const inventory = await sourceInventory(root, (exe: string, argv: string[]) => inventoryInvoke(root, exe, argv));
+    if (!inventory.files || !inventory.digest) throw Error('ADVISORY_BASELINE_UNAVAILABLE');
+    const baseline = await writeBaseline(root, run, {
+      schema_version: 1,
+      run_id: run,
+      pipeline_id: pipelineId,
+      stage,
+      work_item_id: workItemId,
+      manifest_sha256: state.manifest_sha256,
+      state_revision: revision,
+      allowed_change_paths: itemScope,
+      source_digest: inventory.digest,
+      files: inventory.files,
+      recorded_at: new Date().toISOString(),
+    });
+    advisoryChecks = baseChecks.map(check => ({ ...check, work_item_id: workItemId, baseline_path: baseline.path, baseline_sha256: baseline.sha256 }));
+  }
   return { run_id: run, pipeline_id: pipelineId, stage, executor, role, work_item_id: workItemId,
     work_item_path: workItemPath, work_item_sha256: frozen.sha256, authoritative_paths: [state.manifest_file, state.rules_file, ...referencePaths, ...amendmentEvidence],
     review_work_items: stageReview ? [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems].map((w: any) => ({ id: w.id, path: resolve(dirname(state.manifest_file), w.path), sha256: w.sha256 })) : undefined,
     context_paths: (item.context_files ?? []).map((p: string) => resolve(root, p)), reference_paths: (item.reference_files ?? []).map((p: string) => resolve(root, p)),
     decision_ids: item.decision_ids ?? pipeline.decision_ids ?? [], research_ids: item.research_ids ?? pipeline.research_ids ?? [], contract_ids: item.contract_ids ?? pipeline.contract_ids ?? [],
-    effective_scope: effectiveScope, repair_paths: [...new Set([...(repairRuntime?.repair_paths ?? []), ...amendmentPaths])], state_revision: revision, loop: repairRuntime?.technical_fix_cycles ?? 0,
+    effective_scope: effectiveScope, work_item_scope: itemScope, repair_paths: [...new Set([...(repairRuntime?.repair_paths ?? []), ...amendmentPaths])], state_revision: revision, loop: repairRuntime?.technical_fix_cycles ?? 0,
     repair_origin_stage: runtime?.repair_origin_stage,
     evidence_paths: [...new Set(evidencePaths)],
     advisory_checks: advisoryChecks,
