@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { assertPipelineCapabilities } from './capability-preflight.mjs';
 
 const workers = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
-const valid = { tools: ['read', 'shell', 'subagent', 'pipeline_runtime_prepare'].map(id => ({ id })), agents: workers.map(id => ({ id, mode: 'subagent' })), skills: [{ name: 'task-management' }], permissions: workers.map(resource => ({ action: 'subagent', resource, effect: 'allow' })) };
+const coderPermissions = [
+  {action: 'bash', resource: '*', effect: 'deny'},
+  {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*', effect: 'allow'},
+];
+const workerAgent = id => ({ id, mode: 'subagent', ...(id === 'CoderAgent' ? { permissions: coderPermissions } : {}) });
+const valid = { tools: ['read', 'shell', 'subagent', 'pipeline_runtime_prepare'].map(id => ({ id })), agents: workers.map(workerAgent), skills: [{ name: 'task-management' }], permissions: workers.map(resource => ({ action: 'subagent', resource, effect: 'allow' })) };
 test('live model catalog detects wrong provider and preserves the exact plugin suffix', () => {
   const input = {...valid, agents: valid.agents.map(a => a.id === 'SeniorTechnicalPlanReviewer' ? {...a, model: 'claude-code/claude-opus-5-5[1m]'} : a),
     models: [{providerID: 'claude-code', id: 'claude-opus-5-5[1m]'}]};
@@ -21,6 +26,16 @@ test('preflight checks exact worker IDs and live availability, including permiss
   assert.equal(valid.permissions.every(x => x.action === 'subagent'), true);
 });
 
+test('preflight requires live CoderAgent access to the affected advisory runner', () => {
+  const denied = valid.agents.map(agent => agent.id === 'CoderAgent'
+    ? {...agent, permissions: [{action: 'bash', resource: '*', effect: 'deny'}]}
+    : agent);
+  assert.throws(() => assertPipelineCapabilities({...valid, agents: denied}), /capability:CoderAgent:advisory-gate-runner/);
+  const missing = valid.agents.map(agent => agent.id === 'CoderAgent'
+    ? {...agent, permissions: []}
+    : agent);
+  assert.throws(() => assertPipelineCapabilities({...valid, agents: missing}), /capability:CoderAgent:advisory-gate-runner/);
+});
 
 test('a live tool-level denial overrides worker delegation grants', () => {
   assert.throws(() => assertPipelineCapabilities({ ...valid, permissions: [...valid.permissions, {action: "subagent", resource: "*", effect: "deny"}] }), /permission:subagent:CoderAgent:deny/);
@@ -30,8 +45,10 @@ const researchInput = (id = 'ArchitectureAnalyzer') => ({
   ...valid,
   tools: [...valid.tools, {id: 'webfetch'}, {id: 'gh_grep_searchGitHub'}, {id: 'context7_query-docs'}],
   agents: [...valid.agents.filter(a => a.id !== id), {id, mode: 'subagent', permissions: [
+    ...(id === 'CoderAgent' ? coderPermissions : []),
     {action: '*', resource: '*', effect: 'deny'},
     ...['webfetch', 'gh_grep_*', 'context7_*'].map(action => ({action, resource: '*', effect: 'allow'})),
+    ...(id === 'CoderAgent' ? coderPermissions : []),
   ]}],
   permissions: [...valid.permissions, {action: 'subagent', resource: id, effect: 'allow'}],
   researchAgents: [id],
