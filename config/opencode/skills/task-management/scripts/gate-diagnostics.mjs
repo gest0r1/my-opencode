@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, lstat } from 'node:fs/promises';
+import { readFile, lstat, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const excluded = file => /(^|\/)(\.tmp|\.git|node_modules|dist|build|coverage)(\/|$)|(^|\/)(\.env(?:\..*)?|[^/]+\.(?:key|pem|secret))$/i.test(file);
@@ -32,9 +32,15 @@ export async function sourceInventory(cwd, invoke, scopes = []) {
   for (const file of selected) {
     let identity = 'deleted';
     try {
-      const stat = await lstat(join(cwd, file));
-      if (!stat.isFile()) identity = `non-regular:${stat.mode}`;
-      else identity = createHash('sha256').update(String(stat.mode)).update('\0').update(await readFile(join(cwd, file))).digest('hex');
+      const absolute = join(cwd, file);
+      const stat = await lstat(absolute);
+      if (stat.isFile()) {
+        identity = createHash('sha256').update(String(stat.mode)).update('\0').update(await readFile(absolute)).digest('hex');
+      } else if (stat.isSymbolicLink()) {
+        identity = createHash('sha256').update(`symlink:${stat.mode}`).update('\0').update(await readlink(absolute)).digest('hex');
+      } else {
+        identity = `non-regular:${stat.mode}`;
+      }
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
