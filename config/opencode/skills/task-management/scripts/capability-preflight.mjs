@@ -5,6 +5,10 @@ const ADVISORY_RUNNER_INVOCATIONS = [
   'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected',
   'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected',
 ];
+const RUNTIME_DIAGNOSTIC_INVOCATIONS = [
+  'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts http-get https://example.invalid/health',
+  'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts http-get https://example.invalid/health',
+];
 
 export function assertPipelineCapabilities({ tools, agents, skills, visibleTools, permissions, models, researchAgents = [] }) {
   const names = new Set(tools.map(x => x.id ?? x.name));
@@ -37,6 +41,12 @@ export function assertPipelineCapabilities({ tools, agents, skills, visibleTools
     const advisoryAllowed = ['bash', 'shell'].some(action =>
       ADVISORY_RUNNER_INVOCATIONS.some(resource => effectFor(coder.permissions, action, resource) === 'allow'));
     if (!advisoryAllowed) missing.push('capability:CoderAgent:advisory-gate-runner');
+  }
+  const devops = catalog.get('OpenDevopsSpecialist');
+  if (devops) {
+    const diagnosticAllowed = ['bash', 'shell'].some(action =>
+      RUNTIME_DIAGNOSTIC_INVOCATIONS.some(resource => effectFor(devops.permissions, action, resource) === 'allow'));
+    if (!diagnosticAllowed) missing.push('capability:OpenDevopsSpecialist:runtime-diagnostic');
   }
   const research = selected.map(id => {
     const agent = catalog.get(id);
