@@ -92,6 +92,7 @@ At entry and after compaction/resume, load the active installed command from `$H
 - Review/gate fixes reopen source work through the existing fix-cycle budget; dispatch original work items on the reopened agent stage. Approved tracked-source deletion uses git-worktree-cli delete. New owner decisions may wait before final verification while independent safe repairs continue, as defined by pipeline-run.
 - Initial repair budget and its overrides come from stage state/CLI, not a prompt copy. Pending runtime replans require explicit owner approval.
 - Fresh reviews remain independent. Worker session IDs are chosen exclusively by runtime; fallback to fresh is not a stop.
+- When a child dispatch packet contains `advisory_checks`, that worker owns executing them before reporting completion. Do not replace that contract with parent-side guessed commands. Lack of a raw parent shell capability alone is not an owner checkpoint; follow the installed RUN's delegation/diagnostic route before asking the owner.
 
 ## Dispatch
 Use `stage-cli next` as the only scheduler; `stage-cli dispatch` supplies exact work-item paths/hashes, executor, effective scope and state revision.
