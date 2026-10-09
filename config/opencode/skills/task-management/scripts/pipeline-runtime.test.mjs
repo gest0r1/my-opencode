@@ -49,7 +49,7 @@ async function baseManifest(root, runId, pipelines) {
   const normalized = [];
   for (const pipeline of pipelines) {
     const id = `wi-${pipeline.id}`;
-    const artifact = await frozen(root, `work-items/${id}.json`, JSON.stringify({ id, pipeline_id: pipeline.id }));
+    const artifact = await frozen(root, `work-items/${id}.json`, JSON.stringify({ id, pipeline_id: pipeline.id, stage: pipeline.stages[0], suggested_agent: 'CoderAgent' }));
     workItems.push({ id, pipeline_id: pipeline.id, ...artifact });
     normalized.push({
       ...pipeline,
@@ -94,19 +94,36 @@ async function baseManifest(root, runId, pipelines) {
 test('validated dispatch resumes only the same healthy worker with frozen repair evidence', async () => {
  const previousCwd = process.cwd(), root = await tempProject();
  try {
+  spawnSync('git',['init'],{cwd:root});
+  spawnSync('git',['config','user.email','test@example.invalid'],{cwd:root});
+  spawnSync('git',['config','user.name','Test'],{cwd:root});
+  await mkdir(path.join(root,'src'),{recursive:true});
+  await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
+  spawnSync('git',['add','src'],{cwd:root});
+  spawnSync('git',['commit','-m','base'],{cwd:root});
+
   const manifest = await baseManifest(root,'runtime-test',[{id:'p',stages:['implementation', 'code-review']}]);
   manifest.allowed_change_paths=['src/**'];
   manifest.pipelines[0].executors['code-review']='review';
   manifest.pipelines[0].profile='local';
   manifest.gate_profiles={local:{'local-test':['npm test']}};
   manifest.gate_testing={local:{'local-test':{impact_groups:[{inputs:['src/**'],command_index:0}]}}};
+  const workItemPath=path.join(root,manifest.work_items[0].path);
+  const workItemRaw=JSON.stringify({id:'wi-p',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent',allowed_change_paths:['src/**']});
+  await writeFile(workItemPath,workItemRaw);
+  manifest.work_items[0].sha256=sha(workItemRaw);
+
   const manifestPath=await writeManifest(root,manifest);
   run(root,['init',manifestPath]); run(root,['approve','runtime-test']); run(root,['start','runtime-test','implementation','--pipeline','p']);
   process.chdir(root);
   const baselinePacket = await dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent');
-  assert.deepEqual(baselinePacket.advisory_checks,[{gate:'local-test',mode:'affected'}]);
-  const reviewlessPacket = await dispatchPacket(root,'runtime-test','p','implementation','wi-p','TestEngineer');
-  assert.deepEqual(reviewlessPacket.advisory_checks,[]);
+  assert.equal(baselinePacket.advisory_checks.length,1);
+  assert.equal(baselinePacket.advisory_checks[0].gate,'local-test');
+  assert.equal(baselinePacket.advisory_checks[0].mode,'affected');
+  assert.equal(baselinePacket.advisory_checks[0].work_item_id,'wi-p');
+  assert.match(baselinePacket.advisory_checks[0].baseline_path,/^checks\/baselines\//);
+  assert.match(baselinePacket.advisory_checks[0].baseline_sha256,/^[0-9a-f]{64}$/);
+  await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','TestEngineer'),/WORK_ITEM_ROLE_MISMATCH/);
   const hooks={}, sessionHooks={}; let unavailable=false;
   await runtime.setup({location:{directory:root}, tool:{hook:async(name,fn)=>{hooks[name]=fn},transform:async(fn)=>fn({add:()=>{}})},session:{hook:async(name,fn)=>{sessionHooks[name]=fn},get:async()=>{if(unavailable) throw Error('removed');return {data:{}}}}});
   const input=()=>({agent:'CoderAgent',prompt:'<pipeline_work_item id="wi-p"/><pipeline_dispatch run="runtime-test" pipeline="p" stage="implementation"/>',sessionID:'model-invented'});
@@ -152,6 +169,7 @@ test('runtime preflight forwards selected research roles and checks their effect
       {action:'bash',resource:'*',effect:'deny'},
       {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*',effect:'allow'},
     ] : []),
+    ...(id === 'TestEngineer' ? [{action:'bash',resource:'pytest *',effect:'allow'}] : []),
     ...(id === 'OpenDevopsSpecialist' ? [
       {action:'bash',resource:'*',effect:'deny'},
       {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *',effect:'allow'},
