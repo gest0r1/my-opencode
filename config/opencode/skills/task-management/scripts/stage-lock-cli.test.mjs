@@ -27,14 +27,36 @@ test('stale stage lock is recovered, absent lock is idempotent, live lock is pre
   }
 });
 
-test('malformed lock fails closed', async () => {
+test('stale recovery guard from a crashed recovery process is reclaimed', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'stage-lock-'));
-  const dir = path.join(root, 'run-2');
+  const runId = 'run-recovery';
+  const dir = path.join(root, runId);
   await mkdir(dir,{recursive:true});
   try {
-    await writeFile(path.join(dir,'.lock'),'not-a-pid\n');
+    await writeFile(path.join(dir,'.lock.recover'),'2147483646\n');
+    await writeFile(path.join(dir,'.lock'),'2147483647\n');
+    const recovered = await recoverStageLock(root, runId);
+    assert.equal(recovered.status, 'RECOVERED');
+    await assert.rejects(readFile(path.join(dir,'.lock.recover'),'utf8'), error => error?.code === 'ENOENT');
+  } finally {
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('malformed lock and recovery guard fail closed', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'stage-lock-'));
+  const lockDir = path.join(root, 'run-2');
+  const guardDir = path.join(root, 'run-3');
+  await mkdir(lockDir,{recursive:true});
+  await mkdir(guardDir,{recursive:true});
+  try {
+    await writeFile(path.join(lockDir,'.lock'),'not-a-pid\n');
     await assert.rejects(recoverStageLock(root,'run-2'), /LOCK_INVALID/);
-    assert.equal((await readFile(path.join(dir,'.lock'),'utf8')).trim(),'not-a-pid');
+    assert.equal((await readFile(path.join(lockDir,'.lock'),'utf8')).trim(),'not-a-pid');
+
+    await writeFile(path.join(guardDir,'.lock.recover'),'not-a-pid\n');
+    await assert.rejects(recoverStageLock(root,'run-3'), /LOCK_RECOVERY_INVALID/);
+    assert.equal((await readFile(path.join(guardDir,'.lock.recover'),'utf8')).trim(),'not-a-pid');
   } finally {
     await rm(root,{recursive:true,force:true});
   }
