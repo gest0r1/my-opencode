@@ -8,7 +8,10 @@ const advisoryPermissions = [
   {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*', effect: 'allow'},
 ];
 const coderPermissions = advisoryPermissions;
-const testEngineerPermissions = advisoryPermissions;
+const testEngineerPermissions = [
+  ...advisoryPermissions,
+  {action: 'bash', resource: 'pytest *', effect: 'allow'},
+];
 const devopsPermissions = [
   {action: 'bash', resource: '*', effect: 'deny'},
   {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *', effect: 'allow'},
@@ -43,18 +46,32 @@ test('preflight requires live CoderAgent access to the affected advisory runner'
   assert.throws(() => assertPipelineCapabilities({...valid, agents: missing}), /capability:CoderAgent:advisory-gate-runner/);
 });
 
-test('preflight requires live TestEngineer access to the advisory runner', () => {
+test('preflight requires TestEngineer advisory and targeted-test routes independently', () => {
   const denied = valid.agents.map(agent => agent.id === 'TestEngineer'
     ? {...agent, permissions: [{action: 'bash', resource: '*', effect: 'deny'}]}
     : agent);
   assert.throws(() => assertPipelineCapabilities({...valid, agents: denied}), /capability:TestEngineer:advisory-gate-runner/);
+
+  const advisoryOnly = valid.agents.map(agent => agent.id === 'TestEngineer'
+    ? {...agent, permissions: advisoryPermissions}
+    : agent);
+  assert.throws(() => assertPipelineCapabilities({...valid, agents: advisoryOnly}), /capability:TestEngineer:targeted-test-runner/);
 });
 
-test('preflight requires live OpenDevopsSpecialist access to runtime diagnostics', () => {
+test('preflight requires both HTTP and PostgreSQL DevOps diagnostic routes', () => {
   const denied = valid.agents.map(agent => agent.id === 'OpenDevopsSpecialist'
     ? {...agent, permissions: [{action: 'bash', resource: '*', effect: 'deny'}]}
     : agent);
-  assert.throws(() => assertPipelineCapabilities({...valid, agents: denied}), /capability:OpenDevopsSpecialist:runtime-diagnostic/);
+  assert.throws(() => assertPipelineCapabilities({...valid, agents: denied}), /runtime-diagnostic-http/);
+
+  const httpOnlyPermissions = [
+    {action: 'bash', resource: '*', effect: 'deny'},
+    {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts http-get *', effect: 'allow'},
+  ];
+  const httpOnly = valid.agents.map(agent => agent.id === 'OpenDevopsSpecialist'
+    ? {...agent, permissions: httpOnlyPermissions}
+    : agent);
+  assert.throws(() => assertPipelineCapabilities({...valid, agents: httpOnly}), /runtime-diagnostic-postgres/);
 });
 
 test('a live tool-level denial overrides worker delegation grants', () => {
