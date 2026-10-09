@@ -13,14 +13,22 @@ CoderAgent work, PLAN assigns the source pipeline the shared frozen `profile` an
 `gate_testing[profile][gate].impact_groups` for the relevant component boundaries and
 transitive consumers. A source-only feature pipeline may share the terminal delivery
 pipeline's profile solely for advisory selection; this does **not** add a `local_gate`
-stage, authoritative PASS, extra fix budget or duplicate final validation.
+stage, authoritative final PASS, extra fix budget or duplicate final validation.
+
+Every source-changing CoderAgent work item freezes its exact target agent `stage` and a
+non-empty `allowed_change_paths` subset. On each Coder dispatch, `stage-cli dispatch` captures
+a machine-owned content baseline for that work item and returns `advisory_checks[]` containing
+`work_item_id`, `baseline_path` and `baseline_sha256`. The worker cannot edit `.tmp/pipelines`
+and must execute the supplied bound check. `stage-complete-cli` verifies the resulting PASS
+against the same baseline and current scoped source before delegating to the ordinary
+`stage-cli complete` transition.
 
 Do not create a synthetic profile or impact mapping when no repository-native deterministic
 check applies. If a relevant deterministic check exists but a source-changing CoderAgent
 pipeline cannot resolve it through its frozen profile + impact groups, planning is incomplete
-and must be revised before approval. `stage-cli dispatch` derives CoderAgent
-`advisory_checks[]` only from this frozen contract; RUN and the worker must not guess a test
-command or dependency graph.
+and must be revised before approval. If the work item lacks its frozen stage/scope binding,
+dispatch is incomplete and must not silently fall back to a global affected check. RUN and
+the worker must not guess a test command or dependency graph.
 
 ```json
 {
@@ -71,12 +79,18 @@ file filters to an explicit `vitest run`; omission runs that command in full.
 Overlapping groups union file filters; an unfiltered group wins. Previously
 failed commands are rechecked in full.
 
-An advisory affected run compares the worktree (including staged and untracked
-source files) with frozen `git_setup.base_sha`. Missing baseline, unmapped input,
-schema/migration/auth/shared-contract, lockfile or configuration changes select
-the complete array. Final gates always execute the original complete array.
-Existing frozen RUNs are not rewritten; without impact metadata advisory checks
-remain full. No dependency graph is guessed by the model during RUN.
+A bound Coder affected run compares the current worktree with the machine-owned snapshot
+captured at that exact dispatch, then intersects that content delta with the work item's
+frozen `allowed_change_paths`. Therefore unrelated parallel work outside that scope neither
+selects extra tests nor invalidates a previously bound PASS. A later change inside the same
+scope changes the scoped source digest and makes the PASS stale until the affected check is
+rerun.
+
+Legacy/manual advisory affected invocations without a dispatch baseline retain the existing
+`git_setup.base_sha` comparison. Missing impact metadata, an unmapped change inside the
+selected delta, schema/migration/auth/shared-contract, lockfile or configuration changes
+select the complete command array. Final authoritative gates always execute the original
+complete array. No dependency graph is guessed by the model during RUN.
 
 ## Disposable PostgreSQL
 
@@ -99,10 +113,11 @@ addressed recovery, never use Docker prune or a wildcard delete.
 ## Diagnostics
 
 Evidence includes per-command durations, bounded redacted output, failure
-summaries and fresh Vitest JSON report summaries. `report_files` is relative to
-the RUN directory; stale reports and paths escaping that directory are rejected
-or ignored. Exit status and the complete final gate remain authoritative;
-derived report summaries cannot turn FAIL into PASS.
+summaries and fresh Vitest JSON report summaries. Bound Coder evidence also records its
+work-item/stage identity, baseline SHA-256, selected paths and scoped source digest.
+`report_files` is relative to the RUN directory; stale reports and paths escaping that
+directory are rejected or ignored. Exit status and the complete final gate remain
+authoritative; derived report summaries cannot turn FAIL into PASS.
 
 Repeating unchanged failed diagnostic inputs is blocked. A correction changes
 the input fingerprint; a new concrete hypothesis can be recorded in this RUN's
@@ -114,6 +129,6 @@ test validity. A faulty test is repaired against its approved requirement, not
 weakened to pass. Only a genuine requirement/policy/external-access choice needs
 the owner; see the RUN command for repair and stop handling.
 
-Docker access is only through the trusted runner. DevOps may author and run
-scoped advisory tests; orchestration owns the final gate and stage transitions.
-No manual env-prefix or OpenCode restart is needed for a frozen managed resource.
+Docker access for managed test resources is only through the trusted runner. DevOps uses its
+separate bounded runtime diagnostic route; orchestration owns the final gate and stage
+transitions. No manual env-prefix or OpenCode restart is needed for a frozen managed resource.
