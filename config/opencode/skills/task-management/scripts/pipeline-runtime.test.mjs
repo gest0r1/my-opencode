@@ -152,6 +152,10 @@ test('runtime preflight forwards selected research roles and checks their effect
       {action:'bash',resource:'*',effect:'deny'},
       {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*',effect:'allow'},
     ] : []),
+    ...(id === 'OpenDevopsSpecialist' ? [
+      {action:'bash',resource:'*',effect:'deny'},
+      {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *',effect:'allow'},
+    ] : []),
     {action:'webfetch',resource:'*',effect:denied?'deny':'allow'}, {action:'gh_grep_*',resource:'*',effect:'allow'}]}))]})},
    skill:{list:async()=>({data:[{name:'task-management'}]})},
    model:{list:async()=>({data:[{providerID:'test',id:'test'}]})},
