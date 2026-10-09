@@ -4,7 +4,9 @@ import process from 'node:process';
 
 const MAX_CAPTURE = 256 * 1024;
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-const SQL_WRITE = /\b(insert|update|delete|merge|copy|create|alter|drop|truncate|grant|revoke|vacuum|analyze|call|do|set|reset|begin|commit|rollback|savepoint|prepare|execute|deallocate|refresh|reindex|cluster|lock)\b/i;
+const SQL_WRITE = /\b(insert|update|delete|merge|copy|create|alter|drop|truncate|grant|revoke|vacuum|analyze|call|do|set|reset|begin|commit|rollback|savepoint|prepare|execute|deallocate|refresh|reindex|cluster|lock|into)\b/i;
+const SQL_ROW_LOCK = /\bfor\s+(?:update|no\s+key\s+update|share|key\s+share)\b/i;
+const SQL_SIDE_EFFECT = /\b(?:nextval|setval|set_config|pg_notify|pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|pg_switch_wal|pg_create_restore_point|pg_promote|pg_log_backend_memory_contexts|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|pg_ls_logdir|pg_ls_waldir|pg_ls_archive_statusdir|lo_import|lo_export|dblink\w*|pg_(?:try_)?advisory_(?:xact_)?(?:lock|unlock)(?:_shared|_all)?)\s*\(/i;
 const SQL_START = /^\s*(select|with|show)\b/i;
 
 export class RuntimeDiagnosticError extends Error {}
@@ -35,8 +37,11 @@ export function validateReadOnlySql(raw: string): string {
   if (sql.includes('\0') || /--|\/\*|\*\/|\\/.test(sql)) throw new RuntimeDiagnosticError('SQL_UNSAFE_SYNTAX');
   const withoutTrailing = sql.endsWith(';') ? sql.slice(0, -1).trim() : sql;
   if (withoutTrailing.includes(';')) throw new RuntimeDiagnosticError('SQL_MULTIPLE_STATEMENTS');
-  if (!SQL_START.test(withoutTrailing) || SQL_WRITE.test(withoutTrailing)) {
+  if (!SQL_START.test(withoutTrailing) || SQL_WRITE.test(withoutTrailing) || SQL_ROW_LOCK.test(withoutTrailing)) {
     throw new RuntimeDiagnosticError('SQL_READ_ONLY_REQUIRED');
+  }
+  if (SQL_SIDE_EFFECT.test(withoutTrailing)) {
+    throw new RuntimeDiagnosticError('SQL_SIDE_EFFECT_FUNCTION_FORBIDDEN');
   }
   return withoutTrailing;
 }
