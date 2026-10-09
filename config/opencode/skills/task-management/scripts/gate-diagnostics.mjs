@@ -4,21 +4,57 @@ import { join } from 'node:path';
 
 const excluded = file => /(^|\/)(\.tmp|\.git|node_modules|dist|build|coverage)(\/|$)|(^|\/)(\.env(?:\..*)?|[^/]+\.(?:key|pem|secret))$/i.test(file);
 
-export async function sourceSnapshot(cwd, manifest, invoke) {
+function scopeMatches(file, scope) {
+  if (typeof scope !== 'string' || !scope) return false;
+  if (scope.endsWith('/**')) {
+    const prefix = scope.slice(0, -3).replace(/\/$/, '');
+    return file === prefix || file.startsWith(`${prefix}/`);
+  }
+  return file === scope;
+}
+
+export async function sourceInventory(cwd, invoke) {
   const files = await invoke('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z']);
-  if (files.exit_code !== 0 || files.truncated) return { digest: null, changed: null };
+  if (files.exit_code !== 0 || files.truncated) return { digest: null, files: null };
+  const entries = {};
   const digest = createHash('sha256');
   for (const file of [...new Set(files.stdout.split('\0').filter(Boolean))].filter(file => !excluded(file)).sort()) {
-    digest.update(file).update('\0');
+    let identity = 'deleted';
     try {
       const stat = await lstat(join(cwd, file));
-      if (!stat.isFile()) { digest.update('non-regular'); continue; }
-      digest.update(String(stat.mode)).update(await readFile(join(cwd, file)));
+      if (!stat.isFile()) identity = `non-regular:${stat.mode}`;
+      else identity = createHash('sha256').update(String(stat.mode)).update('\0').update(await readFile(join(cwd, file))).digest('hex');
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
-      digest.update('deleted');
     }
+    entries[file] = identity;
+    digest.update(file).update('\0').update(identity).update('\0');
   }
+  return { digest: digest.digest('hex'), files: entries };
+}
+
+export function changedFromInventory(currentFiles, baselineFiles, scopes = []) {
+  if (!currentFiles || !baselineFiles) return null;
+  const changed = [];
+  for (const file of [...new Set([...Object.keys(currentFiles), ...Object.keys(baselineFiles)])].sort()) {
+    if (currentFiles[file] === baselineFiles[file]) continue;
+    if (scopes.length && !scopes.some(scope => scopeMatches(file, scope))) continue;
+    changed.push(file);
+  }
+  return changed;
+}
+
+export async function sourceSnapshot(cwd, manifest, invoke, baseline) {
+  const inventory = await sourceInventory(cwd, invoke);
+  if (!inventory.files) return { digest: null, changed: null };
+
+  if (baseline?.files && Array.isArray(baseline?.allowed_change_paths)) {
+    return {
+      digest: inventory.digest,
+      changed: changedFromInventory(inventory.files, baseline.files, baseline.allowed_change_paths),
+    };
+  }
+
   let changed = null;
   const base = manifest.git_setup?.base_sha;
   if (/^[0-9a-f]{40}$/i.test(base ?? '')) {
@@ -26,7 +62,7 @@ export async function sourceSnapshot(cwd, manifest, invoke) {
     const untracked = await invoke('git', ['ls-files', '--others', '--exclude-standard', '-z']);
     if (diff.exit_code === 0 && untracked.exit_code === 0 && !diff.truncated && !untracked.truncated) changed = [...new Set([...diff.stdout.split('\0'), ...untracked.stdout.split('\0')].filter(file => file && !excluded(file)))];
   }
-  return { digest: digest.digest('hex'), changed };
+  return { digest: inventory.digest, changed };
 }
 
 export async function readDiagnosticHypothesis(path, runDirectory) {
