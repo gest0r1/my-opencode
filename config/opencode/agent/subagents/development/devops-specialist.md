@@ -13,6 +13,8 @@ permission:
     "*": deny
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *": allow
     "docker compose ps *": allow
     "docker compose logs *": allow
     "docker ps *": allow
@@ -57,7 +59,15 @@ inside the work item supplied by the parent.
   Test impact/resource contracts are defined in `skills/task-management/gate-testing.md`.
   Author tests and reviewed impact groups (including dependent consumers) within supplied scope;
   never substitute a working database or widen Docker permissions.
-- Read-only operational commands may be used only to diagnose an observed issue.
+- Diagnose observed runtime failures autonomously with existing read-only commands and
+  `runtime-diagnostic-cli`. Use its `http-get|http-head` for unauthenticated HTTP reads and
+  `postgres-compose` for bounded PostgreSQL reads. The wrapper enforces read-only database
+  mode, rejects mutating SQL and redacts bounded output; never replace it with raw `psql`,
+  `docker exec`, arbitrary `curl`, or a shell escape.
+- Parent/orchestrator lack of shell permission is not an owner task when these diagnostic
+  routes can answer the question. Return the concrete command/result and diagnosis.
+- Runtime mutation, destructive cleanup, credentials/secrets and policy/security decisions
+  remain on their existing deterministic/owner stop paths.
 - Do not advance pipeline state or invoke another execution agent.
 - The parent verifies changed-file scope after source/config edits.
 
@@ -74,6 +84,6 @@ Return:
 - deployment/runtime assumptions;
 - required deterministic gate commands/locks;
 - rollback expectation or `not_applicable` with reason;
-- diagnosis of any supplied runner evidence.
+- diagnosis of any supplied runner/runtime evidence.
 
 Never turn a failed deterministic runtime gate into PASS by judgement.
