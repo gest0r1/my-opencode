@@ -159,7 +159,11 @@ test('runtime preflight forwards selected research roles and checks their effect
   const registered = new Map();
   const ids = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist', 'WebResearcher'];
   let denied = false;
-  const parent = {id:'OpenStageOrchestrator', mode:'primary', permissions:ids.map(resource => ({action:'subagent', resource, effect:'allow'}))};
+  const parent = {id:'OpenStageOrchestrator', mode:'primary', permissions:[
+    ...ids.map(resource => ({action:'subagent', resource, effect:'allow'})),
+    {action:'bash',resource:'*',effect:'deny'},
+    {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*',effect:'allow'},
+  ]};
   await runtime.setup({location:{directory:root},
    tool:{hook:async()=>{}, transform:async fn=>fn({add:t=>registered.set(t.name,t)}),
     list:async()=>['read','shell','subagent','pipeline_runtime_prepare','webfetch','gh_grep_searchGitHub'].map(id=>({id}))},
