@@ -1,6 +1,10 @@
 const WORKERS = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
 
 const RESEARCH_ROLES = new Set(['ExternalScout', 'WebResearcher', 'ArchitectureAnalyzer', 'CoderAgent', 'CodeReviewer', 'SeniorTechnicalPlanReviewer']);
+const ADVISORY_RUNNER_INVOCATIONS = [
+  'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected',
+  'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected',
+];
 
 export function assertPipelineCapabilities({ tools, agents, skills, visibleTools, permissions, models, researchAgents = [] }) {
   const names = new Set(tools.map(x => x.id ?? x.name));
@@ -27,6 +31,12 @@ export function assertPipelineCapabilities({ tools, agents, skills, visibleTools
       for (const rule of permissions) if (match('subagent', rule.action) && match(id, rule.resource)) effect = rule.effect;
       if (effect !== 'allow') missing.push(`permission:subagent:${id}:${effect}`);
     }
+  }
+  const coder = catalog.get('CoderAgent');
+  if (coder) {
+    const advisoryAllowed = ['bash', 'shell'].some(action =>
+      ADVISORY_RUNNER_INVOCATIONS.some(resource => effectFor(coder.permissions, action, resource) === 'allow'));
+    if (!advisoryAllowed) missing.push('capability:CoderAgent:advisory-gate-runner');
   }
   const research = selected.map(id => {
     const agent = catalog.get(id);
