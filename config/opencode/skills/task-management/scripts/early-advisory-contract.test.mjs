@@ -8,9 +8,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../../../../..');
 const text = relative => readFile(path.join(ROOT, relative), 'utf8');
 
-test('PLAN, dispatch, CoderAgent and completion share one affected-advisory contract', async () => {
-  const [plan, testing, taskManager, coder, orchestrator, dispatch, runner, completion] = await Promise.all([
+test('PLAN, RUN, dispatch, CoderAgent and completion share one affected-advisory contract', async () => {
+  const [plan, run, testing, taskManager, coder, orchestrator, dispatch, runner, completion] = await Promise.all([
     text('config/opencode/command/pipeline-plan.md'),
+    text('config/opencode/command/pipeline-run.md'),
     text('config/opencode/skills/task-management/gate-testing.md'),
     text('config/opencode/agent/subagents/core/task-manager.md'),
     text('config/opencode/agent/subagents/code/coder-agent.md'),
@@ -21,6 +22,10 @@ test('PLAN, dispatch, CoderAgent and completion share one affected-advisory cont
   ]);
 
   assert.match(plan, /gate_testing.*skills\/task-management\/gate-testing\.md/is);
+  assert.match(run, /stage-complete-cli.*mandatory boundary/is);
+  assert.match(run, /Never call `stage-cli complete` directly from OpenStage/is);
+  assert.match(run, /Every supplied `mode=affected` entry is a mandatory completion check/is);
+  assert.match(run, /--work-item WORK_ITEM_ID[\s\S]*--baseline BASELINE_PATH[\s\S]*--baseline-sha256 BASELINE_SHA256/is);
   assert.match(testing, /machine-owned content baseline/is);
   assert.match(testing, /work item's\s+frozen `allowed_change_paths`/is);
   assert.match(taskManager, /`stage`: exact target agent stage ID/is);
