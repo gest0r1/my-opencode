@@ -97,14 +97,21 @@ test('validated dispatch resumes only the same healthy worker with frozen repair
   const manifest = await baseManifest(root,'runtime-test',[{id:'p',stages:['implementation', 'code-review']}]);
   manifest.allowed_change_paths=['src/**'];
   manifest.pipelines[0].executors['code-review']='review';
+  manifest.pipelines[0].profile='local';
+  manifest.gate_profiles={local:{'local-test':['pnpm test']}};
+  manifest.gate_testing={local:{'local-test':{impact_groups:[{inputs:['src/**'],command_index:0}]}}};
   const manifestPath=await writeManifest(root,manifest);
   run(root,['init',manifestPath]); run(root,['approve','runtime-test']); run(root,['start','runtime-test','implementation','--pipeline','p']);
   process.chdir(root);
+  const baselinePacket = await dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent');
+  assert.deepEqual(baselinePacket.advisory_checks,[{gate:'local-test',mode:'affected'}]);
+  const reviewlessPacket = await dispatchPacket(root,'runtime-test','p','implementation','wi-p','TestEngineer');
+  assert.deepEqual(reviewlessPacket.advisory_checks,[]);
   const hooks={}, sessionHooks={}; let unavailable=false;
   await runtime.setup({location:{directory:root}, tool:{hook:async(name,fn)=>{hooks[name]=fn},transform:async(fn)=>fn({add:()=>{}})},session:{hook:async(name,fn)=>{sessionHooks[name]=fn},get:async()=>{if(unavailable) throw Error('removed');return {data:{}}}}});
   const input=()=>({agent:'CoderAgent',prompt:'<pipeline_work_item id="wi-p"/><pipeline_dispatch run="runtime-test" pipeline="p" stage="implementation"/>',sessionID:'model-invented'});
   let e={tool:'subagent',sessionID:'parent',id:'first',input:input()};
-  await hooks['execute.before'](e); assert.equal(e.input.sessionID,undefined); assert.match(e.input.prompt,/decision-register/);
+  await hooks['execute.before'](e); assert.equal(e.input.sessionID,undefined); assert.match(e.input.prompt,/decision-register/); assert.match(e.input.prompt,/advisory_checks/);
   await sessionHooks.context({sessionID:'worker',agent:'CoderAgent',model:{providerID:'test',modelID:'test'},system:[],messages:[{text:'history'}],tools:{}});
   await hooks['execute.after']({...e,status:'completed',result:{metadata:{sessionID:'worker'},content:'done'}});
   await writeFile(path.join(root,'review.json'),'{"status":"technical_fix"}');
@@ -113,6 +120,7 @@ test('validated dispatch resumes only the same healthy worker with frozen repair
   const reviewPacket = await dispatchPacket(root,'runtime-test','p','code-review','code-review','CodeReviewer');
   assert.equal(reviewPacket.review_work_items[0].id, 'wi-p');
   assert.equal(reviewPacket.reuse.eligible, false);
+  assert.deepEqual(reviewPacket.advisory_checks, []);
   run(root,['scope-check','runtime-test','code-review','src/a.ts','--pipeline','p']);
   run(root,['fix-cycle','runtime-test','code-review','--pipeline','p','--evidence',path.join(root,'review.json')]);
   e={tool:'subagent',sessionID:'parent',id:'repair',input:input()};await hooks['execute.before'](e);
@@ -140,6 +148,10 @@ test('runtime preflight forwards selected research roles and checks their effect
     list:async()=>['read','shell','subagent','pipeline_runtime_prepare','webfetch','gh_grep_searchGitHub'].map(id=>({id}))},
    session:{hook:async()=>{}},
    agent:{list:async()=>({data:[parent,...ids.map(id=>({id,mode:'subagent',permissions:[
+    ...(id === 'CoderAgent' ? [
+      {action:'bash',resource:'*',effect:'deny'},
+      {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*',effect:'allow'},
+    ] : []),
     {action:'webfetch',resource:'*',effect:denied?'deny':'allow'}, {action:'gh_grep_*',resource:'*',effect:'allow'}]}))]})},
    skill:{list:async()=>({data:[{name:'task-management'}]})},
    model:{list:async()=>({data:[{providerID:'test',id:'test'}]})},
