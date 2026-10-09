@@ -104,6 +104,7 @@ jobs:
             config/opencode/skills/task-management/scripts/github-pr-cli.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-github-sync.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-agent-audit.test.mjs \
+            config/opencode/skills/task-management/scripts/early-advisory-contract.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-runtime.test.mjs \
             config/opencode/skills/task-management/scripts/reuse-report.test.mjs
 
