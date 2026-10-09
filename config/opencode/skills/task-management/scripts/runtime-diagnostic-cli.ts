@@ -14,8 +14,22 @@ export class RuntimeDiagnosticError extends Error {}
 function redact(value: string): string {
   return value
     .replace(/(postgres(?:ql)?:\/\/)[^\s@]+@/gi, '$1[REDACTED]@')
-    .replace(/(authorization:\s*bearer\s+)[^\s]+/gi, '$1[REDACTED]')
-    .replace(/((?:token|password|secret|api[_-]?key)\s*[=:]\s*)[^\s&]+/gi, '$1[REDACTED]');
+    .replace(/(authorization:\s*(?:bearer|basic)\s+)[^\s]+/gi, '$1[REDACTED]')
+    .replace(/((?:token|password|secret|api[_-]?key|access[_-]?key|client[_-]?secret)\s*[=:]\s*)[^\s&]+/gi, '$1[REDACTED]');
+}
+
+function displayUrl(url: URL): string {
+  const copy = new URL(url.toString());
+  for (const key of [...copy.searchParams.keys()]) copy.searchParams.set(key, '[REDACTED]');
+  copy.hash = '';
+  return copy.toString();
+}
+
+function safeHeaders(headers: Headers): Record<string, string> {
+  const blocked = new Set(['set-cookie', 'cookie', 'authorization', 'proxy-authorization', 'x-api-key', 'x-auth-token']);
+  return Object.fromEntries([...headers.entries()]
+    .filter(([name]) => !blocked.has(name.toLowerCase()))
+    .map(([name, value]) => [name, redact(value)]));
 }
 
 export function validateDiagnosticUrl(raw: string): URL {
@@ -47,7 +61,8 @@ export function validateReadOnlySql(raw: string): string {
 }
 
 function safePath(value: string, label: string): string {
-  if (!value || value.includes('\0') || value.includes('\n') || value.includes('\r') || value.startsWith('-')) {
+  if (!value || value.startsWith('/') || value.startsWith('-') || value.includes('\\') || /[\0\r\n]/.test(value) ||
+      value.split('/').some(part => part === '..' || part === '.git')) {
     throw new RuntimeDiagnosticError(`${label}_INVALID`);
   }
   return value;
@@ -60,22 +75,65 @@ function option(args: string[], name: string, required = false): string | undefi
   return value;
 }
 
-function runProcess(exe: string, args: string[], stdin?: string, timeoutMs = 15_000): Promise<{exit_code:number;stdout:string;stderr:string}> {
+type ProcessResult = {exit_code:number;stdout:string;stderr:string;timed_out:boolean};
+
+function runProcess(exe: string, args: string[], stdin?: string, timeoutMs = 15_000): Promise<ProcessResult> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(exe, args, { shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(exe, args, { shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     const append = (current: string, chunk: unknown) => (current + String(chunk)).slice(0, MAX_CAPTURE);
+    const terminate = (signal: NodeJS.Signals) => {
+      try {
+        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {}
+    };
     child.stdout.on('data', chunk => { stdout = append(stdout, chunk); });
     child.stderr.on('data', chunk => { stderr = append(stderr, chunk); });
     child.on('error', reject);
-    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminate('SIGTERM');
+      killTimer = setTimeout(() => terminate('SIGKILL'), 3_000);
+    }, timeoutMs);
     child.on('close', code => {
       clearTimeout(timer);
-      resolvePromise({ exit_code: code ?? 1, stdout: redact(stdout), stderr: redact(stderr) });
+      if (killTimer) clearTimeout(killTimer);
+      resolvePromise({ exit_code: timedOut ? 124 : code ?? 1, stdout: redact(stdout), stderr: redact(stderr), timed_out: timedOut });
     });
     child.stdin.end(stdin ?? '');
   });
+}
+
+async function boundedBody(response: Response): Promise<{body:string;truncated:boolean}> {
+  if (!response.body) return { body: '', truncated: false };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let body = '';
+  let bytes = 0;
+  let truncated = false;
+  try {
+    while (bytes < MAX_CAPTURE) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = MAX_CAPTURE - bytes;
+      const slice = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      bytes += slice.byteLength;
+      body += decoder.decode(slice, { stream: true });
+      if (value.byteLength > remaining) {
+        truncated = true;
+        await reader.cancel();
+        break;
+      }
+    }
+    body += decoder.decode();
+    return { body: redact(body), truncated };
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function httpDiagnostic(method: 'GET'|'HEAD', rawUrl: string): Promise<void> {
@@ -84,10 +142,8 @@ async function httpDiagnostic(method: 'GET'|'HEAD', rawUrl: string): Promise<voi
   const timer = setTimeout(() => controller.abort(), 10_000);
   try {
     const response = await fetch(url, { method, redirect: 'manual', signal: controller.signal, headers: { 'user-agent': 'opencode-runtime-diagnostic/1' } });
-    const body = method === 'HEAD' ? '' : (await response.text()).slice(0, MAX_CAPTURE);
-    const headers = Object.fromEntries([...response.headers.entries()]
-      .filter(([name]) => !['set-cookie', 'authorization', 'proxy-authorization'].includes(name.toLowerCase())));
-    process.stdout.write(`${JSON.stringify({status:'PASS',kind:'http',method,url:url.toString(),http_status:response.status,headers,body:redact(body)},null,2)}\n`);
+    const body = method === 'HEAD' ? { body: '', truncated: false } : await boundedBody(response);
+    process.stdout.write(`${JSON.stringify({status:'OBSERVED',kind:'http',method,url:displayUrl(url),transport_ok:true,http_status:response.status,http_ok:response.ok,headers:safeHeaders(response.headers),body:body.body,body_truncated:body.truncated},null,2)}\n`);
   } finally {
     clearTimeout(timer);
   }
@@ -109,8 +165,16 @@ async function postgresCompose(args: string[]): Promise<void> {
     service,
     'sh', '-lc', 'exec psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"',
   );
-  const result = await runProcess('docker', dockerArgs, `${query};\n`, 15_000);
-  const payload = {status: result.exit_code === 0 ? 'PASS' : 'FAIL', kind:'postgres-compose', project, service, exit_code:result.exit_code, stdout:result.stdout, stderr:result.stderr};
+  const script = [
+    'SET ROLE pg_read_all_data;',
+    'BEGIN READ ONLY;',
+    "SET LOCAL statement_timeout = '5s';",
+    `${query};`,
+    'ROLLBACK;',
+    '',
+  ].join('\n');
+  const result = await runProcess('docker', dockerArgs, script, 15_000);
+  const payload = {status:'OBSERVED',kind:'postgres-compose',project,service,query_ok:result.exit_code === 0,exit_code:result.exit_code,timed_out:result.timed_out,read_identity:'pg_read_all_data',stdout:result.stdout,stderr:result.stderr};
   process.stdout.write(`${JSON.stringify(payload,null,2)}\n`);
   if (result.exit_code !== 0) process.exitCode = 1;
 }
