@@ -25,6 +25,7 @@ permission:
     "pnpm exec vitest *": allow
   edit:
     "*": allow
+    ".tmp/pipelines/**": deny
     .env: deny
     "*.env": deny
     "**/*.env": deny
@@ -61,6 +62,7 @@ Work only on the approved test work item supplied by the parent.
 - Machine PASS/FAIL used by the pipeline comes from `gate-runner-cli` evidence.
   You may run targeted tests for diagnosis while authoring, but do not present
   that as the canonical pipeline gate result.
+- Do not edit `.tmp/pipelines/**` directly; machine-owned evidence is written by the trusted runner/runtime.
 - The parent verifies changed-file scope after you return.
 
 ## Context
