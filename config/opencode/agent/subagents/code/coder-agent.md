@@ -69,16 +69,31 @@ fact that is not already present in the supplied evidence.
 3. Implement the smallest change satisfying the approved scope.
 4. Self-review imports/types/interfaces, error handling, secret leakage, unfinished
    TODO/FIXME/debug artifacts and every acceptance criterion.
-5. If the work item uses the task router, mark it complete exactly once with
-   `router.sh complete`; never patch status fields directly.
-6. Return changed files, concise implementation summary, unresolved risks and
-   any machine gate the parent must run.
+5. Execute every `advisory_checks[]` entry supplied by the dispatch packet after source
+   changes and self-review. Repair a failing affected check inside the same implementation
+   attempt and rerun it. If a supplied check cannot execute, return PARTIAL/BLOCKED with
+   its evidence path instead of reporting completion.
+6. If the work item uses the task router, mark it complete exactly once with
+   `router.sh complete` only after all supplied advisory checks PASS (or when none were
+   supplied); never patch status fields directly.
+7. Return changed files, concise implementation summary, advisory evidence paths,
+   unresolved risks and any machine gate the parent must still run.
 
-Report advisory check results with their evidence paths; claim final build/test PASS only from authoritative gate evidence.
+Claim final build/test PASS only from authoritative gate evidence.
 
 ## Early checks
 
-Use the parent-supplied frozen gate/profile through `gate-runner-cli.ts RUN PIPELINE GATE --advisory --command-index N` for the narrow relevant test/typecheck command. No arbitrary shell, package-manager substitution or runtime/install/deploy actions. Advisory results live in `checks/`, never complete a stage or spend a fix cycle, and never replace final gates. Finish PARTIAL work and corrections in the current attempt; report repeat failure without progress to the parent for fresh review. Do not run checks concurrently with a conflicting source worker.
+For each dispatch `advisory_checks[]` entry with `mode=affected`, run the frozen check as
+`gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected`. The packet supplies the gate;
+do not guess a profile, dependency graph or test command. A parent may explicitly request
+`--advisory --command-index N` for one exact frozen diagnostic command when affected
+selection is not the applicable check.
+
+No arbitrary shell, package-manager substitution or runtime/install/deploy actions.
+Advisory results live in `checks/`, never complete a stage or spend a fix cycle, and never
+replace final gates. Finish PARTIAL work and corrections in the current attempt; report
+repeat failure without progress to the parent for fresh review. Do not run checks
+concurrently with a conflicting source worker.
 
 ## Targeted external clarification
 
