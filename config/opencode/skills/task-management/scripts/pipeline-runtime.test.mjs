@@ -98,7 +98,7 @@ test('validated dispatch resumes only the same healthy worker with frozen repair
   manifest.allowed_change_paths=['src/**'];
   manifest.pipelines[0].executors['code-review']='review';
   manifest.pipelines[0].profile='local';
-  manifest.gate_profiles={local:{'local-test':['pnpm test']}};
+  manifest.gate_profiles={local:{'local-test':['npm test']}};
   manifest.gate_testing={local:{'local-test':{impact_groups:[{inputs:['src/**'],command_index:0}]}}};
   const manifestPath=await writeManifest(root,manifest);
   run(root,['init',manifestPath]); run(root,['approve','runtime-test']); run(root,['start','runtime-test','implementation','--pipeline','p']);
