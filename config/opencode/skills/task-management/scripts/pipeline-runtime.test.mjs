@@ -131,6 +131,22 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','TestEngineer'),/WORK_ITEM_ROLE_MISMATCH/);
   const hooks={}, sessionHooks={}; let unavailable=false;
   await runtime.setup({location:{directory:root}, tool:{hook:async(name,fn)=>{hooks[name]=fn},transform:async(fn)=>fn({add:()=>{}})},session:{hook:async(name,fn)=>{sessionHooks[name]=fn},get:async()=>{if(unavailable) throw Error('removed');return {data:{}}}}});
+
+  const shellDispatch={
+    tool:'shell',sessionID:'parent',id:'dispatch-shell',status:'completed',
+    input:{command:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts dispatch runtime-test --pipeline p --stage implementation --work-item wi-p --role CoderAgent --json'},
+    result:{content:JSON.stringify(baselinePacket)},
+  };
+  await hooks['execute.after'](shellDispatch);
+  const compactDispatch=JSON.parse(shellDispatch.result.content);
+  assert.equal(compactDispatch.status,'ready');
+  assert.equal(compactDispatch.work_item_id,'wi-p');
+  assert.equal(compactDispatch.advisory_required,true);
+  assert.match(compactDispatch.packet_path,/^\.tmp\/pipelines\/runtime-test\/handoffs\/dispatch\//);
+  const persistedDispatch=JSON.parse(await readFile(path.join(root,compactDispatch.packet_path),'utf8'));
+  assert.equal(persistedDispatch.advisory_checks[0].gate,'local-test');
+  assert.ok(shellDispatch.result.content.length < JSON.stringify(baselinePacket).length);
+
   const input=()=>({agent:'CoderAgent',prompt:'<pipeline_work_item id="wi-p"/><pipeline_dispatch run="runtime-test" pipeline="p" stage="implementation"/>',sessionID:'model-invented'});
   let e={tool:'subagent',sessionID:'parent',id:'first',input:input()};
   await hooks['execute.before'](e);
