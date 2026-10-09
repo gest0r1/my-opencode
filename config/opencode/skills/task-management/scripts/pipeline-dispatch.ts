@@ -24,14 +24,18 @@ function scopeContained(child: string, parent: string): boolean {
   return child === parent;
 }
 
-function coderScope(item: any, effectiveScope: string[]): string[] {
-  if (!Array.isArray(item?.allowed_change_paths) || item.allowed_change_paths.length === 0 ||
-      item.allowed_change_paths.some((value: unknown) => !scopePath(value))) return [];
-  const scope = [...new Set(item.allowed_change_paths as string[])];
-  if (scope.some(child => !effectiveScope.some(parent => scopeContained(child, parent)))) {
+function checkedScope(scope: string[], effectiveScope: string[]): string[] {
+  const unique = [...new Set(scope)];
+  if (!unique.length || unique.some(value => !scopePath(value))) return [];
+  if (unique.some(child => !effectiveScope.some(parent => scopeContained(child, parent)))) {
     throw Error('WORK_ITEM_SCOPE_OUTSIDE_EFFECTIVE_SCOPE');
   }
-  return scope;
+  return unique;
+}
+
+function coderScope(item: any, effectiveScope: string[]): string[] {
+  if (!Array.isArray(item?.allowed_change_paths)) return [];
+  return checkedScope(item.allowed_change_paths, effectiveScope);
 }
 
 function affectedAdvisoryChecks(manifest: any, pipeline: any, role: string) {
@@ -103,6 +107,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   const amendmentEvidence: string[] = [];
   const relevantAmendments: any[] = [];
   const amendmentPaths: string[] = [];
+  let runtimeAmendmentMatch = false;
   for (const amendment of amendmentRecords as any[]) {
     const file = resolve(amendment.evidence_path);
     let amendmentRaw: string;
@@ -126,10 +131,13 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     }
     const normalize = (units: any[]) => units.map(({id,pipeline_id,path,sha256}) => ({id,pipeline_id,path,sha256}));
     if (JSON.stringify(normalize(validated.work_items)) !== JSON.stringify(normalize(amendment.work_items ?? []))) throw Error('OWNER_AMENDMENT_WORK_ITEM_IDENTITY_CHANGED');
-    if (stageReview || validated.work_item_id === workItemId || validated.work_items.some(w => w.id === workItemId)) {
+    const relevant = stageReview || validated.work_item_id === workItemId || validated.work_items.some(w => w.id === workItemId);
+    if (relevant) {
+      if (!stageReview && validated.target_stage !== stage) throw Error('OWNER_AMENDMENT_TARGET_STAGE_MISMATCH');
       amendmentEvidence.push(file);
       relevantAmendments.push(amendment);
       amendmentPaths.push(...validated.paths);
+      runtimeAmendmentMatch ||= !stageReview;
     }
   }
 
@@ -148,7 +156,14 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   }
   const revision = hash(JSON.stringify({ manifest: state.manifest_sha256, runtime, repairRuntime, effectiveScope, ownerAmendments: relevantAmendments }));
   const baseChecks = affectedAdvisoryChecks(manifest, pipeline, role);
-  const itemScope = role === 'CoderAgent' ? coderScope(item, effectiveScope) : [];
+  let itemScope = role === 'CoderAgent' ? coderScope(item, effectiveScope) : [];
+  if (role === 'CoderAgent' && baseChecks.length > 0 && itemScope.length === 0 && runtimeAmendmentMatch) {
+    itemScope = checkedScope(amendmentPaths, effectiveScope);
+  }
+  if (role === 'CoderAgent' && baseChecks.length > 0 && itemScope.length === 0 && item.stage === undefined) {
+    // Compatibility for already-frozen v2 work items created before per-work-item scope binding.
+    itemScope = checkedScope(effectiveScope, effectiveScope);
+  }
   if (role === 'CoderAgent' && baseChecks.length > 0 && itemScope.length === 0) throw Error('WORK_ITEM_ADVISORY_SCOPE_MISSING');
   let advisoryChecks: Array<Record<string, unknown>> = [];
   if (baseChecks.length) {
