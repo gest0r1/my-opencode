@@ -43,17 +43,47 @@ function requiredAffectedGates(manifest: any, pipeline: any): string[] {
   ).sort();
 }
 
-async function expectedCoderWorkItems(manifest: any, pipeline: any, stage: string, manifestFile: string): Promise<string[]> {
-  const root = dirname(manifestFile);
-  const expected: string[] = [];
-  for (const frozen of manifest.work_items ?? []) {
-    if (frozen.pipeline_id !== pipeline.id || !pipeline.work_items?.includes(frozen.id) || typeof frozen.path !== 'string') continue;
-    let item: any;
-    try { item = JSON.parse(await readFile(resolve(root, frozen.path), 'utf8')); }
-    catch { throw new StageCompleteError(`FROZEN_WORK_ITEM_INVALID: ${frozen.id}`); }
-    if (item.stage === stage && (item.suggested_agent === 'CoderAgent' || item.role === 'CoderAgent')) expected.push(frozen.id);
+async function readFrozenWorkItem(manifestFile: string, frozen: any, errorPrefix: string): Promise<any> {
+  if (!frozen || typeof frozen.path !== 'string' || !/^[0-9a-f]{64}$/i.test(String(frozen.sha256 ?? ''))) {
+    throw new StageCompleteError(`${errorPrefix}_INVALID: ${String(frozen?.id ?? '<unknown>')}`);
   }
-  return expected.sort();
+  const path = resolve(dirname(manifestFile), frozen.path);
+  let raw: string;
+  try { raw = await readFile(path, 'utf8'); }
+  catch { throw new StageCompleteError(`${errorPrefix}_MISSING: ${String(frozen.id ?? '<unknown>')}`); }
+  if (hash(raw) !== frozen.sha256) throw new StageCompleteError(`${errorPrefix}_CHANGED: ${String(frozen.id ?? '<unknown>')}`);
+  try { return JSON.parse(raw); }
+  catch { throw new StageCompleteError(`${errorPrefix}_INVALID: ${String(frozen.id ?? '<unknown>')}`); }
+}
+
+async function expectedCoderWorkItems(state: any, manifest: any, pipeline: any, stage: string, manifestFile: string): Promise<string[]> {
+  const expected = new Set<string>();
+  for (const frozen of manifest.work_items ?? []) {
+    if (frozen.pipeline_id !== pipeline.id || !pipeline.work_items?.includes(frozen.id)) continue;
+    const item = await readFrozenWorkItem(manifestFile, frozen, 'FROZEN_WORK_ITEM');
+    if (item.stage === stage && (item.suggested_agent === 'CoderAgent' || item.role === 'CoderAgent')) expected.add(frozen.id);
+  }
+
+  for (const amendment of state.owner_amendments ?? []) {
+    if (amendment?.pipeline_id !== pipeline.id || amendment?.status !== 'approved') continue;
+    if (typeof amendment.evidence_path !== 'string' || !/^[0-9a-f]{64}$/i.test(String(amendment.evidence_sha256 ?? ''))) {
+      throw new StageCompleteError('OWNER_AMENDMENT_EVIDENCE_INVALID');
+    }
+    let evidenceRaw: string;
+    try { evidenceRaw = await readFile(resolve(amendment.evidence_path), 'utf8'); }
+    catch { throw new StageCompleteError('OWNER_AMENDMENT_EVIDENCE_MISSING'); }
+    if (hash(evidenceRaw) !== amendment.evidence_sha256) throw new StageCompleteError('OWNER_AMENDMENT_EVIDENCE_CHANGED');
+    let evidence: any;
+    try { evidence = JSON.parse(evidenceRaw); }
+    catch { throw new StageCompleteError('OWNER_AMENDMENT_EVIDENCE_INVALID'); }
+    if (evidence.target_stage !== stage) continue;
+
+    for (const frozen of amendment.work_items ?? []) {
+      const item = await readFrozenWorkItem(manifestFile, frozen, 'OWNER_AMENDMENT_WORK_ITEM');
+      if (item.suggested_agent === 'CoderAgent' || item.role === 'CoderAgent') expected.add(frozen.id);
+    }
+  }
+  return [...expected].sort();
 }
 
 export async function verifyAgentAdvisoryCompletion(root: string, args: string[]): Promise<{checked:number}> {
@@ -75,7 +105,7 @@ export async function verifyAgentAdvisoryCompletion(root: string, args: string[]
   if (!pipeline || pipeline.executors?.[stage] !== 'agent') return { checked: 0 };
   const gates = requiredAffectedGates(manifest, pipeline);
   if (gates.length === 0) return { checked: 0 };
-  const expectedItems = await expectedCoderWorkItems(manifest, pipeline, stage, manifestFile);
+  const expectedItems = await expectedCoderWorkItems(state, manifest, pipeline, stage, manifestFile);
 
   const baselineDir = join(runRoot, 'checks', 'baselines');
   let names: string[] = [];
