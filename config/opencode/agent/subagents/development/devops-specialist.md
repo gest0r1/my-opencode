@@ -16,14 +16,8 @@ permission:
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *": allow
     "docker compose ps *": allow
-    "docker compose logs *": allow
     "docker ps *": allow
-    "docker logs *": allow
-    "kubectl get *": allow
-    "kubectl describe *": allow
-    "kubectl logs *": allow
     "terraform validate *": allow
-    "terraform plan *": allow
   edit:
     "*": allow
     .env: deny
@@ -59,13 +53,20 @@ inside the work item supplied by the parent.
   Test impact/resource contracts are defined in `skills/task-management/gate-testing.md`.
   Author tests and reviewed impact groups (including dependent consumers) within supplied scope;
   never substitute a working database or widen Docker permissions.
-- Diagnose observed runtime failures autonomously with existing read-only commands and
-  `runtime-diagnostic-cli`. Use its `http-get|http-head` for unauthenticated HTTP reads and
-  `postgres-compose` for bounded PostgreSQL reads. The wrapper enforces read-only database
-  mode, rejects mutating SQL and redacts bounded output; never replace it with raw `psql`,
-  `docker exec`, arbitrary `curl`, or a shell escape.
-- Parent/orchestrator lack of shell permission is not an owner task when these diagnostic
-  routes can answer the question. Return the concrete command/result and diagnosis.
+- Diagnose observed runtime failures autonomously from supplied deterministic evidence,
+  bounded status commands and `runtime-diagnostic-cli`. Use its `http-get|http-head` for
+  unauthenticated HTTP reads and `postgres-compose` for bounded PostgreSQL reads. The wrapper
+  downgrades PostgreSQL execution to the built-in `pg_read_all_data` role, runs read-only,
+  rejects mutating SQL, bounds execution/output and redacts diagnostic output. Never replace
+  it with raw `psql`, `docker exec`, arbitrary `curl`, Kubernetes secret/config reads or a
+  shell escape.
+- Raw container/Kubernetes logs and `terraform plan` are intentionally not agent permissions:
+  they can expose application credentials or provider/state values without a reliable
+  redaction boundary. Use gate/CI evidence first; if the registered safe diagnostic route
+  cannot answer the question, return a concrete capability blocker rather than asking the
+  owner to paste an unrestricted shell command.
+- Parent/orchestrator lack of shell permission is not an owner task when the registered
+  diagnostic routes can answer the question. Return the concrete command/result and diagnosis.
 - Runtime mutation, destructive cleanup, credentials/secrets and policy/security decisions
   remain on their existing deterministic/owner stop paths.
 - Do not advance pipeline state or invoke another execution agent.
