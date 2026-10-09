@@ -34,8 +34,8 @@ function coderScope(item: any, effectiveScope: string[]): string[] {
   return scope;
 }
 
-function affectedAdvisoryChecks(manifest: any, pipeline: any, role: string, itemScope: string[]) {
-  if (role !== 'CoderAgent' || itemScope.length === 0 || typeof pipeline?.profile !== 'string' || !pipeline.profile) return [];
+function affectedAdvisoryChecks(manifest: any, pipeline: any, role: string) {
+  if (role !== 'CoderAgent' || typeof pipeline?.profile !== 'string' || !pipeline.profile) return [];
   const profile = pipeline.profile;
   const commands = manifest.gate_profiles?.[profile];
   const testing = manifest.gate_testing?.[profile];
@@ -97,6 +97,8 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   if (hash(raw) !== frozen.sha256) throw Error('WORK_ITEM_CHANGED');
   const item = stageReview ? {} : JSON.parse(raw);
   if (item.role && item.role !== role) throw Error('WORK_ITEM_ROLE_MISMATCH');
+  if (!stageReview && item.stage !== undefined && item.stage !== stage) throw Error('WORK_ITEM_STAGE_MISMATCH');
+  if (!stageReview && item.suggested_agent !== undefined && item.suggested_agent !== role) throw Error('WORK_ITEM_ROLE_MISMATCH');
 
   const amendmentEvidence: string[] = [];
   const relevantAmendments: any[] = [];
@@ -145,8 +147,9 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     evidencePaths.push(file);
   }
   const revision = hash(JSON.stringify({ manifest: state.manifest_sha256, runtime, repairRuntime, effectiveScope, ownerAmendments: relevantAmendments }));
+  const baseChecks = affectedAdvisoryChecks(manifest, pipeline, role);
   const itemScope = role === 'CoderAgent' ? coderScope(item, effectiveScope) : [];
-  const baseChecks = affectedAdvisoryChecks(manifest, pipeline, role, itemScope);
+  if (role === 'CoderAgent' && baseChecks.length > 0 && itemScope.length === 0) throw Error('WORK_ITEM_ADVISORY_SCOPE_MISSING');
   let advisoryChecks: Array<Record<string, unknown>> = [];
   if (baseChecks.length) {
     const inventory = await sourceInventory(root, (exe: string, argv: string[]) => inventoryInvoke(root, exe, argv));
