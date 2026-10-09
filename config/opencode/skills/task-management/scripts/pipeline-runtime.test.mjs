@@ -90,8 +90,13 @@ async function baseManifest(root, runId, pipelines) {
   };
 }
 
+function handoffPathFromPrompt(prompt, tag) {
+  const match = new RegExp(`<${tag} path="([^"]+)"\\/>`).exec(prompt);
+  assert.ok(match, `missing ${tag} path in prompt`);
+  return match[1];
+}
 
-test('validated dispatch resumes only the same healthy worker with frozen repair evidence', async () => {
+test('validated dispatch uses file-backed handoffs and resumes only the same healthy worker', async () => {
  const previousCwd = process.cwd(), root = await tempProject();
  try {
   spawnSync('git',['init'],{cwd:root});
@@ -128,9 +133,24 @@ test('validated dispatch resumes only the same healthy worker with frozen repair
   await runtime.setup({location:{directory:root}, tool:{hook:async(name,fn)=>{hooks[name]=fn},transform:async(fn)=>fn({add:()=>{}})},session:{hook:async(name,fn)=>{sessionHooks[name]=fn},get:async()=>{if(unavailable) throw Error('removed');return {data:{}}}}});
   const input=()=>({agent:'CoderAgent',prompt:'<pipeline_work_item id="wi-p"/><pipeline_dispatch run="runtime-test" pipeline="p" stage="implementation"/>',sessionID:'model-invented'});
   let e={tool:'subagent',sessionID:'parent',id:'first',input:input()};
-  await hooks['execute.before'](e); assert.equal(e.input.sessionID,undefined); assert.match(e.input.prompt,/decision-register/); assert.match(e.input.prompt,/advisory_checks/);
+  await hooks['execute.before'](e);
+  assert.equal(e.input.sessionID,undefined);
+  assert.doesNotMatch(e.input.prompt,/<dispatch_packet>/);
+  assert.doesNotMatch(e.input.prompt,/"advisory_checks"/);
+  const dispatchPath = handoffPathFromPrompt(e.input.prompt,'pipeline_dispatch_packet');
+  const dispatch = JSON.parse(await readFile(path.join(root,dispatchPath),'utf8'));
+  assert.equal(dispatch.work_item_id,'wi-p');
+  assert.equal(dispatch.advisory_checks[0].gate,'local-test');
   await sessionHooks.context({sessionID:'worker',agent:'CoderAgent',model:{providerID:'test',modelID:'test'},system:[],messages:[{text:'history'}],tools:{}});
-  await hooks['execute.after']({...e,status:'completed',result:{metadata:{sessionID:'worker'},content:'done'}});
+  const firstResult={...e,status:'completed',result:{metadata:{sessionID:'worker'},content:'status: ready\nimplementation detail that should not stay in parent context'}};
+  await hooks['execute.after'](firstResult);
+  const compactFirst=JSON.parse(firstResult.result.content);
+  assert.equal(compactFirst.status,'ready');
+  assert.match(compactFirst.result_path,/^\.tmp\/pipelines\/runtime-test\/handoffs\/results\//);
+  const persistedFirst=JSON.parse(await readFile(path.join(root,compactFirst.result_path),'utf8'));
+  assert.match(persistedFirst.content,/implementation detail/);
+  assert.ok(firstResult.result.content.length < persistedFirst.content.length + 200);
+
   await writeFile(path.join(root,'review.json'),'{"status":"technical_fix"}');
   run(root,['complete','runtime-test','implementation','--pipeline','p']);
   run(root,['start','runtime-test','code-review','--pipeline','p']);
@@ -141,8 +161,14 @@ test('validated dispatch resumes only the same healthy worker with frozen repair
   run(root,['scope-check','runtime-test','code-review','src/a.ts','--pipeline','p']);
   run(root,['fix-cycle','runtime-test','code-review','--pipeline','p','--evidence',path.join(root,'review.json')]);
   e={tool:'subagent',sessionID:'parent',id:'repair',input:input()};await hooks['execute.before'](e);
-  assert.equal(e.input.sessionID,'worker');assert.match(e.input.prompt,/session_reuse_delta/);
-  await hooks['execute.after']({...e,status:'completed',result:{metadata:{sessionID:'worker'},content:'fixed'}});
+  assert.equal(e.input.sessionID,'worker');
+  assert.doesNotMatch(e.input.prompt,/<session_reuse_delta>\s*\{/);
+  const deltaPath = handoffPathFromPrompt(e.input.prompt,'session_reuse_delta');
+  const delta=JSON.parse(await readFile(path.join(root,deltaPath),'utf8'));
+  assert.equal(delta.work_item_id,'wi-p');
+  const repairResult={...e,status:'completed',result:{metadata:{sessionID:'worker'},content:'status: ready\nfixed with long technical explanation'}};
+  await hooks['execute.after'](repairResult);
+  assert.equal(JSON.parse(repairResult.result.content).status,'ready');
   unavailable=true;e={tool:'subagent',sessionID:'parent',id:'unavailable',input:input()};await hooks['execute.before'](e);assert.equal(e.input.sessionID,undefined);
   await sessionHooks.prompt({sessionID:'parent',prompt:'/pipeline-run runtime-test --no-session-reuse'});
   unavailable=false;e={tool:'subagent',sessionID:'parent',id:'disabled',input:input()};await hooks['execute.before'](e);assert.equal(e.input.sessionID,undefined);
