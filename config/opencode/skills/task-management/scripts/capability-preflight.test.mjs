@@ -16,8 +16,13 @@ const devopsPermissions = [
   {action: 'bash', resource: '*', effect: 'deny'},
   {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *', effect: 'allow'},
 ];
+const parentPermissions = [
+  ...workers.map(resource => ({ action: 'subagent', resource, effect: 'allow' })),
+  {action: 'bash', resource: '*', effect: 'deny'},
+  {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*', effect: 'allow'},
+];
 const workerAgent = id => ({ id, mode: 'subagent', ...(id === 'CoderAgent' ? { permissions: coderPermissions } : {}), ...(id === 'TestEngineer' ? { permissions: testEngineerPermissions } : {}), ...(id === 'OpenDevopsSpecialist' ? { permissions: devopsPermissions } : {}) });
-const valid = { tools: ['read', 'shell', 'subagent', 'pipeline_runtime_prepare'].map(id => ({ id })), agents: workers.map(workerAgent), skills: [{ name: 'task-management' }], permissions: workers.map(resource => ({ action: 'subagent', resource, effect: 'allow' })) };
+const valid = { tools: ['read', 'shell', 'subagent', 'pipeline_runtime_prepare'].map(id => ({ id })), agents: workers.map(workerAgent), skills: [{ name: 'task-management' }], permissions: parentPermissions };
 test('live model catalog detects wrong provider and preserves the exact plugin suffix', () => {
   const input = {...valid, agents: valid.agents.map(a => a.id === 'SeniorTechnicalPlanReviewer' ? {...a, model: 'claude-code/claude-opus-5-5[1m]'} : a),
     models: [{providerID: 'claude-code', id: 'claude-opus-5-5[1m]'}]};
@@ -32,7 +37,24 @@ test('preflight checks exact worker IDs and live availability, including permiss
     assert.throws(() => assertPipelineCapabilities({ ...valid, ...mutation }), /PIPELINE_CAPABILITY_UNAVAILABLE/);
   }
   assert.throws(() => assertPipelineCapabilities({ ...valid, agents: valid.agents.map(x => ({ ...x, mode: 'primary' })) }), /subagent/);
-  assert.equal(valid.permissions.every(x => x.action === 'subagent'), true);
+  assert.equal(valid.permissions.filter(x => x.action === 'subagent').length, workers.length);
+});
+
+test('preflight requires OpenStage access to the deterministic completion boundary', () => {
+  const withoutCompletion = valid.permissions.filter(rule => !String(rule.resource).includes('stage-complete-cli.ts'));
+  assert.throws(
+    () => assertPipelineCapabilities({...valid, permissions: withoutCompletion}),
+    /capability:OpenStageOrchestrator:stage-complete/,
+  );
+  const directStageCompleteOnly = [
+    ...workers.map(resource => ({ action: 'subagent', resource, effect: 'allow' })),
+    {action: 'bash', resource: '*', effect: 'deny'},
+    {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*', effect: 'allow'},
+  ];
+  assert.throws(
+    () => assertPipelineCapabilities({...valid, permissions: directStageCompleteOnly}),
+    /capability:OpenStageOrchestrator:stage-complete/,
+  );
 });
 
 test('preflight requires live CoderAgent access to the affected advisory runner', () => {
