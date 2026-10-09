@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 
 const MAX_CAPTURE = 256 * 1024;
@@ -123,7 +124,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   throw new RuntimeDiagnosticError('usage: runtime-diagnostic-cli.ts http-get|http-head <url> | postgres-compose --project <name> --compose-file <path> [--env-file <path>] --service <name> --query <read-only-sql>');
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   main().catch(error => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
