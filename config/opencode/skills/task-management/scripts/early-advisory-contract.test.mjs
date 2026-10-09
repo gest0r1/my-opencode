@@ -21,7 +21,7 @@ test('PLAN, dispatch and CoderAgent share one affected-advisory contract', async
   assert.match(plan, /gate_testing.*skills\/task-management\/gate-testing\.md/is);
   assert.match(testing, /source-only feature pipeline.*share.*profile.*advisory selection/is);
   assert.match(testing, /planning is incomplete.*revised before approval/is);
-  assert.match(taskManager, /return `needs_revision`.*affected advisory check/is);
+  assert.match(taskManager, /affected advisory check.*return `needs_revision`/is);
   assert.match(taskManager, /Do not duplicate\s+`advisory_checks` into work-item JSON/is);
   assert.match(dispatch, /advisory_checks:\s*advisoryChecks/);
   assert.match(dispatch, /impact_groups/);
