@@ -13,6 +13,14 @@ function scopeMatches(file, scope) {
   return file === scope;
 }
 
+export function scopedInventoryDigest(files, scopes = []) {
+  if (!files) return null;
+  const digest = createHash('sha256');
+  const selected = Object.keys(files).filter(file => scopes.length === 0 || scopes.some(scope => scopeMatches(file, scope))).sort();
+  for (const file of selected) digest.update(file).update('\0').update(files[file]).update('\0');
+  return digest.digest('hex');
+}
+
 export async function sourceInventory(cwd, invoke) {
   const files = await invoke('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z']);
   if (files.exit_code !== 0 || files.truncated) return { digest: null, files: null };
@@ -46,11 +54,12 @@ export function changedFromInventory(currentFiles, baselineFiles, scopes = []) {
 
 export async function sourceSnapshot(cwd, manifest, invoke, baseline) {
   const inventory = await sourceInventory(cwd, invoke);
-  if (!inventory.files) return { digest: null, changed: null };
+  if (!inventory.files) return { digest: null, scoped_digest: null, changed: null };
 
   if (baseline?.files && Array.isArray(baseline?.allowed_change_paths)) {
     return {
       digest: inventory.digest,
+      scoped_digest: scopedInventoryDigest(inventory.files, baseline.allowed_change_paths),
       changed: changedFromInventory(inventory.files, baseline.files, baseline.allowed_change_paths),
     };
   }
@@ -62,7 +71,7 @@ export async function sourceSnapshot(cwd, manifest, invoke, baseline) {
     const untracked = await invoke('git', ['ls-files', '--others', '--exclude-standard', '-z']);
     if (diff.exit_code === 0 && untracked.exit_code === 0 && !diff.truncated && !untracked.truncated) changed = [...new Set([...diff.stdout.split('\0'), ...untracked.stdout.split('\0')].filter(file => file && !excluded(file)))];
   }
-  return { digest: inventory.digest, changed };
+  return { digest: inventory.digest, scoped_digest: null, changed };
 }
 
 export async function readDiagnosticHypothesis(path, runDirectory) {
