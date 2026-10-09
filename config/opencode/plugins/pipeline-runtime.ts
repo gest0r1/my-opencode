@@ -121,6 +121,52 @@ function registryPath(root: string, runID: string) {
 function metricsFile(root: string, runID: string) {
   return path.join(root, ".tmp", "pipelines", runID, "reuse-metrics", "events.jsonl")
 }
+function safeHandoffPart(value: string) {
+  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "")
+  return (normalized || "item").slice(0, 96)
+}
+function handoffPath(root: string, runID: string, kind: string, name: string) {
+  return path.join(root, ".tmp", "pipelines", runID, "handoffs", kind, `${safeHandoffPart(name)}.json`)
+}
+function relativePath(root: string, file: string) {
+  return path.relative(root, file).split(path.sep).join("/")
+}
+function writeJsonHandoff(root: string, runID: string, kind: string, name: string, value: unknown) {
+  const file = handoffPath(root, runID, kind, name)
+  ensureDir(path.dirname(file))
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", "utf8")
+  return relativePath(root, file)
+}
+function handoffIdentity(ctx: Pick<RuntimeContext, "pipeline_id" | "stage" | "work_item_id">, suffix: string) {
+  return `${ctx.pipeline_id}--${ctx.stage}--${ctx.work_item_id}--${suffix}`
+}
+function reportedStatus(raw: string, transportStatus: string) {
+  const json = /"status"\s*:\s*"([A-Za-z0-9_-]+)"/i.exec(raw)?.[1]
+  if (json) return json.toLowerCase()
+  const line = /(?:^|\n)\s*status\s*:\s*([A-Za-z0-9_-]+)/i.exec(raw)?.[1]
+  if (line) return line.toLowerCase()
+  if (/\bblocked\b/i.test(raw)) return "blocked"
+  if (/\bpartial\b/i.test(raw)) return "partial"
+  if (/\bneeds_revision\b/i.test(raw)) return "needs_revision"
+  return transportStatus === "completed" ? "completed" : "error"
+}
+function artifactPaths(raw: string) {
+  const found = raw.match(/\.tmp\/pipelines\/[A-Za-z0-9._\-\/]+/g) ?? []
+  return [...new Set(found)].slice(0, 8)
+}
+function compactSubagentResult(raw: string, transportStatus: string, resultPath: string) {
+  const status = reportedStatus(raw, transportStatus)
+  const detailRequired = new Set([
+    "blocked", "partial", "needs_revision", "replan", "security_stop", "scope_stop",
+    "secret_stop", "destructive_stop", "failed", "fail", "error",
+  ]).has(status)
+  return JSON.stringify({
+    status,
+    result_path: resultPath,
+    artifacts: artifactPaths(raw),
+    detail_required: detailRequired,
+  })
+}
 function loadRegistry(root: string, runID: string): RegistryEntry[] {
   const value = safeJson(registryPath(root, runID))
   return Array.isArray(value) ? value : []
@@ -354,15 +400,28 @@ export default Plugin.define({
       const current = await dispatchPacket(root, ctx.run_id, ctx.pipeline_id, ctx.stage, ctx.work_item_id, role)
       runBySession.set(sessionID, ctx.run_id)
       if (current.state_revision !== ctx.state_revision) throw new Error("STALE_DISPATCH_STATE")
-      input.prompt = [String(input.prompt), "<dispatch_packet>", JSON.stringify(current), "</dispatch_packet>", "Read authoritative files directly. Conversation history is supplemental. Return status, blockers and artifact paths."].join("\n")
+      const dispatchPath = writeJsonHandoff(
+        root,
+        ctx.run_id,
+        "dispatch",
+        handoffIdentity(ctx, sha256(current.state_revision).slice(0, 12)),
+        current,
+      )
+      input.prompt = [
+        String(input.prompt),
+        `<pipeline_dispatch_packet path="${dispatchPath}"/>`,
+        "Read the dispatch packet file before work. Authoritative files and machine evidence stay in files; conversation history is supplemental. Return only the concise role result required by the pipeline.",
+      ].join("\n")
       event.input = input
       const promptBytes = byteLength(input.prompt ?? "")
       const rememberFresh = (reason: string, priorFiles: string[] = []) => {
         invocationByCallID.set(String(event.id), {
           ctx, started_at: Date.now(), decision: "fresh", fallback_reason: reason,
-          prompt_bytes: promptBytes, prior_files_read: priorFiles,
+          prompt_bytes: promptBytes, packet_bytes: byteLength(current), prior_files_read: priorFiles,
         })
-        appendJsonLine(metricsFile(root, ctx.run_id), decisionMetric(ctx, role, "fresh", reason))
+        appendJsonLine(metricsFile(root, ctx.run_id), {
+          ...decisionMetric(ctx, role, "fresh", reason), dispatch_path: dispatchPath, packet_bytes: byteLength(current),
+        })
       }
 
       if (!contextIsFresh(ctx)) return rememberFresh("stale_runtime_context")
@@ -391,11 +450,18 @@ export default Plugin.define({
 
       try { await plugin.session.get({ sessionID: match.session_id as any }) }
       catch { return rememberFresh("session_unavailable", match.files_read ?? []) }
+      const deltaPath = writeJsonHandoff(
+        root,
+        ctx.run_id,
+        "reuse",
+        handoffIdentity(ctx, sha256(`${ctx.state_revision}:${delta.hash}`).slice(0, 12)),
+        delta.payload,
+      )
       input.sessionID = match.session_id
       input.prompt = [
-        String(input.prompt ?? ""), "", "<session_reuse_delta>",
-        JSON.stringify(delta.payload, null, 2), "</session_reuse_delta>",
-        "Re-read the evidence and required paths above. Prior conversation memory is supplemental; repository state and evidence remain authoritative.",
+        String(input.prompt ?? ""),
+        `<session_reuse_delta path="${deltaPath}"/>`,
+        "Read the reuse delta file and every required path listed there. Prior conversation memory is supplemental; repository state and evidence remain authoritative.",
       ].join("\n")
       event.input = input
       invocationByCallID.set(String(event.id), {
@@ -405,7 +471,7 @@ export default Plugin.define({
       match.status = "in_progress"; match.updated_at = new Date().toISOString(); saveRegistry(root, ctx.run_id, registry)
       appendJsonLine(metricsFile(root, ctx.run_id), {
         ...decisionMetric(ctx, role, "reuse"), session_id: match.session_id,
-        packet_bytes: delta.bytes, delta_hash: delta.hash, call_id: String(event.id),
+        packet_bytes: delta.bytes, delta_hash: delta.hash, delta_path: deltaPath, dispatch_path: dispatchPath, call_id: String(event.id),
       })
     })
 
@@ -433,6 +499,26 @@ export default Plugin.define({
       const currentFiles = [...(sessionStats?.files_read ?? new Set<string>())]
       const priorFiles = new Set(invocation.prior_files_read)
       const rereadFiles = currentFiles.filter((file) => priorFiles.has(file))
+      const rawResult = event.status === "completed"
+        ? String(event.result?.content ?? event.result?.output ?? "")
+        : String(event.error?.message ?? "")
+      const resultPath = writeJsonHandoff(
+        root,
+        ctx.run_id,
+        "results",
+        handoffIdentity(ctx, sha256(`${callID}:${now}`).slice(0, 12)),
+        {
+          run_id: ctx.run_id,
+          pipeline_id: ctx.pipeline_id,
+          stage: ctx.stage,
+          role,
+          work_item_id: ctx.work_item_id,
+          transport_status: event.status,
+          session_id: childID || null,
+          recorded_at: now,
+          content: rawResult,
+        },
+      )
 
       if (event.status === "completed" && childID) {
         const next: RegistryEntry = {
@@ -459,7 +545,9 @@ export default Plugin.define({
         orientation_ms: sessionStats?.first_meaningful_at ? sessionStats.first_meaningful_at - invocation.started_at : null,
         prompt_bytes: invocation.prompt_bytes,
         context_bytes: sessionStats?.context_bytes ?? null, model_requests: sessionStats?.model_requests ?? null, model: sessionStats?.model ?? null,
-        response_bytes: event.status === "completed" ? byteLength(event.result?.content ?? event.result?.output ?? "") : 0,
+        response_bytes: byteLength(rawResult),
+        parent_response_bytes: byteLength(compactSubagentResult(rawResult, event.status, resultPath)),
+        result_path: resultPath,
         packet_bytes: invocation.packet_bytes ?? null,
         tool_calls: sessionStats?.tool_calls ?? null, read_calls: sessionStats?.read_calls ?? null,
         grep_calls: sessionStats?.grep_calls ?? null, glob_calls: sessionStats?.glob_calls ?? null,
@@ -467,6 +555,10 @@ export default Plugin.define({
         unique_files_read: currentFiles.length, reread_files: rereadFiles, reread_file_count: rereadFiles.length,
         context_reread_ratio: currentFiles.length ? rereadFiles.length / currentFiles.length : null,
       })
+      if (event.status === "completed") {
+        const compact = compactSubagentResult(rawResult, event.status, resultPath)
+        event.result = { ...event.result, content: compact, output: compact }
+      }
       invocationByCallID.delete(callID)
       if (childID) statsBySession.delete(childID)
     })
