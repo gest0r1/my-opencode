@@ -167,6 +167,38 @@ function compactSubagentResult(raw: string, transportStatus: string, resultPath:
     detail_required: detailRequired,
   })
 }
+function compactDispatchShellResult(root: string, event: any) {
+  if (event.status !== "completed" || event.tool !== "shell") return
+  const command = String(event.input?.command ?? "")
+  if (!/stage-cli\.ts\s+dispatch\b/.test(command)) return
+  const raw = String(event.result?.content ?? event.result?.output ?? "")
+  let packet: any
+  try { packet = JSON.parse(raw) } catch { return }
+  if (!packet?.run_id || !packet?.pipeline_id || !packet?.stage || !packet?.work_item_id || !packet?.state_revision) return
+  const ctx = packet as Pick<RuntimeContext, "pipeline_id" | "stage" | "work_item_id">
+  const packetPath = writeJsonHandoff(
+    root,
+    String(packet.run_id),
+    "dispatch",
+    handoffIdentity(ctx, sha256(String(packet.state_revision)).slice(0, 12)),
+    packet,
+  )
+  const compact = JSON.stringify({
+    status: "ready",
+    run_id: packet.run_id,
+    pipeline_id: packet.pipeline_id,
+    stage: packet.stage,
+    work_item_id: packet.work_item_id,
+    role: packet.role ?? null,
+    state_revision: packet.state_revision,
+    advisory_required: Array.isArray(packet.advisory_checks) && packet.advisory_checks.length > 0,
+    packet_path: packetPath,
+    work_item_marker: `<pipeline_work_item id="${packet.work_item_id}"/>`,
+    dispatch_marker: `<pipeline_dispatch run="${packet.run_id}" pipeline="${packet.pipeline_id}" stage="${packet.stage}"/>`,
+    parent_action: "dispatch with markers; runtime injects file-backed packet",
+  })
+  event.result = { ...event.result, content: compact, output: compact }
+}
 function loadRegistry(root: string, runID: string): RegistryEntry[] {
   const value = safeJson(registryPath(root, runID))
   return Array.isArray(value) ? value : []
@@ -477,6 +509,7 @@ export default Plugin.define({
 
     await plugin.tool.hook("execute.after", async (event) => {
       if (event.tool !== "subagent") {
+        compactDispatchShellResult(root, event)
         const run = runBySession.get(String(event.sessionID))
         if (run && event.status === "completed" && event.tool === "read") appendJsonLine(metricsFile(root, run), {
           event: "parent_read", timestamp: new Date().toISOString(), bytes_read: byteLength(event.result.content) })
