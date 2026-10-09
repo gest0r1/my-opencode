@@ -6,6 +6,22 @@ managed PostgreSQL resources. Validation and selection are implemented once in
 `scripts/gate-testing-policy.mjs`; lifecycle and evidence belong to the existing
 `gate-runner-cli.ts`. RUN owns call order, not a second implementation of these rules.
 
+## Early implementation contract
+
+When an existing deterministic local test/typecheck command can validate source-changing
+CoderAgent work, PLAN assigns the source pipeline the shared frozen `profile` and defines
+`gate_testing[profile][gate].impact_groups` for the relevant component boundaries and
+transitive consumers. A source-only feature pipeline may share the terminal delivery
+pipeline's profile solely for advisory selection; this does **not** add a `local_gate`
+stage, authoritative PASS, extra fix budget or duplicate final validation.
+
+Do not create a synthetic profile or impact mapping when no repository-native deterministic
+check applies. If a relevant deterministic check exists but a source-changing CoderAgent
+pipeline cannot resolve it through its frozen profile + impact groups, planning is incomplete
+and must be revised before approval. `stage-cli dispatch` derives CoderAgent
+`advisory_checks[]` only from this frozen contract; RUN and the worker must not guess a test
+command or dependency graph.
+
 ```json
 {
   "gate_profiles": {
