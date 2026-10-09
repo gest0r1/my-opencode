@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -62,7 +62,7 @@ test('agent completion requires bound PASS and only invalidates on work-item sco
   const baselineInventory = await sourceInventory(fx.root, invoke(fx.root));
   const baseline = {
     schema_version: 1, run_id: fx.runId, pipeline_id: 'app', stage: 'implementation', work_item_id: 'wi-1',
-    manifest_sha256: sha(await (await import('node:fs/promises')).readFile(fx.manifestFile, 'utf8')),
+    manifest_sha256: sha(await readFile(fx.manifestFile, 'utf8')),
     allowed_change_paths: ['src/a/**'], source_digest: baselineInventory.digest, files: baselineInventory.files,
   };
   const baselineRaw = `${JSON.stringify(baseline, null, 2)}\n`;
@@ -87,4 +87,16 @@ test('agent completion requires bound PASS and only invalidates on work-item sco
 
   await writeFile(path.join(fx.root, 'src', 'a', 'a.ts'), 'export const a = 3;\n');
   await assert.rejects(verifyAgentAdvisoryCompletion(fx.root, args), /ADVISORY_EVIDENCE_STALE_SOURCE/);
+});
+
+test('OpenStage cannot bypass completion verifier and DevOps has no raw secret-bearing diagnostics', async () => {
+  const orchestrator = await readFile(new URL('../../../agent/core/openstage-orchestrator.md', import.meta.url), 'utf8');
+  assert.match(orchestrator, /stage-cli\.ts complete\*": deny/);
+  assert.match(orchestrator, /stage-complete-cli\.ts\*": allow/);
+
+  const devops = await readFile(new URL('../../../agent/subagents/development/devops-specialist.md', import.meta.url), 'utf8');
+  assert.doesNotMatch(devops, /docker (?:compose )?logs .*:\s*allow/i);
+  assert.doesNotMatch(devops, /kubectl (?:get|describe|logs) .*:\s*allow/i);
+  assert.doesNotMatch(devops, /terraform plan .*:\s*allow/i);
+  assert.match(devops, /runtime-diagnostic-cli\.ts \*": allow/);
 });
