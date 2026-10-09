@@ -330,11 +330,12 @@ test('RUN authorizes bounded runtime scope before consuming technical-fix cycles
 });
 
 
-test('compact parent loads the single command contract at entry and after resume', async () => {
+test('parent keeps pipeline transport file-backed and orchestration-only', async () => {
   const parent = await text('config/opencode/agent/core/openstage-orchestrator.md');
-  assert.match(parent, /At entry and after compaction\/resume, load the active installed command/);
+  assert.match(parent, /At entry load only the active installed command/);
   assert.match(parent, /commands\/pipeline-\{plan,run,refresh,status\}/);
-  assert.match(parent, /never reinterpret a missing contract/);
-  assert.match(parent, /stage-cli dispatch/);
-  assert.match(parent, /Never supply `sessionID`/);
+  assert.match(parent, /context\/transport rules below own what crosses the parent conversation boundary/i);
+  assert.match(parent, /do not read that packet in the parent/i);
+  assert.match(parent, /detail_required=false/);
+  assert.match(parent, /Never invent `sessionID`/);
 });
