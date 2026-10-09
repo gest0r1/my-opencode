@@ -38,6 +38,8 @@ class GateRunnerError extends Error {}
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
 const MAX_CAPTURE = 256 * 1024;
 const SHA = /^[0-9a-f]{40}$/i;
+const SHA256 = /^[0-9a-f]{64}$/i;
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const RUNTIME_GATE = /(runtime|deploy|release|smoke|install)/i;
 
 function sha256(content: string): string {
@@ -84,7 +86,6 @@ async function runInvocation(exe: string, args: string[], cwd: string, env: Reco
     activeChildren.add(child);
     let stdout = ''; let stderr = ''; let timedOut = false; let truncated = false;
     const timer = setTimeout(() => { timedOut = true; terminate(child, 'SIGTERM'); }, timeout * 1000);
-    // Also bounds children which ignore TERM, including an interrupted test tree.
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     const killLater = () => { killTimer ??= setTimeout(() => terminate(child, 'SIGKILL'), 3000); };
     const timeoutKill = setTimeout(killLater, timeout * 1000);
@@ -166,7 +167,7 @@ async function main(): Promise<void> {
   const pipeline = manifest.pipelines.find((item) => item.id === pipelineId);
   if (!pipeline) throw new GateRunnerError(`pipeline not found: ${pipelineId}`);
   if (!pipeline.profile) throw new GateRunnerError(`pipeline has no gate profile: ${pipelineId}`);
-  let commands = manifest.gate_profiles?.[pipeline.profile]?.[gate];
+  const commands = manifest.gate_profiles?.[pipeline.profile]?.[gate];
   if (!Array.isArray(commands) || commands.length === 0) {
     throw new GateRunnerError(`no executable gate commands: profile=${pipeline.profile} gate=${gate}`);
   }
@@ -176,6 +177,36 @@ async function main(): Promise<void> {
   const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
   const affected = args.includes('--affected');
   if (affected && !advisory) throw new GateRunnerError('affected tests are advisory only; final gates always run the full frozen set');
+
+  const workItemIndex = args.indexOf('--work-item');
+  const baselineIndex = args.indexOf('--baseline');
+  const baselineShaIndex = args.indexOf('--baseline-sha256');
+  const workItemId = workItemIndex >= 0 ? args[workItemIndex + 1] : undefined;
+  const baselinePath = baselineIndex >= 0 ? args[baselineIndex + 1] : undefined;
+  const baselineSha = baselineShaIndex >= 0 ? args[baselineShaIndex + 1] : undefined;
+  const hasBoundBaseline = workItemId !== undefined || baselinePath !== undefined || baselineSha !== undefined;
+  if (hasBoundBaseline && (!advisory || !affected || !workItemId || !baselinePath || !baselineSha)) {
+    throw new GateRunnerError('work-item baseline requires --advisory --affected --work-item --baseline --baseline-sha256');
+  }
+  if (workItemId && !SAFE_ID.test(workItemId)) throw new GateRunnerError('WORK_ITEM_ID_INVALID');
+
+  let baseline: any = null;
+  let baselineRaw: string | undefined;
+  if (baselinePath) {
+    if (!safeRelativePath(baselinePath) || !baselinePath.startsWith('checks/baselines/')) throw new GateRunnerError('ADVISORY_BASELINE_PATH_INVALID');
+    if (!SHA256.test(baselineSha ?? '')) throw new GateRunnerError('ADVISORY_BASELINE_SHA_INVALID');
+    const absolute = resolve(stateRoot, runId, baselinePath);
+    baselineRaw = await readFile(absolute, 'utf8').catch(() => { throw new GateRunnerError('ADVISORY_BASELINE_MISSING'); });
+    if (sha256(baselineRaw) !== baselineSha) throw new GateRunnerError('ADVISORY_BASELINE_CHANGED');
+    try { baseline = JSON.parse(baselineRaw); }
+    catch { throw new GateRunnerError('ADVISORY_BASELINE_INVALID_JSON'); }
+    if (baseline.schema_version !== 1 || baseline.run_id !== runId || baseline.pipeline_id !== pipelineId ||
+        baseline.work_item_id !== workItemId || baseline.manifest_sha256 !== state.manifest_sha256 ||
+        !Array.isArray(baseline.allowed_change_paths) || baseline.allowed_change_paths.length === 0 || !baseline.files) {
+      throw new GateRunnerError('ADVISORY_BASELINE_IDENTITY_MISMATCH');
+    }
+  }
+
   const selection = args.indexOf('--command-index');
   let selected = commands.map((command, index) => ({ command, index, test_files: [] as string[] }));
   if (selection >= 0) {
@@ -183,11 +214,13 @@ async function main(): Promise<void> {
     if (!advisory || affected || !Number.isInteger(index) || index < 0 || index >= commands.length) throw new GateRunnerError('command-index requires an advisory check and a valid frozen command index');
     selected = [selected[index]];
   }
-  const evidenceFile = join(resolve(stateRoot), runId, advisory ? 'checks' : 'gates', `${pipelineId}-${gate}.json`);
+
+  const evidenceSuffix = workItemId ? `-${sha256(`${baseline?.stage ?? ''}:${workItemId}`).slice(0, 16)}` : '';
+  const evidenceFile = join(resolve(stateRoot), runId, advisory ? 'checks' : 'gates', `${pipelineId}-${gate}${evidenceSuffix}.json`);
   await mkdir(dirname(evidenceFile), { recursive: true });
   let previous: any;
   try { previous = JSON.parse(await readFile(evidenceFile, 'utf8')); } catch {}
-  const snapshot = advisory ? await sourceSnapshot(process.cwd(), manifest, (exe: string, argv: string[]) => runInvocation(exe, argv, process.cwd(), {}, 30)) : null;
+  const snapshot = advisory ? await sourceSnapshot(process.cwd(), manifest, (exe: string, argv: string[]) => runInvocation(exe, argv, process.cwd(), {}, 30), baseline) : null;
   let selectionReason = 'full frozen set';
   if (affected) {
     const failures = (previous?.results ?? []).filter((result: any) => result.exit_code !== 0).map((result: any) => result.command_index);
@@ -205,9 +238,9 @@ async function main(): Promise<void> {
   if (hypothesisIndex >= 0 && (!advisory || !args[hypothesisIndex + 1])) throw new GateRunnerError('hypothesis requires an advisory check and an evidence path');
   const hypothesis = hypothesisIndex < 0 ? null : await readDiagnosticHypothesis(args[hypothesisIndex + 1], join(resolve(stateRoot), runId));
   const environmentDigest = sha256(JSON.stringify([process.version, process.env.PATH, process.env.NODE_ENV, process.env.LIVE_PG_TEST, process.env.LIVE_PG_CONTOUR, process.env.DATABASE_URL]));
-  const inputIdentity = snapshot?.digest ? sha256(JSON.stringify([snapshot.digest, state.manifest_sha256, environmentDigest])) : null;
+  const inputIdentity = snapshot?.digest ? sha256(JSON.stringify([snapshot.scoped_digest ?? snapshot.digest, state.manifest_sha256, baselineSha ?? null, environmentDigest])) : null;
   const fingerprint = inputIdentity ? sha256(JSON.stringify([inputIdentity, invocations])) : null;
-  const ledgerFile = join(resolve(stateRoot), runId, 'checks', `${pipelineId}-${gate}-attempts.json`);
+  const ledgerFile = join(resolve(stateRoot), runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-attempts.json`);
   const releaseLocks = [...(RUNTIME_GATE.test(gate) ? pipeline.runtime_locks ?? [] : []), `gate:${runId}:${pipelineId}:${gate}`];
   const release = await acquireRuntimeLocks(stateRoot, runId, releaseLocks);
   let ledger: any = { input_identity: inputIdentity, attempts: {} };
@@ -259,9 +292,11 @@ async function main(): Promise<void> {
     }
     try {
       await writeFile(evidenceFile, `${JSON.stringify({ status, purpose: advisory ? 'advisory' : 'authoritative', run_id: runId, pipeline_id: pipelineId, gate,
+        work_item_id: workItemId ?? null, dispatch_stage: baseline?.stage ?? null, baseline_path: baselinePath ?? null, baseline_sha256: baselineSha ?? null,
         runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, fingerprint,
         hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])],
-        selection_reason: selectionReason, source_digest: snapshot?.digest ?? null,
+        selection_reason: selectionReason, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
+        changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
         live_postgres: resource?.evidence ?? null, cleanup_complete: cleanupComplete,
         test_reports: JSON.parse(redact(JSON.stringify(await readTestReports(config?.report_files, join(resolve(stateRoot), runId), startedAt)))),
@@ -273,7 +308,7 @@ async function main(): Promise<void> {
     } finally { await release(); }
   }
   if (failure) throw failure;
-  console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, candidate_sha: candidateSha ?? null, evidence: evidenceFile,
+  console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: workItemId ?? null, candidate_sha: candidateSha ?? null, evidence: evidenceFile,
     selection_reason: selectionReason, commands_run: results.length }));
 }
 
