@@ -89,6 +89,56 @@ test('agent completion requires bound PASS and only invalidates on work-item sco
   await assert.rejects(verifyAgentAdvisoryCompletion(fx.root, args), /ADVISORY_EVIDENCE_STALE_SOURCE/);
 });
 
+test('owner-amended Coder runtime units also require a dispatch baseline', async () => {
+  const fx = await fixture();
+  const args = ['complete', fx.runId, 'implementation', '--pipeline', 'app'];
+  const inventory = await sourceInventory(fx.root, invoke(fx.root));
+  const originalBaseline = {
+    schema_version: 1, run_id: fx.runId, pipeline_id: 'app', stage: 'implementation', work_item_id: 'wi-1',
+    manifest_sha256: sha(await readFile(fx.manifestFile, 'utf8')),
+    allowed_change_paths: ['src/a/**'], source_digest: inventory.digest, files: inventory.files,
+  };
+  await writeFile(path.join(fx.runRoot, 'checks', 'baselines', 'wi-1.json'), `${JSON.stringify(originalBaseline, null, 2)}\n`);
+
+  const runtimeDir = path.join(fx.runRoot, 'work-items', 'runtime');
+  await mkdir(runtimeDir, { recursive: true });
+  const runtimeItem = { id: 'wi-runtime', pipeline_id: 'app', role: 'CoderAgent', summary: 'owner clarification' };
+  const runtimeRaw = `${JSON.stringify(runtimeItem, null, 2)}\n`;
+  const runtimeRelative = 'work-items/runtime/wi-runtime.json';
+  await writeFile(path.join(fx.runRoot, runtimeRelative), runtimeRaw);
+  const frozenRuntime = { id: 'wi-runtime', pipeline_id: 'app', path: runtimeRelative, sha256: sha(runtimeRaw) };
+
+  const amendment = {
+    kind: 'owner_amendment', status: 'ready', bounded: true, pipeline_id: 'app', source_stage: 'owner-check',
+    target_stage: 'implementation', work_item_id: 'wi-runtime', new_work_item_required: true,
+    paths: ['src/b/b.ts'], work_items: [frozenRuntime], requirements_changed: true,
+    acceptance_criteria_changed: true, business_intent_changed: false, external_contract_changed: false,
+    security_boundary_changed: false, destructive_change: false,
+  };
+  const ownerDir = path.join(fx.runRoot, 'owner');
+  await mkdir(ownerDir, { recursive: true });
+  const amendmentPath = path.join(ownerDir, 'amendment.json');
+  const amendmentRaw = `${JSON.stringify(amendment, null, 2)}\n`;
+  await writeFile(amendmentPath, amendmentRaw);
+
+  const statePath = path.join(fx.runRoot, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.owner_amendments = [{
+    revision: 1, pipeline_id: 'app', source_stage: 'owner-check', status: 'approved',
+    evidence_path: amendmentPath, evidence_sha256: sha(amendmentRaw), paths: amendment.paths,
+    work_items: [frozenRuntime],
+  }];
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+  await assert.rejects(
+    verifyAgentAdvisoryCompletion(fx.root, args),
+    /ADVISORY_DISPATCH_BASELINE_REQUIRED: app\/implementation\/wi-runtime/,
+  );
+
+  await writeFile(amendmentPath, `${amendmentRaw.trim()}\n `);
+  await assert.rejects(verifyAgentAdvisoryCompletion(fx.root, args), /OWNER_AMENDMENT_EVIDENCE_CHANGED/);
+});
+
 test('OpenStage cannot bypass completion verifier and DevOps has no raw secret-bearing diagnostics', async () => {
   const orchestrator = await readFile(new URL('../../../agent/core/openstage-orchestrator.md', import.meta.url), 'utf8');
   assert.match(orchestrator, /stage-cli\.ts complete\*": deny/);
