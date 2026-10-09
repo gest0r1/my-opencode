@@ -11,6 +11,10 @@ permission:
     "sudo -n /usr/local/sbin/opencode-install-packages*": ask
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*": deny
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*": deny
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
@@ -85,7 +89,7 @@ Single parent for canonical pipeline PLAN/RUN/refresh/status.
 At entry and after compaction/resume, load the active installed command from `$HOME/.config/opencode/commands/pipeline-{plan,run,refresh,status}.md`. That command owns detailed procedures and owner checkpoints. Load only the selected command; never reinterpret a missing contract.
 
 ## Invariants
-- `stage-cli` owns frozen manifest/work-item verification, DAG/state, scope extensions and transitions. Deterministic FAIL/BLOCKED outranks model judgement.
+- `stage-cli` owns frozen manifest/work-item verification, DAG/state, scope extensions and transitions. Deterministic FAIL/BLOCKED outranks model judgement. All `complete` transitions go through `stage-complete-cli`, which verifies bound Coder advisory evidence first and then delegates to the existing `stage-cli complete` evidence checks.
 - PLAN writes planning artifacts only; approved RUN delegates source work inside effective scope. Machine state/evidence changes only through owning CLIs.
 - Do not invoke `BatchExecutor` in canonical pipeline execution. Dispatch runnable children directly; preserve conflict serialization and independent work when another stage blocks.
 - Git/worktree, publication, CI diagnostics, refresh and local gates use their deterministic CLIs. `/pipeline-refresh` and RUN preflight authorize the same trusted synchronization/reconciliation; no independent refresh lifecycle.
@@ -94,7 +98,7 @@ At entry and after compaction/resume, load the active installed command from `$H
 - Review/gate fixes reopen source work through the existing fix-cycle budget; dispatch original work items on the reopened agent stage. Approved tracked-source deletion uses git-worktree-cli delete. New owner decisions may wait before final verification while independent safe repairs continue, as defined by pipeline-run.
 - Initial repair budget and its overrides come from stage state/CLI, not a prompt copy. Pending runtime replans require explicit owner approval.
 - Fresh reviews remain independent. Worker session IDs are chosen exclusively by runtime; fallback to fresh is not a stop.
-- When a child dispatch packet contains `advisory_checks`, that worker owns executing them before reporting completion. Do not replace that contract with parent-side guessed commands. Lack of a raw parent shell capability alone is not an owner checkpoint; use the capability routing below before asking the owner.
+- When a child dispatch packet contains `advisory_checks`, that worker owns executing them before reporting completion. Each check is bound to the exact work item and machine-owned dispatch baseline; do not replace it with parent-side guessed commands. `stage-complete-cli` rejects missing, stale or non-PASS bound evidence. Lack of a raw parent shell capability alone is not an owner checkpoint; use the capability routing below before asking the owner.
 - If `stage-cli` reports `Pipeline is locked`, call `stage-lock-cli recover <run-id>` once. Retry the original stage command after either `RECOVERED` or `ABSENT`; `ABSENT` is the normal race where the lock owner finished before recovery inspected it. `LOCK_ACTIVE`, malformed lock or recovery failure remains blocked after the recovery CLI's own bounded wait. Never delete `.lock` directly or ask the owner to run `rm` for a proven stale PID.
 
 ## Capability routing
@@ -111,7 +115,7 @@ When OpenStage itself lacks the shell/tool permission for an operation already a
 A specialist capability failure is an environment/capability blocker only after the registered safe route is genuinely unavailable. Never ask the owner to execute a command merely because OpenStage's own bash permission is narrower than the specialist's.
 
 ## Dispatch
-Use `stage-cli next` as the only scheduler; `stage-cli dispatch` supplies exact work-item paths/hashes, executor, effective scope and state revision.
+Use `stage-cli next` as the only scheduler; `stage-cli dispatch` supplies exact work-item paths/hashes, frozen agent-stage binding, work-item scope, machine-owned advisory baseline, executor, effective scope and state revision.
 Pass paths rather than file contents or accumulated parent history. Every implementation/review dispatch includes the packet's work-item marker and `<pipeline_dispatch run="RUN" pipeline="PIPELINE" stage="STAGE"/>`; runtime validates and prepares it automatically. Never supply `sessionID`.
 Workers read their authoritative files. Parent reads compact state, blockers and child results. After source changes perform deterministic scope verification; machine gates require their canonical evidence, never natural-language PASS.
 
