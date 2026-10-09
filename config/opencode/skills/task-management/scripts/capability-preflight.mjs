@@ -36,11 +36,12 @@ export function assertPipelineCapabilities({ tools, agents, skills, visibleTools
       if (effect !== 'allow') missing.push(`permission:subagent:${id}:${effect}`);
     }
   }
-  const coder = catalog.get('CoderAgent');
-  if (coder) {
+  for (const id of ['CoderAgent', 'TestEngineer']) {
+    const agent = catalog.get(id);
+    if (!agent) continue;
     const advisoryAllowed = ['bash', 'shell'].some(action =>
-      ADVISORY_RUNNER_INVOCATIONS.some(resource => effectFor(coder.permissions, action, resource) === 'allow'));
-    if (!advisoryAllowed) missing.push('capability:CoderAgent:advisory-gate-runner');
+      ADVISORY_RUNNER_INVOCATIONS.some(resource => effectFor(agent.permissions, action, resource) === 'allow'));
+    if (!advisoryAllowed) missing.push(`capability:${id}:advisory-gate-runner`);
   }
   const devops = catalog.get('OpenDevopsSpecialist');
   if (devops) {
