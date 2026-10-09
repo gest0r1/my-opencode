@@ -1,6 +1,10 @@
 const WORKERS = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
 
 const RESEARCH_ROLES = new Set(['ExternalScout', 'WebResearcher', 'ArchitectureAnalyzer', 'CoderAgent', 'CodeReviewer', 'SeniorTechnicalPlanReviewer']);
+const STAGE_COMPLETE_INVOCATIONS = [
+  'npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts complete RUN STAGE --pipeline PIPELINE',
+  'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts complete RUN STAGE --pipeline PIPELINE',
+];
 const ADVISORY_RUNNER_INVOCATIONS = [
   'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected',
   'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected',
@@ -52,8 +56,13 @@ export function assertPipelineCapabilities({ tools, agents, skills, visibleTools
     for (const rule of rules ?? []) if (match(action, rule.action) && match(resource, rule.resource)) effect = rule.effect;
     return effect;
   };
-  const invocationAllowed = (agent, resources) => ['bash', 'shell'].some(action =>
-    resources.some(resource => effectFor(agent?.permissions, action, resource) === 'allow'));
+  const rulesAllowInvocation = (rules, resources) => ['bash', 'shell'].some(action =>
+    resources.some(resource => effectFor(rules, action, resource) === 'allow'));
+  const invocationAllowed = (agent, resources) => rulesAllowInvocation(agent?.permissions, resources);
+
+  if (permissions && !rulesAllowInvocation(permissions, STAGE_COMPLETE_INVOCATIONS)) {
+    missing.push('capability:OpenStageOrchestrator:stage-complete');
+  }
   for (const id of requiredWorkers) {
     if (!catalog.has(id) || catalog.get(id).mode === 'primary') missing.push(`subagent:${id}`);
     if (permissions) {
