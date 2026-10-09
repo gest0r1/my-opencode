@@ -8,7 +8,8 @@ export function summarize(events) {
     const key = ['fresh', 'reuse'].includes(row.decision) ? row.decision : 'unknown';
     const value = groups[key] ??= { calls: 0, failures: 0, latency_ms: 0, prompt_bytes: 0, response_bytes: 0, parent_response_bytes: 0, read_calls: 0, context_bytes: 0, model_requests: 0 };
     value.calls++; value.failures += row.session_health === 'error' ? 1 : 0;
-    for (const metric of ['latency_ms', 'prompt_bytes', 'response_bytes', 'parent_response_bytes', 'read_calls', 'context_bytes', 'model_requests']) value[metric] += Number(row[metric] ?? 0);
+    for (const metric of ['latency_ms', 'prompt_bytes', 'response_bytes', 'read_calls', 'context_bytes', 'model_requests']) value[metric] += Number(row[metric] ?? 0);
+    value.parent_response_bytes += Number(row.parent_response_bytes ?? row.response_bytes ?? 0);
   }
   const reasons = {};
   for (const e of events.filter(e => e.event === 'reuse_decision' && e.fallback_reason)) reasons[e.fallback_reason] = (reasons[e.fallback_reason] ?? 0) + 1;
