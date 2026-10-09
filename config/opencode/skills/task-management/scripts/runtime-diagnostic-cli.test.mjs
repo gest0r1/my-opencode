@@ -22,6 +22,23 @@ test('runtime diagnostic SQL policy permits one read-only statement and rejects 
     'SELECT 1; SELECT 2',
     'SELECT 1 -- comment',
     'SELECT nextval(\'seq\'); DROP TABLE users',
+    'SELECT * INTO copied_users FROM users',
+    'SELECT * FROM users FOR SHARE',
     '\\dt',
   ]) assert.throws(() => validateReadOnlySql(sql));
+});
+
+test('runtime diagnostic SQL policy blocks PostgreSQL side-effect and server-access functions', () => {
+  for (const sql of [
+    'SELECT nextval(\'seq\')',
+    'SELECT setval(\'seq\', 42)',
+    'SELECT pg_terminate_backend(123)',
+    'SELECT pg_cancel_backend(123)',
+    'SELECT pg_advisory_lock(42)',
+    'SELECT pg_notify(\'diagnostic\', \'payload\')',
+    'SELECT pg_reload_conf()',
+    'SELECT pg_read_file(\'/etc/passwd\')',
+    'SELECT pg_ls_dir(\'/\')',
+    'SELECT dblink(\'host=example\', \'SELECT 1\')',
+  ]) assert.throws(() => validateReadOnlySql(sql), /SQL_SIDE_EFFECT_FUNCTION_FORBIDDEN/);
 });
