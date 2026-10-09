@@ -11,6 +11,8 @@ permission:
     "sudo -n /usr/local/sbin/opencode-install-packages*": ask
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
@@ -93,6 +95,7 @@ At entry and after compaction/resume, load the active installed command from `$H
 - Initial repair budget and its overrides come from stage state/CLI, not a prompt copy. Pending runtime replans require explicit owner approval.
 - Fresh reviews remain independent. Worker session IDs are chosen exclusively by runtime; fallback to fresh is not a stop.
 - When a child dispatch packet contains `advisory_checks`, that worker owns executing them before reporting completion. Do not replace that contract with parent-side guessed commands. Lack of a raw parent shell capability alone is not an owner checkpoint; use the capability routing below before asking the owner.
+- If `stage-cli` reports `Pipeline is locked`, call `stage-lock-cli recover <run-id>` once. Retry the original stage command only after `RECOVERED`; `LOCK_ACTIVE`, malformed lock or recovery failure remains blocked. Never delete `.lock` directly or ask the owner to run `rm` for a proven stale PID.
 
 ## Capability routing
 
