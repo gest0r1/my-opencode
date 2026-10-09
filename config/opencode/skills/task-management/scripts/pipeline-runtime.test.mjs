@@ -148,7 +148,7 @@ test('runtime preflight forwards selected research roles and checks their effect
     list:async()=>['read','shell','subagent','pipeline_runtime_prepare','webfetch','gh_grep_searchGitHub'].map(id=>({id}))},
    session:{hook:async()=>{}},
    agent:{list:async()=>({data:[parent,...ids.map(id=>({id,mode:'subagent',permissions:[
-    ...(id === 'CoderAgent' ? [
+    ...(['CoderAgent','TestEngineer'].includes(id) ? [
       {action:'bash',resource:'*',effect:'deny'},
       {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*',effect:'allow'},
     ] : []),
