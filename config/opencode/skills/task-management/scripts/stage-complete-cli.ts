@@ -43,6 +43,19 @@ function requiredAffectedGates(manifest: any, pipeline: any): string[] {
   ).sort();
 }
 
+async function expectedCoderWorkItems(manifest: any, pipeline: any, stage: string, manifestFile: string): Promise<string[]> {
+  const root = dirname(manifestFile);
+  const expected: string[] = [];
+  for (const frozen of manifest.work_items ?? []) {
+    if (frozen.pipeline_id !== pipeline.id || !pipeline.work_items?.includes(frozen.id) || typeof frozen.path !== 'string') continue;
+    let item: any;
+    try { item = JSON.parse(await readFile(resolve(root, frozen.path), 'utf8')); }
+    catch { throw new StageCompleteError(`FROZEN_WORK_ITEM_INVALID: ${frozen.id}`); }
+    if (item.stage === stage && (item.suggested_agent === 'CoderAgent' || item.role === 'CoderAgent')) expected.push(frozen.id);
+  }
+  return expected.sort();
+}
+
 export async function verifyAgentAdvisoryCompletion(root: string, args: string[]): Promise<{checked:number}> {
   if (args[0] !== 'complete') return { checked: 0 };
   const runId = args[1];
@@ -54,13 +67,15 @@ export async function verifyAgentAdvisoryCompletion(root: string, args: string[]
   const runRoot = join(stateRoot, runId);
   const state = await loadJson(join(runRoot, 'state.json'));
   if (!state.manifest_file) return { checked: 0 };
-  const manifestRaw = await readFile(resolve(state.manifest_file), 'utf8');
+  const manifestFile = resolve(state.manifest_file);
+  const manifestRaw = await readFile(manifestFile, 'utf8');
   if (state.manifest_sha256 && hash(manifestRaw) !== state.manifest_sha256) throw new StageCompleteError('FROZEN_MANIFEST_CHANGED');
   const manifest = JSON.parse(manifestRaw);
   const pipeline = manifest.pipelines?.find((candidate: any) => candidate.id === pipelineId);
   if (!pipeline || pipeline.executors?.[stage] !== 'agent') return { checked: 0 };
   const gates = requiredAffectedGates(manifest, pipeline);
   if (gates.length === 0) return { checked: 0 };
+  const expectedItems = await expectedCoderWorkItems(manifest, pipeline, stage, manifestFile);
 
   const baselineDir = join(runRoot, 'checks', 'baselines');
   let names: string[] = [];
@@ -70,11 +85,18 @@ export async function verifyAgentAdvisoryCompletion(root: string, args: string[]
   const baselines = [];
   for (const name of names) {
     const path = join(baselineDir, name);
+    const raw = await readFile(path, 'utf8');
     let baseline: any;
-    try { baseline = JSON.parse(await readFile(path, 'utf8')); }
+    try { baseline = JSON.parse(raw); }
     catch { throw new StageCompleteError(`ADVISORY_BASELINE_INVALID: ${path}`); }
     if (baseline.run_id === runId && baseline.pipeline_id === pipelineId && baseline.stage === stage) {
-      baselines.push({ path, baseline, sha256: hash(await readFile(path, 'utf8')) });
+      baselines.push({ path, baseline, sha256: hash(raw) });
+    }
+  }
+
+  for (const workItemId of expectedItems) {
+    if (!baselines.some(({ baseline }) => baseline.work_item_id === workItemId)) {
+      throw new StageCompleteError(`ADVISORY_DISPATCH_BASELINE_REQUIRED: ${pipelineId}/${stage}/${workItemId}`);
     }
   }
   if (baselines.length === 0) return { checked: 0 };
