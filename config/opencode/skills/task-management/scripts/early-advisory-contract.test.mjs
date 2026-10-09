@@ -8,24 +8,34 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../../../../..');
 const text = relative => readFile(path.join(ROOT, relative), 'utf8');
 
-test('PLAN, dispatch and CoderAgent share one affected-advisory contract', async () => {
-  const [plan, testing, taskManager, coder, orchestrator, dispatch] = await Promise.all([
+test('PLAN, dispatch, CoderAgent and completion share one affected-advisory contract', async () => {
+  const [plan, testing, taskManager, coder, orchestrator, dispatch, runner, completion] = await Promise.all([
     text('config/opencode/command/pipeline-plan.md'),
     text('config/opencode/skills/task-management/gate-testing.md'),
     text('config/opencode/agent/subagents/core/task-manager.md'),
     text('config/opencode/agent/subagents/code/coder-agent.md'),
     text('config/opencode/agent/core/openstage-orchestrator.md'),
     text('config/opencode/skills/task-management/scripts/pipeline-dispatch.ts'),
+    text('config/opencode/skills/task-management/scripts/gate-runner-cli.ts'),
+    text('config/opencode/skills/task-management/scripts/stage-complete-cli.ts'),
   ]);
 
   assert.match(plan, /gate_testing.*skills\/task-management\/gate-testing\.md/is);
-  assert.match(testing, /source-only feature pipeline.*share.*profile.*advisory selection/is);
-  assert.match(testing, /planning is incomplete.*revised before approval/is);
-  assert.match(taskManager, /affected advisory check.*return `needs_revision`/is);
+  assert.match(testing, /machine-owned content baseline/is);
+  assert.match(testing, /work item's\s+frozen `allowed_change_paths`/is);
+  assert.match(taskManager, /`stage`: exact target agent stage ID/is);
+  assert.match(taskManager, /`allowed_change_paths`.*mandatory and non-empty for source-changing CoderAgent/is);
   assert.match(taskManager, /Do not duplicate\s+`advisory_checks` into work-item JSON/is);
-  assert.match(dispatch, /advisory_checks:\s*advisoryChecks/);
-  assert.match(dispatch, /impact_groups/);
-  assert.match(coder, /Execute every `advisory_checks\[\]` entry/is);
-  assert.match(coder, /--advisory --affected/);
-  assert.match(orchestrator, /dispatch packet contains `advisory_checks`/i);
+  assert.match(dispatch, /WORK_ITEM_STAGE_MISMATCH/);
+  assert.match(dispatch, /WORK_ITEM_ADVISORY_SCOPE_MISSING/);
+  assert.match(dispatch, /baseline_path: baseline\.path/);
+  assert.match(dispatch, /baseline_sha256: baseline\.sha256/);
+  assert.match(runner, /--baseline-sha256/);
+  assert.match(runner, /scoped_source_digest/);
+  assert.match(coder, /--work-item WORK_ITEM_ID/);
+  assert.match(coder, /--baseline BASELINE_PATH/);
+  assert.match(coder, /--baseline-sha256 BASELINE_SHA256/);
+  assert.match(orchestrator, /stage-complete-cli/);
+  assert.match(completion, /ADVISORY_DISPATCH_BASELINE_REQUIRED/);
+  assert.match(completion, /ADVISORY_EVIDENCE_STALE_SOURCE/);
 });
