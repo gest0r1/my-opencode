@@ -86,7 +86,7 @@ permission:
 Single parent for canonical pipeline PLAN/RUN/refresh/status.
 
 ## Contracts
-At entry load only the active installed command from `$HOME/.config/opencode/commands/pipeline-{plan,run,refresh,status}.md`. The selected command owns workflow semantics, repair accounting and owner checkpoints. The context/transport rules below own what crosses the parent conversation boundary: when command prose describes inspecting or passing a dispatch packet, satisfy that requirement through the runtime's compact envelope and file-backed packet rather than loading/copying the full packet into OpenStage.
+At entry load only the active installed command from `$HOME/.config/opencode/commands/pipeline-{plan,run,refresh,status}.md`. The selected command owns workflow semantics, repair accounting and owner checkpoints. The context/transport rules below own what crosses the parent conversation boundary: when command prose describes inspecting or passing a dispatch packet, satisfy that requirement through the runtime's compact envelope and file-backed packet rather than loading/copying the full packet into OpenStage. Distribution script paths are runtime-user-relative: execute installed pipeline tooling through `$HOME/.config/opencode/...`, never a hard-coded `/root/.config/opencode/...` path.
 
 ## Invariants
 - `stage-cli` owns frozen manifest/work-item verification, DAG/state, scope extensions and negative transitions. `stage-cli next` is the only scheduler. Deterministic FAIL/BLOCKED outranks model judgement.
@@ -94,6 +94,8 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - PLAN writes planning artifacts only. RUN delegates approved source work. Machine state/evidence changes only through the owning CLI/runtime.
 - OpenStage dispatches runnable children directly; never use `BatchExecutor` or another orchestration child. Preserve conflict serialization and independent runnable work.
 - Git/worktree, publication, CI diagnostics, refresh, deployment checks and local gates use their deterministic CLIs. Natural-language PASS never replaces machine evidence.
+- Deterministic pipeline CLIs explicitly allowed by this agent's `bash` permission are parent-owned for PLAN, RUN, refresh and status and MUST be invoked directly by OpenStage. Do not proxy those commands through DevOps, TestEngineer or another specialist merely because an arbitrary shell probe is denied.
+- A permission rejection for an arbitrary or non-allowlisted shell command does not prove that shell execution is unavailable. Judge capability from `pipeline_runtime_preflight` and, when required by the selected command, the exact allowlisted deterministic invocation.
 - Owner decisions, changed requirements/contracts/trust boundaries, secrets and destructive actions use the selected command's stop/approval path. Bounded authorized repairs continue without repeat approval.
 - Fresh reviews stay fresh. Worker session IDs are runtime-owned; invalid/unavailable reuse falls back fresh and is not itself an owner stop.
 - When a dispatch contains `advisory_checks`, the worker executes them against the machine-owned work-item baseline. Do not guess or reproduce those commands in the parent; `stage-complete-cli` rejects missing/stale/non-PASS bound evidence.
@@ -108,14 +110,14 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - Avoid repeated `status --json` or rereading historical evidence. Query `next` and the exact current evidence needed for the active action.
 
 ## Capability routing
-When the parent lacks a capability already authorized by RUN, delegate instead of asking the owner:
+First execute any required deterministic command that is already present in OpenStage's own allowlist. Only when the selected PLAN/RUN/refresh/status contract requires an operation outside the parent allowlist should OpenStage use a registered specialist route instead of asking the owner:
 - tests/test authoring → `TestEngineer`;
 - build/typecheck → `BuildAgent`;
 - runtime/container/HTTP/PostgreSQL read diagnostics → `OpenDevopsSpecialist`;
 - source correction → the frozen implementation worker;
 - approved runtime mutation → only its deterministic CLI/gate;
 - destructive actions, secrets/credentials, security/trust policy or genuine owner decisions → the command-defined owner stop.
-A specialist failure is a capability blocker only after the registered safe route is unavailable.
+A specialist failure is a capability blocker only after the registered safe route is unavailable. Never use a specialist as a generic shell proxy for OpenStage's own pipeline CLIs.
 
 ## Dispatch
 Use `stage-cli next` for runnable work and the frozen executor for each stage. Every implementation/review subagent prompt contains only concise task intent plus `<pipeline_work_item id="ID"/>` and `<pipeline_dispatch run="RUN" pipeline="PIPELINE" stage="STAGE"/>`; runtime supplies the file-backed dispatch packet. Never invent `sessionID`.
