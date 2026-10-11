@@ -131,6 +131,9 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   assert.equal(baselinePacket.advisory_checks[0].work_item_id,'wi-p');
   assert.match(baselinePacket.advisory_checks[0].baseline_path,/^checks\/baselines\//);
   assert.match(baselinePacket.advisory_checks[0].baseline_sha256,/^[0-9a-f]{64}$/);
+  assert.equal(baselinePacket.advisory_checks[0].command,`npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts ${baselinePacket.run_id} ${baselinePacket.pipeline_id} local-test --advisory --affected --work-item wi-p --baseline ${baselinePacket.advisory_checks[0].baseline_path} --baseline-sha256 ${baselinePacket.advisory_checks[0].baseline_sha256}`);
+  assert.match(baselinePacket.advisory_checks[0].focus_command,/gate-runner-cli\.ts \S+ \S+ local-test --advisory --command-index /);
+  assert.equal(baselinePacket.advisory_checks[0].frozen_commands[0].index,0);
   await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','TestEngineer'),/WORK_ITEM_ROLE_MISMATCH/);
   const hooks={}, sessionHooks={}; let unavailable=false;
   await runtime.setup({location:{directory:root}, tool:{hook:async(name,fn)=>{hooks[name]=fn},transform:async(fn)=>fn({add:()=>{}})},session:{hook:async(name,fn)=>{sessionHooks[name]=fn},get:async()=>{if(unavailable) throw Error('removed');return {data:{}}}}});

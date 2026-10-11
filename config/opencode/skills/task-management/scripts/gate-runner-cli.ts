@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
@@ -147,7 +147,7 @@ async function main(): Promise<void> {
   const stateRootIndex = args.indexOf('--state-root');
   if (stateRootIndex >= 0) stateRoot = args[stateRootIndex + 1] ?? DEFAULT_STATE_ROOT;
   if (!runId || !pipelineId || !gate) {
-    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>] [--advisory]');
+    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>] [--advisory [--affected ...|--command-index N [--test-file PATH]...|--base-probe]]');
   }
 
   const stateFile = join(resolve(stateRoot), runId, 'state.json');
@@ -215,13 +215,43 @@ async function main(): Promise<void> {
     selected = [selected[index]];
   }
 
-  const evidenceSuffix = workItemId ? `-${sha256(`${baseline?.stage ?? ''}:${workItemId}`).slice(0, 16)}` : '';
+  // Focused diagnostic: one frozen vitest command narrowed to concrete test files. It never
+  // satisfies a bound completion check; the bound affected check and final gates stay complete.
+  const testFiles: string[] = [];
+  args.forEach((value, index) => { if (value === '--test-file') testFiles.push(args[index + 1] ?? ''); });
+  if (testFiles.length) {
+    if (!advisory || affected || selection < 0) throw new GateRunnerError('test-file requires --advisory --command-index N');
+    for (const file of testFiles) {
+      if (!safeRelativePath(file) || file.startsWith('-') || /[*?\[\]{}\0\r\n]/.test(file)) throw new GateRunnerError(`TEST_FILE_INVALID: ${file}`);
+      await access(resolve(process.cwd(), file)).catch(() => { throw new GateRunnerError(`TEST_FILE_MISSING: ${file}`); });
+    }
+    const tokens = tokenizeCommand(selected[0].command);
+    if (!tokens.includes('vitest') || !tokens.includes('run')) throw new GateRunnerError('test-file requires an explicit vitest run command');
+    selected[0] = { ...selected[0], test_files: [...new Set(testFiles)] };
+  }
+
+  // Base probe: the complete frozen set on the untouched checkout before implementation starts,
+  // so pre-existing red suites are classified up front instead of inside an unrelated work item.
+  const baseProbe = args.includes('--base-probe');
+  let probe: { head_sha: string; base_sha: string | null } | null = null;
+  if (baseProbe) {
+    if (!advisory || affected || selection >= 0 || hasBoundBaseline) throw new GateRunnerError('base-probe requires --advisory and the complete frozen set');
+    const status = await runInvocation('git', ['status', '--porcelain', '--untracked-files=all'], process.cwd(), {}, 30);
+    const dirty = status.stdout.split('\n').filter(line => line.trim() && !/^.. \.tmp\//.test(line));
+    if (status.exit_code !== 0 || dirty.length) throw new GateRunnerError('BASE_PROBE_REQUIRES_CLEAN_CHECKOUT');
+    const head = await runInvocation('git', ['rev-parse', 'HEAD'], process.cwd(), {}, 30);
+    probe = { head_sha: head.stdout.trim(), base_sha: manifest.git_setup?.base_sha ?? null };
+  }
+
+  const evidenceSuffix = workItemId ? `-${sha256(`${baseline?.stage ?? ''}:${workItemId}`).slice(0, 16)}`
+    : baseProbe ? '-base-probe'
+      : testFiles.length ? `-focus-${sha256(JSON.stringify([selected[0].index, selected[0].test_files])).slice(0, 12)}` : '';
   const evidenceFile = join(resolve(stateRoot), runId, advisory ? 'checks' : 'gates', `${pipelineId}-${gate}${evidenceSuffix}.json`);
   await mkdir(dirname(evidenceFile), { recursive: true });
   let previous: any;
   try { previous = JSON.parse(await readFile(evidenceFile, 'utf8')); } catch {}
   const snapshot = advisory ? await sourceSnapshot(process.cwd(), manifest, (exe: string, argv: string[]) => runInvocation(exe, argv, process.cwd(), {}, 30), baseline) : null;
-  let selectionReason = 'full frozen set';
+  let selectionReason = baseProbe ? 'base probe: full frozen set' : testFiles.length ? 'focused test files' : 'full frozen set';
   if (affected) {
     const failures = (previous?.results ?? []).filter((result: any) => result.exit_code !== 0).map((result: any) => result.command_index);
     const impact = selectAffectedCommands(commands, config, snapshot?.changed, failures);
@@ -295,7 +325,7 @@ async function main(): Promise<void> {
         work_item_id: workItemId ?? null, dispatch_stage: baseline?.stage ?? null, baseline_path: baselinePath ?? null, baseline_sha256: baselineSha ?? null,
         runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, fingerprint,
         hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])],
-        selection_reason: selectionReason, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
+        selection_reason: selectionReason, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
         live_postgres: resource?.evidence ?? null, cleanup_complete: cleanupComplete,

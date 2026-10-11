@@ -48,12 +48,15 @@ export function validateGateTesting(manifest) {
   }
 }
 
-const BROAD_CHANGE = /(^|\/)(package\.json|(?:pnpm|bun|yarn|package)[.-]lock[^/]*|[^/]*config\.[^/]+|[^/]*schema[^/]*|[^/]*migration[^/]*)(\/|$)|(^|\/)(auth|contracts|migrations|schema)(\/|[.-])/i;
+// Dependency manifests/lockfiles and auth/security paths can affect any suite: always full.
+const ALWAYS_FULL_CHANGE = /(^|\/)(package\.json|(?:pnpm|bun|yarn|package)[.-]lock[^/]*)$|(^|\/)auth(\/|[.-])/i;
 
 export function selectAffectedCommands(commands, config, changed, previousFailures = []) {
   const full = reason => ({ reason, selected: commands.map((command, index) => ({ command, index, test_files: [] })) });
   if (!config?.impact_groups || !changed?.length) return full('missing impact map or change baseline');
-  if (changed.some(file => BROAD_CHANGE.test(file))) return full('shared contract/configuration/security/database change');
+  if (changed.some(file => ALWAYS_FULL_CHANGE.test(file))) return full('dependency or security change');
+  // Schema/migration/configuration/shared-contract changes use the frozen, reviewed transitive
+  // impact groups like any other path; an unmapped one still selects the complete array.
   if (changed.some(file => !config.impact_groups.some(group => group.inputs.some(input => impactMatches(input, file))))) return full('unmapped change');
   const selected = new Map();
   for (const group of config.impact_groups) {

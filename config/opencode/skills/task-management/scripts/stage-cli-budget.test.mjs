@@ -44,6 +44,42 @@ test('approved source deletion removes tracked source, rejects scope escapes and
   assert.equal(await readFile(path.join(fx.root, 'protected.ts'), 'utf8'), 'keep\n');
 });
 
+test('approved source move copies bytes exactly, verifies the hash, then removes the original', async () => {
+  const fx = await fixture('source-move', ['implementation'], { implementation: 'agent' }, true);
+  const manifest = JSON.parse(await readFile(path.join(fx.root, 'manifest.json'), 'utf8'));
+  const from = 'packages/db/src/obsolete.ts'; const to = 'packages/db/src/archive/pre-baseline/obsolete.ts';
+  const original = await readFile(path.join(fx.root, from));
+  const evidence = { kind: 'source_move', status: 'ready', run_id: fx.runId, pipeline_id: 'app', work_item_id: 'wi-app',
+    work_item_sha256: manifest.work_items[0].sha256, approved_requirement: true, owner_decision_required: false,
+    policy_basis: 'AC: archive released source byte-for-byte', moves: [{ from, to: 'archive/obsolete.ts' }] };
+  const file = path.join(fx.root, 'move.json');
+  const move = async () => {
+    await writeFile(file, JSON.stringify(evidence));
+    return spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'git-worktree-cli.ts'), 'move', fx.runId,
+      '--pipeline', 'app', '--stage', 'implementation', '--work-item', 'wi-app', '--role', 'CoderAgent', '--evidence', file], { cwd: fx.root, encoding: 'utf8', env: process.env });
+  };
+  let result = await move(); assert.notEqual(result.status, 0); assert.match(result.stderr, /SOURCE_MOVE_OUTSIDE_SCOPE/);
+  evidence.moves = [{ from, to }, { from: to, to: 'packages/db/src/other.ts' }];
+  result = await move(); assert.notEqual(result.status, 0); assert.match(result.stderr, /SOURCE_MOVE_CHAINED_PATH/);
+  evidence.moves = [{ from, to }]; evidence.owner_decision_required = true;
+  result = await move(); assert.notEqual(result.status, 0); assert.match(result.stderr, /SOURCE_MOVE_AUTHORIZATION_REQUIRED/);
+  evidence.owner_decision_required = false;
+  await mkdir(path.dirname(path.join(fx.root, to)), { recursive: true });
+  await writeFile(path.join(fx.root, to), 'different\n');
+  result = await move(); assert.notEqual(result.status, 0); assert.match(result.stderr, /SOURCE_MOVE_TARGET_EXISTS/);
+  await unlink(path.join(fx.root, to));
+  assert.deepEqual(await readFile(path.join(fx.root, from)), original);
+  result = await move(); assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.deepEqual(await readFile(path.join(fx.root, to)), original);
+  await assert.rejects(readFile(path.join(fx.root, from)), /ENOENT/);
+  assert.equal(output.moved[0].sha256, createHash('sha256').update(original).digest('hex'));
+  assert.equal(JSON.parse(await readFile(output.evidence, 'utf8')).status, 'PASS');
+  result = await move(); assert.equal(result.status, 0, result.stderr);
+  await writeFile(path.join(fx.root, to), 'tampered\n');
+  result = await move(); assert.notEqual(result.status, 0); assert.match(result.stderr, /SOURCE_MOVE_SOURCE_MISSING/);
+});
+
 test('deferred owner decision lets repairs finish and blocks only the final gate', async () => {
   const fx = await fixture('deferred-owner', ['implementation', 'code-review', 'final-test'], { implementation: 'agent', 'code-review': 'review', 'final-test': 'local_gate' });
   const file = await writeReview(fx, 'decision.json', { kind: 'deferred_owner_decision', owner_decision_required: true,
