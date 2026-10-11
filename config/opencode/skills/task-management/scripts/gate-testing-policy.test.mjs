@@ -27,10 +27,21 @@ test('affected selection includes transitive consumers, prior failures and suite
   assert.deepEqual(selection.selected.map(item => item.index), [0, 1, 2]);
 });
 
-test('unmapped, security, schema, dependency and uncertain changes run the full set', () => {
-  for (const changes of [null, [], ['other/file.ts'], ['package.json'], ['pnpm-lock.yaml'], ['packages/shared/src/schema.ts'], ['apps/api/src/auth.ts'], ['apps/api/src/auth/login.ts'], ['vitest.config.ts']]) {
+test('unmapped, security, dependency and uncertain changes run the full set', () => {
+  for (const changes of [null, [], ['other/file.ts'], ['package.json'], ['apps/api/package.json'], ['pnpm-lock.yaml'], ['apps/api/src/auth.ts'], ['apps/api/src/auth/login.ts'], ['vitest.config.ts'], ['db/migrations/061_baseline.sql'], ['apps/api/src/orders.ts', 'vitest.live.config.ts']]) {
     assert.equal(selectAffectedCommands(commands, config, changes).selected.length, commands.length, String(changes));
   }
+});
+
+test('mapped schema, migration and configuration changes follow the frozen impact groups', () => {
+  const mapped = { impact_groups: [
+    ...config.impact_groups,
+    { inputs: ['packages/db/migrations/**', 'vitest.live.config.ts'], command_index: 0 },
+  ] };
+  for (const changes of [['packages/db/migrations/061_baseline.sql'], ['vitest.live.config.ts'], ['apps/api/src/schema.ts']]) {
+    assert.deepEqual(selectAffectedCommands(commands, mapped, changes).selected.map(item => item.index), changes[0].startsWith('apps/') ? [0, 2] : [0], String(changes));
+  }
+  assert.deepEqual(selectAffectedCommands(commands, mapped, ['packages/shared/src/schema.ts']).selected.map(item => item.index), [0, 1, 2]);
 });
 
 test('frozen test/resource contracts reject privilege flags, mutable images and invalid filters', () => {

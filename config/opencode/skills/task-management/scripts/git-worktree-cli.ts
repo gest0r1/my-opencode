@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { deleteApprovedSource } from './source-delete.ts';
+import { moveApprovedSource } from './source-move.ts';
 import { createHash } from 'node:crypto';
 import { lstat, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -286,16 +287,17 @@ async function publish(manifest: Manifest, manifestPath: string, cwd: string): P
 async function main(): Promise<void> {
   const [command, manifestPath] = process.argv.slice(2);
   const cwd = await git(['rev-parse', '--show-toplevel']);
-  if (command === 'delete') {
+  if (command === 'delete' || command === 'move') {
     const args = process.argv.slice(4);
     const allowed = new Set(['--pipeline', '--stage', '--work-item', '--role', '--evidence']);
     const options = new Map<string, string>();
     for (let i = 0; i < args.length; i += 2) {
-      if (!allowed.has(args[i]) || !args[i + 1] || options.has(args[i])) throw new GateError('Invalid delete arguments');
+      if (!allowed.has(args[i]) || !args[i + 1] || options.has(args[i])) throw new GateError(`Invalid ${command} arguments`);
       options.set(args[i], args[i + 1]);
     }
-    if (!manifestPath || [...allowed].some(key => !options.has(key))) throw new GateError('delete requires run-id, pipeline, stage, work-item, role and evidence');
-    console.log(JSON.stringify(await deleteApprovedSource(cwd, manifestPath, options.get('--pipeline')!, options.get('--stage')!, options.get('--work-item')!, options.get('--role')!, options.get('--evidence')!)));
+    if (!manifestPath || [...allowed].some(key => !options.has(key))) throw new GateError(`${command} requires run-id, pipeline, stage, work-item, role and evidence`);
+    const apply = command === 'delete' ? deleteApprovedSource : moveApprovedSource;
+    console.log(JSON.stringify(await apply(cwd, manifestPath, options.get('--pipeline')!, options.get('--stage')!, options.get('--work-item')!, options.get('--role')!, options.get('--evidence')!)));
     return;
   }
   if (command === 'inspect' && !manifestPath) {
@@ -307,7 +309,7 @@ async function main(): Promise<void> {
     return;
   }
   if (!manifestPath || !['freshness', 'adopt', 'verify', 'publish'].includes(command ?? '')) {
-    throw new GateError('usage: git-worktree-cli.ts inspect | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json>; setup is disabled');
+    throw new GateError('usage: git-worktree-cli.ts inspect | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
   assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
