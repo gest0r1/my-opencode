@@ -38,6 +38,8 @@ function coderScope(item: any, effectiveScope: string[]): string[] {
   return checkedScope(item.allowed_change_paths, effectiveScope);
 }
 
+const GATE_RUNNER = 'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts';
+
 function affectedAdvisoryChecks(manifest: any, pipeline: any, role: string) {
   if (role !== 'CoderAgent' || typeof pipeline?.profile !== 'string' || !pipeline.profile) return [];
   const profile = pipeline.profile;
@@ -182,7 +184,12 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       files: inventory.files,
       recorded_at: new Date().toISOString(),
     });
-    advisoryChecks = baseChecks.map(check => ({ ...check, work_item_id: workItemId, baseline_path: baseline.path, baseline_sha256: baseline.sha256 }));
+    // Exact allowlisted invocations (literal `$HOME`, matching CoderAgent's bash permission): the
+    // worker executes them verbatim instead of reconstructing a command that the allowlist rejects.
+    advisoryChecks = baseChecks.map(check => ({ ...check, work_item_id: workItemId, baseline_path: baseline.path, baseline_sha256: baseline.sha256,
+      command: `${GATE_RUNNER} ${run} ${pipelineId} ${check.gate} --advisory --affected --work-item ${workItemId} --baseline ${baseline.path} --baseline-sha256 ${baseline.sha256}`,
+      focus_command: `${GATE_RUNNER} ${run} ${pipelineId} ${check.gate} --advisory --command-index <frozen_commands[].index> --test-file <repo-relative vitest file>`,
+      frozen_commands: (manifest.gate_profiles[pipeline.profile][check.gate] as string[]).map((command, index) => ({ index, command })) }));
   }
   return { run_id: run, pipeline_id: pipelineId, stage, executor, role, work_item_id: workItemId,
     work_item_path: workItemPath, work_item_sha256: frozen.sha256, authoritative_paths: [state.manifest_file, state.rules_file, ...referencePaths, ...amendmentEvidence],

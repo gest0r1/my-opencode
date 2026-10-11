@@ -196,6 +196,55 @@ test('affected advisory filters suites but authoritative invocation always runs 
   } finally { process.env.PATH = oldPath; }
 });
 
+test('focused advisory narrows one frozen vitest command to existing test files only', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, [...fx.args, '--advisory', '--command-index', '1', '--test-file', 'src/web.ts']);
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.match(output.evidence, /checks\/app-build-focus-[0-9a-f]{12}\.json$/);
+    const evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.equal(evidence.results.length, 1); assert.equal(evidence.results[0].command_index, 1);
+    assert.equal(evidence.results[0].argv.at(-1), 'src/web.ts'); assert.equal(evidence.selection_reason, 'focused test files');
+    for (const [extra, error] of [
+      [['--command-index', '1', '--test-file', 'src/missing.ts'], /TEST_FILE_MISSING/],
+      [['--command-index', '1', '--test-file', '../src/web.ts'], /TEST_FILE_INVALID/],
+      [['--command-index', '1', '--test-file', 'src/*.ts'], /TEST_FILE_INVALID/],
+      [['--test-file', 'src/web.ts'], /requires --advisory --command-index/],
+      [['--affected', '--test-file', 'src/web.ts'], /requires --advisory --command-index/],
+    ]) {
+      result = run(fx.root, [...fx.args, '--advisory', ...extra]);
+      assert.notEqual(result.status, 0); assert.match(result.stderr, error);
+    }
+    assert.notEqual(run(fx.root, [...fx.args, '--command-index', '1', '--test-file', 'src/web.ts']).status, 0);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('base probe runs the complete frozen set only on a clean checkout and records its base', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, [...fx.args, '--advisory', '--base-probe']);
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /BASE_PROBE_REQUIRES_CLEAN_CHECKOUT/);
+    assert.equal(spawnSync('git', ['checkout', '--', 'src/orders.ts'], { cwd: fx.root }).status, 0);
+    for (const extra of [['--affected'], ['--command-index', '0']]) {
+      assert.notEqual(run(fx.root, [...fx.args, '--advisory', '--base-probe', ...extra]).status, 0);
+    }
+    assert.notEqual(run(fx.root, [...fx.args, '--base-probe']).status, 0);
+    result = run(fx.root, [...fx.args, '--advisory', '--base-probe']);
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.match(output.evidence, /checks\/app-build-base-probe\.json$/); assert.equal(output.commands_run, 2);
+    const evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.equal(evidence.purpose, 'advisory'); assert.equal(evidence.base_probe.head_sha, evidence.base_probe.base_sha);
+    await writeFile(path.join(fx.root, '.tmp/fail'), '');
+    result = run(fx.root, [...fx.args, '--advisory', '--base-probe']);
+    assert.notEqual(result.status, 0);
+    assert.equal(JSON.parse(await readFile(output.evidence, 'utf8')).status, 'FAIL');
+  } finally { process.env.PATH = oldPath; }
+});
+
 test('unchanged diagnostic failures cannot spin; a unique hypothesis permits one retry and source corrections resume', async () => {
   const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
   try {
