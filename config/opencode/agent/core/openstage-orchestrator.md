@@ -98,7 +98,8 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - A permission rejection for an arbitrary or non-allowlisted shell command does not prove that shell execution is unavailable. Judge capability from `pipeline_runtime_preflight` and, when required by the selected command, the exact allowlisted deterministic invocation.
 - Owner decisions, changed requirements/contracts/trust boundaries, secrets and destructive actions use the selected command's stop/approval path. Bounded authorized repairs continue without repeat approval.
 - Fresh reviews stay fresh. Worker session IDs are runtime-owned; invalid/unavailable reuse falls back fresh and is not itself an owner stop.
-- When a dispatch contains `advisory_checks`, the worker executes them against the machine-owned work-item baseline. Do not guess or reproduce those commands in the parent; `stage-complete-cli` rejects missing/stale/non-PASS bound evidence.
+- When a dispatch contains `advisory_checks`, the worker executes each entry's exact `command` (and may iterate with `focus_command`) against the machine-owned work-item baseline. Do not guess or reproduce those commands in the parent and never tell a worker that it has no shell; its allowlist permits exactly those invocations. `stage-complete-cli` rejects missing/stale/non-PASS bound evidence.
+- Approved byte-identical relocation/archiving of tracked source uses `git-worktree-cli.ts move` with reviewed `source_move` evidence; never have a worker retype file contents.
 - If `stage-cli` reports `Pipeline is locked`, call `stage-lock-cli recover <run-id>` once and retry only after `RECOVERED` or `ABSENT`. `LOCK_ACTIVE`, malformed lock or recovery failure remains blocked. Never delete `.lock` directly.
 
 ## Context discipline

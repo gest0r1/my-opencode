@@ -88,9 +88,24 @@ rerun.
 
 Legacy/manual advisory affected invocations without a dispatch baseline retain the existing
 `git_setup.base_sha` comparison. Missing impact metadata, an unmapped change inside the
-selected delta, schema/migration/auth/shared-contract, lockfile or configuration changes
-select the complete command array. Final authoritative gates always execute the original
-complete array. No dependency graph is guessed by the model during RUN.
+selected delta, auth/security paths, `package.json` or lockfile changes select the complete
+command array. Schema, migration, configuration and shared-contract paths follow the frozen
+impact groups like any other input, so PLAN must map them to every consuming suite (for example
+`packages/db/migrations/**` → db and live-PG commands); an unmapped one still selects the
+complete array. Final authoritative gates always execute the original complete array. No
+dependency graph is guessed by the model during RUN.
+
+## Focused runs and base probe
+
+`--advisory --command-index N --test-file PATH` (repeatable) appends existing repo-relative
+test files to one explicit frozen `vitest run` command, with the same managed resources. It is
+the fast correction loop for a failing suite; its `checks/<pipeline>-<gate>-focus-*.json`
+evidence never satisfies a bound completion check.
+
+`--advisory --base-probe` runs the complete frozen array on a clean checkout before the first
+implementation start and records `base_probe.head_sha/base_sha` in
+`checks/<pipeline>-<gate>-base-probe.json`, so a suite that is already red on the base is
+classified before any work item starts instead of surfacing inside an unrelated one.
 
 ## Disposable PostgreSQL
 

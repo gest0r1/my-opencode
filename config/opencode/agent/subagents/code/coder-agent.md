@@ -87,7 +87,8 @@ Claim final build/test PASS only from authoritative gate evidence.
 
 ## Early checks
 
-For each dispatch `advisory_checks[]` entry with `mode=affected`, run exactly:
+For each dispatch `advisory_checks[]` entry with `mode=affected`, execute its `command` field
+verbatim with the shell tool. It has the form:
 
 ```text
 gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected \
@@ -96,14 +97,23 @@ gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected \
   --baseline-sha256 BASELINE_SHA256
 ```
 
-Use the `gate`, `work_item_id`, `baseline_path` and `baseline_sha256` supplied in that entry;
-do not substitute another baseline, guess a profile/dependency graph/test command, or edit
-machine evidence. The baseline was captured at this dispatch and its frozen work-item scope
-keeps parallel unrelated source changes out of affected selection.
+Keep the literal `npx --yes tsx $HOME/.config/opencode/...` prefix: never expand `$HOME`,
+rewrite the path, prepend `cd`/env or reorder arguments, because the bash allowlist matches the
+exact text. Do not substitute another baseline, guess a profile/dependency graph/test command,
+or edit machine evidence. The baseline was captured at this dispatch and its frozen work-item
+scope keeps parallel unrelated source changes out of affected selection.
 
-A parent may explicitly request `--advisory --command-index N` for one exact frozen diagnostic
-command only when affected selection is not the supplied completion check; such a diagnostic
-does not satisfy a bound `advisory_checks[]` requirement.
+While correcting a failing suite, iterate quickly with the entry's `focus_command`: pick the
+failing `frozen_commands[].index` (an explicit `vitest run` command) and one or more existing
+repo-relative test files with repeated `--test-file PATH`. A focused or
+`--advisory --command-index N` diagnostic never satisfies the bound `advisory_checks[]`
+requirement; finish with the bound `command`.
+
+Only these gate-runner invocations and the router commands are allowlisted. Other commands
+(`echo`, `git`, `sha256sum`, package managers) are rejected by design; such a rejection does not
+mean shell is unavailable. Report the shell capability as unavailable only when the exact
+supplied `command` itself was rejected, quoting that rejection. Never move, copy or archive
+files by retyping their contents; request the parent's deterministic `git-worktree-cli move`.
 
 No arbitrary shell, package-manager substitution or runtime/install/deploy actions.
 Advisory results live in `checks/`, never satisfy the final authoritative gate or spend a fix
