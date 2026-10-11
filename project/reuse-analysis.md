@@ -2,6 +2,8 @@
 
 Reuse is an optimization hypothesis. Keep independent reviews fresh and use machine evidence as authority regardless of conversation history.
 
+CoderAgent reuse includes healthy same-work-item continuations at `loop=0` (PARTIAL, advisory corrections, completion redispatch), not only charged repairs. TestEngineer/BuildAgent remain repair-only. The runtime binds the frozen contract/scope and previous machine-persisted result, checks state/evidence/session availability, and falls back fresh for unsafe or legacy entries. Interrupted/error sessions are not treated as healthy merely because their ID exists. Inspect continuation metrics separately from formal repair loops; no cycle budget is charged by resume.
+
 ## Collect
 
 Run `/pipeline-run RUN` normally. Runtime records `.tmp/pipelines/RUN/reuse-metrics/events.jsonl` with worker decisions, fallback reasons, call latency, prompt/response sizes, full model-context bytes (including history), model request count/model and tool/read counts; parent reads/tool calls and compactions are recorded separately. Missing telemetry stays unknown. UTF-8 bytes are not tokens, cached tokens or billed cost.
