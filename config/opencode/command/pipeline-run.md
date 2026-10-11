@@ -22,7 +22,7 @@ Execute only a frozen, owner-approved manifest in the CURRENT worktree-session. 
 Options:
 - `--unattended` — continue through already-approved bounded work without routine owner prompts; it never approves owner/security/destructive decisions.
 - `--fix-cycles N` — explicit owner grant raising the per-stage automatic repair ceiling for this RUN to `N` (5..20). It is a ceiling override, not `+N`, and never lowers an already-higher stage budget.
-- `--no-session-reuse` — force fresh implementation/test/build child sessions instead of eligible technical-fix session reuse.
+- `--no-session-reuse` — force fresh implementation/test/build child sessions instead of eligible continuation/automatic-repair session reuse.
 
 Unknown modes/arguments BLOCK.
 
@@ -252,13 +252,13 @@ Use the deterministic CLI that owns the operation. Owner shell intervention is a
 
 `--unattended` skips interaction only inside the already-approved frozen scope. It does not approve decisions, changed scope/base/manifest/evidence, exceptions or merge. It also never auto-approves a runtime replan: `awaiting_owner_clarification` and `awaiting_owner_approval` are mandatory owner checkpoints.
 
-Reuse child sessions only for CoderAgent/TestEngineer/BuildAgent automatic repair cycles (`technical_fix` or bounded `security_fix`) with exact:
+Reuse healthy CoderAgent sessions for continuations of the same frozen work item, including PARTIAL completion, bound-advisory corrections and parent completion redispatch at `loop=0`, as well as automatic repair cycles (`technical_fix` or bounded `security_fix`). TestEngineer/BuildAgent reuse remains limited to automatic repair cycles. Require exact:
 
 ```text
 {run_id,pipeline_id,stage,role,work_item_id}
 ```
 
-Planning/reviews are always fresh. Invalid reuse starts a fresh child, never another worktree session.
+The first dispatch is fresh. Runtime checks the frozen contract/scope fingerprint, prior state revision, required files, persisted previous result or authoritative repair evidence and child availability. Continuation does not consume a fix-cycle. Interrupted/error/cancelled/in-progress sessions without confirmed healthy completion fall back fresh; interruption recovery does not itself prove safe resume. Legacy registry entries without a contract fingerprint also fall back fresh once. Planning/reviews are always fresh. Invalid reuse starts a fresh child, never another worktree session.
 
 ## GitHub handoff mode
 

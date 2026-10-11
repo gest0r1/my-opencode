@@ -117,6 +117,9 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   const workItemRaw=JSON.stringify({id:'wi-p',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent',allowed_change_paths:['src/**']});
   await writeFile(workItemPath,workItemRaw);
   manifest.work_items[0].sha256=sha(workItemRaw);
+  const otherItem=await frozen(root,'work-items/wi-other.json',JSON.stringify({id:'wi-other',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent',allowed_change_paths:['src/**']}));
+  manifest.work_items.push({id:'wi-other',pipeline_id:'p',...otherItem});
+  manifest.pipelines[0].work_items.push('wi-other');
 
   const manifestPath=await writeManifest(root,manifest);
   run(root,['init',manifestPath]); run(root,['approve','runtime-test']); run(root,['start','runtime-test','implementation','--pipeline','p']);
@@ -158,14 +161,57 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   assert.equal(dispatch.work_item_id,'wi-p');
   assert.equal(dispatch.advisory_checks[0].gate,'local-test');
   await sessionHooks.context({sessionID:'worker',agent:'CoderAgent',model:{providerID:'test',modelID:'test'},system:[],messages:[{text:'history'}],tools:{}});
-  const firstResult={...e,status:'completed',result:{metadata:{sessionID:'worker'},content:'status: ready\nimplementation detail that should not stay in parent context'}};
+  const firstResult={...e,status:'completed',result:{metadata:{sessionID:'worker'},content:'status: partial\nimplementation detail that should not stay in parent context'}};
   await hooks['execute.after'](firstResult);
   const compactFirst=JSON.parse(firstResult.result.content);
-  assert.equal(compactFirst.status,'ready');
+  assert.equal(compactFirst.status,'partial');
   assert.match(compactFirst.result_path,/^\.tmp\/pipelines\/runtime-test\/handoffs\/results\//);
   const persistedFirst=JSON.parse(await readFile(path.join(root,compactFirst.result_path),'utf8'));
   assert.match(persistedFirst.content,/implementation detail/);
   assert.ok(firstResult.result.content.length < persistedFirst.content.length + 200);
+
+  // Continuing the original implementation must resume even before a fix-cycle.
+  e={tool:'subagent',sessionID:'parent',id:'continuation',input:input()};
+  await hooks['execute.before'](e);
+  assert.equal(e.input.sessionID,'worker');
+  const continuationDelta=JSON.parse(await readFile(path.join(root,handoffPathFromPrompt(e.input.prompt,'session_reuse_delta')),'utf8'));
+  assert.equal(continuationDelta.continuation_kind,'same_work_item');
+  assert.equal(continuationDelta.evidence_path,compactFirst.result_path);
+  assert.ok(continuationDelta.required_reread.includes(compactFirst.result_path));
+  const continuedPacket=await dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent');
+  assert.equal(continuedPacket.loop,0);
+  await hooks['execute.after']({...e,status:'completed',result:{metadata:{sessionID:'worker'},content:'status: ready\ncompleted original attempt'}});
+
+  const registryPath=path.join(root,'.tmp/pipelines/runtime-test/session-registry.json');
+  const healthyRegistry=await readFile(registryPath,'utf8');
+  const assertFresh=async (reason, mutate) => {
+    const entries=JSON.parse(healthyRegistry); mutate(entries[0]);
+    await writeFile(registryPath,JSON.stringify(entries));
+    const event={tool:'subagent',sessionID:'parent',id:`fallback-${reason}`,input:input()};
+    await hooks['execute.before'](event);
+    assert.equal(event.input.sessionID,undefined);
+    const metrics=(await readFile(path.join(root,'.tmp/pipelines/runtime-test/reuse-metrics/events.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+    assert.equal(metrics.at(-1).fallback_reason,reason);
+    await writeFile(registryPath,healthyRegistry);
+  };
+  await assertFresh('contract_changed',entry=>{entry.continuity_key='different-scope';});
+  await assertFresh('contract_changed',entry=>{delete entry.continuity_key;});
+  await assertFresh('stale_state',entry=>{delete entry.state_revision;});
+  await assertFresh('missing_delta',entry=>{delete entry.result_path;});
+  await assertFresh('stale_evidence',entry=>{entry.result_sha256='tampered';});
+  for (const status of ['error','cancelled','in_progress']) await assertFresh(status,entry=>{entry.status=status;});
+
+  // Cancellation of a resumed worker invalidates it, even if its ID still exists.
+  e={tool:'subagent',sessionID:'parent',id:'interrupted',input:input()}; await hooks['execute.before'](e);
+  assert.equal(e.input.sessionID,'worker');
+  await hooks['execute.after']({...e,status:'cancelled',error:{message:'interrupted'}});
+  const recovery={tool:'subagent',sessionID:'parent',id:'recovery',input:input()}; await hooks['execute.before'](recovery);
+  assert.equal(recovery.input.sessionID,undefined);
+  await writeFile(registryPath,healthyRegistry);
+
+  const other={tool:'subagent',sessionID:'parent',id:'other-work-item',input:{agent:'CoderAgent',sessionID:'worker',prompt:'<pipeline_work_item id="wi-other"/><pipeline_dispatch run="runtime-test" pipeline="p" stage="implementation"/>'}};
+  await hooks['execute.before'](other);
+  assert.equal(other.input.sessionID,undefined);
 
   await writeFile(path.join(root,'review.json'),'{"status":"technical_fix"}');
   run(root,['complete','runtime-test','implementation','--pipeline','p']);
@@ -174,6 +220,9 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   assert.equal(reviewPacket.review_work_items[0].id, 'wi-p');
   assert.equal(reviewPacket.reuse.eligible, false);
   assert.deepEqual(reviewPacket.advisory_checks, []);
+  const reviewer={tool:'subagent',sessionID:'parent',id:'independent-review',input:{agent:'CodeReviewer',sessionID:'worker',prompt:'<pipeline_work_item id="code-review"/><pipeline_dispatch run="runtime-test" pipeline="p" stage="code-review"/>'}};
+  await hooks['execute.before'](reviewer);
+  assert.equal(reviewer.input.sessionID,undefined);
   run(root,['scope-check','runtime-test','code-review','src/a.ts','--pipeline','p']);
   run(root,['fix-cycle','runtime-test','code-review','--pipeline','p','--evidence',path.join(root,'review.json')]);
   e={tool:'subagent',sessionID:'parent',id:'repair',input:input()};await hooks['execute.before'](e);
@@ -193,6 +242,26 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   await writeFile(path.join(root,'review.json'),'changed');
   await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent'),/REPAIR_EVIDENCE_CHANGED/);
  } finally {process.chdir(previousCwd); await rm(root,{recursive:true,force:true});}
+});
+
+for (const role of ['TestEngineer','BuildAgent']) test(`${role} stays fresh for loop-zero continuations`, async () => {
+ const previousCwd=process.cwd(), root=await tempProject();
+ try {
+  const manifest=await baseManifest(root,`baseline-${role}`,[{id:'p',stages:['implementation']}]);
+  const raw=JSON.stringify({id:'wi-p',pipeline_id:'p',stage:'implementation',suggested_agent:role});
+  await writeFile(path.join(root,manifest.work_items[0].path),raw); manifest.work_items[0].sha256=sha(raw);
+  run(root,['init',await writeManifest(root,manifest)]); run(root,['approve',manifest.run_id]); run(root,['start',manifest.run_id,'implementation','--pipeline','p']);
+  process.chdir(root);
+  const hooks={};
+  await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},session:{hook:async()=>{},get:async()=>({data:{}})}});
+  const input=()=>({agent:role,prompt:`<pipeline_work_item id="wi-p"/><pipeline_dispatch run="${manifest.run_id}" pipeline="p" stage="implementation"/>`});
+  const first={tool:'subagent',sessionID:'parent',id:'first',input:input()}; await hooks['execute.before'](first);
+  await hooks['execute.after']({...first,status:'completed',result:{metadata:{sessionID:'worker'},content:'status: partial'}});
+  const next={tool:'subagent',sessionID:'parent',id:'next',input:input()}; await hooks['execute.before'](next);
+  assert.equal(next.input.sessionID,undefined);
+  const metrics=(await readFile(path.join(root,`.tmp/pipelines/${manifest.run_id}/reuse-metrics/events.jsonl`),'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(metrics.at(-1).fallback_reason,'baseline');
+ } finally {process.chdir(previousCwd);await rm(root,{recursive:true,force:true});}
 });
 
 test('runtime preflight forwards selected research roles and checks their effective access', async () => {

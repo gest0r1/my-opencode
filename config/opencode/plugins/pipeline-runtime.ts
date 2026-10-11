@@ -25,6 +25,9 @@ type RegistryEntry = {
   state_revision?: string
   evidence_path?: string
   last_delta_hash?: string
+  continuity_key?: string
+  result_path?: string
+  result_sha256?: string
   files_read?: string[]
   updated_at: string
 }
@@ -41,6 +44,7 @@ type RuntimeContext = {
   work_item_id: string
   loop: number
   technical_fix: boolean
+  continuity_key: string
   state_revision: string
   previous_state_revision?: string
   evidence_path?: string
@@ -243,8 +247,15 @@ function hashDelta(root: string, ctx: RuntimeContext) {
   }))
 }
 function validateReuseDelta(root: string, ctx: RuntimeContext, previous: RegistryEntry) {
+  if (!previous.continuity_key || previous.continuity_key !== ctx.continuity_key) {
+    return { ok: false as const, reason: "contract_changed" }
+  }
   const evidence = resolveInsideRoot(root, ctx.evidence_path)
   if (!ctx.evidence_path || !evidence || !fs.existsSync(evidence)) return { ok: false as const, reason: "missing_delta" }
+  if (!ctx.technical_fix && ctx.evidence_path === previous.result_path &&
+      (!previous.result_sha256 || sha256(fs.readFileSync(evidence)) !== previous.result_sha256)) {
+    return { ok: false as const, reason: "stale_evidence" }
+  }
   if (!ctx.previous_state_revision || ctx.previous_state_revision !== previous.state_revision) {
     return { ok: false as const, reason: "stale_state" }
   }
@@ -256,14 +267,24 @@ function validateReuseDelta(root: string, ctx: RuntimeContext, previous: Registr
   }
   const payload = {
     work_item_id: ctx.work_item_id,
+    continuation_kind: ctx.technical_fix ? "automatic_repair" : "same_work_item",
     evidence_path: ctx.evidence_path,
     changed_files: ctx.changed_files,
     diff_path: ctx.diff_path ?? null,
     previous_state_revision: ctx.previous_state_revision,
     state_revision: ctx.state_revision,
-    required_reread: ctx.required_reread,
+    required_reread: [...new Set([...ctx.required_reread, ctx.evidence_path])],
   }
   return { ok: true as const, payload, bytes: byteLength(payload), hash: hashDelta(root, ctx) }
+}
+function continuityKey(packet: Awaited<ReturnType<typeof dispatchPacket>>) {
+  // Frozen contract/scope, not mutable stage status or repair-cycle counters.
+  return sha256(JSON.stringify({
+    work_item_sha256: packet.work_item_sha256,
+    effective_scope: packet.effective_scope,
+    work_item_scope: packet.work_item_scope,
+    authoritative_files: packet.authoritative_paths.map(file => [file, sha256(fs.readFileSync(file))]),
+  }))
 }
 function fileFromInput(input: any) {
   const value = input?.filePath ?? input?.file_path ?? input?.path
@@ -368,8 +389,8 @@ export default Plugin.define({
           const ctx: RuntimeContext = {
             ...packet, nonce: crypto.randomUUID(), prepared_at: new Date(now).toISOString(),
             expires_at: new Date(now + CONTEXT_TTL_MS).toISOString(), parent_session_id: String(context.sessionID),
-            technical_fix: packet.loop > 0, previous_state_revision: previous?.state_revision,
-            evidence_path: packet.evidence_paths.at(-1), changed_files: packet.repair_paths,
+            technical_fix: packet.loop > 0, continuity_key: continuityKey(packet), previous_state_revision: previous?.state_revision,
+            evidence_path: packet.loop === 0 && args.role === "CoderAgent" ? previous?.result_path : packet.evidence_paths.at(-1), changed_files: packet.repair_paths,
             required_reread: [packet.work_item_path, ...packet.authoritative_paths, ...packet.evidence_paths],
             no_session_reuse: args.no_session_reuse === true || reuseDisabled(String(context.sessionID)),
           }
@@ -424,14 +445,15 @@ export default Plugin.define({
         const packet = await dispatchPacket(root, marker[1], marker[2], marker[3], workItemID, role)
         const previous = loadRegistry(root, packet.run_id).find(item => identity(item as RuntimeContext) === identity(packet as RuntimeContext))
         ctx = { ...packet, nonce: crypto.randomUUID(), prepared_at: new Date().toISOString(), expires_at: new Date(Date.now() + CONTEXT_TTL_MS).toISOString(),
-          parent_session_id: sessionID, technical_fix: packet.loop > 0, previous_state_revision: previous?.state_revision,
-          evidence_path: packet.evidence_paths.at(-1), changed_files: packet.repair_paths, required_reread: [packet.work_item_path, ...packet.authoritative_paths, ...packet.evidence_paths],
+          parent_session_id: sessionID, technical_fix: packet.loop > 0, continuity_key: continuityKey(packet), previous_state_revision: previous?.state_revision,
+          evidence_path: packet.loop === 0 && role === "CoderAgent" ? previous?.result_path : packet.evidence_paths.at(-1), changed_files: packet.repair_paths, required_reread: [packet.work_item_path, ...packet.authoritative_paths, ...packet.evidence_paths],
           no_session_reuse: reuseDisabled(sessionID) }
       }
       if (!ctx) return
       const current = await dispatchPacket(root, ctx.run_id, ctx.pipeline_id, ctx.stage, ctx.work_item_id, role)
       runBySession.set(sessionID, ctx.run_id)
       if (current.state_revision !== ctx.state_revision) throw new Error("STALE_DISPATCH_STATE")
+      if (continuityKey(current) !== ctx.continuity_key) throw new Error("STALE_DISPATCH_CONTRACT")
       const dispatchPath = writeJsonHandoff(
         root,
         ctx.run_id,
@@ -468,7 +490,7 @@ export default Plugin.define({
         item.stage === ctx.stage && item.role === role && item.work_item_id === ctx.work_item_id)
 
       if (ctx.no_session_reuse) return rememberFresh("disabled_by_owner")
-      if (!ctx.technical_fix) return rememberFresh("baseline")
+      if (!ctx.technical_fix && role !== "CoderAgent") return rememberFresh("baseline")
       if (!match) return rememberFresh("no_prior_session")
       if (match.status !== "healthy") return rememberFresh(match.status, match.files_read ?? [])
 
@@ -559,6 +581,9 @@ export default Plugin.define({
           work_item_id: ctx.work_item_id, session_id: childID, status: "healthy",
           state_revision: ctx.state_revision, evidence_path: ctx.evidence_path,
           last_delta_hash: hashDelta(root, ctx),
+          continuity_key: ctx.continuity_key,
+          result_path: resultPath,
+          result_sha256: sha256(fs.readFileSync(path.resolve(root, resultPath))),
           files_read: currentFiles.length ? currentFiles : previous?.files_read ?? [], updated_at: now,
         }
         saveRegistry(root, ctx.run_id, [
