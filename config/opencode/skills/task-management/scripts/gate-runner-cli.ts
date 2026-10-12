@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
-import { validateGateTesting, selectAffectedCommands } from './gate-testing-policy.mjs';
+import { validateGateTesting, selectAffectedCommands, parallelBatches } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
 import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, readTestReports } from './gate-diagnostics.mjs';
 
@@ -67,6 +67,10 @@ function substituteCandidate(tokens: string[], candidateSha?: string): string[] 
   if (!tokens.some((token) => token.includes('{candidate_sha}'))) return tokens;
   if (!candidateSha || !SHA.test(candidateSha)) throw new GateRunnerError('candidate_sha placeholder used but candidate evidence is missing');
   return tokens.map((token) => token.replaceAll('{candidate_sha}', candidateSha));
+}
+
+function liveIndexes(config: any): number[] {
+  return Array.isArray(config?.live_postgres?.command_indexes) ? config.live_postgres.command_indexes : [];
 }
 
 let interrupted = false;
@@ -137,6 +141,40 @@ async function acquireRuntimeLocks(stateRoot: string, runId: string, locks: stri
   };
 }
 
+type ReuseQuery = {
+  runDirectory: string; pipelineId: string; gate: string; manifestSha: string; sourceDigest: string;
+  environmentDigest: string; selected: Array<{ index: number; test_files: string[] }>; requireComplete: number | null;
+};
+
+// A PASS already recorded by this runner for the identical source tree, frozen manifest, gate,
+// environment and a superset of the selected commands proves the same result; running the same
+// commands again on the same bytes adds wall-clock time, not evidence. Evidence written before
+// these identity fields existed is never reused.
+export async function findReusablePass(query: ReuseQuery): Promise<{ path: string; evidence: any } | null> {
+  for (const directory of ['gates', 'checks']) {
+    let names: string[] = [];
+    try { names = await readdir(join(query.runDirectory, directory)); } catch { continue; }
+    for (const name of names.sort()) {
+      if (!name.endsWith('.json') || name.endsWith('-attempts.json')) continue;
+      const path = join(query.runDirectory, directory, name);
+      let evidence: any;
+      try { evidence = JSON.parse(await readFile(path, 'utf8')); } catch { continue; }
+      if (evidence?.status !== 'PASS' || evidence.pipeline_id !== query.pipelineId || evidence.gate !== query.gate ||
+          evidence.manifest_sha256 !== query.manifestSha || evidence.source_digest !== query.sourceDigest ||
+          evidence.environment_digest !== query.environmentDigest || evidence.base_probe || evidence.reused_from ||
+          !Array.isArray(evidence.results)) continue;
+      const covered = (index: number, files: string[]) => evidence.results.some((result: any) => result.command_index === index &&
+        result.exit_code === 0 && Array.isArray(result.test_files) &&
+        (result.test_files.length === 0 || (files.length > 0 && files.every(file => result.test_files.includes(file)))));
+      if (query.requireComplete !== null) {
+        if (!Array.from({ length: query.requireComplete }, (_, index) => index).every(index => covered(index, []))) continue;
+      } else if (!query.selected.every(item => covered(item.index, item.test_files))) continue;
+      return { path, evidence };
+    }
+  }
+  return null;
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const runId = args[0];
@@ -147,7 +185,7 @@ async function main(): Promise<void> {
   const stateRootIndex = args.indexOf('--state-root');
   if (stateRootIndex >= 0) stateRoot = args[stateRootIndex + 1] ?? DEFAULT_STATE_ROOT;
   if (!runId || !pipelineId || !gate) {
-    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>] [--advisory [--affected ...|--command-index N [--test-file PATH]...|--base-probe]]');
+    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>] [--no-reuse] [--advisory [--affected ...|--command-index N [--test-file PATH]...|--base-probe]]');
   }
 
   const stateFile = join(resolve(stateRoot), runId, 'state.json');
@@ -250,7 +288,8 @@ async function main(): Promise<void> {
   await mkdir(dirname(evidenceFile), { recursive: true });
   let previous: any;
   try { previous = JSON.parse(await readFile(evidenceFile, 'utf8')); } catch {}
-  const snapshot = advisory ? await sourceSnapshot(process.cwd(), manifest, (exe: string, argv: string[]) => runInvocation(exe, argv, process.cwd(), {}, 30), baseline) : null;
+  // Read-only inventory: never take .git/index.lock while a worker or publish may be writing.
+  const snapshot = await sourceSnapshot(process.cwd(), manifest, (exe: string, argv: string[]) => runInvocation(exe, argv, process.cwd(), { GIT_OPTIONAL_LOCKS: '0' }, 30), advisory ? baseline : null);
   let selectionReason = baseProbe ? 'base probe: full frozen set' : testFiles.length ? 'focused test files' : 'full frozen set';
   if (affected) {
     const failures = (previous?.results ?? []).filter((result: any) => result.exit_code !== 0).map((result: any) => result.command_index);
@@ -291,28 +330,48 @@ async function main(): Promise<void> {
   let cleanupComplete: boolean | null = null;
   let status = 'PASS';
   const startedAt = new Date().toISOString();
+  const usesCandidate = commands.some(command => command.includes('{candidate_sha}'));
+  const reuse = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest ? null
+    : await findReusablePass({ runDirectory: join(resolve(stateRoot), runId), pipelineId, gate, manifestSha: state.manifest_sha256,
+      sourceDigest: snapshot.digest, environmentDigest, selected: invocations.map(item => ({ index: item.index, test_files: item.test_files })),
+      requireComplete: advisory ? null : commands.length });
   try {
+    if (reuse) {
+      results.push(...reuse.evidence.results);
+    } else {
     if (config?.live_postgres && invocations.some(item => config.live_postgres.command_indexes.includes(item.index))) {
       resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${runId}:${pipelineId}:${gate}`, (exe: string, argv: string[], env?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), env, 60, ['inspect', 'rm'].includes(argv[0])));
     }
-    for (const invocation of invocations) {
-      const commandStarted = new Date().toISOString();
-      const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
-      const result = await runInvocation(invocation.exe, invocation.args, process.cwd(), usesLive ? resource.env : {}, config?.timeout_seconds ?? 1800);
-      const stdout = redact(result.stdout); const stderr = redact(result.stderr);
-      results.push({
-        command: invocation.command, command_index: invocation.index, executable: invocation.exe, argv: invocation.args,
-        started_at: commandStarted, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(commandStarted),
-        exit_code: result.exit_code, stdout, stderr, output_truncated: result.truncated,
-        failure_summary: result.exit_code === 0 ? [] : failureSummary(stdout, stderr),
-        stdout_sha256: sha256(result.stdout), stderr_sha256: sha256(result.stderr),
-      });
-      if (result.exit_code !== 0) {
+    // Frozen parallel groups run together (bounded); every other command keeps frozen order.
+    // A failing batch stops the gate after all of its members settle, so evidence stays complete.
+    for (const batch of parallelBatches(invocations, config, liveIndexes(config))) {
+      const settled = await Promise.all(batch.map(async invocation => {
+        const commandStarted = new Date().toISOString();
+        const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
+        const result = await runInvocation(invocation.exe, invocation.args, process.cwd(), usesLive ? resource.env : {}, config?.timeout_seconds ?? 1800);
+        const stdout = redact(result.stdout); const stderr = redact(result.stderr);
+        return { invocation, result: {
+          command: invocation.command, command_index: invocation.index, executable: invocation.exe, argv: invocation.args, test_files: invocation.test_files,
+          started_at: commandStarted, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(commandStarted),
+          exit_code: result.exit_code, stdout, stderr, output_truncated: result.truncated,
+          failure_summary: result.exit_code === 0 ? [] : failureSummary(stdout, stderr),
+          stdout_sha256: sha256(result.stdout), stderr_sha256: sha256(result.stderr),
+        } };
+      }));
+      for (const item of settled) results.push(item.result);
+      const failed = settled.find(item => item.result.exit_code !== 0);
+      if (failed) {
         status = 'FAIL';
-        throw new GateRunnerError(`gate command failed (${result.exit_code}): ${invocation.command}; evidence=${evidenceFile}`);
+        throw new GateRunnerError(`gate command failed (${failed.result.exit_code}): ${failed.invocation.command}; evidence=${evidenceFile}`);
       }
     }
-  } catch (error) { failure = error; if (status !== 'FAIL') status = 'BLOCKED'; }
+    }
+  } catch (error) {
+    failure = error; if (status !== 'FAIL') status = 'BLOCKED';
+    // An advisory run stopped by its caller (shell timeout, cancelled tool call) proves nothing about
+    // the source: it is recorded as INTERRUPTED and does not consume the no-progress fingerprint.
+    if (advisory && interrupted) status = 'INTERRUPTED';
+  }
   finally {
     if (resource) {
       try {
@@ -324,14 +383,21 @@ async function main(): Promise<void> {
       await writeFile(evidenceFile, `${JSON.stringify({ status, purpose: advisory ? 'advisory' : 'authoritative', run_id: runId, pipeline_id: pipelineId, gate,
         work_item_id: workItemId ?? null, dispatch_stage: baseline?.stage ?? null, baseline_path: baselinePath ?? null, baseline_sha256: baselineSha ?? null,
         runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, fingerprint,
+        manifest_sha256: state.manifest_sha256, environment_digest: environmentDigest, reused_from: reuse?.path ?? null,
         hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])],
         selection_reason: selectionReason, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
         live_postgres: resource?.evidence ?? null, cleanup_complete: cleanupComplete,
-        test_reports: JSON.parse(redact(JSON.stringify(await readTestReports(config?.report_files, join(resolve(stateRoot), runId), startedAt)))),
+        test_reports: reuse ? reuse.evidence.test_reports ?? [] : JSON.parse(redact(JSON.stringify(await readTestReports(config?.report_files, join(resolve(stateRoot), runId), startedAt)))),
         error: failure ? redact(String(failure)) : null, results }, null, 2)}\n`, 'utf8');
-      if (advisory && fingerprint) {
+      // Append-only gate timeline for the RUN report: the main wall-clock cost is gate time.
+      await mkdir(join(resolve(stateRoot), runId, 'reuse-metrics'), { recursive: true });
+      await writeFile(join(resolve(stateRoot), runId, 'reuse-metrics', 'gates.jsonl'), `${JSON.stringify({ timestamp: new Date().toISOString(),
+        event: 'gate_run', run_id: runId, pipeline_id: pipelineId, gate, work_item_id: workItemId ?? null, purpose: advisory ? 'advisory' : 'authoritative',
+        mode: baseProbe ? 'base_probe' : testFiles.length ? 'focus' : affected ? 'affected' : selection >= 0 ? 'command' : 'complete',
+        status, duration_ms: Date.now() - Date.parse(startedAt), commands_run: reuse ? 0 : results.length, reused: Boolean(reuse) })}\n`, { encoding: 'utf8', flag: 'a' });
+      if (advisory && fingerprint && status !== 'INTERRUPTED') {
         ledger.attempts[fingerprint] = { status, hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])] };
         await writeFile(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8');
       }
@@ -339,7 +405,7 @@ async function main(): Promise<void> {
   }
   if (failure) throw failure;
   console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: workItemId ?? null, candidate_sha: candidateSha ?? null, evidence: evidenceFile,
-    selection_reason: selectionReason, commands_run: results.length }));
+    selection_reason: selectionReason, commands_run: reuse ? 0 : results.length, reused_from: reuse?.path ?? null }));
 }
 
 main().catch((error: unknown) => {

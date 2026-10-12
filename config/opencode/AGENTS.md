@@ -15,7 +15,7 @@ For explicitly requested software installation, use `sudo -n /usr/local/sbin/ope
 
 ## Local source reading (all agents)
 - Start with supplied context packets and changed-file lists. If a local path is known, read it directly; use `glob` only to discover unknown paths, or `grep` to locate a symbol before reading a relevant range. This is task-based selection, not a mandatory `glob -> grep -> read` sequence.
-- Prefer `read` for ordinary local analysis. An available, permitted local raw-file tool (including `fetch file://` if the actual tool supports it) is appropriate when full raw text or significant whitespace/newlines are needed, or `read` is unavailable or changes the representation. Verify the tool preserves the needed content; raw text alone does not prove byte identity. Byte-exact copies require an authorized deterministic copy/hash check; report that capability gap if unavailable.
-- Never bypass an explicit file/path permission denial using another transport. Tool unavailability is distinct from a permission denial. Do not assume HTTP-only `webfetch` supports `file://`; external search is not a local-file fallback. Keep web/research tools for external URLs and version-specific facts.
+- Read local files with `read`. `fetch` and `webfetch` are for external URLs only (OpenCode rejects `file://` there). Raw text does not prove byte identity: byte-exact copies use an authorized deterministic copy/hash check; report that capability gap if unavailable.
+- Never bypass an explicit file/path permission denial using another transport. External search is not a local-file fallback.
 - Avoid reopening unchanged files or rereading overlapping ranges unless new edits, missing context, or verification require it. Use targeted reads rather than entire large files; expand only as necessary for correctness.
 - Do not impose a fixed tool-call budget or omit required checks. Prefer fewer relevant reads without compromising correctness or evidence.

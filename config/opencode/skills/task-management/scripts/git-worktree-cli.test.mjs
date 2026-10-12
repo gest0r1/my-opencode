@@ -201,3 +201,44 @@ test('verify accepts machine-owned runtime scope extensions without mutating man
   assert.equal(evidence.runtime_scope_extensions[0].scope_class, 'test');
   assert.equal(await readFile(f.manifestPath, 'utf8'), originalManifest);
 });
+
+test('quarantine-strays moves only untracked out-of-scope files created after the first dispatch', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'stray-'));
+  try {
+    exec(root, 'git', ['init']);
+    exec(root, 'git', ['config', 'user.name', 'Pipeline Test']);
+    exec(root, 'git', ['config', 'user.email', 'pipeline@example.invalid']);
+    await writeFile(path.join(root, '.gitignore'), '.tmp/\n');
+    await mkdir(path.join(root, 'src'));
+    await writeFile(path.join(root, 'src/app.ts'), 'base\n');
+    await writeFile(path.join(root, 'owner-notes.txt'), 'existed before the run\n');
+    exec(root, 'git', ['add', '.gitignore', 'src']);
+    exec(root, 'git', ['commit', '-m', 'base']);
+    const runDir = path.join(root, '.tmp/pipelines/stray-run');
+    await mkdir(path.join(runDir, 'checks/baselines'), { recursive: true });
+    const manifestPath = path.join(runDir, 'manifest.json');
+    await writeFile(manifestPath, JSON.stringify({ run_id: 'stray-run', allowed_change_paths: ['src/**'] }));
+    await writeFile(path.join(runDir, 'checks/baselines/first.json'), JSON.stringify({
+      recorded_at: '2026-10-11T00:00:00.000Z', files: { '.gitignore': 'x', 'src/app.ts': 'x', 'owner-notes.txt': 'x' },
+    }));
+    await writeFile(path.join(root, 'diffstat.txt'), '');
+    await writeFile(path.join(root, 'test-infra.patch'), 'diff\n');
+    await writeFile(path.join(root, 'src/new.ts'), 'in scope\n');
+    await writeFile(path.join(root, 'secret.key'), 'never touched\n');
+    let result = gate(root, ['quarantine-strays', manifestPath]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout).strays, ['diffstat.txt', 'test-infra.patch']);
+    result = gate(root, ['quarantine-strays', manifestPath, '--apply']);
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.deepEqual(output.moved.map(item => item.path), ['diffstat.txt', 'test-infra.patch']);
+    assert.equal(await readFile(path.join(output.quarantine_dir, 'test-infra.patch'), 'utf8'), 'diff\n');
+    await assert.rejects(readFile(path.join(root, 'diffstat.txt')));
+    assert.equal(await readFile(path.join(root, 'owner-notes.txt'), 'utf8'), 'existed before the run\n');
+    assert.equal(await readFile(path.join(root, 'src/new.ts'), 'utf8'), 'in scope\n');
+    assert.equal(await readFile(path.join(root, 'secret.key'), 'utf8'), 'never touched\n');
+    await rm(path.join(runDir, 'checks/baselines/first.json'));
+    result = gate(root, ['quarantine-strays', manifestPath]);
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /QUARANTINE_REQUIRES_DISPATCH_BASELINE/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

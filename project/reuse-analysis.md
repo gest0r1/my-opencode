@@ -6,7 +6,7 @@ CoderAgent reuse includes healthy same-work-item continuations at `loop=0` (PART
 
 ## Collect
 
-Run `/pipeline-run RUN` normally. Runtime records `.tmp/pipelines/RUN/reuse-metrics/events.jsonl` with worker decisions, fallback reasons, call latency, prompt/response sizes, full model-context bytes (including history), model request count/model and tool/read counts; parent reads/tool calls and compactions are recorded separately. Missing telemetry stays unknown. UTF-8 bytes are not tokens, cached tokens or billed cost.
+Run `/pipeline-run RUN` normally. Runtime records `.tmp/pipelines/RUN/reuse-metrics/events.jsonl` with worker decisions, fallback reasons, call latency, prompt/response sizes, full model-context bytes (including history), model request count/model and tool/read counts; parent reads/tool calls and compactions are recorded separately. Missing telemetry stays unknown. Every gate-runner invocation also appends to `reuse-metrics/gates.jsonl` (purpose, mode, status, duration, commands run, reuse); the report groups it under `gates`, which is where most RUN wall-clock goes. UTF-8 bytes are not tokens, cached tokens or billed cost.
 
 For a fresh-session comparison use `/pipeline-run RUN --no-session-reuse` on a separately planned comparable run. Keep task, model, reasoning, source baseline, acceptance criteria and gates equivalent. Record successful outcomes and repair counts. Ordinary fresh fallback differs from a controlled fresh run; do not treat it as an A/B experiment.
 

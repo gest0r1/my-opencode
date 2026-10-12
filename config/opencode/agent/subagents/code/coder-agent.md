@@ -103,6 +103,16 @@ exact text. Do not substitute another baseline, guess a profile/dependency graph
 or edit machine evidence. The baseline was captured at this dispatch and its frozen work-item
 scope keeps parallel unrelated source changes out of affected selection.
 
+Start the bound `command` as a background shell command (the entry's `shell` field:
+`background: true`, no timeout) and wait for its completion notification. A foreground call is
+killed by the shell timeout long before a complete gate finishes; the runner records such a run as
+`INTERRUPTED`, so simply start it again in the background. Do not run type-check, lint, build or
+complete suites yourself: the coordinator runs those once on the combined tree.
+
+When a review finding is the reason for this dispatch, fix the defect class, not only the cited
+line: check every branch and sibling file where the same mistake can occur and add a regression
+that fails without the fix.
+
 While correcting a failing suite, iterate quickly with the entry's `focus_command`: pick the
 failing `frozen_commands[].index` (an explicit `vitest run` command) and one or more existing
 repo-relative test files with repeated `--test-file PATH`. A focused or

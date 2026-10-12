@@ -334,3 +334,95 @@ test('SIGTERM stops the test tree, cleans its container and preserves failed evi
   assert.equal(evidence.results[0].exit_code, 130);
   await assert.rejects(access(path.join(fx.root, '.tmp/docker-state.json')));
 });
+
+async function patchTesting(fx, patch) {
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+  Object.assign(manifest.gate_testing.default.build, patch);
+  const content = JSON.stringify(manifest); state.manifest_sha256 = sha256(content);
+  await writeFile(state.manifest_file, content); await writeFile(statePath, JSON.stringify(state));
+}
+
+const callCount = async root => (await readFile(path.join(root, '.tmp/calls.log'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).length;
+
+test('a PASS on the identical tree is reused instead of rerun; any source change runs the commands again', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, [...fx.args, '--advisory']); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
+    const calls = await callCount(fx.root);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    let output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 0); assert.match(output.reused_from, /checks\/app-build\.json$/);
+    const evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.equal(evidence.status, 'PASS'); assert.equal(evidence.purpose, 'authoritative'); assert.equal(evidence.results.length, 2);
+    assert.equal(await callCount(fx.root), calls);
+    result = run(fx.root, [...fx.args, '--no-reuse']); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
+    await writeFile(path.join(fx.root, 'src/web.ts'), 'changed again\n');
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    output = JSON.parse(result.stdout); assert.equal(output.commands_run, 2); assert.equal(output.reused_from, null);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('a focused PASS never stands in for the complete authoritative set', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, [...fx.args, '--advisory', '--affected']); assert.equal(result.status, 0, result.stderr);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('an advisory run stopped by its caller is INTERRUPTED and does not consume the no-progress fingerprint', async () => {
+  const fx = await diagnosticFixture(); await attachPostgres(fx);
+  await writeFile(path.join(fx.root, '.tmp/sleep'), 'yes');
+  const args = [...fx.args, '--advisory', '--command-index', '0'];
+  const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), RUNNER, ...args], { cwd: fx.root, env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}` }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let errors = ''; child.stderr.on('data', chunk => { errors += chunk; }); child.stdout.resume();
+  const done = new Promise((resolve, reject) => { child.on('error', reject); child.on('close', code => resolve(code)); });
+  let started = false;
+  for (let count = 0; count < 100; count++) {
+    try { await access(path.join(fx.root, '.tmp/test-started')); started = true; break; } catch {}
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  if (!started) child.kill('SIGKILL');
+  assert.equal(started, true, errors);
+  child.kill('SIGINT'); assert.equal(await done, 1, errors);
+  const evidence = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'checks/app-build.json'), 'utf8'));
+  assert.equal(evidence.status, 'INTERRUPTED'); assert.equal(evidence.cleanup_complete, true);
+  await unlink(path.join(fx.root, '.tmp/sleep'));
+  const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    const rerun = run(fx.root, args);
+    assert.doesNotMatch(rerun.stderr, /DIAGNOSTIC_NO_PROGRESS/); assert.equal(rerun.status, 0, rerun.stderr);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('frozen parallel groups run together and coordinator-only commands stay out of affected checks', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  await writeFile(path.join(fx.bin, 'pnpm'), `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.appendFileSync('.tmp/calls.log', JSON.stringify(process.argv.slice(2)) + '\\n');
+const until = Date.now() + 600; while (Date.now() < until) {}
+`, { mode: 0o755 });
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    await patchTesting(fx, { parallel_groups: [[0, 1]] });
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const evidence = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    const [first, second] = evidence.results;
+    assert.ok(Date.parse(second.started_at) < Date.parse(first.completed_at), 'grouped commands overlap');
+    await patchTesting(fx, { coordinator_only: [1] });
+    await writeFile(path.join(fx.root, 'src/web.ts'), 'changed\n');
+    result = run(fx.root, [...fx.args, '--advisory', '--affected']); assert.equal(result.status, 0, result.stderr);
+    const affected = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.deepEqual(affected.results.map(item => item.command_index), [0]);
+    await patchTesting(fx, { parallel_groups: [[0, 1, 0]] });
+    result = run(fx.root, fx.args); assert.notEqual(result.status, 0); assert.match(result.stderr, /parallel_groups/);
+  } finally { process.env.PATH = oldPath; }
+});

@@ -177,6 +177,29 @@ function assertConflictSerialization(manifest) {
   }
 }
 
+// Independent pipelines run at the same time in one checkout. Work items of two pipelines that
+// neither depends on must not be allowed to change the same paths, or parallel workers would edit
+// the same files; shared files belong to the delivery sink or a serialized conflict group.
+function assertParallelScopes(manifest, root) {
+  const pipelines = manifest.pipelines ?? [];
+  const scopes = new Map(pipelines.map(pipeline => [pipeline.id, []]));
+  for (const item of manifest.work_items ?? []) {
+    let record;
+    try { record = JSON.parse(readFileSync(resolve(root, item.path), 'utf8')); } catch { continue; }
+    if (Array.isArray(record?.allowed_change_paths)) scopes.get(item.pipeline_id)?.push(...record.allowed_change_paths.filter(path => typeof path === 'string'));
+  }
+  for (let i = 0; i < pipelines.length; i += 1) {
+    for (let j = i + 1; j < pipelines.length; j += 1) {
+      const a = pipelines[i]; const b = pipelines[j];
+      if (dependencyReachable(pipelines, a.id, b.id) || dependencyReachable(pipelines, b.id, a.id)) continue;
+      const overlap = scopes.get(a.id).find(x => scopes.get(b.id).some(y => scopesOverlap(x, y)));
+      if (overlap) {
+        throw new ManifestV2PolicyError(`PARALLEL_SCOPE_OVERLAP: ${a.id} and ${b.id} run in parallel and both may change ${overlap}; move the shared path to one pipeline or serialize them with depends_on`);
+      }
+    }
+  }
+}
+
 function validatePlanningInputs(manifest) {
   if (manifest.planning_scope !== undefined) {
     if (!Array.isArray(manifest.planning_scope) || !manifest.planning_scope.length) throw new ManifestV2PolicyError('planning_scope must be a non-empty path-scope array');
@@ -788,6 +811,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
   validatePlanningReadiness(manifest, root);
   validatePlanningInputs(manifest);
   validateWorkItems(manifest, root);
+  assertParallelScopes(manifest, root);
   validatePreservedBaseline(manifest);
   validateLineage(manifest);
   validateGithubExecutionContract(manifest);

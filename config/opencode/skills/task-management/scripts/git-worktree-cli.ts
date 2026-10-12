@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { deleteApprovedSource } from './source-delete.ts';
 import { moveApprovedSource } from './source-move.ts';
 import { createHash } from 'node:crypto';
-import { lstat, readFile, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -96,7 +96,7 @@ async function inspect(cwd: string): Promise<Record<string, unknown>> {
     git(['rev-parse', '--path-format=absolute', '--git-dir'], cwd),
     git(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd),
     git(['rev-parse', '--verify', 'refs/heads/main'], cwd),
-    git(['status', '--porcelain', '--untracked-files=all'], cwd),
+    git(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all'], cwd),
     git(['ls-files', '--', '.tmp/pipelines'], cwd),
   ]);
   return { head, branch, linked_worktree: resolve(gitDir) !== resolve(commonDir), main_sha: main,
@@ -224,7 +224,7 @@ async function verify(manifest:Manifest,manifestPath:string,cwd:string):Promise<
     }
     writableChanged.push(path);
     if (!scope.some((allowed) => matches(path, allowed))) {
-      throw new GateError(`RUNTIME_SCOPE_CHECK_REQUIRED: changed path is outside effective scope: ${path}; run stage-cli scope-check for the active technical-fix stage; do not edit manifest/state manually`);
+      throw new GateError(`RUNTIME_SCOPE_CHECK_REQUIRED: changed path is outside effective scope: ${path}; if it is an untracked worker leftover run git-worktree-cli quarantine-strays <manifest> --apply, otherwise run stage-cli scope-check for the active technical-fix stage; do not edit manifest/state manually`);
     }
   }
   const headSha = await git(['rev-parse', 'HEAD'], cwd);
@@ -284,6 +284,43 @@ async function publish(manifest: Manifest, manifestPath: string, cwd: string): P
   await writeJsonAtomic(evidencePath, evidence);
   return { ...evidence, evidence: evidencePath };
 }
+// Workers sometimes leave diagnostic files (patches, diffstats, logs) in the checkout. They are
+// untracked, outside every authorized path, and were not there when the RUN's first work item was
+// dispatched; verify then blocks on them and no agent may delete them. This moves exactly those
+// files into the run's quarantine (never deletes) so verification can continue. A file that existed
+// before the first dispatch, a tracked or in-scope path, a symlink and a sensitive name are never touched.
+async function quarantineStrays(manifestPath:string,cwd:string,apply:boolean):Promise<Record<string,unknown>>{
+  const manifest=JSON.parse(await readFile(manifestPath,'utf8')) as Manifest;
+  const runDir=dirname(resolve(manifestPath));
+  const baselineDir=join(runDir,'checks','baselines');
+  let first:{recorded_at:string;files:Record<string,string>}|undefined;
+  for(const name of (await readdir(baselineDir).catch(()=>[] as string[])).filter(item=>item.endsWith('.json')).sort()){
+    try{const baseline=JSON.parse(await readFile(join(baselineDir,name),'utf8'));if(baseline?.files&&typeof baseline.recorded_at==='string'&&(!first||baseline.recorded_at<first.recorded_at))first=baseline;}catch{}
+  }
+  if(!first)throw new GateError('QUARANTINE_REQUIRES_DISPATCH_BASELINE: no work item has been dispatched in this run');
+  const {scope}=await effectiveScope(manifest,manifestPath);
+  const untracked=(await git(['--no-optional-locks','ls-files','--others','--exclude-standard'],cwd)).split('\n').filter(Boolean).sort();
+  const strays:string[]=[];
+  for(const path of untracked){
+    if(!safePath(path)||sensitive(path)||path.startsWith('.tmp/')||scope.some(allowed=>matches(path,allowed))||path in first.files)continue;
+    const stat=await lstat(join(cwd,path)).catch(()=>undefined);
+    if(stat?.isFile())strays.push(path);
+  }
+  if(!apply)return {mode:'dry-run',strays};
+  const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+  const target=join(runDir,'quarantine',stamp);
+  const moved:Array<{path:string;sha256:string}>=[];
+  for(const path of strays){
+    const destination=join(target,path);
+    await mkdir(dirname(destination),{recursive:true});
+    const digest=createHash('sha256').update(await readFile(join(cwd,path))).digest('hex');
+    await rename(join(cwd,path),destination);
+    moved.push({path,sha256:digest});
+  }
+  const evidence={status:'PASS',kind:'stray_quarantine',run_id:manifest.run_id??null,quarantine_dir:target,moved,recorded_at:new Date().toISOString()};
+  if(moved.length){await mkdir(target,{recursive:true});await writeJsonAtomic(join(target,'quarantine.json'),evidence);}
+  return {mode:'apply',...evidence};
+}
 async function main(): Promise<void> {
   const [command, manifestPath] = process.argv.slice(2);
   const cwd = await git(['rev-parse', '--show-toplevel']);
@@ -300,6 +337,12 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(await apply(cwd, manifestPath, options.get('--pipeline')!, options.get('--stage')!, options.get('--work-item')!, options.get('--role')!, options.get('--evidence')!)));
     return;
   }
+  if (command === 'quarantine-strays' && manifestPath) {
+    const extra = process.argv.slice(4);
+    if (extra.some(arg => arg !== '--apply')) throw new GateError('usage: quarantine-strays <manifest.json> [--apply]');
+    console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await quarantineStrays(manifestPath, cwd, extra.includes('--apply')) }));
+    return;
+  }
   if (command === 'inspect' && !manifestPath) {
     console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await inspect(cwd) }));
     return;
@@ -309,7 +352,7 @@ async function main(): Promise<void> {
     return;
   }
   if (!manifestPath || !['freshness', 'adopt', 'verify', 'publish'].includes(command ?? '')) {
-    throw new GateError('usage: git-worktree-cli.ts inspect | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
+    throw new GateError('usage: git-worktree-cli.ts inspect | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | quarantine-strays <manifest.json> [--apply] | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
   assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
