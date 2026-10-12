@@ -20,13 +20,13 @@ test('installed agent prompts use native V2 delegation fields', () => {
   assert.match(read('config/opencode/agent/subagents/core/stage-orchestrator.md'), /retired|retirement|canonical/i);
 });
 
-test('OpenCode 2.0.23 runtime contract retains native subagent session resume', () => {
+test('OpenCode 2.0.27 runtime contract retains native subagent session resume', () => {
   const pkg = JSON.parse(read('config/opencode/package.json'));
   const runtime = read('config/opencode/plugins/pipeline-runtime.ts');
   const installer = read('install.sh');
 
-  assert.equal(pkg.dependencies['@opencode/plugin'], '2.0.23');
-  assert.match(installer, /OPENCODE_INSTALL_VERSION="\$\{OPENCODE_INSTALL_VERSION:-2\.0\.23\}"/);
+  assert.equal(pkg.dependencies['@opencode/plugin'], '2.0.27');
+  assert.match(installer, /OPENCODE_INSTALL_VERSION="\$\{OPENCODE_INSTALL_VERSION:-2\.0\.27\}"/);
 
   assert.match(runtime, /import \{ Plugin \} from "@opencode\/plugin"/);
   assert.match(runtime, /export default Plugin\.define\(/);
