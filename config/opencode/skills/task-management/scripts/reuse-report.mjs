@@ -15,7 +15,16 @@ export function summarize(events) {
   for (const e of events.filter(e => e.event === 'reuse_decision' && e.fallback_reason)) reasons[e.fallback_reason] = (reasons[e.fallback_reason] ?? 0) + 1;
   const rawResponseBytes = rows.reduce((a, e) => a + Number(e.response_bytes ?? 0), 0);
   const parentResponseBytes = rows.reduce((a, e) => a + Number(e.parent_response_bytes ?? e.response_bytes ?? 0), 0);
-  return { schema_version: 1, groups, fallback_reasons: reasons,
+  const gateRuns = events.filter(e => e.event === 'gate_run');
+  const gates = {};
+  for (const row of gateRuns) {
+    const key = `${row.purpose ?? 'unknown'}:${row.mode ?? 'unknown'}`;
+    const value = gates[key] ??= { runs: 0, reused: 0, interrupted: 0, failed: 0, duration_ms: 0, commands_run: 0 };
+    value.runs++; value.reused += row.reused ? 1 : 0; value.interrupted += row.status === 'INTERRUPTED' ? 1 : 0;
+    value.failed += ['FAIL', 'BLOCKED'].includes(row.status) ? 1 : 0;
+    value.duration_ms += Number(row.duration_ms ?? 0); value.commands_run += Number(row.commands_run ?? 0);
+  }
+  return { schema_version: 1, groups, fallback_reasons: reasons, gates,
     parent: {
       tool_calls: events.filter(e => e.event === 'parent_tool').length,
       read_bytes: events.filter(e => e.event === 'parent_read').reduce((a, e) => a + Number(e.bytes_read ?? 0), 0),
@@ -29,9 +38,10 @@ export function summarize(events) {
 export function exportReport(runId, output) {
   if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw Error('Invalid run ID');
   const root = path.resolve('.tmp/pipelines', runId);
-  const events = fs.readFileSync(path.join(root, 'reuse-metrics/events.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const readLines = file => { try { return fs.readFileSync(path.join(root, file), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch (error) { if (error.code === 'ENOENT') return []; throw error; } };
+  const events = [...readLines('reuse-metrics/events.jsonl'), ...readLines('reuse-metrics/gates.jsonl')];
   // Explicit allowlist prevents prompts, source contents, credentials and raw tool outputs entering export.
-  const allowed = ['timestamp', 'event', 'identity', 'run_id', 'pipeline_id', 'stage', 'role', 'work_item_id', 'loop', 'decision', 'fallback_reason', 'session_health', 'latency_ms', 'orientation_ms', 'prompt_bytes', 'response_bytes', 'parent_response_bytes', 'packet_bytes', 'tool_calls', 'read_calls', 'grep_calls', 'glob_calls', 'edit_calls', 'shell_calls', 'unique_files_read', 'reread_file_count', 'context_reread_ratio', 'bytes_read', 'tool', 'context_bytes', 'model_requests', 'model'];
+  const allowed = ['timestamp', 'event', 'identity', 'run_id', 'pipeline_id', 'stage', 'role', 'work_item_id', 'loop', 'decision', 'fallback_reason', 'session_health', 'latency_ms', 'orientation_ms', 'prompt_bytes', 'response_bytes', 'parent_response_bytes', 'packet_bytes', 'tool_calls', 'read_calls', 'grep_calls', 'glob_calls', 'edit_calls', 'shell_calls', 'unique_files_read', 'reread_file_count', 'context_reread_ratio', 'bytes_read', 'tool', 'context_bytes', 'model_requests', 'model', 'gate', 'purpose', 'mode', 'status', 'duration_ms', 'commands_run', 'reused'];
   const safe = events.map(e => Object.fromEntries(allowed.filter(k => k in e).map(k => [k, e[k]])));
   const summary = summarize(safe);
   fs.mkdirSync(output, { recursive: true });

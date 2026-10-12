@@ -1,4 +1,4 @@
-import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
+import { readFile, readdir, mkdir, writeFile, rename } from 'node:fs/promises';
 import { resolve, dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -56,7 +56,7 @@ function affectedAdvisoryChecks(manifest: any, pipeline: any, role: string) {
 
 function inventoryInvoke(root: string, exe: string, argv: string[]) {
   if (exe !== 'git') return Promise.resolve({ exit_code: 1, stdout: '', stderr: 'unsupported executable', truncated: false });
-  const result = spawnSync(exe, argv, { cwd: root, shell: false, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, timeout: 30_000 });
+  const result = spawnSync(exe, argv, { cwd: root, shell: false, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, timeout: 30_000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
   const stdout = String(result.stdout ?? '');
   return Promise.resolve({
     exit_code: result.status ?? (result.error ? 1 : 0),
@@ -167,8 +167,34 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     itemScope = checkedScope(effectiveScope, effectiveScope);
   }
   if (role === 'CoderAgent' && baseChecks.length > 0 && itemScope.length === 0) throw Error('WORK_ITEM_ADVISORY_SCOPE_MISSING');
+  // A repair may touch authorized paths outside the work item's own scope. The bound check must
+  // see those edits: they select affected suites, change the no-progress fingerprint and make an
+  // earlier PASS stale. Otherwise a PASS stays "fresh" after the repaired files change.
+  const repairPaths = [...new Set([...(repairRuntime?.repair_paths ?? []), ...amendmentPaths])];
+  const boundScope = role === 'CoderAgent' && itemScope.length > 0
+    ? [...new Set([...itemScope, ...checkedScope(repairPaths, effectiveScope)])] : itemScope;
   let advisoryChecks: Array<Record<string, unknown>> = [];
   if (baseChecks.length) {
+    // The first source dispatch of a RUN needs a passing base probe for every advisory gate, so a
+    // suite that is already red on the untouched base is classified before any work item absorbs it.
+    const runRoot = resolve(root, '.tmp/pipelines', run);
+    const dispatched = (await readdir(join(runRoot, 'checks', 'baselines')).catch(() => [] as string[])).some(name => name.endsWith('.json'));
+    if (!dispatched) {
+      // Pipelines sharing a frozen profile run identical commands on the same base: one probe serves all.
+      const sharing = manifest.pipelines.filter((p: any) => p.profile === pipeline.profile).map((p: any) => p.id);
+      for (const check of baseChecks) {
+        let passed = false;
+        for (const id of sharing) {
+          try {
+            const probe = JSON.parse(await readFile(join(runRoot, 'checks', `${id}-${check.gate}-base-probe.json`), 'utf8'));
+            passed ||= probe?.status === 'PASS' && probe?.purpose === 'advisory' && Boolean(probe?.base_probe);
+          } catch {}
+        }
+        if (!passed) {
+          throw Error(`BASE_PROBE_REQUIRED: run gate-runner-cli ${run} ${pipelineId} ${check.gate} --advisory --base-probe on the clean checkout before the first source dispatch; a FAIL means the base is red and PLAN must assign a baseline-repair work item`);
+        }
+      }
+    }
     const inventory = await sourceInventory(root, (exe: string, argv: string[]) => inventoryInvoke(root, exe, argv));
     if (!inventory.files || !inventory.digest) throw Error('ADVISORY_BASELINE_UNAVAILABLE');
     const baseline = await writeBaseline(root, run, {
@@ -179,7 +205,8 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       work_item_id: workItemId,
       manifest_sha256: state.manifest_sha256,
       state_revision: revision,
-      allowed_change_paths: itemScope,
+      allowed_change_paths: boundScope,
+      repair_paths: repairPaths,
       source_digest: inventory.digest,
       files: inventory.files,
       recorded_at: new Date().toISOString(),
@@ -189,6 +216,9 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     advisoryChecks = baseChecks.map(check => ({ ...check, work_item_id: workItemId, baseline_path: baseline.path, baseline_sha256: baseline.sha256,
       command: `${GATE_RUNNER} ${run} ${pipelineId} ${check.gate} --advisory --affected --work-item ${workItemId} --baseline ${baseline.path} --baseline-sha256 ${baseline.sha256}`,
       focus_command: `${GATE_RUNNER} ${run} ${pipelineId} ${check.gate} --advisory --command-index <frozen_commands[].index> --test-file <repo-relative vitest file>`,
+      // The bound check can take tens of minutes: run it as a background shell command (no
+      // timeout, completion notification) instead of a foreground call killed by the shell timeout.
+      shell: { background: true, timeout_ms: 0 },
       frozen_commands: (manifest.gate_profiles[pipeline.profile][check.gate] as string[]).map((command, index) => ({ index, command })) }));
   }
   return { run_id: run, pipeline_id: pipelineId, stage, executor, role, work_item_id: workItemId,
@@ -196,7 +226,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     review_work_items: stageReview ? [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems].map((w: any) => ({ id: w.id, path: resolve(dirname(state.manifest_file), w.path), sha256: w.sha256 })) : undefined,
     context_paths: (item.context_files ?? []).map((p: string) => resolve(root, p)), reference_paths: (item.reference_files ?? []).map((p: string) => resolve(root, p)),
     decision_ids: item.decision_ids ?? pipeline.decision_ids ?? [], research_ids: item.research_ids ?? pipeline.research_ids ?? [], contract_ids: item.contract_ids ?? pipeline.contract_ids ?? [],
-    effective_scope: effectiveScope, work_item_scope: itemScope, repair_paths: [...new Set([...(repairRuntime?.repair_paths ?? []), ...amendmentPaths])], state_revision: revision, loop: repairRuntime?.technical_fix_cycles ?? 0,
+    effective_scope: effectiveScope, work_item_scope: itemScope, bound_scope: boundScope, repair_paths: repairPaths, state_revision: revision, loop: repairRuntime?.technical_fix_cycles ?? 0,
     repair_origin_stage: runtime?.repair_origin_stage,
     evidence_paths: [...new Set(evidencePaths)],
     advisory_checks: advisoryChecks,

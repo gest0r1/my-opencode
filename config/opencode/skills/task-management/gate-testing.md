@@ -92,8 +92,35 @@ selected delta, auth/security paths, `package.json` or lockfile changes select t
 command array. Schema, migration, configuration and shared-contract paths follow the frozen
 impact groups like any other input, so PLAN must map them to every consuming suite (for example
 `packages/db/migrations/**` → db and live-PG commands); an unmapped one still selects the
-complete array. Final authoritative gates always execute the original complete array. No
+complete array. Final authoritative gates always cover the original complete array. No
 dependency graph is guessed by the model during RUN.
+
+## Coordinator-only commands, parallel groups and reuse
+
+Parallel workers edit one checkout. A worker runs only the tests its change impacts; heavy
+whole-repository commands run once, on the combined tree, by the coordinator (OpenStage) after a
+wave of parallel work and again in the final gate. Running them per worker multiplies the wall
+clock, competes for CPU and memory, and reports other workers' half-finished edits.
+
+```json
+"gate_testing": { "local": { "local-gates": {
+  "coordinator_only": [0, 1, 2],
+  "parallel_groups": [[1, 2], [3, 4, 5]],
+  "impact_groups": [ ... ]
+} } }
+```
+
+- `coordinator_only` lists frozen command indexes (type-check, lint, build, complete suites) that
+  `--affected` never selects, including as a previous failure. Explicit `--command-index`
+  diagnostics and complete runs still execute them.
+- `parallel_groups` lists 2–3 frozen indexes that may run at the same time. Members of one group
+  that are selected run concurrently; everything else keeps frozen order. Live-PostgreSQL
+  commands never join a group. A failing group stops the gate after all its members finish.
+- A PASS recorded by the runner is reused when the source tree digest, frozen manifest,
+  environment and a superset of the selected commands match; the new evidence records
+  `reused_from` and runs nothing. An authoritative gate reuses only a PASS that covered the
+  complete array; base probes, hypothesis runs, runtime gates and `{candidate_sha}` commands never
+  reuse. `--no-reuse` forces execution.
 
 ## Focused runs and base probe
 
@@ -105,7 +132,9 @@ evidence never satisfies a bound completion check.
 `--advisory --base-probe` runs the complete frozen array on a clean checkout before the first
 implementation start and records `base_probe.head_sha/base_sha` in
 `checks/<pipeline>-<gate>-base-probe.json`, so a suite that is already red on the base is
-classified before any work item starts instead of surfacing inside an unrelated one.
+classified before any work item starts instead of surfacing inside an unrelated one. The first
+source dispatch of a RUN is refused without a PASS probe (`BASE_PROBE_REQUIRED`); one probe
+serves every pipeline that shares the frozen profile.
 
 ## Disposable PostgreSQL
 
@@ -134,7 +163,8 @@ work-item/stage identity, baseline SHA-256, selected paths and scoped source dig
 directory are rejected or ignored. Exit status and the complete final gate remain
 authoritative; derived report summaries cannot turn FAIL into PASS.
 
-Repeating unchanged failed diagnostic inputs is blocked. A correction changes
+An advisory run stopped by its caller (SIGINT/SIGTERM, for example a shell timeout) is recorded as
+`INTERRUPTED` and does not count as a failed attempt. Repeating unchanged failed diagnostic inputs is blocked. A correction changes
 the input fingerprint; a new concrete hypothesis can be recorded in this RUN's
 `checks/` and passed with `--hypothesis PATH`. Its content hash is consumed once
 for those inputs. This is not another fix budget. Do not manufacture changes or

@@ -16,3 +16,14 @@ test('reuse export drops sensitive content and keeps comparable measurements', (
   assert.throws(()=>exportReport('../escape','output'),/Invalid run ID/);
  } finally {process.chdir(previous);fs.rmSync(root,{recursive:true,force:true});}
 });
+
+test('gate timeline summarizes reused, interrupted and executed gate runs', async () => {
+  const { summarize } = await import('./reuse-report.mjs');
+  const summary = summarize([
+    { event: 'gate_run', purpose: 'advisory', mode: 'affected', status: 'PASS', duration_ms: 1200000, commands_run: 12, reused: false },
+    { event: 'gate_run', purpose: 'authoritative', mode: 'complete', status: 'PASS', duration_ms: 900, commands_run: 0, reused: true },
+    { event: 'gate_run', purpose: 'advisory', mode: 'affected', status: 'INTERRUPTED', duration_ms: 120000, commands_run: 4, reused: false },
+  ]);
+  assert.deepEqual(summary.gates['advisory:affected'], { runs: 2, reused: 0, interrupted: 1, failed: 0, duration_ms: 1320000, commands_run: 16 });
+  assert.deepEqual(summary.gates['authoritative:complete'], { runs: 1, reused: 1, interrupted: 0, failed: 0, duration_ms: 900, commands_run: 0 });
+});

@@ -38,6 +38,8 @@ implementation/review
 
 Canonical candidate CI artifactless: без `actions/upload-artifact`/`actions/download-artifact`; evidence связывает exact candidate SHA, workflow run/attempt и required jobs. GitHub CI следует держать коротким и независимым, а не повторять дорогостоящую локальную установку без причины.
 
+GitHub Actions на бесплатном тарифе: minutes ограничены, платное хранилище artifacts не используется. Поэтому финальный CI запускается один раз на кандидата и должен проходить с первого раза: перед `git_publish` стоит локальный `ci-parity` gate, который повторяет required jobs финального workflow (сборка образа/дистрибутива, fresh/upgrade install, secret scan). Ранних «пробных» прогонов CI нет.
+
 Release packaging отделён от candidate CI. Если проект реально выпускает package/container/binary, используется его существующий release/tag workflow, а результат публикуется в GitHub Release или registry. Actions artifacts не используются как долговременное хранилище релизов.
 
 Если final CI отсутствует, PLAN замораживает обычный bootstrap/adaptation work item. Новый privileged stateful CD workflow нужен только для выбранного `opencode_host` режима и по-прежнему становится runnable только после merge в trusted ref.
@@ -112,6 +114,17 @@ append-only amendment, в том числе с новыми hash-bound runtime w
 RUN и REFRESH используют единый `pipeline-reconcile-cli`: hash mismatch — сигнал
 для анализа diff против PLAN, а не автоматический replan. Только COMPATIBLE / PLAN_INVALID.
 `state=in_progress` без реального старта не означает активное выполнение.
+
+## Скорость RUN
+
+- Пачка задач режется в PLAN на независимые lanes (pipeline на issue/блок) с непересекающимися `allowed_change_paths`; preflight отклоняет пересечение (`PARALLEL_SCOPE_OVERLAP`). Общие файлы (тестовые конфиги, workflows, `Dockerfile`, lockfile) принадлежат delivery sink.
+- OpenStage запускает все runnable стадии сразу фоновыми субагентами.
+- Воркер гоняет только тесты затронутых блоков; type-check, lint, build и полные сьюты (`coordinator_only`) координатор запускает один раз на объединённом дереве волны и в финальном gate.
+- `gate-runner-cli` переиспользует PASS для идентичного дерева, manifest, окружения и набора команд (`reused_from`); родитель не перепроверяет PASS воркера.
+- Независимые команды gate выполняются параллельными группами (`parallel_groups`, до 3).
+- Первый source dispatch без PASS base-probe отклоняется (`BASE_PROBE_REQUIRED`).
+- Посторонние untracked-файлы воркера убирает `git-worktree-cli quarantine-strays --apply` (перемещение в карантин RUN, не удаление).
+- Хронология gate-прогонов пишется в `reuse-metrics/gates.jsonl` и попадает в `reuse-report`.
 
 ## Доделка, fix loop и ранние проверки
 

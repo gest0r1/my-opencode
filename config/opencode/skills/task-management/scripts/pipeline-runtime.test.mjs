@@ -90,6 +90,13 @@ async function baseManifest(root, runId, pipelines) {
   };
 }
 
+
+async function writeBaseProbe(root, run, pipeline, gate, status = 'PASS') {
+  const dir = path.join(root, '.tmp/pipelines', run, 'checks');
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${pipeline}-${gate}-base-probe.json`), JSON.stringify({ status, purpose: 'advisory', base_probe: { head_sha: 'a'.repeat(40), base_sha: null } }));
+}
+
 function handoffPathFromPrompt(prompt, tag) {
   const match = new RegExp(`<${tag} path="([^"]+)"\\/>`).exec(prompt);
   assert.ok(match, `missing ${tag} path in prompt`);
@@ -124,7 +131,12 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   const manifestPath=await writeManifest(root,manifest);
   run(root,['init',manifestPath]); run(root,['approve','runtime-test']); run(root,['start','runtime-test','implementation','--pipeline','p']);
   process.chdir(root);
+  await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent'),/BASE_PROBE_REQUIRED/);
+  await writeBaseProbe(root,'runtime-test','p','local-test','FAIL');
+  await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent'),/BASE_PROBE_REQUIRED/);
+  await writeBaseProbe(root,'runtime-test','p','local-test');
   const baselinePacket = await dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent');
+  assert.deepEqual(baselinePacket.advisory_checks[0].shell,{background:true,timeout_ms:0});
   assert.equal(baselinePacket.advisory_checks.length,1);
   assert.equal(baselinePacket.advisory_checks[0].gate,'local-test');
   assert.equal(baselinePacket.advisory_checks[0].mode,'affected');
@@ -304,4 +316,42 @@ test('runtime preflight forwards selected research roles and checks their effect
   await assert.rejects(preflight.execute({research_agents:['ArchitectureAnalyzer']},{sessionID:'parent'}), /research:ArchitectureAnalyzer:webfetch/);
   assert.equal(JSON.parse((await preflight.execute({}, {sessionID:'parent'})).content).status,'PASS');
  } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test('a repair dispatch binds its authorized repair paths into the advisory baseline scope', async () => {
+ const previousCwd = process.cwd(), root = await tempProject();
+ try {
+  spawnSync('git',['init'],{cwd:root});
+  spawnSync('git',['config','user.email','test@example.invalid'],{cwd:root});
+  spawnSync('git',['config','user.name','Test'],{cwd:root});
+  await mkdir(path.join(root,'src'),{recursive:true}); await mkdir(path.join(root,'test'),{recursive:true});
+  await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n'); await writeFile(path.join(root,'test','a.test.ts'),'// base\n');
+  spawnSync('git',['add','src','test'],{cwd:root}); spawnSync('git',['commit','-m','base'],{cwd:root});
+  const manifest = await baseManifest(root,'repair-scope',[{id:'p',stages:['implementation','code-review']}]);
+  manifest.allowed_change_paths=['src/**','test/**'];
+  manifest.pipelines[0].executors['code-review']='review';
+  manifest.pipelines[0].profile='local';
+  manifest.gate_profiles={local:{'local-test':['npm test']}};
+  manifest.gate_testing={local:{'local-test':{impact_groups:[{inputs:['src/**','test/**'],command_index:0}]}}};
+  const workItemRaw=JSON.stringify({id:'wi-p',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent',allowed_change_paths:['src/**']});
+  await writeFile(path.join(root,manifest.work_items[0].path),workItemRaw); manifest.work_items[0].sha256=sha(workItemRaw);
+  const manifestPath=await writeManifest(root,manifest);
+  run(root,['init',manifestPath]); run(root,['approve','repair-scope']); run(root,['start','repair-scope','implementation','--pipeline','p']);
+  assert.equal(run(root,['complete','repair-scope','implementation','--pipeline','p']).status,0);
+  assert.equal(run(root,['start','repair-scope','code-review','--pipeline','p']).status,0);
+  assert.equal(run(root,['scope-check','repair-scope','code-review','test/a.test.ts','--pipeline','p']).status,0);
+  const review=path.join(root,'.tmp/pipelines/repair-scope/review-1.json');
+  await writeFile(review,JSON.stringify({status:'needs_revision',findings:['test gap']}));
+  const charged=run(root,['fix-cycle','repair-scope','code-review','--pipeline','p','--evidence',review]);
+  assert.equal(charged.status,0,charged.stderr);
+  process.chdir(root);
+  await writeBaseProbe(root,'repair-scope','p','local-test');
+  const packet=await dispatchPacket(root,'repair-scope','p','implementation','wi-p','CoderAgent');
+  assert.deepEqual(packet.work_item_scope,['src/**']);
+  assert.deepEqual(packet.repair_paths,['test/a.test.ts']);
+  assert.deepEqual(packet.bound_scope,['src/**','test/a.test.ts']);
+  const baseline=JSON.parse(await readFile(path.join(root,'.tmp/pipelines/repair-scope',packet.advisory_checks[0].baseline_path),'utf8'));
+  assert.deepEqual(baseline.allowed_change_paths,['src/**','test/a.test.ts']);
+  assert.deepEqual(baseline.repair_paths,['test/a.test.ts']);
+ } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });

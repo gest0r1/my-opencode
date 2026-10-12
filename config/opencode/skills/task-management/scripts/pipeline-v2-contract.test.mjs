@@ -1476,3 +1476,22 @@ test('PLAN rejects orphaned work items, missing dependencies, cycles and reverse
     assert.throws(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}), dependency==='missing' ? /UNKNOWN_WORK_ITEM_DEPENDENCY/ : /DEPENDENCY_CYCLE/);
   }
 });
+
+test('schema v2 rejects parallel pipelines whose work items may change the same paths', async () => {
+  const fx = await fixture('v2-parallel-scope');
+  const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', allowed_change_paths: ['src/api/**', 'vitest.config.ts'] }));
+  fx.manifest.work_items[0] = { id: 'wi-1', pipeline_id: 'app', ...first };
+  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/web/**', 'vitest.config.ts'] }));
+  fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...second });
+  fx.manifest.pipelines.push({
+    id: 'b', deployable: false, stages: ['implementation'], executors: { implementation: 'agent' },
+    work_items: ['wi-2'], decision_ids: [], research_ids: [], contract_ids: [],
+  });
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /PARALLEL_SCOPE_OVERLAP: app and b .*vitest\.config\.ts/,
+  );
+  const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/web/**'] }));
+  fx.manifest.work_items[1] = { id: 'wi-2', pipeline_id: 'b', ...disjoint };
+  assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
+});
