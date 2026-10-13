@@ -258,17 +258,28 @@ readiness() {
 }
 
 opencode_readiness() {
-  local attempt
+  # OpenCode 2.x protects /api/info with Basic auth (user `opencode`). With the
+  # configured password the payload is checked; without one, 401 still proves the
+  # server is up, and OpenCode generated its own password for this start.
+  local attempt code password url
+  password="$(read_env_value "$HOME/.config/opencode.env" OPENCODE_SERVER_PASSWORD)"
+  url="http://${OPENCODE_WEB_HOST:-127.0.0.1}:${OPENCODE_WEB_PORT:-4096}/api/info"
   for ((attempt=0; attempt<20; attempt++)); do
-    if systemctl --user is-active --quiet opencode-web.service &&
-       curl --noproxy '*' --fail --silent --max-time 2 \
-         "http://${OPENCODE_WEB_HOST:-127.0.0.1}:${OPENCODE_WEB_PORT:-4096}/api/info" |
-       node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const v=JSON.parse(s);process.exit(typeof v.version==="string" && Number.isInteger(v.pid)?0:1)}catch{process.exit(1)}})'; then
-      return 0
+    if systemctl --user is-active --quiet opencode-web.service; then
+      if [[ -n "$password" ]]; then
+        code="$(curl --noproxy '*' --silent --max-time 2 -u "opencode:$password" \
+          -o "$TMP/opencode-info.json" -w '%{http_code}' "$url" || true)"
+        if [[ "$code" == 200 ]] && node -e 'const v=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(typeof v.version==="string" && Number.isInteger(v.pid)?0:1)' "$TMP/opencode-info.json" 2>/dev/null; then
+          return 0
+        fi
+      else
+        code="$(curl --noproxy '*' --silent --max-time 2 -o /dev/null -w '%{http_code}' "$url" || true)"
+        [[ "$code" != 200 && "$code" != 401 ]] || return 0
+      fi
     fi
     sleep 1
   done
-  echo 'OpenCode user service failed to become active.' >&2
+  echo "OpenCode user service failed to become active: $url (last HTTP status: ${code:-unknown})" >&2
   systemctl --user status opencode-web.service --no-pager -l >&2 || true
   return 1
 }
