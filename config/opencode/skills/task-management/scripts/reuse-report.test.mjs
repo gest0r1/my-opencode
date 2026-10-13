@@ -27,3 +27,17 @@ test('gate timeline summarizes reused, interrupted and executed gate runs', asyn
   assert.deepEqual(summary.gates['advisory:affected'], { runs: 2, reused: 0, interrupted: 1, failed: 0, duration_ms: 1320000, commands_run: 16 });
   assert.deepEqual(summary.gates['authoritative:complete'], { runs: 1, reused: 1, interrupted: 0, failed: 0, duration_ms: 900, commands_run: 0 });
 });
+
+test('agent reuse, background children and runtime changes are reported apart from gate reuse', () => {
+  const summary = summarize([
+    { event: 'reuse_decision', decision: 'fresh', fallback_reason: 'no_prior_session' },
+    { event: 'subagent_complete', decision: 'fresh', background: true, session_health: 'background' },
+    { event: 'background_child_settled', session_health: 'healthy' },
+    { event: 'reuse_decision', decision: 'reuse' },
+    { event: 'runtime_version', runtime_reload_required: true, runtime_changed_during_run: false },
+    { event: 'gate_run', purpose: 'advisory', mode: 'affected', status: 'PASS', reused: true },
+  ]);
+  assert.deepEqual(summary.agents, { eligible_decisions: 2, resumed: 1, background_children: 1, background_settled: 1 });
+  assert.deepEqual(summary.runtime, { reload_required: 1, changed_during_run: 0 });
+  assert.equal(summary.gates['advisory:affected'].reused, 1);
+});

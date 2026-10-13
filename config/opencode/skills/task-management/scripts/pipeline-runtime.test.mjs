@@ -394,3 +394,75 @@ test('base probe is enforced per profile: a red base admits only a planned repai
   assert.equal(againBaseline.first_recorded_at,movedBaseline.recorded_at);
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });
+
+test('a background worker is resumed only after its child session is idle, and the parent sees the decision', async () => {
+ const previousCwd=process.cwd(), root=await tempProject();
+ try {
+  const manifest=await baseManifest(root,'background-run',[{id:'p',stages:['implementation']}]);
+  const raw=JSON.stringify({id:'wi-p',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent'});
+  await writeFile(path.join(root,manifest.work_items[0].path),raw); manifest.work_items[0].sha256=sha(raw);
+  run(root,['init',await writeManifest(root,manifest)]); run(root,['approve',manifest.run_id]); run(root,['start',manifest.run_id,'implementation','--pipeline','p']);
+  process.chdir(root);
+  let finish; const childDone=new Promise(resolve=>{finish=resolve;});
+  const hooks={};
+  await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},
+    session:{hook:async()=>{},get:async()=>({data:{}}),wait:async({sessionID})=>{assert.equal(sessionID,'bg-worker'); await childDone;}}});
+  const input=()=>({agent:'CoderAgent',background:true,prompt:'<pipeline_work_item id="wi-p"/><pipeline_dispatch run="background-run" pipeline="p" stage="implementation"/>'});
+  const registryFile=path.join(root,'.tmp/pipelines/background-run/session-registry.json');
+  const metrics=async()=>(await readFile(path.join(root,'.tmp/pipelines/background-run/reuse-metrics/events.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+
+  const first={tool:'subagent',sessionID:'parent',id:'first',input:input()}; await hooks['execute.before'](first);
+  const ack={...first,status:'completed',result:{content:'The subagent is working in the background (sessionID: bg-worker). You will be notified automatically when it finishes.'}};
+  await hooks['execute.after'](ack);
+  const compact=JSON.parse(ack.result.content);
+  assert.equal(compact.status,'running'); assert.equal(compact.child_running,true);
+  assert.equal(compact.session_reuse,'fresh:no_prior_session');
+  assert.equal(JSON.parse(await readFile(registryFile,'utf8'))[0].status,'background');
+
+  // While the child still works, a new dispatch must not resume it.
+  const busy={tool:'subagent',sessionID:'parent',id:'busy',input:input()}; await hooks['execute.before'](busy);
+  assert.equal(busy.input.sessionID,undefined);
+  assert.equal((await metrics()).filter(m=>m.event==='reuse_decision').at(-1).fallback_reason,'child_still_running');
+  await hooks['execute.after']({...busy,status:'cancelled',error:{message:'not needed'}});
+
+  finish(); await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(JSON.parse(await readFile(registryFile,'utf8'))[0].status,'healthy');
+  const resume={tool:'subagent',sessionID:'parent',id:'resume',input:input()}; await hooks['execute.before'](resume);
+  assert.equal(resume.input.sessionID,'bg-worker');
+  const done={...resume,status:'completed',result:{metadata:{sessionID:'bg-worker'},content:'The subagent is working in the background (sessionID: bg-worker). You will be notified automatically when it finishes.'}};
+  await hooks['execute.after'](done);
+  assert.equal(JSON.parse(done.result.content).session_reuse,'resumed');
+
+  // A watcher lost with a server restart is recovered at the next dispatch.
+  const entries=JSON.parse(await readFile(registryFile,'utf8')); entries[0].status='background'; await writeFile(registryFile,JSON.stringify(entries));
+  const restarted={};
+  await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{restarted[name]=fn;},transform:async fn=>fn({add:()=>{}})},
+    session:{hook:async()=>{},get:async()=>({data:{}}),wait:async()=>{}}});
+  const after={tool:'subagent',sessionID:'parent',id:'after-restart',input:input()}; await restarted['execute.before'](after);
+  assert.equal(after.input.sessionID,'bg-worker');
+ } finally {process.chdir(previousCwd);await rm(root,{recursive:true,force:true});}
+});
+
+test('a runtime version change during a RUN is surfaced to the parent and recorded', async () => {
+ const previousCwd=process.cwd(), root=await tempProject();
+ try {
+  const manifest=await baseManifest(root,'version-run',[{id:'p',stages:['implementation']}]);
+  const raw=JSON.stringify({id:'wi-p',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent'});
+  await writeFile(path.join(root,manifest.work_items[0].path),raw); manifest.work_items[0].sha256=sha(raw);
+  run(root,['init',await writeManifest(root,manifest)]); run(root,['approve',manifest.run_id]); run(root,['start',manifest.run_id,'implementation','--pipeline','p']);
+  process.chdir(root);
+  await mkdir(path.join(root,'.tmp/pipelines/version-run'),{recursive:true});
+  await writeFile(path.join(root,'.tmp/pipelines/version-run/runtime-version.json'),JSON.stringify({loaded:'older-runtime'}));
+  const hooks={};
+  await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},session:{hook:async()=>{},get:async()=>({data:{}})}});
+  const packet=await dispatchPacket(root,'version-run','p','implementation','wi-p','CoderAgent');
+  const shell={tool:'shell',sessionID:'parent',id:'dispatch',status:'completed',
+    input:{command:'npx tsx stage-cli.ts dispatch version-run --pipeline p --stage implementation --work-item wi-p --role CoderAgent --json'},result:{content:JSON.stringify(packet)}};
+  await hooks['execute.after'](shell);
+  const compact=JSON.parse(shell.result.content);
+  assert.equal(compact.runtime_changed_during_run,true);
+  assert.equal(compact.runtime_reload_required,undefined);
+  const events=(await readFile(path.join(root,'.tmp/pipelines/version-run/reuse-metrics/events.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(events.at(-1).event,'runtime_version');
+ } finally {process.chdir(previousCwd);await rm(root,{recursive:true,force:true});}
+});
