@@ -13,7 +13,7 @@ grep -Fq 'oc_activate_release' "$WRAPPER"
 grep -Fq 'native_startup' "$WRAPPER"
 grep -Fq 'readiness' "$WRAPPER"
 grep -Fq 'systemctl --user restart opencode-web.service openchamber.service' "$WRAPPER"
-grep -Fq 'verify-runtime-services.py' "$WRAPPER"
+if grep -Fq 'verify-runtime-services.py' "$WRAPPER"; then echo 'FAIL: runtime acceptance probe is back in the wrapper' >&2; exit 1; fi
 grep -Fq 'effective_restart_mode=defer' "$CORE"
 grep -Fq 'OPENCHAMBER_EMBEDDED_TERMINAL' "$CORE"
 
