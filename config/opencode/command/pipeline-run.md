@@ -72,7 +72,13 @@ For each frozen agent work item, call `stage-cli dispatch <run-id> --pipeline <i
 - **Background waits.** Long checks and workers run in the background; OpenCode delivers their completion notifications. Optional fallback: an OpenChamber scheduled task in this same session; on wake, query `next` and child status, and redispatch a child that ended without a result as a continuation.
 - **Worker leftovers.** When `git-worktree-cli verify` fails on an untracked path outside scope that a worker created, run `git-worktree-cli.ts quarantine-strays <manifest> --apply` (moves only untracked, out-of-scope files created after the first dispatch into the run's quarantine) and verify again. Never ask the owner to delete them.
 
-The worker reads authoritative paths itself. OpenStage reads compact state, blockers and evidence paths. `--no-session-reuse` disables resume in runtime; reviewer/planning sessions remain fresh. Export metrics with `reuse-report.mjs`; see `project/reuse-analysis.md` in the distribution README. Missing/unavailable child sessions fall back fresh before execution; worker failures retain normal repair semantics.
+The worker reads authoritative paths itself. OpenStage reads compact state, blockers and evidence paths. `--no-session-reuse` disables resume in runtime; reviewer/planning sessions remain fresh. Missing/unavailable child sessions fall back fresh before execution; worker failures retain normal repair semantics.
+
+Every compact subagent result carries `session_reuse`: `resumed` or `fresh:<reason>`. That field is the only source of truth about continuity: call a dispatch a continuation of a session only when it says `resumed`, and never pass or invent `sessionID` (runtime strips it). A background child first returns `status: running` with `child_running: true`; it is not a result. Wait for the OpenCode completion notification, do not redispatch the same work item meanwhile (that dispatch goes fresh with `child_still_running` and duplicates work).
+
+A dispatch or result with `runtime_reload_required: true` means the distribution changed on disk after OpenCode started, so the running hooks still enforce the old rules. Finish no further stage: stop at an owner checkpoint asking to restart OpenCode, then continue the same RUN. `runtime_changed_during_run: true` (OpenCode was restarted with a newer distribution mid-RUN) is informational: reread this command before the next dispatch and name it in the final report.
+
+A review verdict is persisted by runtime under `handoffs/results/**`. Never dispatch a reviewer (fresh or "the same one") to persist, restate or confirm a verdict it already returned; record the decision from the result file.
 
 ## Dispatch and machine gates
 
@@ -236,6 +242,8 @@ After any source-changing fix to an already published candidate: Git verify, rer
 - `completed`: every frozen stage, including pre-publish source documentation and post-validation non-source handoff/finalization, is completed/skipped with evidence.
 
 Do not use natural-language completion to skip these state transitions. A pipeline may continue from `ready` or `release_ready` into later frozen stages.
+
+Closing a RUN (every pipeline terminal, or a final owner stop) always ends with `node $HOME/.config/opencode/skills/task-management/scripts/reuse-report.mjs <run-id> .tmp/pipelines/<run-id>/reuse-report`. The final report cites `reuse-report/summary.json`: subagent session reuse (`agents`, `groups`, `fallback_reasons`) and gate evidence reuse (`gates`) as two separate figures, never summed, plus any `runtime` events.
 
 ## GitHub Issue / PR handoff
 

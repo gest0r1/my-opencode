@@ -198,6 +198,12 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   assert.match(run, /stage-cli runtime-replan-approve/);
   assert.match(run, /`--unattended` never supplies runtime-replan approval/i);
   assert.match(rules, /Implementation continuations and advisory tests have no budget/i);
+  // Session reuse is reported honestly and measured at the end of every RUN.
+  assert.match(run, /`session_reuse`: `resumed` or `fresh:<reason>`/);
+  assert.match(run, /runtime_reload_required: true/);
+  assert.match(run, /Never dispatch a reviewer \(fresh or "the same one"\) to persist/);
+  assert.match(run, /Closing a RUN[\s\S]*reuse-report\.mjs <run-id>/);
+  assert.match(orchestrator, /scripts\/reuse-report\.mjs \*": allow/);
   assert.match(rules, /severity alone never forces a stop/i);
   assert.match(status, /правила счёта — по RUN-команде/);
   assert.match(reviewer, /ready_for_owner_approval/);

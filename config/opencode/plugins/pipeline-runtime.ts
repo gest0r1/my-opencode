@@ -3,6 +3,7 @@ import { Plugin } from "@opencode/plugin"
 import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
+import { fileURLToPath } from "node:url"
 import { assertPipelineCapabilities } from "../skills/task-management/scripts/capability-preflight.mjs"
 
 const ELIGIBLE_ROLES = new Set([
@@ -11,8 +12,13 @@ const ELIGIBLE_ROLES = new Set([
 const CONTEXT_TTL_MS = 5 * 60 * 1000
 const WORK_ITEM_RE = /^[A-Za-z0-9._:-]{1,128}$/
 const WORK_ITEM_MARKER_RE = /<pipeline_work_item\s+id="([A-Za-z0-9._:-]{1,128})"\s*\/?\s*>/
+// OpenCode 2.x subagent tool: background=true returns this acknowledgement immediately.
+const BACKGROUND_ACK_RE = /working in the background \(sessionID:\s*([^)\s]+)\)/
+const CHILD_IDLE_PROBE_MS = 1500
 
-type SessionHealth = "healthy" | "in_progress" | "error" | "cancelled" | "stale"
+// "background": a background child acknowledged the dispatch and is still working; it becomes
+// "healthy" once OpenCode reports the child session idle (session.wait).
+type SessionHealth = "healthy" | "in_progress" | "background" | "error" | "cancelled" | "stale"
 
 type RegistryEntry = {
   run_id: string
@@ -158,8 +164,11 @@ function artifactPaths(raw: string) {
   const found = raw.match(/\.tmp\/pipelines\/[A-Za-z0-9._\-\/]+/g) ?? []
   return [...new Set(found)].slice(0, 8)
 }
-function compactSubagentResult(raw: string, transportStatus: string, resultPath: string) {
-  const status = reportedStatus(raw, transportStatus)
+function compactSubagentResult(raw: string, transportStatus: string, resultPath: string,
+  extra: { session_reuse?: string; child_running?: boolean; runtime_reload_required?: boolean } = {}) {
+  // A background acknowledgement is not a result: the child keeps working and OpenCode notifies
+  // the parent when it finishes.
+  const status = extra.child_running ? "running" : reportedStatus(raw, transportStatus)
   const detailRequired = new Set([
     "blocked", "partial", "needs_revision", "replan", "security_stop", "scope_stop",
     "secret_stop", "destructive_stop", "failed", "fail", "error",
@@ -169,9 +178,10 @@ function compactSubagentResult(raw: string, transportStatus: string, resultPath:
     result_path: resultPath,
     artifacts: artifactPaths(raw),
     detail_required: detailRequired,
+    ...extra,
   })
 }
-function compactDispatchShellResult(root: string, event: any) {
+function compactDispatchShellResult(root: string, event: any, runtimeState: (runID: string) => RuntimeVersionState) {
   if (event.status !== "completed" || event.tool !== "shell") return
   const command = String(event.input?.command ?? "")
   if (!/stage-cli\.ts\s+dispatch\b/.test(command)) return
@@ -200,6 +210,7 @@ function compactDispatchShellResult(root: string, event: any) {
     work_item_marker: `<pipeline_work_item id="${packet.work_item_id}"/>`,
     dispatch_marker: `<pipeline_dispatch run="${packet.run_id}" pipeline="${packet.pipeline_id}" stage="${packet.stage}"/>`,
     parent_action: "dispatch with markers; runtime injects file-backed packet",
+    ...runtimeFlags(runtimeState(String(packet.run_id))),
   })
   event.result = { ...event.result, content: compact, output: compact }
 }
@@ -311,10 +322,64 @@ function decisionMetric(ctx: RuntimeContext, role: string, decision: "fresh" | "
   }
 }
 
+// The plugin and the RUN instructions are loaded once, when OpenCode starts. A distribution
+// update during a RUN changes the files on disk but not the running hooks, so the new rules
+// would apply only "on paper". Fingerprint what was loaded and compare it with the disk.
+const RUNTIME_FILES = [
+  fileURLToPath(import.meta.url),
+  fileURLToPath(new URL("../skills/task-management/scripts/pipeline-dispatch.ts", import.meta.url)),
+  fileURLToPath(new URL("../command/pipeline-run.md", import.meta.url)),
+  fileURLToPath(new URL("../agent/core/openstage-orchestrator.md", import.meta.url)),
+]
+function runtimeFingerprint() {
+  return sha256(RUNTIME_FILES.map((file) => {
+    try { return `${path.basename(file)}:${sha256(fs.readFileSync(file))}` } catch { return `${path.basename(file)}:missing` }
+  }).join("\n"))
+}
+type RuntimeVersionState = { reload_required: boolean; changed_during_run: boolean; loaded: string }
+function runtimeFlags(state: RuntimeVersionState) {
+  return {
+    ...(state.reload_required ? { runtime_reload_required: true } : {}),
+    ...(state.changed_during_run ? { runtime_changed_during_run: true } : {}),
+  }
+}
+
 export default Plugin.define({
   id: "pipeline-runtime",
   setup: async (plugin) => {
     const root = String(plugin.location.directory)
+    const loadedRuntime = runtimeFingerprint()
+    const runtimeState = (runID: string): RuntimeVersionState => {
+      const file = path.join(root, ".tmp", "pipelines", runID, "runtime-version.json")
+      let recorded = safeJson(file)
+      if (!recorded?.loaded) {
+        recorded = { loaded: loadedRuntime, recorded_at: new Date().toISOString() }
+        try { ensureDir(path.dirname(file)); fs.writeFileSync(file, JSON.stringify(recorded, null, 2) + "\n", "utf8") } catch {}
+      }
+      const state = { loaded: loadedRuntime, reload_required: runtimeFingerprint() !== loadedRuntime, changed_during_run: recorded.loaded !== loadedRuntime }
+      if (state.reload_required || state.changed_during_run) {
+        appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "runtime_version",
+          run_id: runID, runtime_reload_required: state.reload_required, runtime_changed_during_run: state.changed_during_run })
+      }
+      return state
+    }
+    // Background children: registry entries wait in "background" until the child session is idle.
+    const childIdle = async (sessionID: string, timeoutMs?: number): Promise<boolean> => {
+      const wait = (plugin.session as any).wait
+      if (typeof wait !== "function") return true
+      const done = Promise.resolve(wait({ sessionID })).then(() => true, () => false)
+      if (timeoutMs === undefined) return done
+      return Promise.race([done, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))])
+    }
+    const settleBackground = (runID: string, key: string, childID: string, idle: boolean) => {
+      const registry = loadRegistry(root, runID)
+      const entry = registry.find((item) => identity(item as RuntimeContext) === key && item.session_id === childID)
+      if (!entry || entry.status !== "background") return
+      entry.status = idle ? "healthy" : "error"; entry.updated_at = new Date().toISOString()
+      saveRegistry(root, runID, registry)
+      appendJsonLine(metricsFile(root, runID), { timestamp: entry.updated_at, event: "background_child_settled",
+        identity: key, run_id: runID, session_health: entry.status })
+    }
     const statsBySession = new Map<string, SessionStats>()
     const invocationByCallID = new Map<string, InvocationMeta>()
     const optionFile = (id: string) => path.join(root, '.tmp/pipeline-runtime', sha256(id).slice(0, 24), 'options.json')
@@ -478,6 +543,7 @@ export default Plugin.define({
         })
       }
 
+      if (runtimeState(ctx.run_id).reload_required) return rememberFresh("runtime_reload_required")
       if (!contextIsFresh(ctx)) return rememberFresh("stale_runtime_context")
       if (ctx.parent_session_id !== sessionID) return rememberFresh("parent_session_mismatch")
       if (ctx.work_item_id !== workItemID) return rememberFresh("work_item_mismatch")
@@ -492,6 +558,13 @@ export default Plugin.define({
       if (ctx.no_session_reuse) return rememberFresh("disabled_by_owner")
       if (!ctx.technical_fix && role !== "CoderAgent") return rememberFresh("baseline")
       if (!match) return rememberFresh("no_prior_session")
+      if (match.status === "background") {
+        // The previous child was launched in the background. Resume only once it is idle; a
+        // missed notification (restart, lost watcher) is recovered here instead of going fresh.
+        if (!(await childIdle(match.session_id, CHILD_IDLE_PROBE_MS))) return rememberFresh("child_still_running", match.files_read ?? [])
+        settleBackground(ctx.run_id, identity(match as RuntimeContext), match.session_id, true)
+        match.status = "healthy"
+      }
       if (match.status !== "healthy") return rememberFresh(match.status, match.files_read ?? [])
 
       const delta = validateReuseDelta(root, ctx, match)
@@ -531,7 +604,7 @@ export default Plugin.define({
 
     await plugin.tool.hook("execute.after", async (event) => {
       if (event.tool !== "subagent") {
-        compactDispatchShellResult(root, event)
+        compactDispatchShellResult(root, event, runtimeState)
         const run = runBySession.get(String(event.sessionID))
         if (run && event.status === "completed" && event.tool === "read") appendJsonLine(metricsFile(root, run), {
           event: "parent_read", timestamp: new Date().toISOString(), bytes_read: byteLength(event.result.content) })
@@ -543,8 +616,11 @@ export default Plugin.define({
       const ctx = invocation.ctx
       const role = String((event.input as any)?.agent ?? ctx.role)
       const reusedID = String((event.input as any)?.sessionID ?? "")
-      const resultID = event.status === "completed" ? String(event.result?.metadata?.sessionID ?? "") : ""
+      const rawContent = event.status === "completed" ? String(event.result?.content ?? event.result?.output ?? "") : ""
+      const ackID = BACKGROUND_ACK_RE.exec(rawContent)?.[1] ?? ""
+      const resultID = event.status === "completed" ? String(event.result?.metadata?.sessionID ?? "") || ackID : ""
       const childID = resultID || reusedID
+      const background = event.status === "completed" && ((event.input as any)?.background === true || Boolean(ackID))
       const registry = loadRegistry(root, ctx.run_id)
       const previous = registry.find((item) =>
         item.run_id === ctx.run_id && item.pipeline_id === ctx.pipeline_id &&
@@ -578,7 +654,7 @@ export default Plugin.define({
       if (event.status === "completed" && childID) {
         const next: RegistryEntry = {
           run_id: ctx.run_id, pipeline_id: ctx.pipeline_id, stage: ctx.stage, role,
-          work_item_id: ctx.work_item_id, session_id: childID, status: "healthy",
+          work_item_id: ctx.work_item_id, session_id: childID, status: background ? "background" : "healthy",
           state_revision: ctx.state_revision, evidence_path: ctx.evidence_path,
           last_delta_hash: hashDelta(root, ctx),
           continuity_key: ctx.continuity_key,
@@ -591,14 +667,17 @@ export default Plugin.define({
             item.stage === next.stage && item.role === next.role && item.work_item_id === next.work_item_id)),
           next,
         ])
+        if (background) {
+          void childIdle(childID).then((idle) => settleBackground(ctx.run_id, identity(next as RuntimeContext), childID, idle))
+        }
       } else if (previous && invocation.decision === "reuse") {
         previous.status = "error"; previous.updated_at = now; saveRegistry(root, ctx.run_id, registry)
       }
 
       appendJsonLine(metricsFile(root, ctx.run_id), {
-        timestamp: now, event: "subagent_complete", identity: identity(ctx, role), call_id: callID,
+        timestamp: now, event: "subagent_complete", identity: identity(ctx, role), call_id: callID, background,
         decision: invocation.decision, fallback_reason: invocation.fallback_reason ?? null,
-        session_id: childID || null, session_health: event.status === "completed" ? "healthy" : "error",
+        session_id: childID || null, session_health: event.status !== "completed" ? "error" : background ? "background" : "healthy",
         latency_ms: Date.now() - invocation.started_at,
         orientation_ms: sessionStats?.first_meaningful_at ? sessionStats.first_meaningful_at - invocation.started_at : null,
         prompt_bytes: invocation.prompt_bytes,
@@ -614,7 +693,12 @@ export default Plugin.define({
         context_reread_ratio: currentFiles.length ? rereadFiles.length / currentFiles.length : null,
       })
       if (event.status === "completed") {
-        const compact = compactSubagentResult(rawResult, event.status, resultPath)
+        // The parent sees what the runtime actually decided; it never infers "continuation".
+        const compact = compactSubagentResult(rawResult, event.status, resultPath, {
+          session_reuse: invocation.decision === "reuse" ? "resumed" : `fresh:${invocation.fallback_reason ?? "unknown"}`,
+          ...(background ? { child_running: true } : {}),
+          ...runtimeFlags(runtimeState(ctx.run_id)),
+        })
         event.result = { ...event.result, content: compact, output: compact }
       }
       invocationByCallID.delete(callID)

@@ -34,6 +34,7 @@ permission:
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
     "node $HOME/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
+    "node $HOME/.config/opencode/skills/task-management/scripts/reuse-report.mjs *": allow
     "bash $HOME/.config/opencode/skills/task-management/scripts/worktree-refresh.sh": allow
     "bash $HOME/.config/opencode/skills/task-management/scripts/worktree-refresh.sh --check": allow
   edit:
@@ -97,7 +98,10 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - Deterministic pipeline CLIs explicitly allowed by this agent's `bash` permission are parent-owned for PLAN, RUN, refresh and status and MUST be invoked directly by OpenStage. Do not proxy those commands through DevOps, TestEngineer or another specialist merely because an arbitrary shell probe is denied.
 - A permission rejection for an arbitrary or non-allowlisted shell command does not prove that shell execution is unavailable. Judge capability from `pipeline_runtime_preflight` and, when required by the selected command, the exact allowlisted deterministic invocation.
 - Owner decisions, changed requirements/contracts/trust boundaries, secrets and destructive actions use the selected command's stop/approval path. Bounded authorized repairs continue without repeat approval.
-- Fresh reviews stay fresh. Worker session IDs are runtime-owned; invalid/unavailable reuse falls back fresh and is not itself an owner stop.
+- Fresh reviews stay fresh. Worker session IDs are runtime-owned; invalid/unavailable reuse falls back fresh and is not itself an owner stop. Claim a session continuation only when the compact result says `session_reuse: resumed`.
+- A reviewer's verdict is already in its result file; never dispatch a reviewer again to persist or confirm it.
+- `runtime_reload_required: true` in a dispatch or result is an owner checkpoint: OpenCode must be restarted before the next stage.
+- Close every RUN with `reuse-report.mjs` and report agent reuse and gate reuse separately.
 - When a dispatch contains `advisory_checks`, the worker executes each entry's exact `command` (and may iterate with `focus_command`) against the machine-owned work-item baseline. Do not guess or reproduce those commands in the parent and never tell a worker that it has no shell; its allowlist permits exactly those invocations. `stage-complete-cli` rejects missing/stale/non-PASS bound evidence.
 - Approved byte-identical relocation/archiving of tracked source uses `git-worktree-cli.ts move` with reviewed `source_move` evidence; never have a worker retype file contents.
 - A worker's bound PASS is final unless `stage-complete-cli` rejects it. Do not rerun the same check to verify it; the runner already reuses a PASS for an identical tree.
@@ -109,7 +113,7 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - Keep the parent context orchestration-only. Pass file paths and stable IDs, never copy artifact contents, dispatch JSON, evidence arrays, diffs, logs or prior child prose into a new prompt when a run-scoped file already exists.
 - `stage-cli dispatch --json` may be called when required by RUN, but runtime compacts its parent-visible result and stores the full packet below `.tmp/pipelines/<run-id>/handoffs/dispatch/**`. On a normal ready result, do not read that packet in the parent; send the returned work-item and dispatch markers to the child. Runtime validates current state and injects the file-backed packet.
 - Reuse deltas are file-backed under `.tmp/pipelines/<run-id>/handoffs/reuse/**`; do not restate them in parent prose.
-- Runtime stores full child output under `.tmp/pipelines/<run-id>/handoffs/results/**` and returns a compact envelope `{status,result_path,artifacts,detail_required}`. If `detail_required=false`, do not read `result_path`; continue from machine state/evidence. If `detail_required=true`, read that one result file only when its details are needed to choose the next deterministic action.
+- Runtime stores full child output under `.tmp/pipelines/<run-id>/handoffs/results/**` and returns a compact envelope `{status,result_path,artifacts,detail_required,session_reuse}`. `status: running` with `child_running: true` is a background acknowledgement, not a result. If `detail_required=false`, do not read `result_path`; continue from machine state/evidence. If `detail_required=true`, read that one result file only when its details are needed to choose the next deterministic action.
 - Planning/research/review agents that own artifacts return only compact status/blockers/artifact paths. Treat the artifact as the handoff; do not reconstruct it in chat.
 - Avoid repeated `status --json` or rereading historical evidence. Query `next` and the exact current evidence needed for the active action.
 
