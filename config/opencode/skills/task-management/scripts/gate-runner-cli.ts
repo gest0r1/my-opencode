@@ -7,6 +7,7 @@ import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs'
 import { validateGateTesting, selectAffectedCommands, parallelBatches } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
 import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, readTestReports } from './gate-diagnostics.mjs';
+import { gitReadEnv } from './git-readonly.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -150,7 +151,7 @@ type ReuseQuery = {
 // environment and a superset of the selected commands proves the same result; running the same
 // commands again on the same bytes adds wall-clock time, not evidence. Evidence written before
 // these identity fields existed is never reused.
-export async function findReusablePass(query: ReuseQuery): Promise<{ path: string; evidence: any } | null> {
+async function findReusablePass(query: ReuseQuery): Promise<{ path: string; evidence: any } | null> {
   for (const directory of ['gates', 'checks']) {
     let names: string[] = [];
     try { names = await readdir(join(query.runDirectory, directory)); } catch { continue; }
@@ -274,10 +275,10 @@ async function main(): Promise<void> {
   let probe: { head_sha: string; base_sha: string | null } | null = null;
   if (baseProbe) {
     if (!advisory || affected || selection >= 0 || hasBoundBaseline) throw new GateRunnerError('base-probe requires --advisory and the complete frozen set');
-    const status = await runInvocation('git', ['status', '--porcelain', '--untracked-files=all'], process.cwd(), {}, 30);
+    const status = await runInvocation('git', ['status', '--porcelain', '--untracked-files=all'], process.cwd(), gitReadEnv({}), 30);
     const dirty = status.stdout.split('\n').filter(line => line.trim() && !/^.. \.tmp\//.test(line));
     if (status.exit_code !== 0 || dirty.length) throw new GateRunnerError('BASE_PROBE_REQUIRES_CLEAN_CHECKOUT');
-    const head = await runInvocation('git', ['rev-parse', 'HEAD'], process.cwd(), {}, 30);
+    const head = await runInvocation('git', ['rev-parse', 'HEAD'], process.cwd(), gitReadEnv({}), 30);
     probe = { head_sha: head.stdout.trim(), base_sha: manifest.git_setup?.base_sha ?? null };
   }
 
@@ -289,12 +290,16 @@ async function main(): Promise<void> {
   let previous: any;
   try { previous = JSON.parse(await readFile(evidenceFile, 'utf8')); } catch {}
   // Read-only inventory: never take .git/index.lock while a worker or publish may be writing.
-  const snapshot = await sourceSnapshot(process.cwd(), manifest, (exe: string, argv: string[]) => runInvocation(exe, argv, process.cwd(), { GIT_OPTIONAL_LOCKS: '0' }, 30), advisory ? baseline : null);
+  const snapshot = await sourceSnapshot(process.cwd(), manifest, (exe: string, argv: string[]) => runInvocation(exe, argv, process.cwd(), gitReadEnv({}), 30), advisory ? baseline : null);
+  let deferred: number[] = [];
   let selectionReason = baseProbe ? 'base probe: full frozen set' : testFiles.length ? 'focused test files' : 'full frozen set';
   if (affected) {
     const failures = (previous?.results ?? []).filter((result: any) => result.exit_code !== 0).map((result: any) => result.command_index);
     const impact = selectAffectedCommands(commands, config, snapshot?.changed, failures);
-    selected = impact.selected; selectionReason = impact.reason;
+    selected = impact.selected; selectionReason = impact.reason; deferred = impact.deferred;
+    // Only coordinator commands are impacted: the worker has nothing to run, and the evidence says
+    // so explicitly; the wave gate and the final complete gate run those commands.
+    if (!selected.length) selectionReason = `deferred to coordinator: commands ${deferred.join(', ')}`;
   }
   const candidateSha = advisory ? undefined : await loadCandidate(state.manifest_file);
   const invocations = selected.map(item => {
@@ -345,10 +350,16 @@ async function main(): Promise<void> {
     // Frozen parallel groups run together (bounded); every other command keeps frozen order.
     // A failing batch stops the gate after all of its members settle, so evidence stays complete.
     for (const batch of parallelBatches(invocations, config, liveIndexes(config))) {
+      // Every member settles to a recorded result (a start failure is exit 127), so one failing to
+      // start never leaves its siblings running unrecorded.
       const settled = await Promise.all(batch.map(async invocation => {
         const commandStarted = new Date().toISOString();
         const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
-        const result = await runInvocation(invocation.exe, invocation.args, process.cwd(), usesLive ? resource.env : {}, config?.timeout_seconds ?? 1800);
+        const result = await runInvocation(invocation.exe, invocation.args, process.cwd(), usesLive ? resource.env : {}, config?.timeout_seconds ?? 1800)
+          .catch(error => {
+            if (interrupted) throw error;
+            return { exit_code: 127, stdout: '', stderr: `COMMAND_START_FAILED: ${String((error as Error)?.message ?? error)}`, truncated: false };
+          });
         const stdout = redact(result.stdout); const stderr = redact(result.stderr);
         return { invocation, result: {
           command: invocation.command, command_index: invocation.index, executable: invocation.exe, argv: invocation.args, test_files: invocation.test_files,
@@ -385,7 +396,7 @@ async function main(): Promise<void> {
         runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, fingerprint,
         manifest_sha256: state.manifest_sha256, environment_digest: environmentDigest, reused_from: reuse?.path ?? null,
         hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])],
-        selection_reason: selectionReason, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
+        selection_reason: selectionReason, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
         live_postgres: resource?.evidence ?? null, cleanup_complete: cleanupComplete,

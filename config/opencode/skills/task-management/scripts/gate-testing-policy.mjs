@@ -42,14 +42,18 @@ export function validateGateTesting(manifest) {
           config.coordinator_only.some(index => !indexValid(index)) || new Set(config.coordinator_only).size !== config.coordinator_only.length)) {
         throw new Error('GATE_TESTING_INVALID: coordinator_only must list distinct frozen command indexes');
       }
+      // A worker's bound check must be able to run something: an all-coordinator profile would
+      // turn every worker check into an empty PASS.
+      if (new Set(config.coordinator_only ?? []).size >= commands.length) throw new Error('GATE_TESTING_INVALID: coordinator_only leaves no command for the worker check');
       if (config.parallel_groups !== undefined) {
         const seen = new Set();
         const live = new Set(config.live_postgres?.command_indexes ?? []);
         if (!Array.isArray(config.parallel_groups) || !config.parallel_groups.length) throw new Error('GATE_TESTING_INVALID: parallel_groups must be nonempty');
         for (const group of config.parallel_groups) {
-          if (!Array.isArray(group) || group.length < 2 || group.length > MAX_PARALLEL || new Set(group).size !== group.length ||
-              group.some(index => !indexValid(index) || seen.has(index) || live.has(index))) {
-            throw new Error(`GATE_TESTING_INVALID: parallel_groups hold 2..${MAX_PARALLEL} distinct non-live frozen command indexes, each in one group`);
+          // Consecutive indexes only: a group runs as one step of the frozen order, never ahead of it.
+          if (!Array.isArray(group) || group.length < 2 || group.length > MAX_PARALLEL ||
+              group.some((index, position) => !indexValid(index) || seen.has(index) || live.has(index) || (position > 0 && index !== group[position - 1] + 1))) {
+            throw new Error(`GATE_TESTING_INVALID: parallel_groups hold 2..${MAX_PARALLEL} consecutive non-live frozen command indexes, each in one group`);
           }
           for (const index of group) seen.add(index);
         }
@@ -68,19 +72,23 @@ export function validateGateTesting(manifest) {
 // ceiling that still finishes faster than serial on a 4-core host.
 export const MAX_PARALLEL = 3;
 
-// Invocations in frozen order, grouped into batches: members of one frozen parallel group that were
-// both selected run together; everything else (including live-PG commands) runs alone.
+// Invocations in frozen order, grouped into batches: neighbouring selected members of one frozen
+// parallel group run together; everything else (including live-PG commands) runs alone. Two
+// commands that name the same report file never share a batch, so neither overwrites the other.
 export function parallelBatches(invocations, config, liveIndexes = []) {
   const groups = Array.isArray(config?.parallel_groups) ? config.parallel_groups : [];
+  const reports = Array.isArray(config?.report_files) ? config.report_files : [];
   const groupOf = new Map();
   groups.forEach((group, id) => group.forEach(index => { if (!liveIndexes.includes(index)) groupOf.set(index, id); }));
+  const reportsOf = invocation => reports.filter(file => (invocation.args ?? []).some(arg => String(arg).includes(file)));
   const batches = [];
-  const open = new Map();
   for (const invocation of invocations) {
     const id = groupOf.get(invocation.index);
-    if (id === undefined) { batches.push([invocation]); continue; }
-    if (open.has(id)) { open.get(id).push(invocation); continue; }
-    const batch = [invocation]; open.set(id, batch); batches.push(batch);
+    const last = batches.at(-1);
+    const lastId = last ? groupOf.get(last[0].index) : undefined;
+    const shared = last ? last.some(other => reportsOf(other).some(file => reportsOf(invocation).includes(file))) : false;
+    if (id !== undefined && id === lastId && !shared) last.push(invocation);
+    else batches.push([invocation]);
   }
   return batches;
 }
@@ -93,7 +101,8 @@ export function selectAffectedCommands(commands, config, changed, previousFailur
   // combined tree and in the final gate; a worker's affected check never runs them.
   const coordinatorOnly = new Set(Array.isArray(config?.coordinator_only) ? config.coordinator_only : []);
   const worker = item => !coordinatorOnly.has(item.index);
-  const full = reason => ({ reason, selected: commands.map((command, index) => ({ command, index, test_files: [] })).filter(worker) });
+  const split = (reason, all) => ({ reason, selected: all.filter(worker), deferred: all.filter(item => !worker(item)).map(item => item.index) });
+  const full = reason => split(reason, commands.map((command, index) => ({ command, index, test_files: [] })));
   if (!config?.impact_groups || !changed?.length) return full('missing impact map or change baseline');
   if (changed.some(file => ALWAYS_FULL_CHANGE.test(file))) return full('dependency or security change');
   // Schema/migration/configuration/shared-contract changes use the frozen, reviewed transitive
@@ -113,5 +122,5 @@ export function selectAffectedCommands(commands, config, changed, previousFailur
   for (const index of previousFailures) {
     if (Number.isInteger(index) && commands[index]) selected.set(index, { command: commands[index], index, test_files: [] });
   }
-  return { reason: 'frozen transitive impact groups plus previous failures', selected: [...selected.values()].filter(worker).sort((a, b) => a.index - b.index) };
+  return split('frozen transitive impact groups plus previous failures', [...selected.values()].sort((a, b) => a.index - b.index));
 }

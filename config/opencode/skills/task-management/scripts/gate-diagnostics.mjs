@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFile, lstat, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
-const excluded = file => /(^|\/)(\.tmp|\.git|node_modules|dist|build|coverage)(\/|$)|(^|\/)(\.env(?:\..*)?|[^/]+\.(?:key|pem|secret))$/i.test(file);
+const generated = file => /(^|\/)(\.tmp|\.git|node_modules|dist|build|coverage)(\/|$)/i.test(file);
+const sensitive = file => /(^|\/)(\.env(?:\..*)?|[^/]+\.(?:key|pem|secret))$/i.test(file);
+const excluded = file => generated(file) || sensitive(file);
 
 function scopeMatches(file, scope) {
   if (typeof scope !== 'string' || !scope) return false;
@@ -22,11 +24,17 @@ export function scopedInventoryDigest(files, scopes = []) {
 }
 
 export async function sourceInventory(cwd, invoke, scopes = []) {
-  const files = await invoke('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z']);
-  if (files.exit_code !== 0 || files.truncated) return { digest: null, files: null };
-  const selected = [...new Set(files.stdout.split('\0').filter(Boolean))]
-    .filter(file => !excluded(file) && (scopes.length === 0 || scopes.some(scope => scopeMatches(file, scope))))
-    .sort();
+  // Tracked files are hashed even when they look sensitive (.env.test, fixtures): their bytes are
+  // already in git, and a changed tracked config must invalidate earlier evidence. Untracked
+  // sensitive files stay out; only a content hash is ever recorded.
+  const tracked = await invoke('git', ['ls-files', '--cached', '-z']);
+  const untracked = await invoke('git', ['ls-files', '--others', '--exclude-standard', '-z']);
+  if (tracked.exit_code !== 0 || tracked.truncated || untracked.exit_code !== 0 || untracked.truncated) return { digest: null, files: null };
+  const inScope = file => scopes.length === 0 || scopes.some(scope => scopeMatches(file, scope));
+  const selected = [...new Set([
+    ...tracked.stdout.split('\0').filter(file => file && !generated(file)),
+    ...untracked.stdout.split('\0').filter(file => file && !excluded(file)),
+  ])].filter(inScope).sort();
   const entries = {};
   const digest = createHash('sha256');
   for (const file of selected) {
@@ -62,8 +70,10 @@ export function changedFromInventory(currentFiles, baselineFiles, scopes = []) {
 }
 
 export async function sourceSnapshot(cwd, manifest, invoke, baseline) {
-  const scopes = baseline?.files && Array.isArray(baseline?.allowed_change_paths) ? baseline.allowed_change_paths : [];
-  const inventory = await sourceInventory(cwd, invoke, scopes);
+  // `digest` always covers the whole tree: it is the identity for reusing an earlier PASS, and a
+  // change outside the work item scope (refresh from base, another lane) can break these tests.
+  // The scoped digest and changed paths stay bound to the work item for selection and no-progress.
+  const inventory = await sourceInventory(cwd, invoke);
   if (!inventory.files) return { digest: null, scoped_digest: null, changed: null };
 
   if (baseline?.files && Array.isArray(baseline?.allowed_change_paths)) {

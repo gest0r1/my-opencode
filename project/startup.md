@@ -1,51 +1,19 @@
-# Запуск opencode-web
+# Запуск OpenCode
 
-Всегда запускать только с флагом `--pure`:
-```
-/home/guber/.opencode/bin/opencode web --port 4096 --hostname 0.0.0.0 --pure
-```
-
-Без `--pure` opencode читает все конфиги системы, что приводит к нестабильной работе.
-
-systemd-сервис: `~/.config/systemd/user/opencode-web.service`
-Бинарник: `~/.opencode/bin/opencode`
-Конфиги: `~/.config/opencode/`
+OpenCode работает как user-service systemd по шаблону `config/systemd/opencode-web.service`:
+`opencode serve` на `127.0.0.1`, порт `OPENCODE_WEB_PORT` (по умолчанию `4096`), переменные —
+из `~/.config/opencode.env`. Шаблон ставит установщик из того же pinned config SHA; вручную
+unit не редактировать. OpenChamber запускается своим сервисом `openchamber.service`.
 
 ## Правила перезапуска
 
-- ❌ Агент **не** перезапускает сервис самостоятельно
-- ✅ Агент даёт пользователю команду на restart
-- Команда для restart:
+- Агент **не** перезапускает сервисы сам, а даёт пользователю команду:
   ```bash
   systemctl --user restart opencode-web
   ```
-- Для stop + start раздельно:
-  ```bash
-  systemctl --user stop opencode-web && \
-  systemctl --user start opencode-web
-  ```
 
-## Обновление npm-пакетов
+## Обновление OpenCode и runtime-пакетов
 
-**Обязательно при каждом обновлении бинарника из upstream!**
-
-Какие пакеты обновлять:
-| Пакет | Путь (runtime) | Путь (backup в repo) |
-|-------|---------------|---------------------|
-| `@opencode/plugin` | `~/.config/opencode/package.json` | `config/opencode/package.json` |
-| `@opencode/client` | `~/.config/opencode/package.json` | `config/opencode/package.json` |
-| `@opencode/plugin` | `~/.opencode/package.json` | — |
-
-Порядок обновления:
-1. Обновить версии в 3 package.json
-2. `npm install --prefix ~/.config/opencode --legacy-peer-deps`
-3. `npm install --prefix ~/.opencode`
-4. Перезапустить opencode-web для применения
-
-**Зачем:** `@opencode/plugin` и `@opencode/client` — runtime opencode. Без их обновления новый бинарник может не загружать плагины или работать нестабильно.
-
-## Upstream
-
-Правильный upstream: `https://github.com/anomalyco/opencode` (см. `project/upstream.md`).
-~~`opencode-ai/opencode`~~ — archived, не использовать.
-
+Только через установщик и процедуру `project/opencode-updates.md`: версии бинарника и пакетов
+`@opencode/*` меняются вместе, lockfile пересобирается Bun. Ручной `npm install` в
+`~/.config/opencode` не выполнять — он расходится с `bun.lock`.

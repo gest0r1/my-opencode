@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { sourceInventory, scopedInventoryDigest } from './gate-diagnostics.mjs';
+import { gitReadEnv } from './git-readonly.mjs';
 
 const STAGE_CLI = fileURLToPath(new URL('./stage-cli.ts', import.meta.url));
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -22,7 +23,7 @@ function hash(value: string): string {
 
 function gitInventory(root: string, exe: string, argv: string[]) {
   if (exe !== 'git') return Promise.resolve({ exit_code: 1, stdout: '', stderr: 'unsupported executable', truncated: false });
-  const result = spawnSync(exe, argv, { cwd: root, shell: false, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, timeout: 30_000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
+  const result = spawnSync(exe, argv, { cwd: root, shell: false, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, timeout: 30_000, env: gitReadEnv() });
   const stdout = String(result.stdout ?? '');
   return Promise.resolve({ exit_code: result.status ?? (result.error ? 1 : 0), stdout, stderr: String(result.stderr ?? result.error?.message ?? ''), truncated: stdout.length >= 2 * 1024 * 1024 });
 }

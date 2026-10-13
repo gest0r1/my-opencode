@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Run the complete staging path and prove timeout preserves active trees.
 set -Eeuo pipefail
+# The stub bun below must win: an inherited BUN_INSTALL would point the installer at a real bun.
+unset BUN_INSTALL
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TASK_TMP=$(mktemp -d)
 trap 'rm -rf -- "$TASK_TMP"' EXIT

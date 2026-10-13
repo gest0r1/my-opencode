@@ -1,7 +1,5 @@
 <div align="center">
 
-![OpenAgents Control Hero](docs/images/hero-image.png)
-
 # OpenAgents Control (OAC)
 
 ### Control your AI patterns. Get repeatable results.
@@ -197,11 +195,6 @@ Add a login endpoint
 - ✅ Flexible context discovery (.oac config, .claude/context, context, /home/guber/.config/opencode/context)
 - ✅ Add context from GitHub, worktrees, local files, or URLs
 - ✅ Easy feature planning with `/oac:plan`
-
-**Documentation:**
-- [Plugin README](./plugins/claude-code/README.md) - Complete plugin documentation
-- [First-Time Setup](./plugins/claude-code/FIRST-TIME-SETUP.md) - Step-by-step guide
-- [Quick Start](./plugins/claude-code/QUICK-START.md) - Quick reference
 
 **Status:** BETA - Actively tested and ready for early adopters
 
@@ -792,8 +785,6 @@ We welcome contributions!
 2. Write comprehensive tests for new features
 3. Update documentation for any changes
 4. Ensure security best practices are followed
-
-See: [Contributing Guide](docs/contributing/CONTRIBUTING.md) • [Code of Conduct](docs/contributing/CODE_OF_CONDUCT.md)
 
 ---
 

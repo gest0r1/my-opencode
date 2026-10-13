@@ -56,7 +56,7 @@ def main():
     require(config_installer, 'ensure_claude_cli')
     require(config_installer, 'configure_server_browser')
 
-    require(combined_installer, 'OPENCHAMBER_EXPECTED_VERSION:-2.3.0')
+    require(combined_installer, 'OPENCHAMBER_EXPECTED_VERSION:-2.3.1')
     require(combined_installer, 'systemctl --user is-enabled --quiet opencode-web.service')
     require(combined_installer, 'systemctl --user is-enabled --quiet openchamber.service')
     require(combined_installer, 'verify-runtime-services.py')

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
+import { gitReadEnv } from './git-readonly.mjs';
 
 const HANDOFF_FILE = '.opencode/pipeline-handoff.json';
 const SHA_RE = /^[0-9a-f]{40}$/i;
@@ -100,6 +101,7 @@ function git(args: string[], options: { trim?: boolean; errorCode?: string; cwd:
   try {
     const out = execFileSync('git', args, {
       cwd: options.cwd,
+      env: gitReadEnv(),
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
