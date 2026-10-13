@@ -5,6 +5,9 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORE="$ROOT/scripts/install-openchamber-v2-core.sh"
+# The installed fixture is the pinned release, so the runtime counts as unchanged.
+OC_VERSION="$(sed -n 's/^EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-\(.*\)}"$/\1/p' "$CORE")"
+[[ -n "$OC_VERSION" ]] || { echo "FAIL: OpenChamber pin not found in core" >&2; exit 1; }
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf -- "$TMP_ROOT"' EXIT
 # Isolate the process inventory boundary; detector semantics are tested in
@@ -131,7 +134,7 @@ EOF
 set -Eeuo pipefail
 case "${1:-}" in
   --version)
-    printf '%s\n' 'OpenChamber 2.1.0'
+    printf '%s\n' 'OpenChamber __OC_VERSION__'
     ;;
   startup)
     if [[ "${2:-}" == --help ]]; then
@@ -154,6 +157,7 @@ exit 96
 EOF
 
 
+  sed -i "s/__OC_VERSION__/$OC_VERSION/" "$fakebin/openchamber"
   chmod +x "$fakebin"/*
 }
 
@@ -220,7 +224,7 @@ openchamber_sha=$prev_app
 package_source_sha=$PACKAGE_SOURCE_SHA
 package_fingerprint=$PACKAGE_FINGERPRINT
 package_sha256=$PACKAGE_SHA256
-openchamber_version=2.1.0
+openchamber_version=$OC_VERSION
 opencode_version=2.0.27
 bind_host=172.18.0.1
 bind_port=3000
@@ -256,7 +260,7 @@ run_case() {
   "asset": "openchamber-web-$PACKAGE_SOURCE_SHA.tgz",
   "sha256": "$PACKAGE_SHA256",
   "runtime_fingerprint": "$PACKAGE_FINGERPRINT",
-  "openchamber_version": "2.1.0"
+  "openchamber_version": "$OC_VERSION"
 }
 EOF
   else
