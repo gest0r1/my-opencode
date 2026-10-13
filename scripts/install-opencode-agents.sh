@@ -82,6 +82,11 @@ install_managed() {
   cp -p "$file" "$destination"
 }
 
+# A colour chosen in OpenChamber lives in the agent file this install replaces.
+COLORS_FILE="$(mktemp)"
+trap 'rm -f -- "$COLORS_FILE"' EXIT
+node "$SCRIPT_DIR/preserve-agent-colors.mjs" collect "$SOURCE_ROOT" "$TARGET_ROOT" "$COLORS_FILE"
+
 # Remove every previous distribution copy, including edited nested files.
 node "$SCRIPT_DIR/retire-opencode-agent-copies.mjs" "$SOURCE_ROOT" "$TARGET_ROOT"
 
@@ -104,6 +109,8 @@ if [[ -f "$TARGET_CONFIG" ]]; then
   }
   node "$NORMALIZER" "$TARGET_CONFIG" "$TARGET_ROOT" "$SOURCE_ROOT"
 fi
+
+node "$SCRIPT_DIR/preserve-agent-colors.mjs" apply "$TARGET_ROOT" "$COLORS_FILE"
 
 echo "Installed ${#managed_names[@]} managed agents into $TARGET_ROOT"
 
