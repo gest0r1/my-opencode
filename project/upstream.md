@@ -1,36 +1,22 @@
 # Upstream
 
-## Правильный upstream
+## OpenCode
 
-**Repo:** https://github.com/anomalyco/opencode
-**Git remote:** `upstream`
-**Latest tag:** v1.18.18 (обновлено 2026-08-18)
-**Version scheme:** v1.x.x (совпадает с npm-пакетами @opencode-ai/*)
+- Источник бинарника: официальный установщик `https://opencode.ai/v2/install`
+  с явной версией (`--version`), см. `scripts/install-opencode-generation.sh`.
+- Runtime-пакеты плагинов: `@opencode/plugin`, `@opencode/client`, `@opencode/schema`,
+  `@opencode/protocol` той же версии, что и бинарник. Пин — в `config/opencode/package.json`
+  и `config/opencode/bun.lock`.
+- Пакетов `@opencode-ai/*` и ветки 1.x в дистрибутиве больше нет.
 
-## Legacy (не использовать)
+## OpenChamber
 
-~~https://github.com/opencode-ai/opencode~~ — archived, переехал в charmbracelet/crush.  
-Не является источником binary/config update.
-
-## Ветки
-
-- `upstream` remote всегда указывает на anomalyco/opencode
-- У upstream нет ветки `main` — только `master` или feature-ветки
-- Для версионирования используем теги `v1.*`
+- Форк: `gest0r1/openchamber-ru`, upstream — `openchamber/openchamber` (remote `upstream`).
+- Устанавливаемая версия — `OPENCHAMBER_EXPECTED_VERSION` в `install-openchamber.sh`;
+  остальные копии сверяет `scripts/check-opencode-pins.mjs`.
 
 ## Обновление
 
-**При каждом обновлении ОБЯЗАТЕЛЬНО обновлять npm-пакеты:**
-- `@opencode/plugin` — до версии, соответствующей бинарнику
-- `@opencode-ai/sdk` — до версии, соответствующей бинарнику
-
-Эти пакеты — runtime opencode, от их версии зависит совместимость плагинов и стабильность. Без них бинарник может работать нестабильно или не загружать плагины.
-
-Порядок:
-1. `git fetch upstream --tags`
-2. Проверить latest tag: `git tag -l 'v1*' | sort -V | tail -5`
-3. Сравнить с текущей версией бинарника: `/home/guber/.opencode/bin/opencode --version`
-4. Если версия новее — следовать плану обновления (см. план в OpenStageOrchestrator)
-5. **Всегда обновлять npm-пакеты** — см. `project/startup.md` → раздел "Обновление npm-пакетов"
-6. После обновления — обновить этот файл с актуальной версией
-
+Порядок и проверки — в `project/opencode-updates.md`. Текущие версии — в README
+(раздел «Проверка после установки»); `node scripts/check-opencode-pins.mjs` падает, если
+какая-то копия пина разошлась.

@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { gitReadEnv } from './git-readonly.mjs';
 import {
   RUNTIME_SCOPE_CLASSES,
   type PipelineState,
@@ -31,14 +32,14 @@ class GateError extends Error {}
 
 async function git(args: string[], cwd?: string): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 4 * 1024 * 1024 });
+    const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 4 * 1024 * 1024, env: gitReadEnv() });
     return stdout.trim();
   } catch (error: any) {
     throw new GateError(`git ${args[0] ?? 'command'} failed: ${String(error?.stderr ?? error?.message ?? error).trim()}`);
   }
 }
 async function gitSucceeds(args: string[], cwd?: string): Promise<boolean> {
-  try { await execFileAsync('git', args, { cwd }); return true; } catch { return false; }
+  try { await execFileAsync('git', args, { cwd, env: gitReadEnv() }); return true; } catch { return false; }
 }
 function safePath(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && !value.startsWith('/') &&
@@ -96,7 +97,7 @@ async function inspect(cwd: string): Promise<Record<string, unknown>> {
     git(['rev-parse', '--path-format=absolute', '--git-dir'], cwd),
     git(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd),
     git(['rev-parse', '--verify', 'refs/heads/main'], cwd),
-    git(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all'], cwd),
+    git(['status', '--porcelain', '--untracked-files=all'], cwd),
     git(['ls-files', '--', '.tmp/pipelines'], cwd),
   ]);
   return { head, branch, linked_worktree: resolve(gitDir) !== resolve(commonDir), main_sha: main,
@@ -288,7 +289,8 @@ async function publish(manifest: Manifest, manifestPath: string, cwd: string): P
 // untracked, outside every authorized path, and were not there when the RUN's first work item was
 // dispatched; verify then blocks on them and no agent may delete them. This moves exactly those
 // files into the run's quarantine (never deletes) so verification can continue. A file that existed
-// before the first dispatch, a tracked or in-scope path, a symlink and a sensitive name are never touched.
+// or was last modified before the first dispatch, a tracked or in-scope path, build output, a symlink
+// and a sensitive name are never touched, and only the RUN's own branch is swept.
 async function quarantineStrays(manifestPath:string,cwd:string,apply:boolean):Promise<Record<string,unknown>>{
   const manifest=JSON.parse(await readFile(manifestPath,'utf8')) as Manifest;
   const runDir=dirname(resolve(manifestPath));
@@ -298,13 +300,17 @@ async function quarantineStrays(manifestPath:string,cwd:string,apply:boolean):Pr
     try{const baseline=JSON.parse(await readFile(join(baselineDir,name),'utf8'));if(baseline?.files&&typeof baseline.recorded_at==='string'&&(!first||baseline.recorded_at<first.recorded_at))first=baseline;}catch{}
   }
   if(!first)throw new GateError('QUARANTINE_REQUIRES_DISPATCH_BASELINE: no work item has been dispatched in this run');
+  const branch=await git(['branch','--show-current'],cwd);
+  if(branch!==manifest.git_setup?.branch)throw new GateError(`QUARANTINE_BRANCH_MISMATCH: checkout is on ${branch||'<detached>'}, RUN branch is ${String(manifest.git_setup?.branch)}`);
+  const firstDispatch=Date.parse(first.recorded_at);
   const {scope}=await effectiveScope(manifest,manifestPath);
-  const untracked=(await git(['--no-optional-locks','ls-files','--others','--exclude-standard'],cwd)).split('\n').filter(Boolean).sort();
+  const untracked=(await git(['ls-files','--others','--exclude-standard'],cwd)).split('\n').filter(Boolean).sort();
   const strays:string[]=[];
   for(const path of untracked){
-    if(!safePath(path)||sensitive(path)||path.startsWith('.tmp/')||scope.some(allowed=>matches(path,allowed))||path in first.files)continue;
+    if(!safePath(path)||sensitive(path)||path.startsWith('.tmp/')||/(^|\/)(node_modules|dist|build|coverage)\//.test(path)||
+       scope.some(allowed=>matches(path,allowed))||path in first.files)continue;
     const stat=await lstat(join(cwd,path)).catch(()=>undefined);
-    if(stat?.isFile())strays.push(path);
+    if(stat?.isFile()&&stat.mtimeMs>=firstDispatch)strays.push(path);
   }
   if(!apply)return {mode:'dry-run',strays};
   const stamp=new Date().toISOString().replace(/[:.]/g,'-');

@@ -10,7 +10,7 @@
 ## Целевые версии ветки 2.x
 
 - OpenCode: `2.0.27`
-- OpenChamber RU: `2.3.0`
+- OpenChamber RU: `2.3.1`
 - архитектура runtime: Linux x64
 
 Версии включены в `main`; связанные репозитории:
@@ -204,7 +204,7 @@ ss -lnt | grep '172.18.0.1:3000'
 
 ```text
 OpenCode 2.0.27
-OpenChamber 2.3.0
+OpenChamber 2.3.1
 ```
 
 ## Повторные обновления

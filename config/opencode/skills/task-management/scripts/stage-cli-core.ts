@@ -1791,12 +1791,14 @@ export async function recordTechnicalFixCycle(
       );
     }
     const securityFixPreflight = state.security_fix_preflight;
+    // One repair cycle closes a review's technical and security findings together: the security
+    // paths must all be in the repair scope, which may also hold the technical repair paths.
     if (repairClass === 'security_fix') {
       if (!securityFixPreflight ||
           securityFixPreflight.evidence_sha256 !== sha256(readFileSync(securityFixPreflight.evidence_path, 'utf8')) ||
           securityFixPreflight.pipeline_id !== pipeline.id ||
           securityFixPreflight.stage !== stage ||
-          JSON.stringify([...securityFixPreflight.paths].sort()) !== JSON.stringify([...scopePreflight.paths].sort())) {
+          securityFixPreflight.paths.some((path) => !scopePreflight.paths.includes(path))) {
         throw new StageCliError(
           `SECURITY_FIX_PREFLIGHT_REQUIRED: run stage-cli security-fix-check with matching evidence before security repair: ${pipeline.id}/${stage}`,
         );

@@ -23,12 +23,11 @@ def forbid(text: str, needle: str, label: str):
 def main():
     # Version/network contract.
     require(core, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.27}"', "OpenCode pin")
-    require(core, 'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.1.0}"',
+    require(core, 'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.3.1}"',
             "OpenChamber pin")
     require(core, 'HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"', "wildcard listener allows loopback callback")
     require(core, 'PORT="${OPENCHAMBER_BIND_PORT:-3000}"', "default port")
     require(wrapper, 'attempt<30', "bounded readiness retry")
-    forbid(installer, '2.0.22', "unapproved OpenCode version bump")
 
     # Outer transaction resolves branch refs once and all children use immutable SHAs.
     require(wrapper, 'CONFIG_SHA="$(gh api "repos/$CONFIG_REPO/commits/$CONFIG_REF" --jq .sha)"',

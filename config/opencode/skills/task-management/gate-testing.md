@@ -112,11 +112,17 @@ clock, competes for CPU and memory, and reports other workers' half-finished edi
 
 - `coordinator_only` lists frozen command indexes (type-check, lint, build, complete suites) that
   `--affected` never selects, including as a previous failure. Explicit `--command-index`
-  diagnostics and complete runs still execute them.
-- `parallel_groups` lists 2–3 frozen indexes that may run at the same time. Members of one group
-  that are selected run concurrently; everything else keeps frozen order. Live-PostgreSQL
-  commands never join a group. A failing group stops the gate after all its members finish.
-- A PASS recorded by the runner is reused when the source tree digest, frozen manifest,
+  diagnostics and complete runs still execute them. At least one command must stay outside it.
+  When a change impacts only coordinator commands, the worker check runs nothing and its
+  evidence names them in `deferred_to_coordinator`; the wave gate and the final complete gate
+  run them.
+- `parallel_groups` lists 2–3 consecutive frozen indexes that may run at the same time, so a
+  group is one step of the frozen order. Neighbouring selected members run concurrently;
+  everything else runs alone in frozen order. Live-PostgreSQL commands never join a group, and two
+  commands naming the same `report_files` entry never share a batch. A failing group stops the
+  gate after all its members finish; a member that cannot start is recorded with exit 127.
+- A PASS recorded by the runner is reused when the whole source tree digest (not only the work
+  item scope), frozen manifest,
   environment and a superset of the selected commands match; the new evidence records
   `reused_from` and runs nothing. An authoritative gate reuses only a PASS that covered the
   complete array; base probes, hypothesis runs, runtime gates and `{candidate_sha}` commands never

@@ -12,10 +12,12 @@ Before merging upstream or upgrading OpenCode:
    upstream changes to the current pin, including API, events and plugin hooks.
 2. Choose one compatible OpenCode version for both repositories. Confirm the
    CLI, client, schema, protocol and plugin packages exist for that version.
-3. In this repository, move the defaults in `install.sh`,
+3. In this repository, move the defaults in `install.sh`, `install-openchamber.sh`,
    `scripts/install-opencode-generation.sh` and
    `scripts/install-openchamber-v2-core.sh`, plus
-   `config/opencode/package.json`, together. Regenerate the plugin lockfile with
+   `config/opencode/package.json` and the README versions, together. When the
+   OpenChamber RU release changes, move `OPENCHAMBER_EXPECTED_VERSION` in
+   `install-openchamber.sh` (the single source) and the copies the pin check names. Regenerate the plugin lockfile with
    Bun; never change a package version while retaining its old integrity hash.
 4. In OpenChamber, update the manifests, Electron CLI pin, Docker CLI and
    lockfile as required by its canonical OpenCode skill. The minimum supported

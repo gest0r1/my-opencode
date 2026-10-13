@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { applyOwnerAmendment, runCli } from './stage-cli-core.ts';
 import { prepareProjectTooling } from './project-tooling.mjs';
 import { preflightFile } from './manifest-preflight.mjs';
+import { gitReadEnv } from './git-readonly.mjs';
 import { validateOwnerAmendmentForApply } from './owner-amendment-policy.ts';
 
 function stateRootFromArgs(args: string[]): string {
@@ -31,7 +32,7 @@ async function readJsonEvidence(path: string, label: string): Promise<any> {
 }
 
 function gitValue(args: string[]): string | undefined {
-  const result = spawnSync('git', args, { shell: false, encoding: 'utf8' });
+  const result = spawnSync('git', args, { shell: false, encoding: 'utf8', env: gitReadEnv() });
   if (result.status !== 0 || result.error) return undefined;
   return String(result.stdout ?? '').trim();
 }

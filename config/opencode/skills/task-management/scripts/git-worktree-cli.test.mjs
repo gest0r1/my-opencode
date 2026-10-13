@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -202,7 +202,7 @@ test('verify accepts machine-owned runtime scope extensions without mutating man
   assert.equal(await readFile(f.manifestPath, 'utf8'), originalManifest);
 });
 
-test('quarantine-strays moves only untracked out-of-scope files created after the first dispatch', async () => {
+test('quarantine-strays moves only untracked out-of-scope files created after the first dispatch, on the RUN branch', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'stray-'));
   try {
     exec(root, 'git', ['init']);
@@ -214,10 +214,11 @@ test('quarantine-strays moves only untracked out-of-scope files created after th
     await writeFile(path.join(root, 'owner-notes.txt'), 'existed before the run\n');
     exec(root, 'git', ['add', '.gitignore', 'src']);
     exec(root, 'git', ['commit', '-m', 'base']);
+    exec(root, 'git', ['checkout', '-b', 'pipeline/stray-run']);
     const runDir = path.join(root, '.tmp/pipelines/stray-run');
     await mkdir(path.join(runDir, 'checks/baselines'), { recursive: true });
     const manifestPath = path.join(runDir, 'manifest.json');
-    await writeFile(manifestPath, JSON.stringify({ run_id: 'stray-run', allowed_change_paths: ['src/**'] }));
+    await writeFile(manifestPath, JSON.stringify({ run_id: 'stray-run', allowed_change_paths: ['src/**'], git_setup: { branch: 'pipeline/stray-run' } }));
     await writeFile(path.join(runDir, 'checks/baselines/first.json'), JSON.stringify({
       recorded_at: '2026-10-11T00:00:00.000Z', files: { '.gitignore': 'x', 'src/app.ts': 'x', 'owner-notes.txt': 'x' },
     }));
@@ -225,6 +226,10 @@ test('quarantine-strays moves only untracked out-of-scope files created after th
     await writeFile(path.join(root, 'test-infra.patch'), 'diff\n');
     await writeFile(path.join(root, 'src/new.ts'), 'in scope\n');
     await writeFile(path.join(root, 'secret.key'), 'never touched\n');
+    await mkdir(path.join(root, 'dist'));
+    await writeFile(path.join(root, 'dist/bundle.js'), 'build output\n');
+    await writeFile(path.join(root, 'old-scratch.log'), 'older than the RUN\n');
+    await utimes(path.join(root, 'old-scratch.log'), new Date('2026-10-01T00:00:00Z'), new Date('2026-10-01T00:00:00Z'));
     let result = gate(root, ['quarantine-strays', manifestPath]);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout).strays, ['diffstat.txt', 'test-infra.patch']);
@@ -237,6 +242,12 @@ test('quarantine-strays moves only untracked out-of-scope files created after th
     assert.equal(await readFile(path.join(root, 'owner-notes.txt'), 'utf8'), 'existed before the run\n');
     assert.equal(await readFile(path.join(root, 'src/new.ts'), 'utf8'), 'in scope\n');
     assert.equal(await readFile(path.join(root, 'secret.key'), 'utf8'), 'never touched\n');
+    assert.equal(await readFile(path.join(root, 'dist/bundle.js'), 'utf8'), 'build output\n');
+    assert.equal(await readFile(path.join(root, 'old-scratch.log'), 'utf8'), 'older than the RUN\n');
+    exec(root, 'git', ['checkout', '-b', 'other-branch']);
+    result = gate(root, ['quarantine-strays', manifestPath]);
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /QUARANTINE_BRANCH_MISMATCH/);
+    exec(root, 'git', ['checkout', 'pipeline/stray-run']);
     await rm(path.join(runDir, 'checks/baselines/first.json'));
     result = gate(root, ['quarantine-strays', manifestPath]);
     assert.notEqual(result.status, 0); assert.match(result.stderr, /QUARANTINE_REQUIRES_DISPATCH_BASELINE/);

@@ -453,8 +453,22 @@ test('bounded security_fix requires deterministic evidence and consumes the shar
   let state = JSON.parse(result.stdout);
   assert.equal(state.security_fix_preflight.pipeline_id, 'app');
 
+  // A scope without the security path cannot close the security finding.
   result = run(fx.root, [
-    'scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts',
+    'scope-check', fx.runId, 'code-review', 'packages/db/src/other.ts',
+    '--pipeline', 'app', '--state-root', fx.stateRoot,
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, [
+    'fix-cycle', fx.runId, 'code-review', '--repair-class', 'security_fix',
+    '--pipeline', 'app', '--state-root', fx.stateRoot,
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SECURITY_FIX_PREFLIGHT_REQUIRED/);
+
+  // Security and technical findings of one review share one cycle and one scope.
+  result = run(fx.root, [
+    'scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts', 'packages/db/src/other.ts',
     '--pipeline', 'app', '--state-root', fx.stateRoot,
   ]);
   assert.equal(result.status, 0, result.stderr);
@@ -475,6 +489,7 @@ test('bounded security_fix requires deterministic evidence and consumes the shar
   assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles, 1);
   assert.equal(state.pipelines.app.stages['code-review'].technical_fix_limit, 5);
   assert.match(state.pipelines.app.stages['code-review'].message, /security_fix cycle 1\/5/);
+  assert.deepEqual(state.pipelines.app.stages['code-review'].repair_paths, ['packages/db/src/change.ts', 'packages/db/src/other.ts']);
   assert.equal(state.security_fix_preflight, undefined);
 });
 

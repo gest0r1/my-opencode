@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { selectAffectedCommands, validateGateTesting } from './gate-testing-policy.mjs';
+import { selectAffectedCommands, validateGateTesting, parallelBatches } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
-import { readTestReports } from './gate-diagnostics.mjs';
+import { readTestReports, sourceSnapshot, sourceInventory } from './gate-diagnostics.mjs';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -142,4 +142,52 @@ test('real Docker smoke starts non-root PostgreSQL, applies test DDL and removes
   } finally { await resource.cleanup(); }
   const removed = await invoke('docker', ['inspect', resource.evidence.container_id]);
   assert.notEqual(removed.exit_code, 0);
+});
+
+test('parallel groups are consecutive frozen steps; shared report files and live commands never share a batch', () => {
+  const manifest = groups => ({ gate_profiles: { p: { g: commands } }, gate_testing: { p: { g: { ...config, parallel_groups: groups } } } });
+  validateGateTesting(manifest([[0, 1]]));
+  assert.throws(() => validateGateTesting(manifest([[0, 2]])), /consecutive/);
+  assert.throws(() => validateGateTesting({ gate_profiles: { p: { g: commands } }, gate_testing: { p: { g: { ...config, coordinator_only: [0, 1, 2] } } } }), /no command for the worker/);
+  const inv = (index, args = []) => ({ index, args });
+  assert.deepEqual(parallelBatches([inv(0), inv(1), inv(2)], { parallel_groups: [[0, 1]] }).map(batch => batch.map(item => item.index)), [[0, 1], [2]]);
+  assert.deepEqual(parallelBatches([inv(0), inv(2), inv(1)], { parallel_groups: [[1, 2]] }).map(batch => batch.map(item => item.index)), [[0], [2, 1]]);
+  assert.deepEqual(parallelBatches([inv(0), inv(1)], { parallel_groups: [[0, 1]] }, [1]).map(batch => batch.map(item => item.index)), [[0], [1]]);
+  const reports = { parallel_groups: [[0, 1]], report_files: ['reports/unit.json'] };
+  assert.deepEqual(parallelBatches([inv(0, ['--outputFile=reports/unit.json']), inv(1, ['--outputFile=reports/unit.json'])], reports).map(batch => batch.length), [1, 1]);
+});
+
+test('a change that impacts only coordinator commands is deferred, never silently empty', () => {
+  const selection = selectAffectedCommands(commands, { ...config, coordinator_only: [2] }, ['apps/api/src/orders.ts']);
+  assert.deepEqual(selection.selected.map(item => item.index), [0]);
+  assert.deepEqual(selection.deferred, [2]);
+  const only = selectAffectedCommands(commands, { impact_groups: [{ inputs: ['types/**'], command_index: 2 }], coordinator_only: [2] }, ['types/a.d.ts']);
+  assert.deepEqual(only.selected, []); assert.deepEqual(only.deferred, [2]);
+});
+
+test('the reuse digest covers the whole tree while the scoped digest stays bound to the work item', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'snapshot-'));
+  const git = (...args) => promisify(execFile)('git', args, { cwd: root });
+  await git('init'); await mkdir(join(root, 'src')); await mkdir(join(root, 'lib'));
+  await writeFile(join(root, 'src/a.ts'), 'a\n'); await writeFile(join(root, 'lib/b.ts'), 'b\n'); await writeFile(join(root, '.env.test'), 'X=1\n');
+  await git('add', '.');
+  const invoke = async (exe, argv) => { try { const { stdout } = await promisify(execFile)(exe, argv, { cwd: root }); return { exit_code: 0, stdout, truncated: false }; } catch (error) { return { exit_code: 1, stdout: '', truncated: false }; } };
+  const inventory = await sourceInventory(root, invoke);
+  assert.ok('.env.test' in inventory.files, 'tracked .env files are part of the identity');
+  const baseline = { files: inventory.files, allowed_change_paths: ['src/**'] };
+  const before = await sourceSnapshot(root, {}, invoke, baseline);
+  await writeFile(join(root, 'lib/b.ts'), 'changed outside the scope\n');
+  const outside = await sourceSnapshot(root, {}, invoke, baseline);
+  assert.equal(outside.scoped_digest, before.scoped_digest);
+  assert.notEqual(outside.digest, before.digest, 'an out-of-scope change invalidates PASS reuse');
+  assert.deepEqual(outside.changed, []);
+  // A repair path joins the bound scope: editing it makes the scoped digest (stage-complete) stale.
+  const repair = { ...baseline, allowed_change_paths: ['src/**', 'lib/b.ts'] };
+  const withRepair = await sourceSnapshot(root, {}, invoke, repair);
+  await writeFile(join(root, 'lib/b.ts'), 'repaired\n');
+  assert.notEqual((await sourceSnapshot(root, {}, invoke, repair)).scoped_digest, withRepair.scoped_digest);
+  await writeFile(join(root, '.env.test'), 'X=2\n');
+  assert.notEqual((await sourceSnapshot(root, {}, invoke, baseline)).digest, outside.digest);
+  await writeFile(join(root, '.env.local'), 'SECRET=1\n');
+  assert.ok(!('.env.local' in (await sourceInventory(root, invoke)).files), 'untracked sensitive files stay out');
 });

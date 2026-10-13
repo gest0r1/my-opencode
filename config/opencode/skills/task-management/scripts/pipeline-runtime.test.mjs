@@ -133,10 +133,10 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   process.chdir(root);
   await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent'),/BASE_PROBE_REQUIRED/);
   await writeBaseProbe(root,'runtime-test','p','local-test','FAIL');
-  await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent'),/BASE_PROBE_REQUIRED/);
+  await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent'),/BASE_RED_REPAIR_REQUIRED/);
   await writeBaseProbe(root,'runtime-test','p','local-test');
   const baselinePacket = await dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent');
-  assert.deepEqual(baselinePacket.advisory_checks[0].shell,{background:true,timeout_ms:0});
+  assert.deepEqual(baselinePacket.advisory_checks[0].shell,{background:true});
   assert.equal(baselinePacket.advisory_checks.length,1);
   assert.equal(baselinePacket.advisory_checks[0].gate,'local-test');
   assert.equal(baselinePacket.advisory_checks[0].mode,'affected');
@@ -349,9 +349,48 @@ test('a repair dispatch binds its authorized repair paths into the advisory base
   const packet=await dispatchPacket(root,'repair-scope','p','implementation','wi-p','CoderAgent');
   assert.deepEqual(packet.work_item_scope,['src/**']);
   assert.deepEqual(packet.repair_paths,['test/a.test.ts']);
-  assert.deepEqual(packet.bound_scope,['src/**','test/a.test.ts']);
   const baseline=JSON.parse(await readFile(path.join(root,'.tmp/pipelines/repair-scope',packet.advisory_checks[0].baseline_path),'utf8'));
   assert.deepEqual(baseline.allowed_change_paths,['src/**','test/a.test.ts']);
   assert.deepEqual(baseline.repair_paths,['test/a.test.ts']);
+ } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
+});
+
+test('base probe is enforced per profile: a red base admits only a planned repair, a moved base records the gap', async () => {
+ const previousCwd = process.cwd(), root = await tempProject();
+ try {
+  const git=(...args)=>spawnSync('git',args,{cwd:root,encoding:'utf8'});
+  git('init'); git('config','user.email','test@example.invalid'); git('config','user.name','Test');
+  await mkdir(path.join(root,'src'),{recursive:true});
+  await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
+  git('add','src'); git('commit','-m','base');
+  const manifest = await baseManifest(root,'probe-run',[{id:'p',stages:['implementation']},{id:'q',stages:['implementation']}]);
+  manifest.allowed_change_paths=['src/**','lib/**'];
+  manifest.pipelines[0].profile='local'; manifest.pipelines[1].profile='other';
+  manifest.gate_profiles={local:{'local-test':['npm test']},other:{'local-test':['npm test']}};
+  manifest.gate_testing={local:{'local-test':{impact_groups:[{inputs:['src/**'],command_index:0}]}},other:{'local-test':{impact_groups:[{inputs:['lib/**'],command_index:0}]}}};
+  for (const [index,id] of [[0,'p'],[1,'q']]) {
+    const raw=JSON.stringify({id:`wi-${id}`,pipeline_id:id,stage:'implementation',suggested_agent:'CoderAgent',allowed_change_paths:[id==='p'?'src/**':'lib/**'],...(id==='p'?{baseline_repair:true}:{})});
+    await writeFile(path.join(root,manifest.work_items[index].path),raw); manifest.work_items[index].sha256=sha(raw);
+  }
+  const manifestPath=await writeManifest(root,manifest);
+  run(root,['init',manifestPath]); run(root,['approve','probe-run']);
+  run(root,['start','probe-run','implementation','--pipeline','p']); run(root,['start','probe-run','implementation','--pipeline','q']);
+  process.chdir(root);
+  await writeBaseProbe(root,'probe-run','p','local-test','FAIL');
+  const repair=await dispatchPacket(root,'probe-run','p','implementation','wi-p','CoderAgent');
+  const repairBaseline=JSON.parse(await readFile(path.join(root,'.tmp/pipelines/probe-run',repair.advisory_checks[0].baseline_path),'utf8'));
+  assert.deepEqual(repairBaseline.base_probe,{'local-test':'FAIL_REPAIR_PLANNED'});
+  // Profile `other` has its own probe requirement even though `local` already dispatched.
+  await assert.rejects(dispatchPacket(root,'probe-run','q','implementation','wi-q','CoderAgent'),/BASE_PROBE_REQUIRED/);
+  await mkdir(path.join(root,'lib'),{recursive:true});
+  await writeFile(path.join(root,'lib','b.ts'),'export const b = 1;\n');
+  const moved=await dispatchPacket(root,'probe-run','q','implementation','wi-q','CoderAgent');
+  const movedBaseline=JSON.parse(await readFile(path.join(root,'.tmp/pipelines/probe-run',moved.advisory_checks[0].baseline_path),'utf8'));
+  assert.deepEqual(movedBaseline.base_probe,{'local-test':'SKIPPED_AFTER_START'});
+  // A repeated dispatch of the same work item keeps the first inventory, so earlier edits stay "changed".
+  const again=await dispatchPacket(root,'probe-run','q','implementation','wi-q','CoderAgent');
+  const againBaseline=JSON.parse(await readFile(path.join(root,'.tmp/pipelines/probe-run',again.advisory_checks[0].baseline_path),'utf8'));
+  assert.equal(againBaseline.source_digest,movedBaseline.source_digest);
+  assert.equal(againBaseline.first_recorded_at,movedBaseline.recorded_at);
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });

@@ -1,10 +1,11 @@
-import { readFile, readdir, mkdir, writeFile, rename } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
 import { resolve, dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { computeRunnable, validateState } from './stage-cli-core.ts';
 import { validateOwnerAmendmentEvidence } from './owner-amendment-policy.ts';
 import { sourceInventory } from './gate-diagnostics.mjs';
+import { gitReadEnv } from './git-readonly.mjs';
 
 const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -56,7 +57,7 @@ function affectedAdvisoryChecks(manifest: any, pipeline: any, role: string) {
 
 function inventoryInvoke(root: string, exe: string, argv: string[]) {
   if (exe !== 'git') return Promise.resolve({ exit_code: 1, stdout: '', stderr: 'unsupported executable', truncated: false });
-  const result = spawnSync(exe, argv, { cwd: root, shell: false, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, timeout: 30_000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
+  const result = spawnSync(exe, argv, { cwd: root, shell: false, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, timeout: 30_000, env: gitReadEnv() });
   const stdout = String(result.stdout ?? '');
   return Promise.resolve({
     exit_code: result.status ?? (result.error ? 1 : 0),
@@ -73,11 +74,78 @@ async function writeBaseline(root: string, run: string, payload: Record<string, 
   const identity = hash(JSON.stringify([payload.pipeline_id, payload.stage, payload.work_item_id])).slice(0, 24);
   const relative = `checks/baselines/${identity}.json`;
   const target = join(runRoot, relative);
+  // A re-dispatch of the same work item (repair cycle) keeps the first dispatch's file inventory, so
+  // `changed` still covers everything this work item changed and affected selection stays narrow.
+  try {
+    const previous = JSON.parse(await readFile(target, 'utf8'));
+    if (previous?.manifest_sha256 === payload.manifest_sha256 && previous?.files && typeof previous.source_digest === 'string') {
+      payload = { ...payload, files: previous.files, source_digest: previous.source_digest, first_recorded_at: previous.first_recorded_at ?? previous.recorded_at };
+    }
+  } catch {}
   const content = `${JSON.stringify(payload, null, 2)}\n`;
   const temporary = `${target}.tmp-${process.pid}`;
   await writeFile(temporary, content, 'utf8');
   await rename(temporary, target);
   return { path: relative, sha256: hash(content) };
+}
+
+// The base probe classifies a suite that is already red on the untouched base before any work item
+// can absorb it. One probe serves every pipeline sharing the frozen profile.
+//   PASS                        → dispatch.
+//   FAIL                        → only after PLAN assigned the red suites to a baseline-repair work
+//                                 item (`"baseline_repair": true`) on this profile; that item and the
+//                                 rest of the plan then proceed, the repair lane ordered by depends_on.
+//   missing/BLOCKED, clean base → BASE_PROBE_REQUIRED (the probe needs the clean checkout).
+//   missing, base already moved → implementation started before the probe existed: no probe can be
+//                                 taken any more, so dispatch continues and the baseline records it.
+async function requireBaseProbe(root: string, run: string, manifestFile: string, manifest: any, pipeline: any, gates: string[], item: any, effectiveScope: string[]) {
+  const runRoot = resolve(root, '.tmp/pipelines', run);
+  const sharing = manifest.pipelines.filter((p: any) => p.profile === pipeline.profile).map((p: any) => p.id);
+  const results: Record<string, string> = {};
+  for (const gate of gates) {
+    const statuses: string[] = [];
+    for (const id of sharing) {
+      try {
+        const probe = JSON.parse(await readFile(join(runRoot, 'checks', `${id}-${gate}-base-probe.json`), 'utf8'));
+        if (probe?.purpose === 'advisory' && probe?.base_probe) statuses.push(String(probe.status));
+      } catch {}
+    }
+    if (statuses.includes('PASS')) { results[gate] = 'PASS'; continue; }
+    if (statuses.includes('FAIL')) {
+      if (item?.baseline_repair !== true && !(await profileHasBaselineRepair(manifestFile, manifest, sharing))) {
+        throw Error(`BASE_RED_REPAIR_REQUIRED: ${gate} is red on the untouched base; revise PLAN so a work item with "baseline_repair": true owns the failing suites`);
+      }
+      results[gate] = 'FAIL_REPAIR_PLANNED'; continue;
+    }
+    if (!implementationStarted(root, manifest, effectiveScope)) {
+      throw Error(`BASE_PROBE_REQUIRED: run gate-runner-cli ${run} ${pipeline.id} ${gate} --advisory --base-probe on the clean checkout before the first source dispatch of profile ${pipeline.profile}`);
+    }
+    results[gate] = 'SKIPPED_AFTER_START';
+  }
+  return results;
+}
+
+async function profileHasBaselineRepair(manifestFile: string, manifest: any, pipelineIds: string[]): Promise<boolean> {
+  for (const unit of manifest.work_items ?? []) {
+    if (!pipelineIds.includes(unit.pipeline_id) || typeof unit.path !== 'string') continue;
+    try {
+      if (JSON.parse(await readFile(resolve(dirname(manifestFile), unit.path), 'utf8'))?.baseline_repair === true) return true;
+    } catch {}
+  }
+  return false;
+}
+
+// Started = the RUN branch moved past its base, or an authorized path differs from it. Files outside
+// the RUN scope (owner scratch, planning artifacts) say nothing about implementation.
+function implementationStarted(root: string, manifest: any, effectiveScope: string[]): boolean {
+  const run = (args: string[]) => spawnSync('git', args, { cwd: root, shell: false, encoding: 'utf8', timeout: 30_000, env: gitReadEnv() });
+  const status = run(['status', '--porcelain', '-z', '--untracked-files=all']);
+  if (status.status !== 0) return false;
+  const paths = String(status.stdout).split('\0').filter(Boolean).map(entry => entry.slice(3));
+  if (paths.some(file => effectiveScope.some(scope => scopeContained(file, scope)))) return true;
+  const base = manifest.git_setup?.base_sha;
+  const head = run(['rev-parse', 'HEAD']);
+  return /^[0-9a-f]{40}$/i.test(base ?? '') && head.status === 0 && String(head.stdout).trim().toLowerCase() !== base.toLowerCase();
 }
 
 export async function dispatchPacket(root: string, run: string, pipelineId: string, stage: string, workItemId: string, role: string) {
@@ -175,26 +243,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     ? [...new Set([...itemScope, ...checkedScope(repairPaths, effectiveScope)])] : itemScope;
   let advisoryChecks: Array<Record<string, unknown>> = [];
   if (baseChecks.length) {
-    // The first source dispatch of a RUN needs a passing base probe for every advisory gate, so a
-    // suite that is already red on the untouched base is classified before any work item absorbs it.
-    const runRoot = resolve(root, '.tmp/pipelines', run);
-    const dispatched = (await readdir(join(runRoot, 'checks', 'baselines')).catch(() => [] as string[])).some(name => name.endsWith('.json'));
-    if (!dispatched) {
-      // Pipelines sharing a frozen profile run identical commands on the same base: one probe serves all.
-      const sharing = manifest.pipelines.filter((p: any) => p.profile === pipeline.profile).map((p: any) => p.id);
-      for (const check of baseChecks) {
-        let passed = false;
-        for (const id of sharing) {
-          try {
-            const probe = JSON.parse(await readFile(join(runRoot, 'checks', `${id}-${check.gate}-base-probe.json`), 'utf8'));
-            passed ||= probe?.status === 'PASS' && probe?.purpose === 'advisory' && Boolean(probe?.base_probe);
-          } catch {}
-        }
-        if (!passed) {
-          throw Error(`BASE_PROBE_REQUIRED: run gate-runner-cli ${run} ${pipelineId} ${check.gate} --advisory --base-probe on the clean checkout before the first source dispatch; a FAIL means the base is red and PLAN must assign a baseline-repair work item`);
-        }
-      }
-    }
+    const baseProbe = await requireBaseProbe(root, run, state.manifest_file, manifest, pipeline, baseChecks.map(check => check.gate), item, effectiveScope);
     const inventory = await sourceInventory(root, (exe: string, argv: string[]) => inventoryInvoke(root, exe, argv));
     if (!inventory.files || !inventory.digest) throw Error('ADVISORY_BASELINE_UNAVAILABLE');
     const baseline = await writeBaseline(root, run, {
@@ -207,6 +256,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       state_revision: revision,
       allowed_change_paths: boundScope,
       repair_paths: repairPaths,
+      base_probe: baseProbe,
       source_digest: inventory.digest,
       files: inventory.files,
       recorded_at: new Date().toISOString(),
@@ -216,9 +266,9 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     advisoryChecks = baseChecks.map(check => ({ ...check, work_item_id: workItemId, baseline_path: baseline.path, baseline_sha256: baseline.sha256,
       command: `${GATE_RUNNER} ${run} ${pipelineId} ${check.gate} --advisory --affected --work-item ${workItemId} --baseline ${baseline.path} --baseline-sha256 ${baseline.sha256}`,
       focus_command: `${GATE_RUNNER} ${run} ${pipelineId} ${check.gate} --advisory --command-index <frozen_commands[].index> --test-file <repo-relative vitest file>`,
-      // The bound check can take tens of minutes: run it as a background shell command (no
-      // timeout, completion notification) instead of a foreground call killed by the shell timeout.
-      shell: { background: true, timeout_ms: 0 },
+      // The bound check can take tens of minutes: run it as a background shell command (OpenCode
+      // background commands have no timeout and notify on completion) instead of a foreground call.
+      shell: { background: true },
       frozen_commands: (manifest.gate_profiles[pipeline.profile][check.gate] as string[]).map((command, index) => ({ index, command })) }));
   }
   return { run_id: run, pipeline_id: pipelineId, stage, executor, role, work_item_id: workItemId,
@@ -226,7 +276,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     review_work_items: stageReview ? [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems].map((w: any) => ({ id: w.id, path: resolve(dirname(state.manifest_file), w.path), sha256: w.sha256 })) : undefined,
     context_paths: (item.context_files ?? []).map((p: string) => resolve(root, p)), reference_paths: (item.reference_files ?? []).map((p: string) => resolve(root, p)),
     decision_ids: item.decision_ids ?? pipeline.decision_ids ?? [], research_ids: item.research_ids ?? pipeline.research_ids ?? [], contract_ids: item.contract_ids ?? pipeline.contract_ids ?? [],
-    effective_scope: effectiveScope, work_item_scope: itemScope, bound_scope: boundScope, repair_paths: repairPaths, state_revision: revision, loop: repairRuntime?.technical_fix_cycles ?? 0,
+    effective_scope: effectiveScope, work_item_scope: itemScope, repair_paths: repairPaths, state_revision: revision, loop: repairRuntime?.technical_fix_cycles ?? 0,
     repair_origin_stage: runtime?.repair_origin_stage,
     evidence_paths: [...new Set(evidencePaths)],
     advisory_checks: advisoryChecks,
