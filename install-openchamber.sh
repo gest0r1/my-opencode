@@ -228,6 +228,7 @@ native_startup() {
 [Service]
 WorkingDirectory=$HOME
 Environment="HOME=$HOME" "PATH=$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="OPENCODE_BINARY=$OPENCODE_BINARY"
 Environment="XDG_CONFIG_HOME=$HOME/.config" "XDG_DATA_HOME=$HOME/.local/share" "XDG_STATE_HOME=$HOME/.local/state"
 EOF
   systemctl --user daemon-reload
