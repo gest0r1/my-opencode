@@ -71,6 +71,17 @@ bash scripts/install-opencode-agents.sh \
   "$TARGET"
 grep -Fq 'managed primary v2' "$TARGET/PrimaryAgent.md"
 
-printf 'PASS: flat canonical agent IDs, managed copy replacement, repeat install\n'
+# A colour picked in OpenChamber (saved as color: in the installed file) survives
+# reinstall; the body and every other field still come from the distribution.
+sed -i 's/^name: CoderAgent$/name: CoderAgent\ncolor: "#12a4c8"/' "$TARGET/CoderAgent.md"
+sed -i 's/managed coder/managed coder v2/' "$SRC/subagents/code/coder-agent.md"
+bash scripts/install-opencode-agents.sh \
+  "$SRC" \
+  "$TARGET"
+grep -Fq 'color: "#12a4c8"' "$TARGET/CoderAgent.md"
+grep -Fq 'managed coder v2' "$TARGET/CoderAgent.md"
+if grep -q '^color:' "$TARGET/PrimaryAgent.md"; then echo 'FAIL: colour leaked to another agent' >&2; exit 1; fi
+
+printf 'PASS: flat canonical agent IDs, managed copy replacement, repeat install, kept agent colour\n'
 
 
