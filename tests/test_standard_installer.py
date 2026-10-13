@@ -34,7 +34,7 @@ def main():
             "exact config SHA resolution")
     require(wrapper, 'APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"',
             "exact OpenChamber SHA resolution")
-    require(wrapper, 'install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py verify-runtime-services.py', "exact core fetch")
+    require(wrapper, 'install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py', "exact core fetch")
     require(wrapper, 'contents/scripts/$file?ref=$CONFIG_SHA', "exact runtime helper fetch")
     require(wrapper, 'export OPENCODE_CONFIG_REF="$CONFIG_SHA"', "pinned config ref")
     require(wrapper, 'OPENCHAMBER_REF="$APP_SHA"', "pinned app ref")

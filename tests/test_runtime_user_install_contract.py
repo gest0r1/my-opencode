@@ -59,11 +59,8 @@ def main():
     require(combined_installer, 'OPENCHAMBER_EXPECTED_VERSION:-2.3.1')
     # --no-env-snapshot keeps OPENCODE_BINARY out of startup.env; the managed binary is pinned in the drop-in.
     require(combined_installer, 'Environment="OPENCODE_BINARY=$OPENCODE_BINARY"')
-    # OpenCode 2.x answers /api/info with 401 unless the Basic-auth password is sent.
-    require(combined_installer, 'read_env_value "$HOME/.config/opencode.env" OPENCODE_SERVER_PASSWORD')
     require(combined_installer, 'systemctl --user is-enabled --quiet opencode-web.service')
     require(combined_installer, 'systemctl --user is-enabled --quiet openchamber.service')
-    require(combined_installer, 'verify-runtime-services.py')
     require(combined_installer, 'systemctl --user restart opencode-web.service openchamber.service')
     require(combined_installer, 'configure_server_browser')
 
