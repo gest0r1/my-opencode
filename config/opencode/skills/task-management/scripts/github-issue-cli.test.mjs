@@ -165,3 +165,47 @@ test('check rejects changed requirements and publish-plan posts frozen Story/Arc
   assert.match(postedText, /pipeline-artifact:story:run-1:issue-5/);
   assert.match(postedText, /pipeline-artifact:architecture:run-1:issue-5/);
 });
+
+test('a long Markdown document splits on sections into balanced pieces that fit one comment', async () => {
+  const { splitMarkdown, MAX_COMMENT_CHARS } = await import('./github-issue-cli.ts');
+  assert.ok(MAX_COMMENT_CHARS > 60_000 && MAX_COMMENT_CHARS <= 65_536);
+  const section = (n) => `## Раздел ${n}\n\n${'Архитектурное решение. '.repeat(400)}\n`;
+  const doc = `# Архитектура\n\n${Array.from({ length: 12 }, (_, i) => section(i + 1)).join('\n')}`;
+  const parts = splitMarkdown(doc, 30_000);
+  assert.ok(parts.length > 1);
+  assert.ok(parts.every((part) => part.length <= 30_000));
+  // Sections are kept whole when they fit: every part after the first starts at a heading.
+  assert.ok(parts.slice(1).every((part) => part.startsWith('## Раздел')));
+  assert.equal(parts.join('').replace(/\s/g, '').length, doc.replace(/\s/g, '').length);
+  // A code block cut in two is closed and reopened, so each part renders on its own.
+  const code = `## Код\n\n\`\`\`ts\n${'const x = 1;\n'.repeat(4000)}\`\`\`\n`;
+  for (const part of splitMarkdown(code, 20_000)) assert.equal((part.match(/^```/gm) ?? []).length % 2, 0);
+});
+
+test('publish-plan posts a long Cyrillic architecture as numbered comments under the GitHub size limit', async () => {
+  const { root, bin, posted } = await fixture();
+  let result = run(root, bin, ['probe', '5']);
+  assert.equal(result.status, 0, result.stderr);
+  const requirements = JSON.parse(result.stdout).requirements_sha256;
+  const runRoot = path.join(root, '.tmp', 'pipelines', 'run-1');
+  await mkdir(path.join(runRoot, 'planning'), { recursive: true });
+  // ~100 000 characters: twice the old byte limit for Cyrillic text.
+  const architecture = `# Архитектура\n\n${Array.from({ length: 10 }, (_, i) => `## Раздел ${i + 1}\n\n${'Решение по компоненту и рискам. '.repeat(300)}\n`).join('\n')}`;
+  await writeFile(path.join(runRoot, 'planning', 'architecture.md'), architecture);
+  await writeFile(path.join(runRoot, 'manifest.json'), JSON.stringify({
+    schema_version: 2, run_id: 'run-1', source_type: 'github_issues', repository: 'gest0r1/sevami',
+    source_issues: [{ repository: 'gest0r1/sevami', number: 5, url: 'x', title: 'Issue five' }],
+    source_requirements_sha256: requirements,
+    planning_readiness: { gates: { architecture: { required: true, status: 'ready',
+      artifact: { path: 'planning/architecture.md', sha256: sha(architecture) } } } },
+  }, null, 2));
+  result = run(root, bin, ['publish-plan', 'run-1']);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.published, 2);
+  const postedText = await readFile(posted, 'utf8');
+  assert.match(postedText, /pipeline-artifact:architecture:run-1:issue-5:part-1-of-2/);
+  assert.match(postedText, /pipeline-artifact:architecture:run-1:issue-5:part-2-of-2/);
+  assert.match(postedText, /Pipeline Architecture \(2\/2\)/);
+  for (const body of postedText.split(/(?=api --method POST)/).filter(Boolean)) assert.ok(body.length < 65_536);
+});

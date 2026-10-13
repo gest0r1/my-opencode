@@ -235,31 +235,84 @@ async function readFrozenArtifact(
   return { content, sha256: actual, path: ref.path };
 }
 
-function artifactMarker(kind: 'story' | 'architecture', runId: string, issueNumber: number): string {
-  return `<!-- pipeline-artifact:${kind}:${runId}:issue-${issueNumber} -->`;
+function artifactMarker(kind: 'story' | 'architecture', runId: string, issueNumber: number, part?: { index: number; total: number }): string {
+  const suffix = part ? `:part-${part.index}-of-${part.total}` : '';
+  return `<!-- pipeline-artifact:${kind}:${runId}:issue-${issueNumber}${suffix} -->`;
 }
 
-function renderArtifactComment(
+// GitHub rejects a comment body above 65 536 characters (characters, not UTF-8 bytes, so
+// Cyrillic text gets the same room as Latin). Stay a little below it.
+export const MAX_COMMENT_CHARS = 65_000;
+
+// Split Markdown into pieces of at most `budget` characters: whole `#`/`##` sections first,
+// then paragraphs, then lines; a fenced code block cut in two is closed and reopened.
+export function splitMarkdown(content: string, budget: number): string[] {
+  const units: string[] = [];
+  const pushUnit = (text: string, separators: RegExp[]) => {
+    if (text.length <= budget || !separators.length) {
+      for (let offset = 0; offset < text.length; offset += budget) units.push(text.slice(offset, offset + budget));
+      return;
+    }
+    const [separator, ...rest] = separators;
+    const pieces = text.split(separator).filter((piece) => piece.length > 0);
+    if (pieces.length <= 1) return pushUnit(text, rest);
+    for (const piece of pieces) pushUnit(piece, rest);
+  };
+  pushUnit(content, [/(?=^#{1,2} )/m, /(?<=\n\n)/, /(?<=\n)/]);
+
+  const chunks: string[] = [];
+  let current = '';
+  for (const unit of units) {
+    if (current && current.length + unit.length > budget) { chunks.push(current); current = ''; }
+    current += unit;
+  }
+  if (current) chunks.push(current);
+
+  // Keep every chunk's code fences balanced so each comment renders on its own.
+  const fence = '```';
+  let open = false;
+  return chunks.map((chunk) => {
+    let text = open ? `${fence}\n${chunk}` : chunk;
+    const fences = (chunk.match(/^```/gm) ?? []).length;
+    if (fences % 2 === 1) open = !open;
+    if (open) text = `${text.replace(/\n?$/, '\n')}${fence}`;
+    return text.trim();
+  });
+}
+
+function renderArtifactComments(
   kind: 'story' | 'architecture',
   runId: string,
   issueNumber: number,
   requirementsSha: string,
   artifact: { content: string; sha256: string },
-): string {
+): Array<{ marker: string; body: string }> {
   const title = kind === 'story' ? 'Pipeline Story' : 'Pipeline Architecture';
-  const body = [
-    artifactMarker(kind, runId, issueNumber),
-    `## ${title}`,
+  const header = (marker: string, heading: string) => [
+    marker,
+    `## ${heading}`,
     `Run: \`${runId}\``,
     `Requirements SHA-256: \`${requirementsSha}\``,
     `Artifact SHA-256: \`${artifact.sha256}\``,
     '',
-    artifact.content.trim(),
   ].join('\n');
-  if (Buffer.byteLength(body, 'utf8') > 60_000) {
-    throw new GitHubIssueCliError(`${kind} comment for issue #${issueNumber} exceeds safe GitHub comment size`);
-  }
-  return body;
+  const content = artifact.content.trim();
+  const single = artifactMarker(kind, runId, issueNumber);
+  const singleBody = `${header(single, title)}\n${content}`;
+  if (singleBody.length <= MAX_COMMENT_CHARS) return [{ marker: single, body: singleBody }];
+
+  // Reserve room for the longest header (part numbers up to 999) and the fence repair.
+  const reserve = header(artifactMarker(kind, runId, issueNumber, { index: 999, total: 999 }), `${title} (999/999)`).length + 16;
+  const parts = splitMarkdown(content, MAX_COMMENT_CHARS - reserve);
+  return parts.map((part, offset) => {
+    const position = { index: offset + 1, total: parts.length };
+    const marker = artifactMarker(kind, runId, issueNumber, position);
+    const body = `${header(marker, `${title} (${position.index}/${position.total})`)}\n${part}`;
+    if (body.length > MAX_COMMENT_CHARS) {
+      throw new GitHubIssueCliError(`${kind} comment part ${position.index} for issue #${issueNumber} exceeds GitHub comment size`);
+    }
+    return { marker, body };
+  });
 }
 
 export async function checkFrozenRequirements(
@@ -349,26 +402,27 @@ export async function publishPlanningArtifacts(
     }
     artifacts.push({ kind: 'architecture', content: architecture.content, sha256: architecture.sha256 });
 
+    const hasMarker = (marker: string) => comments.some((comment: any) => typeof comment.body === 'string' && comment.body.includes(marker));
     for (const artifact of artifacts) {
-      const marker = artifactMarker(artifact.kind, runId, number);
-      if (comments.some((comment: any) => typeof comment.body === 'string' && comment.body.includes(marker))) {
+      // A document published earlier as one comment stays as it is.
+      if (hasMarker(artifactMarker(artifact.kind, runId, number))) {
         existing += 1;
         continue;
       }
-      const body = renderArtifactComment(
-        artifact.kind,
-        runId,
-        number,
-        frozenRequirements,
-        artifact,
-      );
-      gh([
-        'api', '--method', 'POST',
-        `repos/${live.repository}/issues/${number}/comments`,
-        '-H', 'X-GitHub-Api-Version: 2022-11-28',
-        '-f', `body=${body}`,
-      ], cwd);
-      published += 1;
+      // A long document goes out as numbered parts; a rerun adds only the missing ones.
+      for (const { marker, body } of renderArtifactComments(artifact.kind, runId, number, frozenRequirements, artifact)) {
+        if (hasMarker(marker)) {
+          existing += 1;
+          continue;
+        }
+        gh([
+          'api', '--method', 'POST',
+          `repos/${live.repository}/issues/${number}/comments`,
+          '-H', 'X-GitHub-Api-Version: 2022-11-28',
+          '-f', `body=${body}`,
+        ], cwd);
+        published += 1;
+      }
     }
   }
   return { status: 'PASS', run_id: runId, repository: live.repository, published, existing };
