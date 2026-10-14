@@ -136,7 +136,7 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent'),/BASE_RED_REPAIR_REQUIRED/);
   await writeBaseProbe(root,'runtime-test','p','local-test');
   const baselinePacket = await dispatchPacket(root,'runtime-test','p','implementation','wi-p','CoderAgent');
-  assert.deepEqual(baselinePacket.advisory_checks[0].shell,{background:true});
+  assert.deepEqual(baselinePacket.advisory_checks[0].shell,{background:false,timeout:3_600_000});
   assert.equal(baselinePacket.advisory_checks.length,1);
   assert.equal(baselinePacket.advisory_checks[0].gate,'local-test');
   assert.equal(baselinePacket.advisory_checks[0].mode,'affected');
@@ -283,7 +283,7 @@ test('runtime preflight forwards selected research roles and checks their effect
  const root = await tempProject();
  try {
   const registered = new Map();
-  const ids = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist', 'WebResearcher'];
+  const ids = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist', 'WebResearcher'];
   let denied = false;
   const parent = {id:'OpenStageOrchestrator', mode:'primary', permissions:[
     ...ids.map(resource => ({action:'subagent', resource, effect:'allow'})),
@@ -295,7 +295,7 @@ test('runtime preflight forwards selected research roles and checks their effect
     list:async()=>['read','shell','subagent','pipeline_runtime_prepare','webfetch','gh_grep_searchGitHub'].map(id=>({id}))},
    session:{hook:async()=>{}},
    agent:{list:async()=>({data:[parent,...ids.map(id=>({id,mode:'subagent',permissions:[
-    ...(['CoderAgent','TestEngineer'].includes(id) ? [
+    ...(['CoderAgent','TestEngineer','GateRunner'].includes(id) ? [
       {action:'bash',resource:'*',effect:'deny'},
       {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*',effect:'allow'},
     ] : []),

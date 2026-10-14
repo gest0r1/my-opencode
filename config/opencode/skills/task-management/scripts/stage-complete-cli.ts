@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { sourceInventory, scopedInventoryDigest } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 
 const STAGE_CLI = fileURLToPath(new URL('./stage-cli.ts', import.meta.url));
+// Same literal as the dispatch packet, so GateRunner's allowlist accepts the rerun command verbatim.
+const GATE_RUNNER = 'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts';
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export class StageCompleteError extends Error {}
@@ -146,21 +148,22 @@ export async function verifyAgentAdvisoryCompletion(root: string, args: string[]
   }
 
   let checked = 0;
-  for (const { baseline, sha256 } of baselines) {
+  for (const { path, baseline, sha256 } of baselines) {
     if (!Array.isArray(baseline.allowed_change_paths) || baseline.allowed_change_paths.length === 0 || !baseline.work_item_id) {
       throw new StageCompleteError(`ADVISORY_BASELINE_INCOMPLETE: ${String(baseline.work_item_id ?? '<unknown>')}`);
     }
     const currentScopedDigest = scopedInventoryDigest(inventory.files, baseline.allowed_change_paths);
     for (const gate of gates) {
+      const rerun = `rerun via GateRunner: ${GATE_RUNNER} ${runId} ${pipelineId} ${gate} --advisory --affected --work-item ${baseline.work_item_id} --baseline checks/baselines/${basename(path)} --baseline-sha256 ${sha256}`;
       const matches = evidenceRecords.filter(({ evidence }) =>
         evidence.status === 'PASS' && evidence.purpose === 'advisory' &&
         evidence.run_id === runId && evidence.pipeline_id === pipelineId && evidence.dispatch_stage === stage &&
         evidence.work_item_id === baseline.work_item_id && evidence.gate === gate && evidence.baseline_sha256 === sha256);
       if (matches.length !== 1) {
-        throw new StageCompleteError(`ADVISORY_PASS_REQUIRED: ${pipelineId}/${stage}/${baseline.work_item_id}/${gate}`);
+        throw new StageCompleteError(`ADVISORY_PASS_REQUIRED: ${pipelineId}/${stage}/${baseline.work_item_id}/${gate}; ${rerun}`);
       }
       if (matches[0].evidence.scoped_source_digest !== currentScopedDigest) {
-        throw new StageCompleteError(`ADVISORY_EVIDENCE_STALE_SOURCE: ${pipelineId}/${stage}/${baseline.work_item_id}/${gate}`);
+        throw new StageCompleteError(`ADVISORY_EVIDENCE_STALE_SOURCE: ${pipelineId}/${stage}/${baseline.work_item_id}/${gate}; ${rerun}`);
       }
       checked += 1;
     }

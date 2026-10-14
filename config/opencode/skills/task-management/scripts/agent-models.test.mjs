@@ -73,6 +73,7 @@ test('MiMo 2.6 Flash', () => {
   for (const path of [
     "config/opencode/agent/core/build.md",
     "config/opencode/agent/subagents/code/build-agent.md",
+    "config/opencode/agent/subagents/code/gate-runner.md",
     "config/opencode/agent/subagents/core/batch-executor.md",
     "config/opencode/agent/subagents/core/context-manager.md",
     "config/opencode/agent/subagents/core/contextscout.md",

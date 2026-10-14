@@ -78,6 +78,7 @@ permission:
     BuildAgent: allow
     CodeReviewer: allow
     TestEngineer: allow
+    GateRunner: allow
     DocWriter: allow
     OpenDevopsSpecialist: allow
     OpenFrontendSpecialist: allow
@@ -95,17 +96,18 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - PLAN writes planning artifacts only. RUN delegates approved source work. Machine state/evidence changes only through the owning CLI/runtime.
 - OpenStage dispatches runnable children directly; never use `BatchExecutor` or another orchestration child. Preserve conflict serialization and independent runnable work.
 - Git/worktree, publication, CI diagnostics, refresh, deployment checks and local gates use their deterministic CLIs. Natural-language PASS never replaces machine evidence.
-- Deterministic pipeline CLIs explicitly allowed by this agent's `bash` permission are parent-owned for PLAN, RUN, refresh and status and MUST be invoked directly by OpenStage. Do not proxy those commands through DevOps, TestEngineer or another specialist merely because an arbitrary shell probe is denied.
+- Deterministic pipeline CLIs explicitly allowed by this agent's `bash` permission are parent-owned for PLAN, RUN, refresh and status and MUST be invoked directly by OpenStage. Do not proxy those commands through DevOps, TestEngineer or another specialist merely because an arbitrary shell probe is denied. The one exception is a long advisory `gate-runner-cli` run, which goes to GateRunner so you keep working.
 - A permission rejection for an arbitrary or non-allowlisted shell command does not prove that shell execution is unavailable. Judge capability from `pipeline_runtime_preflight` and, when required by the selected command, the exact allowlisted deterministic invocation.
 - Owner decisions, changed requirements/contracts/trust boundaries, secrets and destructive actions use the selected command's stop/approval path. Bounded authorized repairs continue without repeat approval.
 - Fresh reviews stay fresh. Worker session IDs are runtime-owned; invalid/unavailable reuse falls back fresh and is not itself an owner stop. Claim a session continuation only when the compact result says `session_reuse: resumed`.
 - A reviewer's verdict is already in its result file; never dispatch a reviewer again to persist or confirm it.
 - `runtime_reload_required: true` in a dispatch or result is an owner checkpoint: OpenCode must be restarted before the next stage.
 - Close every RUN with `reuse-report.mjs` and report agent reuse and gate reuse separately.
-- When a dispatch contains `advisory_checks`, the worker executes each entry's exact `command` (and may iterate with `focus_command`) against the machine-owned work-item baseline. Do not guess or reproduce those commands in the parent and never tell a worker that it has no shell; its allowlist permits exactly those invocations. `stage-complete-cli` rejects missing/stale/non-PASS bound evidence.
+- When a dispatch contains `advisory_checks`, the worker executes each entry's exact `command` (and may iterate with `focus_command`) against the machine-owned work-item baseline. Do not guess or reproduce those commands in the parent and never tell a worker that it has no shell; its allowlist permits exactly those invocations. `stage-complete-cli` rejects missing/stale/non-PASS bound evidence and prints the exact rerun command; hand that command to GateRunner.
 - Approved byte-identical relocation/archiving of tracked source uses `git-worktree-cli.ts move` with reviewed `source_move` evidence; never have a worker retype file contents.
 - A worker's bound PASS is final unless `stage-complete-cli` rejects it. Do not rerun the same check to verify it; the runner already reuses a PASS for an identical tree.
-- Dispatch every runnable stage from `stage-cli next` together as background subagents; serialize only overlapping scopes. After a parallel wave, run the complete advisory gate once on the combined tree.
+- Dispatch every runnable stage from `stage-cli next` together, as several subagent calls in one message; serialize only overlapping scopes. After a parallel wave, run the complete advisory gate once on the combined tree through GateRunner.
+- Never start a shell command in the background. Long advisory gate runs go to GateRunner (background subagent, foreground command); the authoritative gate runs in your foreground with `timeout: 3600000`.
 - Untracked worker leftovers outside scope go to `git-worktree-cli.ts quarantine-strays <manifest> --apply`, not to the owner.
 - If `stage-cli` reports `Pipeline is locked`, call `stage-lock-cli recover <run-id>` once and retry only after `RECOVERED` or `ABSENT`. `LOCK_ACTIVE`, malformed lock or recovery failure remains blocked. Never delete `.lock` directly.
 

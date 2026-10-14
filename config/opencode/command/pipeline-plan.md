@@ -219,7 +219,7 @@ Lifecycle rule: before the first actual source-agent start, all plan corrections
 
 ## Owner approval — mandatory stop
 
-For a new PLAN or owner-contract-changing revision, present gate readiness, branch/main SHA, manifest, DAG, scope, hashes, risks and run ID. Then STOP. A technical-only `--revise` with previous approval and `owner_contract_changed=false` instead runs normal preflight/adopt/verify/init; init restores approved status, so do not ask for approval again or invoke approve on the already-approved state.
+For a new PLAN or owner-contract-changing revision, present gate readiness, branch/main SHA, manifest, DAG with the maximum number of lanes running at once, scope, hashes, risks and run ID. Then STOP. A technical-only `--revise` with previous approval and `owner_contract_changed=false` instead runs normal preflight/adopt/verify/init; init restores approved status, so do not ask for approval again or invoke approve on the already-approved state.
 
 Only AFTER a separate explicit owner message approving this exact v2 manifest/run ID, with every owner decision resolved and every required planning gate `ready`, run:
 
