@@ -103,11 +103,12 @@ exact text. Do not substitute another baseline, guess a profile/dependency graph
 or edit machine evidence. The baseline was captured at this dispatch and its frozen work-item
 scope keeps parallel unrelated source changes out of affected selection.
 
-Start the bound `command` as a background shell command (the entry's `shell` field:
-`background: true`, no timeout) and wait for its completion notification. A foreground call is
-killed by the shell timeout long before a complete gate finishes; the runner records such a run as
-`INTERRUPTED`, so simply start it again in the background. Do not run type-check, lint, build or
-complete suites yourself: the coordinator runs those once on the combined tree.
+Run the bound `command` as one foreground shell call with the entry's `shell.timeout`
+(3600000 ms). Never start it in the background and never end your turn while it runs: a
+background shell wakes only you, and the parent never learns the result. If it comes back
+`INTERRUPTED`, run it once more the same way; a second interruption goes into your result as
+`bound_check: INTERRUPTED`. Do not run type-check, lint, build or complete suites yourself: the
+coordinator runs those once on the combined tree.
 
 When a review finding is the reason for this dispatch, fix the defect class, not only the cited
 line: check every branch and sibling file where the same mistake can occur and add a regression

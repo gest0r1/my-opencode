@@ -20,6 +20,8 @@ const aliases = new Map(Object.entries({
   testengineer: 'TestEngineer',
   tester: 'TestEngineer',
   'test-engineer': 'TestEngineer',
+  gaterunner: 'GateRunner',
+  'gate-runner': 'GateRunner',
   codereviewer: 'CodeReviewer',
   reviewer: 'CodeReviewer',
   buildagent: 'BuildAgent',

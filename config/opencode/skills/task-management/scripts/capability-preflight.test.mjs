@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertPipelineCapabilities } from './capability-preflight.mjs';
 
-const workers = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
+const workers = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
 const advisoryPermissions = [
   {action: 'bash', resource: '*', effect: 'deny'},
   {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*', effect: 'allow'},
@@ -21,7 +21,7 @@ const parentPermissions = [
   {action: 'bash', resource: '*', effect: 'deny'},
   {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*', effect: 'allow'},
 ];
-const workerAgent = id => ({ id, mode: 'subagent', ...(id === 'CoderAgent' ? { permissions: coderPermissions } : {}), ...(id === 'TestEngineer' ? { permissions: testEngineerPermissions } : {}), ...(id === 'OpenDevopsSpecialist' ? { permissions: devopsPermissions } : {}) });
+const workerAgent = id => ({ id, mode: 'subagent', ...(id === 'CoderAgent' ? { permissions: coderPermissions } : {}), ...(id === 'TestEngineer' ? { permissions: testEngineerPermissions } : {}), ...(id === 'GateRunner' ? { permissions: advisoryPermissions } : {}), ...(id === 'OpenDevopsSpecialist' ? { permissions: devopsPermissions } : {}) });
 const valid = { tools: ['read', 'shell', 'subagent', 'pipeline_runtime_prepare'].map(id => ({ id })), agents: workers.map(workerAgent), skills: [{ name: 'task-management' }], permissions: parentPermissions };
 test('live model catalog detects wrong provider and preserves the exact plugin suffix', () => {
   const input = {...valid, agents: valid.agents.map(a => a.id === 'SeniorTechnicalPlanReviewer' ? {...a, model: 'claude-code/claude-opus-5-5[1m]'} : a),

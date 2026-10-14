@@ -1,4 +1,4 @@
-const WORKERS = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
+const WORKERS = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
 
 const RESEARCH_ROLES = new Set(['ExternalScout', 'WebResearcher', 'ArchitectureAnalyzer', 'CoderAgent', 'CodeReviewer', 'SeniorTechnicalPlanReviewer']);
 const STAGE_COMPLETE_INVOCATIONS = [
@@ -71,7 +71,7 @@ export function assertPipelineCapabilities({ tools, agents, skills, visibleTools
       if (effect !== 'allow') missing.push(`permission:subagent:${id}:${effect}`);
     }
   }
-  for (const id of ['CoderAgent', 'TestEngineer']) {
+  for (const id of ['CoderAgent', 'TestEngineer', 'GateRunner']) {
     const agent = catalog.get(id);
     if (!agent) continue;
     if (!invocationAllowed(agent, ADVISORY_RUNNER_INVOCATIONS)) missing.push(`capability:${id}:advisory-gate-runner`);

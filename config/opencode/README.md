@@ -435,6 +435,7 @@ Interactive wizard generates orchestrators, subagents, context files, workflows,
 - **TaskManager** - Breaks complex features into atomic subtasks
 - **CoderAgent** - Focused code implementations
 - **TestEngineer** - Test authoring and TDD
+- **GateRunner** - Runs one advisory gate command in the foreground for the pipeline orchestrator
 - **CodeReviewer** - Code review and security analysis
 - **BuildAgent** - Type checking and build validation
 - **DocWriter** - Documentation generation

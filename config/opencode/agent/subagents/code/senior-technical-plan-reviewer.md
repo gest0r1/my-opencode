@@ -123,6 +123,7 @@ Review decisions, architecture, contracts, evidence, work decomposition and DAG 
 - missing/contradictory requirements or owner decisions;
 - unsafe architecture/interface assumptions;
 - dependency cycles, un-serialized exclusive/migration/fixture conflicts;
+- lost parallelism: independent work items with disjoint paths placed in one pipeline (one stage at a time) instead of separate lanes; work items marked `parallel: true` inside one pipeline are always this finding;
 - migration/data/security/reliability/rollback gaps;
 - testability and runtime/release evidence gaps;
 - scope expansion or vague work items.

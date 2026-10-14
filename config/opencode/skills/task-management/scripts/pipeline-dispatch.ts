@@ -266,9 +266,9 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     advisoryChecks = baseChecks.map(check => ({ ...check, work_item_id: workItemId, baseline_path: baseline.path, baseline_sha256: baseline.sha256,
       command: `${GATE_RUNNER} ${run} ${pipelineId} ${check.gate} --advisory --affected --work-item ${workItemId} --baseline ${baseline.path} --baseline-sha256 ${baseline.sha256}`,
       focus_command: `${GATE_RUNNER} ${run} ${pipelineId} ${check.gate} --advisory --command-index <frozen_commands[].index> --test-file <repo-relative vitest file>`,
-      // The bound check can take tens of minutes: run it as a background shell command (OpenCode
-      // background commands have no timeout and notify on completion) instead of a foreground call.
-      shell: { background: true },
+      // Foreground with a long timeout: the worker sees the exit itself. A background shell wakes
+      // only the child session, so its completion never reached the parent.
+      shell: { background: false, timeout: 3_600_000 },
       frozen_commands: (manifest.gate_profiles[pipeline.profile][check.gate] as string[]).map((command, index) => ({ index, command })) }));
   }
   return { run_id: run, pipeline_id: pipelineId, stage, executor, role, work_item_id: workItemId,
