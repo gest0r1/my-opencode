@@ -103,9 +103,10 @@ exact text. Do not substitute another baseline, guess a profile/dependency graph
 or edit machine evidence. The baseline was captured at this dispatch and its frozen work-item
 scope keeps parallel unrelated source changes out of affected selection.
 
-Run the bound `command` as one foreground shell call with the entry's `shell.timeout`
-(3600000 ms). Never start it in the background and never end your turn while it runs: a
-background shell wakes only you, and the parent never learns the result. If it comes back
+Every shell command runs in the foreground with `timeout: 3600000`, including the bound
+`command`, `focus_command` and any `--command-index` diagnostic. Never start one in the
+background and never end your turn while a command you started is still running: only your
+session would be woken, and the parent never sees your result. If the bound check comes back
 `INTERRUPTED`, run it once more the same way; a second interruption goes into your result as
 `bound_check: INTERRUPTED`. Do not run type-check, lint, build or complete suites yourself: the
 coordinator runs those once on the combined tree.
