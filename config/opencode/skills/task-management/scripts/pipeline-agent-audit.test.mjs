@@ -345,3 +345,15 @@ test('parent keeps pipeline transport file-backed and orchestration-only', async
   assert.match(parent, /detail_required=false/);
   assert.match(parent, /Never invent `sessionID`/);
 });
+
+test('shell-running workers keep every command in the foreground until it finishes', async () => {
+  for (const relative of [
+    'config/opencode/agent/subagents/code/coder-agent.md',
+    'config/opencode/agent/subagents/code/test-engineer.md',
+    'config/opencode/agent/subagents/code/build-agent.md',
+  ]) {
+    const content = (await text(relative)).replace(/\s+/g, ' ');
+    assert.match(content, /Every shell command runs in the foreground with `timeout: 3600000`/, relative);
+    assert.match(content, /never end your turn while a command you started is still running/, relative);
+  }
+});
