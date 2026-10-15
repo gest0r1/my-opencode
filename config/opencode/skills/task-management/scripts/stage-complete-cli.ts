@@ -135,6 +135,18 @@ export async function verifyAgentAdvisoryCompletion(root: string, args: string[]
   }
   if (baselines.length === 0) return { checked: 0 };
 
+  // A stage reopened by fix-cycle is completed by the repair dispatched in this loop. Bound
+  // evidence of work items the repair did not redispatch is superseded: their files may have
+  // changed under the repair, and the repair's own bound check covers the repaired scope.
+  const runtime = state.pipelines?.[pipelineId]?.stages?.[stage];
+  const origin = runtime?.repair_origin_stage ? state.pipelines?.[pipelineId]?.stages?.[runtime.repair_origin_stage] : null;
+  const loop = Number(origin?.technical_fix_cycles ?? 0);
+  if (origin && loop > 0) {
+    const current = baselines.filter(({ baseline }) => Number(baseline.loop ?? 0) === loop && baseline.repair_origin_stage === runtime.repair_origin_stage);
+    if (current.length === 0) throw new StageCompleteError(`ADVISORY_REPAIR_DISPATCH_REQUIRED: ${pipelineId}/${stage} loop ${loop}`);
+    baselines.splice(0, baselines.length, ...current);
+  }
+
   const inventory = await sourceInventory(root, (exe: string, argv: string[]) => gitInventory(root, exe, argv));
   if (!inventory.files) throw new StageCompleteError('ADVISORY_CURRENT_SOURCE_UNAVAILABLE');
   const checkDir = join(runRoot, 'checks');

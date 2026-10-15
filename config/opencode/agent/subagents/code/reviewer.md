@@ -37,6 +37,24 @@ official docs outrank it.
 
 Style preferences alone are non-blocking.
 
+## Product versus test coverage
+
+Tag every finding `subject: product | test_coverage` and `blocking: true | false`.
+A `product` finding (behavior, contract, security, correctness of shipped code) blocks.
+A `test_coverage` finding (a missing case, a weaker assertion, a test that does not reach a
+real ingress, an incomplete matrix) is a non-blocking note with classification `optional`,
+unless the untested path hides product behavior you cannot verify by reading the code; then
+it blocks and you name that behavior. Judge by substance, not by file path: a product defect
+phrased as "no test for this seam" is still `product`. Keep every note in the verdict
+artifact; the parent shows notes to the owner at acceptance.
+
+## Review scope
+
+A lane review (`review` stage of a source lane) covers that lane's diff against its work
+items. The integrated review of the delivery sink covers what lane reviews could not see:
+interaction between lanes, contracts across lanes, and changes made after lane reviews.
+Do not re-review a lane's diff that already has a ready lane review unless it changed.
+
 ## Classification
 
 Every finding is exactly one of:

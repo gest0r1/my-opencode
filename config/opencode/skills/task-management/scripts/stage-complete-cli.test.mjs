@@ -154,3 +154,27 @@ test('OpenStage cannot bypass completion verifier and DevOps has no raw secret-b
   assert.doesNotMatch(devops, /terraform plan .*:\s*allow/i);
   assert.match(devops, /runtime-diagnostic-cli\.ts \*": allow/);
 });
+
+test('a stage reopened by fix-cycle needs bound evidence from the current repair loop only', async () => {
+  const fx = await fixture();
+  const args = ['complete', fx.runId, 'implementation', '--pipeline', 'app'];
+  const state = JSON.parse(await readFile(path.join(fx.runRoot, 'state.json'), 'utf8'));
+  state.pipelines = { app: { stages: { implementation: { repair_origin_stage: 'review' }, review: { technical_fix_cycles: 1 } } } };
+  await writeFile(path.join(fx.runRoot, 'state.json'), JSON.stringify(state));
+  const inventory = await sourceInventory(fx.root, invoke(fx.root));
+  const write = async loop => {
+    const baseline = { schema_version: 1, run_id: fx.runId, pipeline_id: 'app', stage: 'implementation', work_item_id: 'wi-1',
+      manifest_sha256: state.manifest_sha256, allowed_change_paths: ['src/a/**'], source_digest: inventory.digest, files: inventory.files,
+      loop, repair_origin_stage: loop ? 'review' : null };
+    const raw = `${JSON.stringify(baseline, null, 2)}\n`;
+    await writeFile(path.join(fx.runRoot, 'checks', 'baselines', 'wi-1.json'), raw);
+    return raw;
+  };
+  await write(0);
+  await assert.rejects(verifyAgentAdvisoryCompletion(fx.root, args), /ADVISORY_REPAIR_DISPATCH_REQUIRED/);
+  const raw = await write(1);
+  const evidence = { status: 'PASS', purpose: 'advisory', run_id: fx.runId, pipeline_id: 'app', gate: 'tests', work_item_id: 'wi-1',
+    dispatch_stage: 'implementation', baseline_sha256: sha(raw), scoped_source_digest: scopedInventoryDigest(inventory.files, ['src/a/**']) };
+  await writeFile(path.join(fx.runRoot, 'checks', 'app-tests-wi-1.json'), `${JSON.stringify(evidence, null, 2)}\n`);
+  assert.equal((await verifyAgentAdvisoryCompletion(fx.root, args)).checked, 1);
+});
