@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { applyOwnerAmendment, runCli } from './stage-cli-core.ts';
 import { prepareProjectTooling } from './project-tooling.mjs';
 import { preflightFile } from './manifest-preflight.mjs';
+import { freezeGateTesting } from './gate-testing-freeze.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { validateOwnerAmendmentForApply } from './owner-amendment-policy.ts';
 
@@ -380,6 +381,18 @@ async function main(args: string[]): Promise<void> {
     const tooling = prepareProjectTooling(process.cwd());
     const preflight = await preflightFile(resolve(identifier), { environment: true });
     console.log(JSON.stringify({tooling, preflight}));
+    return;
+  }
+  if (command === 'gate-testing-freeze') {
+    const profile = optionFromArgs(args, '--profile');
+    const gate = optionFromArgs(args, '--gate');
+    const source = optionFromArgs(args, '--source');
+    const commands = optionFromArgs(args, '--commands');
+    const ignored = optionFromArgs(args, '--ignored');
+    if (!identifier || !profile || !gate || !source || !commands) {
+      throw new Error('usage: stage-cli gate-testing-freeze <manifest.json> --profile <p> --gate <g> --source <repo impact map.json> --commands <repo command array.json> [--ignored <repo ignored rules.json>]');
+    }
+    console.log(JSON.stringify(freezeGateTesting({ manifestPath: identifier, profile, gate, source, commands, ignored })));
     return;
   }
   if (command === 'preflight') {

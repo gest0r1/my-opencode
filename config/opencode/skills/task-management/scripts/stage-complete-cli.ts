@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { sourceInventory, scopedInventoryDigest } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
+import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 
 const STAGE_CLI = fileURLToPath(new URL('./stage-cli.ts', import.meta.url));
 // Same literal as the dispatch packet, so GateRunner's allowlist accepts the rerun command verbatim.
@@ -103,7 +104,7 @@ export async function verifyAgentAdvisoryCompletion(root: string, args: string[]
   const manifestFile = resolve(state.manifest_file);
   const manifestRaw = await readFile(manifestFile, 'utf8');
   if (state.manifest_sha256 && hash(manifestRaw) !== state.manifest_sha256) throw new StageCompleteError('FROZEN_MANIFEST_CHANGED');
-  const manifest = JSON.parse(manifestRaw);
+  const manifest = resolveGateTestingFile(JSON.parse(manifestRaw), manifestFile);
   const pipeline = manifest.pipelines?.find((candidate: any) => candidate.id === pipelineId);
   if (!pipeline || pipeline.executors?.[stage] !== 'agent') return { checked: 0 };
   const gates = requiredAffectedGates(manifest, pipeline);

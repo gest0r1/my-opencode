@@ -96,6 +96,7 @@ Check the smallest useful architecture surface:
 - state/consistency/migration compatibility, rerun and rollback;
 - security/reliability/performance and deployment/runtime risks;
 - explicit test strategy: deterministic local checks, independent CI, runtime/smoke and owner acceptance when applicable;
+- test selection: when the repository generates its own test impact map (for example `docs/testing/*.json` and the command array it indexes), name both paths so PLAN binds them with `stage-cli gate-testing-freeze`; split work items along that map's test blocks (one or two blocks per item) and keep each item's tests in its own lane;
 - accepted/residual risks, rollback expectation and operational failure modes;
 - implementation ordering, overlap/conflict metadata and release implications;
 - conformance to owner decisions and affected contracts.

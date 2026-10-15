@@ -70,6 +70,34 @@ The image placeholder is deliberately invalid: PLAN must resolve and review a
 real official PostgreSQL image digest. Never substitute a mutable tag or a
 working database. No resource is created when this contract is absent.
 
+## Project-generated impact map
+
+When the repository already generates its own test impact map (for example
+`docs/testing/gate-testing.release.json` next to the command array it indexes,
+`docs/testing/frozen-release-commands.json`), PLAN binds that map instead of writing
+impact groups by hand. A hand-written copy of a generated map is never complete:
+reviewers rightly reject it for missing transitive edges, and the result is a
+non-narrowing contract that runs the whole suite on every work item.
+
+1. Copy the project's command array for that gate into `gate_profiles[profile][gate]`
+   exactly (same order; the map's `command_index` values refer to it).
+2. Run `stage-cli gate-testing-freeze <manifest.json> --profile <p> --gate <g>
+   --source <map.json> --commands <commands.json> [--ignored <rules.json>]`.
+   It snapshots the map into `planning/gate-testing/<p>.<g>.json`, checks the
+   command array, and records only `gate_testing[p][g].source` (snapshot path,
+   SHA-256, command-array digest). `--ignored` takes an array, `ignored_inputs` or
+   `ignored_input_rules` (patterns with optional `except`), for example the
+   project's documentation and asset rules.
+3. Preflight, dispatch, the runner and completion all read the snapshot; a changed
+   snapshot or command array blocks with `GATE_TESTING_SOURCE_*`.
+
+Selection with a bound map: ignored inputs select nothing; a new test file runs
+alone with the command owning its directory; a new source file counts as reached
+through the changed mapped files that import it (alone it selects the complete
+set); other unmapped paths, dependency manifests and auth paths select the complete
+set. Regenerating the project map during RUN does not change the frozen snapshot;
+the final authoritative gate always runs the complete array.
+
 ## Impact groups
 
 Each group binds an original zero-based command index to exact repository inputs

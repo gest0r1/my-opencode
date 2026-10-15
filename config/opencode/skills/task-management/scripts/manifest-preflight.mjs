@@ -5,6 +5,7 @@ import { delimiter, isAbsolute, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { gatePolicyError, isFrozenUvPytest, tokenizeGateCommand as tokenizeGateCommandPolicy } from './gate-command-policy.mjs';
 import { validateManifestV2Policy, validatePackageManagerContract } from './manifest-v2-policy.mjs';
+import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 
 export class ManifestPreflightError extends Error {}
 
@@ -168,7 +169,7 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
     throw new ManifestPreflightError(error instanceof Error ? error.message : String(error));
   }
   if (environment) {
-    const usesLive = Object.entries(manifest.gate_testing ?? {}).some(([profile, gates]) => used.has(profile) && Object.values(gates).some(config => config.live_postgres));
+    const usesLive = Object.entries((manifestPath ? resolveGateTestingFile(manifest, manifestPath) : manifest).gate_testing ?? {}).some(([profile, gates]) => used.has(profile) && Object.values(gates).some(config => config.live_postgres));
     if (usesLive && !executableOnPath('docker')) throw new ManifestPreflightError('EXECUTABLE_NOT_FOUND: docker is required by frozen live_postgres');
     if (usedInvocations.some(({tokens}) => ['pnpm', 'npm', 'npx', 'yarn', 'bun', 'corepack'].includes(tokens[0]))) checkProjectTooling(cwd);
     for (const { profile, gate, tokens } of usedInvocations) {
