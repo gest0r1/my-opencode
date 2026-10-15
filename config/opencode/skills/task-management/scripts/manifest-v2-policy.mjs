@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { accessSync, constants, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { validateGateTesting, resolveGateTesting } from './gate-testing-policy.mjs';
+import { validateGenerators } from './generator-cli.mjs';
 
 export class ManifestV2PolicyError extends Error {}
 
@@ -807,6 +808,13 @@ export function validateManifestV2Policy(manifest, options = {}) {
   const cwd = options.cwd ?? process.cwd();
   const root = runRoot(manifest, cwd, options.manifestPath);
   try { validateGateTesting(resolveGateTesting(manifest, root)); }
+  catch (error) { throw new ManifestV2PolicyError(error.message); }
+  if (manifest.generated_paths !== undefined && (!Array.isArray(manifest.generated_paths) || manifest.generated_paths.some(path =>
+    typeof path !== 'string' || !safeRelativePath(path.endsWith('/**') ? path.slice(0, -3) : path) || /[*?\[\]{}]/.test(path.endsWith('/**') ? path.slice(0, -3) : path) ||
+    /^(?:\.git|\.github|\.opencode)(?:\/|$)/.test(path) || /(?:^|\/)\.env/.test(path)))) {
+    throw new ManifestV2PolicyError('GENERATED_PATHS_INVALID: exact repository paths or directory/** only, outside .git, .github, .opencode and env files');
+  }
+  try { validateGenerators(manifest); }
   catch (error) { throw new ManifestV2PolicyError(error.message); }
   validatePlanningReadiness(manifest, root);
   validatePlanningInputs(manifest);

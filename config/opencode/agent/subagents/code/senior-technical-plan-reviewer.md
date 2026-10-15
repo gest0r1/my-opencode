@@ -36,14 +36,15 @@ Absent search evidence or unjustified duplication is a blocking `technical_fix` 
 
 ## Runtime scope review mode
 
-For runtime scope, read the exact architecture clarification plus frozen decisions/acceptance criteria and failed-gate evidence. Do not broaden the task. Write the exact supplied `.tmp/pipelines/{run-id}/runtime-scope-review-<n>.json` as JSON with:
+For runtime scope, read the exact architecture clarification (when one exists) plus frozen decisions/acceptance criteria and failed-gate evidence. When the paths stay inside already-approved modules and add no dependency or contract between modules (class 1), you are the only reviewer: write `"architecture_status": "not_required"` and `"module_boundary_changed": false`. Otherwise (class 2) review the ArchitectureAnalyzer artifact written before you and set `module_boundary_changed: true`; never review in parallel with the architecture step. Do not broaden the task. Write the exact supplied `.tmp/pipelines/{run-id}/runtime-scope-review-<n>.json` as JSON with:
 
 ```json
 {
   "status": "ready",
   "scope_class": "technical",
   "paths": ["exact/repository/path"],
-  "architecture_status": "ready",
+  "architecture_status": "ready | not_required",
+  "module_boundary_changed": false,
   "review_status": "ready",
   "owner_decision_required": false,
   "requirements_changed": false,

@@ -11,6 +11,7 @@ import { applyOwnerAmendment, runCli } from './stage-cli-core.ts';
 import { prepareProjectTooling } from './project-tooling.mjs';
 import { preflightFile } from './manifest-preflight.mjs';
 import { freezeGateTesting } from './gate-testing-freeze.mjs';
+import { runGenerator } from './generator-cli.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { validateOwnerAmendmentForApply } from './owner-amendment-policy.ts';
 
@@ -381,6 +382,18 @@ async function main(args: string[]): Promise<void> {
     const tooling = prepareProjectTooling(process.cwd());
     const preflight = await preflightFile(resolve(identifier), { environment: true });
     console.log(JSON.stringify({tooling, preflight}));
+    return;
+  }
+  if (command === 'generate') {
+    const id = args[2];
+    const extra = args.slice(3);
+    const unknown = extra.filter((arg, index) => arg !== '--check-only' && arg !== '--state-root' && extra[index - 1] !== '--state-root');
+    if (!identifier || !id || unknown.length) {
+      throw new Error('usage: stage-cli generate <run-id> <generator-id> [--check-only]');
+    }
+    const result = runGenerator({ stateRoot: resolve(stateRootFromArgs(args)), runId: identifier, id, checkOnly: args.includes('--check-only') });
+    console.log(JSON.stringify(result));
+    if (result.status !== 'PASS') process.exitCode = 1;
     return;
   }
   if (command === 'gate-testing-freeze') {
