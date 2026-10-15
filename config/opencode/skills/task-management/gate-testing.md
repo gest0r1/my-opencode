@@ -142,8 +142,10 @@ clock, competes for CPU and memory, and reports other workers' half-finished edi
   `--affected` never selects, including as a previous failure. Explicit `--command-index`
   diagnostics and complete runs still execute them. At least one command must stay outside it.
   When a change impacts only coordinator commands, the worker check runs nothing and its
-  evidence names them in `deferred_to_coordinator`; the wave gate and the final complete gate
-  run them.
+  evidence names them in `deferred_to_coordinator`; the coordinator check
+  (`--advisory --coordinator`) before a review and the final complete gate run them.
+- Reuse is per command: a command that already passed on the identical tree, manifest, gate and
+  environment is not run again (`commands_reused`), in advisory and authoritative runs alike.
 - `parallel_groups` lists 2–3 consecutive frozen indexes that may run at the same time, so a
   group is one step of the frozen order. Neighbouring selected members run concurrently;
   everything else runs alone in frozen order. Live-PostgreSQL commands never join a group, and two

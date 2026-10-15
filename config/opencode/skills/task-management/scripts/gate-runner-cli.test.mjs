@@ -367,6 +367,40 @@ test('a PASS on the identical tree is reused instead of rerun; any source change
   } finally { process.env.PATH = oldPath; }
 });
 
+test('reuse is per command: a complete run executes only the commands not yet passed on this tree', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, [...fx.args, '--advisory', '--command-index', '0']); assert.equal(result.status, 0, result.stderr);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 1); assert.equal(output.commands_reused, 1); assert.equal(output.reused_from, null);
+    const evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.deepEqual(evidence.results.map(item => [item.command_index, Boolean(item.reused_from)]), [[0, true], [1, false]]);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 0);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('coordinator mode runs only coordinator_only commands and the complete run reuses them', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+    const state = JSON.parse(await readFile(statePath, 'utf8'));
+    const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+    manifest.gate_testing.default.build.coordinator_only = [1];
+    const content = JSON.stringify(manifest); state.manifest_sha256 = sha256(content);
+    await writeFile(state.manifest_file, content); await writeFile(statePath, JSON.stringify(state));
+    let result = run(fx.root, [...fx.args, '--advisory', '--coordinator']); assert.equal(result.status, 0, result.stderr);
+    let output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 1); assert.match(output.evidence, /-coordinator\.json$/);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    output = JSON.parse(result.stdout); assert.equal(output.commands_run, 1); assert.equal(output.commands_reused, 1);
+    result = run(fx.root, [...fx.args, '--advisory', '--coordinator', '--affected']); assert.notEqual(result.status, 0);
+  } finally { process.env.PATH = oldPath; }
+});
+
 test('a focused PASS never stands in for the complete authoritative set', async () => {
   const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
   try {
