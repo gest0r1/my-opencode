@@ -144,36 +144,38 @@ async function acquireRuntimeLocks(stateRoot: string, runId: string, locks: stri
 
 type ReuseQuery = {
   runDirectory: string; pipelineId: string; gate: string; manifestSha: string; sourceDigest: string;
-  environmentDigest: string; selected: Array<{ index: number; test_files: string[] }>; requireComplete: number | null;
-};
+  environmentDigest: string; selected: Array<{ index: number; test_files: string[] }>; };
 
-// A PASS already recorded by this runner for the identical source tree, frozen manifest, gate,
-// environment and a superset of the selected commands proves the same result; running the same
-// commands again on the same bytes adds wall-clock time, not evidence. Evidence written before
-// these identity fields existed is never reused.
-async function findReusablePass(query: ReuseQuery): Promise<{ path: string; evidence: any } | null> {
+// A command that already passed on the identical source tree, frozen manifest, gate and environment
+// proves the same result; running it again on the same bytes adds wall-clock time, not evidence.
+// Reuse is per command: a worker's bound check covering commands 3..11 spares those commands in a
+// later complete run, which then executes only 0..2. A result reused once can be reused again,
+// because it still describes the same bytes. Evidence written before these identity fields
+// existed, base probes and interrupted/blocked runs are never reused.
+async function findReusableResults(query: ReuseQuery): Promise<Map<number, { path: string; result: any }>> {
+  const found = new Map<number, { path: string; result: any }>();
+  const wanted = new Map(query.selected.map(item => [item.index, item.test_files]));
   for (const directory of ['gates', 'checks']) {
     let names: string[] = [];
     try { names = await readdir(join(query.runDirectory, directory)); } catch { continue; }
     for (const name of names.sort()) {
+      if (found.size === wanted.size) return found;
       if (!name.endsWith('.json') || name.endsWith('-attempts.json')) continue;
       const path = join(query.runDirectory, directory, name);
       let evidence: any;
       try { evidence = JSON.parse(await readFile(path, 'utf8')); } catch { continue; }
-      if (evidence?.status !== 'PASS' || evidence.pipeline_id !== query.pipelineId || evidence.gate !== query.gate ||
+      if (!['PASS', 'FAIL'].includes(evidence?.status) || evidence.pipeline_id !== query.pipelineId || evidence.gate !== query.gate ||
           evidence.manifest_sha256 !== query.manifestSha || evidence.source_digest !== query.sourceDigest ||
-          evidence.environment_digest !== query.environmentDigest || evidence.base_probe || evidence.reused_from ||
-          !Array.isArray(evidence.results)) continue;
-      const covered = (index: number, files: string[]) => evidence.results.some((result: any) => result.command_index === index &&
-        result.exit_code === 0 && Array.isArray(result.test_files) &&
-        (result.test_files.length === 0 || (files.length > 0 && files.every(file => result.test_files.includes(file)))));
-      if (query.requireComplete !== null) {
-        if (!Array.from({ length: query.requireComplete }, (_, index) => index).every(index => covered(index, []))) continue;
-      } else if (!query.selected.every(item => covered(item.index, item.test_files))) continue;
-      return { path, evidence };
+          evidence.environment_digest !== query.environmentDigest || evidence.base_probe || !Array.isArray(evidence.results)) continue;
+      for (const [index, files] of wanted) {
+        if (found.has(index)) continue;
+        const result = evidence.results.find((item: any) => item.command_index === index && item.exit_code === 0 && Array.isArray(item.test_files) &&
+          (item.test_files.length === 0 || (files.length > 0 && files.every(file => item.test_files.includes(file)))));
+        if (result) found.set(index, { path: result.reused_from ?? path, result });
+      }
     }
   }
-  return null;
+  return found;
 }
 
 async function main(): Promise<void> {
@@ -186,7 +188,7 @@ async function main(): Promise<void> {
   const stateRootIndex = args.indexOf('--state-root');
   if (stateRootIndex >= 0) stateRoot = args[stateRootIndex + 1] ?? DEFAULT_STATE_ROOT;
   if (!runId || !pipelineId || !gate) {
-    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>] [--no-reuse] [--advisory [--affected ...|--command-index N [--test-file PATH]...|--base-probe]]');
+    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>] [--no-reuse] [--advisory [--affected ...|--command-index N [--test-file PATH]...|--coordinator|--base-probe]]');
   }
 
   const stateFile = join(resolve(stateRoot), runId, 'state.json');
@@ -254,6 +256,17 @@ async function main(): Promise<void> {
     selected = [selected[index]];
   }
 
+  // Coordinator check: only the frozen coordinator_only commands (build, type-check, lint) on the
+  // combined tree. Worker bound checks already covered the impacted tests; the complete set runs
+  // in the authoritative gate, reusing every command that already passed on the same bytes.
+  const coordinator = args.includes('--coordinator');
+  if (coordinator) {
+    if (!advisory || affected || selection >= 0 || hasBoundBaseline) throw new GateRunnerError('coordinator requires --advisory without --affected or --command-index');
+    const indexes = Array.isArray(config?.coordinator_only) ? config.coordinator_only : [];
+    if (!indexes.length) throw new GateRunnerError('COORDINATOR_COMMANDS_MISSING: gate_testing has no coordinator_only commands');
+    selected = indexes.slice().sort((a: number, b: number) => a - b).map((index: number) => selected[index]);
+  }
+
   // Focused diagnostic: one frozen vitest command narrowed to concrete test files. It never
   // satisfies a bound completion check; the bound affected check and final gates stay complete.
   const testFiles: string[] = [];
@@ -274,7 +287,7 @@ async function main(): Promise<void> {
   const baseProbe = args.includes('--base-probe');
   let probe: { head_sha: string; base_sha: string | null } | null = null;
   if (baseProbe) {
-    if (!advisory || affected || selection >= 0 || hasBoundBaseline) throw new GateRunnerError('base-probe requires --advisory and the complete frozen set');
+    if (!advisory || affected || selection >= 0 || hasBoundBaseline || coordinator) throw new GateRunnerError('base-probe requires --advisory and the complete frozen set');
     const status = await runInvocation('git', ['status', '--porcelain', '--untracked-files=all'], process.cwd(), gitReadEnv({}), 30);
     const dirty = status.stdout.split('\n').filter(line => line.trim() && !/^.. \.tmp\//.test(line));
     if (status.exit_code !== 0 || dirty.length) throw new GateRunnerError('BASE_PROBE_REQUIRES_CLEAN_CHECKOUT');
@@ -284,6 +297,7 @@ async function main(): Promise<void> {
 
   const evidenceSuffix = workItemId ? `-${sha256(`${baseline?.stage ?? ''}:${workItemId}`).slice(0, 16)}`
     : baseProbe ? '-base-probe'
+      : coordinator ? '-coordinator'
       : testFiles.length ? `-focus-${sha256(JSON.stringify([selected[0].index, selected[0].test_files])).slice(0, 12)}` : '';
   const evidenceFile = join(resolve(stateRoot), runId, advisory ? 'checks' : 'gates', `${pipelineId}-${gate}${evidenceSuffix}.json`);
   await mkdir(dirname(evidenceFile), { recursive: true });
@@ -292,7 +306,7 @@ async function main(): Promise<void> {
   // Read-only inventory: never take .git/index.lock while a worker or publish may be writing.
   const snapshot = await sourceSnapshot(process.cwd(), manifest, (exe: string, argv: string[]) => runInvocation(exe, argv, process.cwd(), gitReadEnv({}), 30), advisory ? baseline : null);
   let deferred: number[] = [];
-  let selectionReason = baseProbe ? 'base probe: full frozen set' : testFiles.length ? 'focused test files' : 'full frozen set';
+  let selectionReason = baseProbe ? 'base probe: full frozen set' : coordinator ? 'coordinator-only commands' : testFiles.length ? 'focused test files' : 'full frozen set';
   if (affected) {
     const failures = (previous?.results ?? []).filter((result: any) => result.exit_code !== 0).map((result: any) => result.command_index);
     const known = baseline?.files && typeof baseline.files === 'object' ? baseline.files : null;
@@ -337,20 +351,21 @@ async function main(): Promise<void> {
   let status = 'PASS';
   const startedAt = new Date().toISOString();
   const usesCandidate = commands.some(command => command.includes('{candidate_sha}'));
-  const reuse = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest ? null
-    : await findReusablePass({ runDirectory: join(resolve(stateRoot), runId), pipelineId, gate, manifestSha: state.manifest_sha256,
-      sourceDigest: snapshot.digest, environmentDigest, selected: invocations.map(item => ({ index: item.index, test_files: item.test_files })),
-      requireComplete: advisory ? null : commands.length });
+  const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest ? new Map()
+    : await findReusableResults({ runDirectory: join(resolve(stateRoot), runId), pipelineId, gate, manifestSha: state.manifest_sha256,
+      sourceDigest: snapshot.digest, environmentDigest, selected: invocations.map(item => ({ index: item.index, test_files: item.test_files })) });
+  const pending = invocations.filter(item => !reusable.has(item.index));
+  // Whole-run reuse keeps the old evidence shape (`reused_from` set, zero commands run).
+  const reuse = invocations.length > 0 && pending.length === 0 ? { path: [...reusable.values()][0].path } : null;
   try {
-    if (reuse) {
-      results.push(...reuse.evidence.results);
-    } else {
-    if (config?.live_postgres && invocations.some(item => config.live_postgres.command_indexes.includes(item.index))) {
+    for (const [, item] of reusable) results.push({ ...item.result, reused_from: item.path });
+    {
+    if (config?.live_postgres && pending.some(item => config.live_postgres.command_indexes.includes(item.index))) {
       resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${runId}:${pipelineId}:${gate}`, (exe: string, argv: string[], env?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), env, 60, ['inspect', 'rm'].includes(argv[0])));
     }
     // Frozen parallel groups run together (bounded); every other command keeps frozen order.
     // A failing batch stops the gate after all of its members settle, so evidence stays complete.
-    for (const batch of parallelBatches(invocations, config, liveIndexes(config))) {
+    for (const batch of parallelBatches(pending, config, liveIndexes(config))) {
       // Every member settles to a recorded result (a start failure is exit 127), so one failing to
       // start never leaves its siblings running unrecorded.
       const settled = await Promise.all(batch.map(async invocation => {
@@ -401,14 +416,14 @@ async function main(): Promise<void> {
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
         live_postgres: resource?.evidence ?? null, cleanup_complete: cleanupComplete,
-        test_reports: reuse ? reuse.evidence.test_reports ?? [] : JSON.parse(redact(JSON.stringify(await readTestReports(config?.report_files, join(resolve(stateRoot), runId), startedAt)))),
-        error: failure ? redact(String(failure)) : null, results }, null, 2)}\n`, 'utf8');
+        test_reports: reuse ? [] : JSON.parse(redact(JSON.stringify(await readTestReports(config?.report_files, join(resolve(stateRoot), runId), startedAt)))),
+        error: failure ? redact(String(failure)) : null, results: [...results].sort((a: any, b: any) => a.command_index - b.command_index) }, null, 2)}\n`, 'utf8');
       // Append-only gate timeline for the RUN report: the main wall-clock cost is gate time.
       await mkdir(join(resolve(stateRoot), runId, 'reuse-metrics'), { recursive: true });
       await writeFile(join(resolve(stateRoot), runId, 'reuse-metrics', 'gates.jsonl'), `${JSON.stringify({ timestamp: new Date().toISOString(),
         event: 'gate_run', run_id: runId, pipeline_id: pipelineId, gate, work_item_id: workItemId ?? null, purpose: advisory ? 'advisory' : 'authoritative',
-        mode: baseProbe ? 'base_probe' : testFiles.length ? 'focus' : affected ? 'affected' : selection >= 0 ? 'command' : 'complete',
-        status, duration_ms: Date.now() - Date.parse(startedAt), commands_run: reuse ? 0 : results.length, reused: Boolean(reuse) })}\n`, { encoding: 'utf8', flag: 'a' });
+        mode: baseProbe ? 'base_probe' : coordinator ? 'coordinator' : testFiles.length ? 'focus' : affected ? 'affected' : selection >= 0 ? 'command' : 'complete',
+        status, duration_ms: Date.now() - Date.parse(startedAt), commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused: Boolean(reuse) })}\n`, { encoding: 'utf8', flag: 'a' });
       if (advisory && fingerprint && status !== 'INTERRUPTED') {
         ledger.attempts[fingerprint] = { status, hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])] };
         await writeFile(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8');
@@ -417,7 +432,7 @@ async function main(): Promise<void> {
   }
   if (failure) throw failure;
   console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: workItemId ?? null, candidate_sha: candidateSha ?? null, evidence: evidenceFile,
-    selection_reason: selectionReason, commands_run: reuse ? 0 : results.length, reused_from: reuse?.path ?? null }));
+    selection_reason: selectionReason, commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused_from: reuse?.path ?? null }));
 }
 
 main().catch((error: unknown) => {
