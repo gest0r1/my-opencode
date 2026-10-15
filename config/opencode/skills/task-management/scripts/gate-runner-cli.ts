@@ -4,7 +4,7 @@ import { access, mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/p
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
-import { validateGateTesting, selectAffectedCommands, parallelBatches } from './gate-testing-policy.mjs';
+import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGateTestingFile } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
 import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, readTestReports } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
@@ -201,7 +201,7 @@ async function main(): Promise<void> {
 
   const manifestContent = await readFile(state.manifest_file, 'utf8');
   if (sha256(manifestContent) !== state.manifest_sha256) throw new GateRunnerError('frozen manifest hash mismatch');
-  const manifest = JSON.parse(manifestContent) as Manifest;
+  const manifest = resolveGateTestingFile(JSON.parse(manifestContent), state.manifest_file) as Manifest;
   if (manifest.run_id !== runId) throw new GateRunnerError('manifest run_id mismatch');
   const pipeline = manifest.pipelines.find((item) => item.id === pipelineId);
   if (!pipeline) throw new GateRunnerError(`pipeline not found: ${pipelineId}`);
@@ -295,7 +295,8 @@ async function main(): Promise<void> {
   let selectionReason = baseProbe ? 'base probe: full frozen set' : testFiles.length ? 'focused test files' : 'full frozen set';
   if (affected) {
     const failures = (previous?.results ?? []).filter((result: any) => result.exit_code !== 0).map((result: any) => result.command_index);
-    const impact = selectAffectedCommands(commands, config, snapshot?.changed, failures);
+    const known = baseline?.files && typeof baseline.files === 'object' ? baseline.files : null;
+    const impact = selectAffectedCommands(commands, config, snapshot?.changed, failures, { isNew: (file: string) => Boolean(known) && !(file in known) });
     selected = impact.selected; selectionReason = impact.reason; deferred = impact.deferred;
     // Only coordinator commands are impacted: the worker has nothing to run, and the evidence says
     // so explicitly; the wave gate and the final complete gate run those commands.

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { computeRunnable, validateState } from './stage-cli-core.ts';
 import { validateOwnerAmendmentEvidence } from './owner-amendment-policy.ts';
+import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 import { sourceInventory } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 
@@ -152,7 +153,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   if (!/^[A-Za-z0-9._-]+$/.test(run)) throw Error('INVALID_RUN_ID');
   const state = await validateState(join(root, '.tmp/pipelines'), run);
   if (state.superseded_by || !state.manifest_file || !['approved', 'in_progress', 'ready', 'release_ready', 'blocked', 'failed'].includes(state.status)) throw Error('RUN_NOT_DISPATCHABLE');
-  const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+  const manifest = resolveGateTestingFile(JSON.parse(await readFile(state.manifest_file, 'utf8')), state.manifest_file);
   const pipeline = manifest.pipelines.find((p: { id: string }) => p.id === pipelineId);
   const runtime = state.pipelines[pipelineId]?.stages[stage];
   if (!pipeline || (!computeRunnable(state).some(p => p.pipeline_id === pipelineId && p.stage === stage) && runtime?.status !== 'in_progress')) throw Error('STAGE_NOT_RUNNABLE');

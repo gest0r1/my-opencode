@@ -1,5 +1,64 @@
 // Frozen test impact and disposable-resource contract, shared by PLAN and RUN.
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
 import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
+
+// Keys a project-generated impact map may supply; the manifest keeps only its frozen reference.
+const SOURCE_KEYS = ['impact_groups', 'coordinator_only', 'parallel_groups', 'live_postgres', 'ignored_inputs'];
+const sha256 = value => createHash('sha256').update(value).digest('hex');
+export const commandsDigest = commands => sha256(JSON.stringify(commands));
+
+// `gate_testing[profile][gate].source` points at a snapshot of the project's own generated impact
+// map, copied into the run directory by `stage-cli gate-testing-freeze`. Every reader resolves it
+// here, so the runner, dispatch, completion and preflight all see the same frozen groups.
+export function resolveGateTesting(manifest, runDirectory) {
+  const testing = manifest?.gate_testing;
+  if (!testing || typeof testing !== 'object' || Array.isArray(testing)) return manifest;
+  let changed = false;
+  const resolved = {};
+  for (const [profile, gates] of Object.entries(testing)) {
+    if (!gates || typeof gates !== 'object' || Array.isArray(gates)) { resolved[profile] = gates; continue; }
+    resolved[profile] = {};
+    for (const [gate, config] of Object.entries(gates)) {
+      if (!config?.source) { resolved[profile][gate] = config; continue; }
+      const source = config.source;
+      if (typeof source !== 'object' || typeof source.snapshot !== 'string' || !/^[0-9a-f]{64}$/i.test(source.sha256 ?? '') ||
+          !/^[0-9a-f]{64}$/i.test(source.commands_sha256 ?? '') || !safeTestPath(source.snapshot)) {
+        throw new Error(`GATE_TESTING_SOURCE_INVALID: ${profile}/${gate}`);
+      }
+      if (!runDirectory) throw new Error(`GATE_TESTING_SOURCE_UNRESOLVED: ${profile}/${gate} needs the run directory`);
+      const root = resolve(runDirectory);
+      const path = resolve(root, source.snapshot);
+      if (!path.startsWith(`${root}${sep}`) || !existsSync(path)) throw new Error(`GATE_TESTING_SOURCE_MISSING: ${source.snapshot}`);
+      const raw = readFileSync(path, 'utf8');
+      if (sha256(raw) !== source.sha256.toLowerCase()) throw new Error(`GATE_TESTING_SOURCE_CHANGED: ${source.snapshot}`);
+      const commands = manifest.gate_profiles?.[profile]?.[gate];
+      if (!Array.isArray(commands) || commandsDigest(commands) !== source.commands_sha256.toLowerCase()) {
+        throw new Error(`GATE_TESTING_SOURCE_COMMANDS_CHANGED: ${profile}/${gate} indexes were frozen against another command array`);
+      }
+      let snapshot;
+      try { snapshot = JSON.parse(raw); } catch { throw new Error(`GATE_TESTING_SOURCE_INVALID: ${source.snapshot}`); }
+      const inline = Object.keys(config).filter(key => key !== 'source');
+      if (inline.some(key => SOURCE_KEYS.includes(key) && key !== 'ignored_inputs')) throw new Error(`GATE_TESTING_SOURCE_CONFLICT: ${profile}/${gate} keeps impact data only in the snapshot`);
+      const merged = { ...config };
+      delete merged.source;
+      for (const key of SOURCE_KEYS) if (snapshot[key] !== undefined && merged[key] === undefined) merged[key] = snapshot[key];
+      resolved[profile][gate] = merged;
+      changed = true;
+    }
+  }
+  return changed ? { ...manifest, gate_testing: resolved } : manifest;
+}
+
+// Same as resolveGateTesting for a manifest file path (its directory is the run directory).
+export function resolveGateTestingFile(manifest, manifestFile) {
+  return resolveGateTesting(manifest, dirname(resolve(manifestFile)));
+}
+
+export function snapshotPath(profile, gate) {
+  return join('planning', 'gate-testing', `${profile}.${gate}.json`);
+}
 
 export function safeTestPath(value) {
   return typeof value === 'string' && value.length > 0 && !value.startsWith('/') &&
@@ -21,7 +80,14 @@ export function validateGateTesting(manifest) {
       const commands = manifest.gate_profiles?.[profile]?.[gate];
       if (!Array.isArray(commands) || !config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`GATE_TESTING_INVALID: ${profile}/${gate}`);
       if (/(runtime|deploy|release|smoke|install)/i.test(gate)) throw new Error('GATE_TESTING_INVALID: test resources cannot wrap deployment gates');
-      if (Object.keys(config).some(key => !['impact_groups', 'live_postgres', 'timeout_seconds', 'report_files', 'coordinator_only', 'parallel_groups'].includes(key))) throw new Error('GATE_TESTING_INVALID: unknown option');
+      if (Object.keys(config).some(key => !['impact_groups', 'live_postgres', 'timeout_seconds', 'report_files', 'coordinator_only', 'parallel_groups', 'ignored_inputs', 'source'].includes(key))) throw new Error('GATE_TESTING_INVALID: unknown option');
+      // An unresolved source reference is validated after resolveGateTesting merges its snapshot.
+      if (config.source !== undefined) continue;
+      if (config.ignored_inputs !== undefined && (!Array.isArray(config.ignored_inputs) || config.ignored_inputs.some(rule => {
+        const pattern = typeof rule === 'string' ? rule : rule?.pattern;
+        const except = typeof rule === 'string' ? [] : rule?.except ?? [];
+        return typeof pattern !== 'string' || !pattern || pattern.startsWith('/') || pattern.includes('..') || !Array.isArray(except) || except.some(item => typeof item !== 'string' || !item);
+      }))) throw new Error('GATE_TESTING_INVALID: ignored_inputs holds glob patterns with optional except lists');
       if (config.report_files !== undefined && (!Array.isArray(config.report_files) || config.report_files.some(file => !safeTestPath(file) || !file.endsWith('.json') || file.includes('*')))) throw new Error('GATE_TESTING_INVALID: report_files must be relative JSON paths inside the run');
       if (config.timeout_seconds !== undefined && (!Number.isInteger(config.timeout_seconds) || config.timeout_seconds < 10 || config.timeout_seconds > 3600)) throw new Error('GATE_TESTING_INVALID: timeout must be 10..3600 seconds');
       const indexValid = index => Number.isInteger(index) && index >= 0 && index < commands.length;
@@ -96,7 +162,34 @@ export function parallelBatches(invocations, config, liveIndexes = []) {
 // Dependency manifests/lockfiles and auth/security paths can affect any suite: always full.
 const ALWAYS_FULL_CHANGE = /(^|\/)(package\.json|(?:pnpm|bun|yarn|package)[.-]lock[^/]*)$|(^|\/)auth(\/|[.-])/i;
 
-export function selectAffectedCommands(commands, config, changed, previousFailures = []) {
+const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+
+function globRegex(pattern) {
+  let out = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i];
+    if (char === '*' && pattern[i + 1] === '*') {
+      if (pattern[i + 2] === '/') { out += '(?:.*/)?'; i += 2; } else { out += '.*'; i += 1; }
+    } else if (char === '*') out += '[^/]*';
+    else if (char === '?') out += '[^/]';
+    else out += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${out}$`);
+}
+
+export function ignoredInput(rules, file) {
+  return (Array.isArray(rules) ? rules : []).some(rule => {
+    const pattern = typeof rule === 'string' ? rule : rule.pattern;
+    const except = typeof rule === 'string' ? [] : rule.except ?? [];
+    return globRegex(pattern).test(file) && !except.some(item => globRegex(item).test(file));
+  });
+}
+
+// `options.isNew(path)` says the path did not exist when the work item was dispatched. A generated
+// project map cannot know files written after it was frozen, so a new test file runs alone with
+// the command that owns its directory, and a new source file is reached through the changed
+// mapped files that import it. Anything else unmapped still selects the complete array.
+export function selectAffectedCommands(commands, config, changed, previousFailures = [], options = {}) {
   // coordinator_only commands (type-check, lint, build, complete suites) run once per wave on the
   // combined tree and in the final gate; a worker's affected check never runs them.
   const coordinatorOnly = new Set(Array.isArray(config?.coordinator_only) ? config.coordinator_only : []);
@@ -104,19 +197,36 @@ export function selectAffectedCommands(commands, config, changed, previousFailur
   const split = (reason, all) => ({ reason, selected: all.filter(worker), deferred: all.filter(item => !worker(item)).map(item => item.index) });
   const full = reason => split(reason, commands.map((command, index) => ({ command, index, test_files: [] })));
   if (!config?.impact_groups || !changed?.length) return full('missing impact map or change baseline');
-  if (changed.some(file => ALWAYS_FULL_CHANGE.test(file))) return full('dependency or security change');
-  // Schema/migration/configuration/shared-contract changes use the frozen, reviewed transitive
-  // impact groups like any other path; an unmapped one still selects the complete array.
-  if (changed.some(file => !config.impact_groups.some(group => group.inputs.some(input => impactMatches(input, file))))) return full('unmapped change');
+  const relevant = changed.filter(file => !ignoredInput(config.ignored_inputs, file));
+  if (!relevant.length) return split('only ignored inputs changed', []);
+  if (relevant.some(file => ALWAYS_FULL_CHANGE.test(file))) return full('dependency or security change');
+  const mapped = file => config.impact_groups.some(group => group.inputs.some(input => impactMatches(input, file)));
+  const isNew = typeof options.isNew === 'function' ? options.isNew : () => false;
   const selected = new Map();
-  for (const group of config.impact_groups) {
-    if (!group.inputs.some(input => changed.some(file => impactMatches(input, file)))) continue;
-    const prior = selected.get(group.command_index);
-    const files = group.test_files ?? [];
-    selected.set(group.command_index, {
-      command: commands[group.command_index], index: group.command_index,
+  const add = (index, files) => {
+    const prior = selected.get(index);
+    selected.set(index, {
+      command: commands[index], index,
       test_files: prior ? (prior.test_files.length && files.length ? [...new Set([...prior.test_files, ...files])] : []) : files,
     });
+  };
+  const anyMapped = relevant.some(mapped);
+  // A new test file is listed in no group's test_files even when a directory glob maps it.
+  for (const file of relevant.filter(file => (!mapped(file) || (isNew(file) && TEST_FILE.test(file))))) {
+    if (TEST_FILE.test(file)) {
+      const directory = file.slice(0, file.lastIndexOf('/') + 1);
+      const owner = config.impact_groups.find(group => (group.test_files ?? []).some(test => test.startsWith(directory) && !test.slice(directory.length).includes('/')));
+      if (!owner) return full('unmapped change');
+      add(owner.command_index, [file]);
+    } else if (!(isNew(file) && anyMapped)) {
+      return full('unmapped change');
+    }
+  }
+  // Schema/migration/configuration/shared-contract changes use the frozen, reviewed transitive
+  // impact groups like any other path.
+  for (const group of config.impact_groups) {
+    if (!group.inputs.some(input => relevant.some(file => impactMatches(input, file)))) continue;
+    add(group.command_index, group.test_files ?? []);
   }
   // A failing command is always rechecked in full, even if its inputs did not change.
   for (const index of previousFailures) {
