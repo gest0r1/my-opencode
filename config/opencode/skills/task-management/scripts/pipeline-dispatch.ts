@@ -257,6 +257,10 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       state_revision: revision,
       allowed_change_paths: boundScope,
       repair_paths: repairPaths,
+      // The repair loop this dispatch serves: completion of a reopened stage needs bound evidence
+      // only from the current loop, not from work items the repair did not redispatch.
+      loop: repairRuntime?.technical_fix_cycles ?? 0,
+      repair_origin_stage: runtime?.repair_origin_stage ?? null,
       base_probe: baseProbe,
       source_digest: inventory.digest,
       files: inventory.files,

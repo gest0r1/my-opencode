@@ -124,6 +124,8 @@ Review decisions, architecture, contracts, evidence, work decomposition and DAG 
 - unsafe architecture/interface assumptions;
 - dependency cycles, un-serialized exclusive/migration/fixture conflicts;
 - lost parallelism: independent work items with disjoint paths placed in one pipeline (one stage at a time) instead of separate lanes; work items marked `parallel: true` inside one pipeline are always this finding;
+- late tests: a source lane without its own `review` stage, or a lane whose tests (unit, live, inventory registration) are left to a later test-only sink item;
+- unbound test selection: the repository generates a test impact map but the manifest copies groups by hand or leaves selection non-narrowing instead of `gate_testing.source`;
 - migration/data/security/reliability/rollback gaps;
 - testability and runtime/release evidence gaps;
 - scope expansion or vague work items.
