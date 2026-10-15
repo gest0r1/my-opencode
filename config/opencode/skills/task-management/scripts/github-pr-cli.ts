@@ -150,13 +150,23 @@ async function assertFinalDeploymentValidation(
       throw new GitHubPrCliError(`deployable pipeline has no deployment validation stage: ${String(pipeline?.id)}`);
     }
     const executor = pipeline?.executors?.[stage];
-    if (executor !== 'github_ci' && executor !== 'github_dev') {
+    // An owner-skipped validation stage is the owner's recorded decision, not a PASS to verify.
+    if (state?.pipelines?.[String(pipeline.id)]?.stages?.[stage]?.status === 'skipped') continue;
+    const localValidation = executor === 'local_gate' && pipeline?.github_ci_mode === 'off';
+    if (executor !== 'github_ci' && executor !== 'github_dev' && !localValidation) {
       throw new GitHubPrCliError(`deployment validation is not a GitHub gate: ${String(pipeline?.id)}/${stage}`);
     }
     const evidence = await readJson(
-      path.join(runDir, 'github', `${String(pipeline.id)}-${stage}.json`),
+      localValidation ? path.join(runDir, 'gates', `${String(pipeline.id)}-${stage}.json`) : path.join(runDir, 'github', `${String(pipeline.id)}-${stage}.json`),
       `deployment validation evidence ${String(pipeline.id)}/${stage}`,
     );
+    if (localValidation) {
+      if (evidence.status !== 'PASS' || evidence.purpose !== 'authoritative' ||
+          (evidence.candidate_sha && String(evidence.candidate_sha).toLowerCase() !== candidateSha.toLowerCase())) {
+        throw new GitHubPrCliError(`FINAL_CANDIDATE_VALIDATION_REQUIRED: ${String(pipeline.id)}/${stage} must PASS locally`);
+      }
+      continue;
+    }
     if (evidence.status !== 'PASS' ||
         String(evidence.candidate_sha ?? '').toLowerCase() !== candidateSha.toLowerCase()) {
       throw new GitHubPrCliError(

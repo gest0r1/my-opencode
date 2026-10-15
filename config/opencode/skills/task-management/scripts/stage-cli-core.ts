@@ -1708,6 +1708,43 @@ export async function approveRuntimeReplan(
   });
 }
 
+// Owner decision to skip a stage. Any stage may be skipped, but only with run-local evidence that
+// quotes the owner's decision; `github_ci_mode: optional` lets a CI infrastructure blocker
+// (`ci_infra_waiver` evidence citing GITHUB_CI_INFRA_BLOCKED) count as that decision.
+export async function ownerSkipStage(stateRoot: string, runId: string, stage: string, evidencePath: string, pipelineId?: string): Promise<PipelineState> {
+  return updateState(stateRoot, runId, state => {
+    const file = resolve(evidencePath);
+    if (!state.manifest_file || !file.startsWith(dirname(resolve(state.manifest_file)) + '/')) throw new StageCliError('OWNER_SKIP_EVIDENCE_OUTSIDE_RUN');
+    const raw = readFileSync(file, 'utf8');
+    let evidence: any;
+    try { evidence = JSON.parse(raw); } catch { throw new StageCliError('OWNER_SKIP_EVIDENCE_INVALID'); }
+    const pipeline = getPipeline(state, pipelineId);
+    const runtime = pipeline.stages[stage];
+    if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    if (['completed', 'skipped'].includes(runtime.status)) throw new StageCliError(`OWNER_SKIP_STAGE_DONE: ${pipeline.id}/${stage}`);
+    const spec = readFrozenManifestFromState(state).pipelines.find(p => p.id === pipeline.id) as any;
+    const text = (value: unknown) => typeof value === 'string' && value.trim().length > 0;
+    const ownerDecision = evidence.kind === 'owner_skip' && evidence.owner_decision_required === true && text(evidence.owner_decision) && text(evidence.reason);
+    const ciWaiver = evidence.kind === 'ci_infra_waiver' && spec?.github_ci_mode === 'optional' &&
+      spec?.executors?.[stage] === 'github_ci' && /GITHUB_CI_INFRA_BLOCKED/.test(String(evidence.reason ?? ''));
+    if (evidence.stage !== stage || evidence.pipeline_id !== pipeline.id || (!ownerDecision && !ciWaiver)) {
+      throw new StageCliError('OWNER_SKIP_EVIDENCE_INVALID: needs kind=owner_skip with owner_decision_required=true, the owner decision text, reason, stage and pipeline_id (or ci_infra_waiver for github_ci_mode optional)');
+    }
+    runtime.status = 'skipped';
+    runtime.completed_at = now();
+    runtime.message = `skipped by ${evidence.kind}: ${String(evidence.reason).slice(0, 300)}`;
+    runtime.evidence = { ...(runtime.evidence ?? {}), owner_skip: { path: file, sha256: sha256(raw), kind: evidence.kind } } as any;
+    addHistory(state, pipeline.id, stage, 'skipped', runtime.message);
+    const done = (name: string | undefined) => !!name && pipeline.stage_order.indexOf(name) >= 0 &&
+      pipeline.stage_order.slice(0, pipeline.stage_order.indexOf(name) + 1).every(item => ['completed', 'skipped'].includes(pipeline.stages[item]?.status));
+    const all = pipeline.stage_order.every(item => ['completed', 'skipped'].includes(pipeline.stages[item]?.status));
+    if (all) { pipeline.status = 'completed'; pipeline.current_stage = undefined; }
+    else if (done(pipeline.release_ready_after_stage)) pipeline.status = 'release_ready';
+    else if (done(pipeline.ready_after_stage)) pipeline.status = 'ready';
+    else if (!pipeline.stage_order.some(item => pipeline.stages[item]?.status === 'blocked' || pipeline.stages[item]?.status === 'failed')) pipeline.status = 'in_progress';
+  });
+}
+
 export async function deferOwnerDecision(stateRoot: string, runId: string, id: string, evidencePath: string, pipelineId: string): Promise<PipelineState> {
   return updateState(stateRoot, runId, state => {
     const file = resolve(evidencePath);
@@ -2337,6 +2374,11 @@ export async function runCli(args: string[]): Promise<void> {
       await authorizeSecurityFix(options.stateRoot, runId, stage, options.evidencePath, options.pipelineId),
       options.json,
     );
+    return;
+  }
+  if (command === 'owner-skip') {
+    if (!positional[2] || !options.evidencePath) throw new StageCliError('owner-skip requires <stage> --pipeline <id> --evidence <owner-skip.json>');
+    printState(await ownerSkipStage(options.stateRoot, runId, positional[2], options.evidencePath, options.pipelineId), options.json);
     return;
   }
   if (command === 'owner-decision-defer') {

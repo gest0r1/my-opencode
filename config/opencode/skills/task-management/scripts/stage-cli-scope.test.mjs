@@ -262,3 +262,16 @@ test('class 1 technical scope needs only the senior review when no module bounda
   const result = extend();
   assert.equal(result.status, 0, result.stderr);
 });
+
+test('owner-skip needs the owner decision and makes the stage skipped', async () => {
+  const fx = await fixture('owner-skip-run');
+  const evidence = path.join(fx.stateRoot, fx.runId, 'owner-skip.json');
+  const skip = () => run(fx.root, ['owner-skip', fx.runId, 'implementation', '--pipeline', 'app', '--evidence', evidence, '--state-root', fx.stateRoot, '--json']);
+  await writeFile(evidence, JSON.stringify({ kind: 'owner_skip', stage: 'implementation', pipeline_id: 'app', reason: 'CI billing', owner_decision_required: true }));
+  assert.notEqual(skip().status, 0);
+  await writeFile(evidence, JSON.stringify({ kind: 'owner_skip', stage: 'implementation', pipeline_id: 'app', reason: 'CI billing', owner_decision_required: true, owner_decision: 'Пропусти стадию' }));
+  const result = skip();
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'state.json'), 'utf8'));
+  assert.equal(state.pipelines.app.stages.implementation.status, 'skipped');
+});

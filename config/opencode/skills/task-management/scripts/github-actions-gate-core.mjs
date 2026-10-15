@@ -670,3 +670,20 @@ export function validateWorkflowResult({
     ...(sourceCiRunId ? { source_ci_run_id: sourceCiRunId } : {}),
   };
 }
+
+// A job GitHub never started (billing, spending limit, no runner) has no steps and no log; the
+// reason is only in its check-run annotations. It is an infrastructure blocker, not a code failure.
+export function jobNotStarted(job) {
+  return job?.conclusion && job.conclusion !== 'success' && job.conclusion !== 'skipped' &&
+    (!Array.isArray(job.steps) || job.steps.length === 0) && !job.runner_name;
+}
+
+export function classifyCiInfra(jobs, annotationsByJob = {}) {
+  const notStarted = (jobs ?? []).filter(jobNotStarted);
+  if (!notStarted.length) return null;
+  const messages = notStarted.flatMap(job => (annotationsByJob[job.id] ?? []).map(item => String(item?.message ?? ''))).filter(Boolean);
+  const text = messages.join('\n');
+  const kind = /payment|spending limit|billing/i.test(text) ? 'billing'
+    : /runner|no hosted|queued/i.test(text) ? 'runner' : 'not_started';
+  return { kind, jobs: notStarted.map(job => String(job.name ?? job.id)), message: messages[0] ?? 'jobs were not started' };
+}
