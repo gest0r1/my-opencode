@@ -327,6 +327,22 @@ async function quarantineStrays(manifestPath:string,cwd:string,apply:boolean):Pr
   if(moved.length){await mkdir(target,{recursive:true});await writeJsonAtomic(join(target,'quarantine.json'),evidence);}
   return {mode:'apply',...evidence};
 }
+// Project tooling that lists files through the git index (`git ls-files`: generated test maps,
+// release metadata) does not see files a worker created. This records exactly the untracked files
+// inside the effective scope as intent-to-add entries: no content is staged, nothing is committed,
+// and publish still stages the final content itself. Sensitive names and build output are skipped.
+async function stageNew(manifestPath:string,cwd:string):Promise<Record<string,unknown>>{
+  const manifest=JSON.parse(await readFile(manifestPath,'utf8')) as Manifest;
+  const branch=await git(['branch','--show-current'],cwd);
+  if(branch!==manifest.git_setup?.branch)throw new GateError(`STAGE_NEW_BRANCH_MISMATCH: checkout is on ${branch||'<detached>'}, RUN branch is ${String(manifest.git_setup?.branch)}`);
+  const {scope}=await effectiveScope(manifest,manifestPath);
+  const untracked=(await git(['ls-files','--others','--exclude-standard'],cwd)).split('\n').filter(Boolean).sort();
+  const added=untracked.filter(path=>safePath(path)&&!sensitive(path)&&!path.startsWith('.tmp/')&&
+    !/(^|\/)(node_modules|dist|build|coverage)\//.test(path)&&scope.some(allowed=>matches(path,allowed)));
+  const outside=untracked.filter(path=>!added.includes(path)&&!path.startsWith('.tmp/'));
+  if(added.length)await git(['add','--intent-to-add','--',...added],cwd);
+  return {intent_to_add:added,skipped_outside_scope:outside};
+}
 async function main(): Promise<void> {
   const [command, manifestPath] = process.argv.slice(2);
   const cwd = await git(['rev-parse', '--show-toplevel']);
@@ -349,6 +365,11 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await quarantineStrays(manifestPath, cwd, extra.includes('--apply')) }));
     return;
   }
+  if (command === 'stage-new' && manifestPath) {
+    if (process.argv.length > 4) throw new GateError('usage: stage-new <manifest.json>');
+    console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await stageNew(manifestPath, cwd) }));
+    return;
+  }
   if (command === 'inspect' && !manifestPath) {
     console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await inspect(cwd) }));
     return;
@@ -358,7 +379,7 @@ async function main(): Promise<void> {
     return;
   }
   if (!manifestPath || !['freshness', 'adopt', 'verify', 'publish'].includes(command ?? '')) {
-    throw new GateError('usage: git-worktree-cli.ts inspect | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | quarantine-strays <manifest.json> [--apply] | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
+    throw new GateError('usage: git-worktree-cli.ts inspect | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | quarantine-strays <manifest.json> [--apply] | stage-new <manifest.json> | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
   assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);

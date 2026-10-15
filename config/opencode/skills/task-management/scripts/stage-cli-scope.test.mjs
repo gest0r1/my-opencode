@@ -26,7 +26,7 @@ async function frozen(root, relative, content) {
   await writeFile(file, content, 'utf8');
   return { path: relative, sha256: sha(content) };
 }
-async function fixture(runId = 'scope-run') {
+async function fixture(runId = 'scope-run', extra = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'stage-cli-scope-'));
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const architecture = await frozen(root, 'planning/architecture.md', '# architecture\n');
@@ -63,6 +63,7 @@ async function fixture(runId = 'scope-run') {
     },
     open_decisions: [],
     allowed_change_paths: ['packages/db/src/**'],
+    ...extra,
     gate_profiles: {},
     pipelines: [{
       id: 'app',
@@ -239,3 +240,25 @@ test('runtime scope cannot auto-authorize workflow trust-boundary paths', async 
   assert.match(result.stderr, /protected\/sensitive path/);
 });
 
+
+test('scope-check authorizes declared generator outputs without a reviewer', async () => {
+  const fx = await fixture('scope-generated', { generated_paths: ['docs/testing/**'] });
+  const result = run(fx.root, ['scope-check', fx.runId, 'implementation', 'docs/testing/test-blocks.json', '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.runtime_scope_extensions[0].scope_class, 'generated');
+});
+
+test('class 1 technical scope needs only the senior review when no module boundary changes', async () => {
+  const fx = await fixture('scope-class-one');
+  const requested = ['packages/db/scripts/new-helper.ts'];
+  const evidence = path.join(fx.stateRoot, fx.runId, 'runtime-scope-review.json');
+  const base = { status: 'ready', scope_class: 'technical', paths: requested, review_status: 'ready', owner_decision_required: false,
+    requirements_changed: false, acceptance_criteria_changed: false, external_contract_changed: false, security_boundary_changed: false, destructive_change: false };
+  const extend = () => run(fx.root, ['scope-extend', fx.runId, 'implementation', ...requested, '--class', 'technical', '--evidence', evidence, '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
+  await writeFile(evidence, JSON.stringify({ ...base, architecture_status: 'not_required', module_boundary_changed: true }));
+  assert.notEqual(extend().status, 0);
+  await writeFile(evidence, JSON.stringify({ ...base, architecture_status: 'not_required', module_boundary_changed: false }));
+  const result = extend();
+  assert.equal(result.status, 0, result.stderr);
+});

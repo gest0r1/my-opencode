@@ -1,7 +1,7 @@
 import { executablePath, checkProjectTooling } from './project-tooling.mjs';
-import { readFileSync, accessSync, constants } from 'node:fs';
+import { readFileSync, accessSync, constants, existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { gatePolicyError, isFrozenUvPytest, tokenizeGateCommand as tokenizeGateCommandPolicy } from './gate-command-policy.mjs';
 import { validateManifestV2Policy, validatePackageManagerContract } from './manifest-v2-policy.mjs';
@@ -112,6 +112,29 @@ function checkPython(tokens, cwd) {
 }
 
 
+const TEST_ARG = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+
+// A frozen command that repeats another, or only narrows another to test files that the broader
+// command already runs, costs a full extra run on every complete gate and proves nothing new.
+export function redundantGateCommands(commands) {
+  const findings = [];
+  const parsed = commands.map(command => tokenizeGateCommand(command));
+  parsed.forEach((tokens, index) => {
+    parsed.forEach((other, otherIndex) => {
+      if (otherIndex === index) return;
+      if (JSON.stringify(tokens) === JSON.stringify(other)) {
+        if (otherIndex < index) findings.push(`${index} repeats ${otherIndex}`);
+        return;
+      }
+      const narrowed = tokens.filter(token => !TEST_ARG.test(token));
+      if (narrowed.length < tokens.length && !other.some(token => TEST_ARG.test(token)) && JSON.stringify(narrowed) === JSON.stringify(other)) {
+        findings.push(`${index} is a subset of ${otherIndex}`);
+      }
+    });
+  });
+  return findings;
+}
+
 export function validateGateManifest(manifest, { environment = false, cwd = process.cwd(), manifestPath } = {}) {
   if (!manifest || typeof manifest !== 'object' || !Array.isArray(manifest.pipelines)) {
     throw new ManifestPreflightError('manifest.pipelines must be an array');
@@ -180,7 +203,13 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
       checkPython(tokens, cwd);
     }
   }
-  return { status: 'PASS', checked_commands: invocations.length, environment_checked: environment };
+  // Before init this blocks the PLAN; an already initialized RUN only reports it.
+  const redundant = Object.entries(profiles).flatMap(([profile, gates]) => Object.entries(gates)
+    .flatMap(([gate, commands]) => redundantGateCommands(commands).map(finding => `${profile}/${gate}: command ${finding}`)));
+  if (redundant.length && manifestPath && !existsSync(join(dirname(resolve(manifestPath)), 'state.json'))) {
+    throw new ManifestPreflightError(`GATE_COMMAND_REDUNDANT: ${redundant.join('; ')}; drop the repeated or contained command`);
+  }
+  return { status: 'PASS', checked_commands: invocations.length, environment_checked: environment, ...(redundant.length ? { warnings: redundant.map(item => `GATE_COMMAND_REDUNDANT: ${item}`) } : {}) };
 }
 
 export async function preflightFile(path, options = {}) {

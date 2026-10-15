@@ -201,6 +201,8 @@ export interface RefreshRevalidation {
 export interface PipelineManifest {
   schema_version: number;
   run_id: string;
+  /** Generator outputs (exact paths or `dir/**`) that RUN may extend into without a reviewer. */
+  generated_paths?: string[];
   rules_file: string;
   rules_version: number;
   pipelines: PipelineManifestPipeline[];
@@ -319,7 +321,7 @@ export interface PipelineRuntime {
   current_stage?: string;
 }
 
-export const RUNTIME_SCOPE_CLASSES = ['test', 'technical', 'owner_amendment'] as const;
+export const RUNTIME_SCOPE_CLASSES = ['test', 'generated', 'technical', 'owner_amendment'] as const;
 export type RuntimeScopeClass = (typeof RUNTIME_SCOPE_CLASSES)[number];
 
 export interface RuntimeScopeExtension {
