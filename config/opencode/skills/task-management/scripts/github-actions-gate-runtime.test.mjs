@@ -365,3 +365,11 @@ esac
   assert.match(result.stdout, /first diagnostic line/);
   assert.doesNotMatch(result.stdout, /fixture-secret-value/);
 });
+
+test('jobs GitHub never started are classified as an infrastructure blocker from annotations', async () => {
+  const { classifyCiInfra } = await import('./github-actions-gate-core.mjs');
+  const jobs = [{ id: 1, name: 'build', conclusion: 'failure', steps: [] }, { id: 2, name: 'ok', conclusion: 'success', steps: [{}] }];
+  const billing = classifyCiInfra(jobs, { 1: [{ message: 'The job was not started because recent account payments have failed or your spending limit needs to be increased.' }] });
+  assert.equal(billing.kind, 'billing'); assert.deepEqual(billing.jobs, ['build']);
+  assert.equal(classifyCiInfra([{ id: 3, conclusion: 'failure', steps: [{ conclusion: 'failure' }], runner_name: 'r' }]), null);
+});

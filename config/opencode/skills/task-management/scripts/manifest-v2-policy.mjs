@@ -674,8 +674,15 @@ function validateGithubExecutionContract(manifest) {
           typeof validation.stage !== 'string' || !stageSet.has(validation.stage)) {
         throw new ManifestV2PolicyError(`DEPLOYMENT_VALIDATION_REQUIRED: ${pipeline.id}`);
       }
+      const ciMode = pipeline.github_ci_mode ?? 'required';
+      if (!['required', 'optional', 'off'].includes(ciMode)) throw new ManifestV2PolicyError(`GITHUB_CI_MODE_INVALID: ${pipeline.id}`);
       const validationExecutor = pipeline.executors[validation.stage];
-      if (validationExecutor !== 'github_ci') {
+      if (ciMode === 'off') {
+        // Owner chose no GitHub CI: the frozen local gate is the delivery validation.
+        if (Object.values(pipeline.executors).includes('github_ci') || validationExecutor !== 'local_gate') {
+          throw new ManifestV2PolicyError(`GITHUB_CI_MODE_OFF_REQUIRES_LOCAL_VALIDATION: ${pipeline.id}/${validation.stage}`);
+        }
+      } else if (validationExecutor !== 'github_ci') {
         throw new ManifestV2PolicyError(`DEPLOYMENT_VALIDATION_REQUIRES_FINAL_GITHUB_CI: ${pipeline.id}/${validation.stage}`);
       }
 

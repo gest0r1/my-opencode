@@ -16,6 +16,8 @@ import {
   sanitizeGithubFailedLog,
   validateDevEvidence,
   validateWorkflowResult,
+  classifyCiInfra,
+  jobNotStarted,
 } from './github-actions-gate-core.mjs';
 
 type Executor = 'github_ci' | 'github_dev';
@@ -468,6 +470,14 @@ function fetchJobs(repo: string, id: number): any[] {
   return ghJson(['api', `repos/${repo}/actions/runs/${id}/jobs?filter=latest&per_page=100`])?.jobs ?? [];
 }
 
+function fetchAnnotations(repo: string, jobs: any[]): Record<string, any[]> {
+  const out: Record<string, any[]> = {};
+  for (const job of jobs.filter(jobNotStarted)) {
+    try { out[job.id] = ghJson(['api', `repos/${repo}/check-runs/${Number(job.id)}/annotations`]) ?? []; } catch { out[job.id] = []; }
+  }
+  return out;
+}
+
 function fetchArtifacts(repo: string, id: number): any[] {
   return ghJson(['api', `repos/${repo}/actions/runs/${id}/artifacts?per_page=100`])?.artifacts ?? [];
 }
@@ -824,8 +834,12 @@ async function runGate(runId: string, pipelineId: string, stage: string, stateRo
       trusted_ref: contract.trusted_ref ?? null,
       recorded_at: new Date().toISOString(),
     };
+    // Jobs GitHub never started are an infrastructure blocker: no fix cycle, no rerun until fixed.
+    const infra = run?.conclusion !== 'success' ? classifyCiInfra(jobs, fetchAnnotations(repo as string, jobs)) : null;
+    if (infra) Object.assign(failure, { status: 'BLOCKED', infra_blocker: infra });
     await writeFile(evidenceFile, `${JSON.stringify(failure, null, 2)}\n`, 'utf8');
-    throw new CliError(`${message}; evidence=${evidenceFile}`);
+    if (infra) throw new CliError(`GITHUB_CI_INFRA_BLOCKED: ${infra.kind}: ${infra.message}; jobs=${infra.jobs.join(',')}; evidence=${evidenceFile}`);
+    throw new CliError(`GITHUB_CI_CODE_FAILURE: ${message}; evidence=${evidenceFile}`);
   }
 
   const evidence = {
@@ -888,8 +902,11 @@ async function diagnoseCommand(runId: string, pipelineId: string, stage: string,
     });
     const summaries = Array.isArray(diagnostics.jobs) ? diagnostics.jobs : [];
     const failed = [];
+    const annotations = fetchAnnotations(repo, jobs);
+    const infra = classifyCiInfra(jobs, annotations);
     for (const job of failedJobs(jobs)) {
-      const logFile = await writeDiagnosticJobLog(
+      // A job that never started has no log; its reason is in the annotations.
+      const logFile = jobNotStarted(job) ? null : await writeDiagnosticJobLog(
         runRoot, repo, workflowRunId, pipelineId, stage, job,
       );
       const summary = summaries.find((item: any) => Number(item?.id) === Number(job?.id));
@@ -902,9 +919,11 @@ async function diagnoseCommand(runId: string, pipelineId: string, stage: string,
           failed_steps: [],
         }),
         log_file: logFile,
+        not_started: jobNotStarted(job),
+        annotations: (annotations[job.id] ?? []).map((item: any) => String(item?.message ?? '')).filter(Boolean),
       });
     }
-    const compact = { ...diagnostics, failed_jobs: failed };
+    const compact = { ...diagnostics, failed_jobs: failed, classification: infra ? `GITHUB_CI_INFRA_BLOCKED: ${infra.kind}` : 'GITHUB_CI_CODE_FAILURE', ...(infra ? { infra_blocker: infra } : {}) };
     const file = join(runRoot, 'github', `${pipelineId}-${stage}-diagnostics.json`);
     await writeFile(file, `${JSON.stringify(compact, null, 2)}\n`, 'utf8');
     return { ...compact, evidence: file };
