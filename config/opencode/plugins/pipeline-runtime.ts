@@ -5,6 +5,7 @@ import path from "node:path"
 import crypto from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { assertPipelineCapabilities } from "../skills/task-management/scripts/capability-preflight.mjs"
+import { RUN_PROMPT, WAKE_MARKER, wakeDecision, wakeText } from "../skills/task-management/scripts/orchestrator-wake.mjs"
 
 const ELIGIBLE_ROLES = new Set([
   "CoderAgent", "TestEngineer", "BuildAgent",
@@ -15,6 +16,8 @@ const WORK_ITEM_MARKER_RE = /<pipeline_work_item\s+id="([A-Za-z0-9._:-]{1,128})"
 // OpenCode 2.x subagent tool: background=true returns this acknowledgement immediately.
 const BACKGROUND_ACK_RE = /working in the background \(sessionID:\s*([^)\s]+)\)/
 const CHILD_IDLE_PROBE_MS = 1500
+// Grace period after an OpenStage turn ends before it counts as a stall.
+const wakeDelayMs = () => Number(process.env.PIPELINE_WAKE_DELAY_MS) || 90_000
 
 // "background": a background child acknowledged the dispatch and is still working; it becomes
 // "healthy" once OpenCode reports the child session idle (session.wait).
@@ -380,6 +383,56 @@ export default Plugin.define({
       appendJsonLine(metricsFile(root, runID), { timestamp: entry.updated_at, event: "background_child_settled",
         identity: key, run_id: runID, session_health: entry.status })
     }
+    // Orchestrator wake: OpenStage sessions running a RUN, their running background children and
+    // the state fingerprint at the last wake (one wake per fingerprint).
+    const orchestratorRun = new Map<string, string>()
+    const pendingChildren = new Map<string, Set<string>>()
+    const lastWake = new Map<string, string>()
+    const wakeTimers = new Map<string, ReturnType<typeof setTimeout>>()
+    const trackChild = (parentID: string, childID: string) => {
+      const set = pendingChildren.get(parentID) ?? new Set<string>()
+      set.add(childID); pendingChildren.set(parentID, set)
+      void childIdle(childID).then(() => { set.delete(childID) })
+    }
+    const checkWake = async (sessionID: string) => {
+      wakeTimers.delete(sessionID)
+      const runID = orchestratorRun.get(sessionID)
+      if (!runID) return
+      const statePath = path.join(root, ".tmp/pipelines", runID, "state.json")
+      let stateRaw = ""
+      try { stateRaw = fs.readFileSync(statePath, "utf8") } catch {}
+      let manifest: any = null
+      try { manifest = JSON.parse(fs.readFileSync(String(JSON.parse(stateRaw).manifest_file), "utf8")) } catch {}
+      const decision = wakeDecision({ stateRaw, manifest, pendingChildren: pendingChildren.get(sessionID)?.size ?? 0, lastFingerprint: lastWake.get(sessionID) ?? null })
+      if (!decision.wake) return
+      lastWake.set(sessionID, decision.fingerprint)
+      appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake", run_id: runID, session_id: sessionID })
+      try {
+        await (plugin.session as any).synthetic({ sessionID, text: wakeText(runID), description: "pipeline wake", delivery: "queue", resume: true })
+      } catch (error) {
+        appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake_failed", run_id: runID, error: String((error as Error)?.message ?? error) })
+      }
+    }
+    void (async () => {
+      const subscribe = (plugin as any).event?.subscribe
+      if (typeof subscribe !== "function") return
+      for (;;) {
+        try {
+          for await (const event of subscribe.call((plugin as any).event)) {
+            const sessionID = String((event as any)?.data?.sessionID ?? "")
+            if (!sessionID || !orchestratorRun.has(sessionID)) continue
+            const type = String((event as any)?.type ?? "")
+            if (type === "session.execution.started") {
+              const timer = wakeTimers.get(sessionID); if (timer) clearTimeout(timer); wakeTimers.delete(sessionID)
+            } else if (type === "session.execution.succeeded") {
+              const timer = wakeTimers.get(sessionID); if (timer) clearTimeout(timer)
+              wakeTimers.set(sessionID, setTimeout(() => { void checkWake(sessionID) }, wakeDelayMs()))
+            }
+          }
+        } catch {}
+        await new Promise((resolve) => setTimeout(resolve, 5_000))
+      }
+    })()
     const statsBySession = new Map<string, SessionStats>()
     const invocationByCallID = new Map<string, InvocationMeta>()
     const optionFile = (id: string) => path.join(root, '.tmp/pipeline-runtime', sha256(id).slice(0, 24), 'options.json')
@@ -388,6 +441,10 @@ export default Plugin.define({
     const parentFiles = new Map<string, Set<string>>()
     await plugin.session.hook("prompt", (event) => {
       const text = JSON.stringify(event.prompt)
+      const runID = RUN_PROMPT.exec(text)?.[1]
+      if (runID) orchestratorRun.set(String(event.sessionID), runID)
+      // An owner prompt reopens waking; our own wake does not.
+      if (!text.includes(WAKE_MARKER)) lastWake.delete(String(event.sessionID))
       if (/pipeline-run/.test(text)) {
         const file = optionFile(String(event.sessionID)); ensureDir(path.dirname(file))
         fs.writeFileSync(file, JSON.stringify({ no_session_reuse: /--no-session-reuse/.test(text) }))
@@ -561,7 +618,10 @@ export default Plugin.define({
       if (match.status === "background") {
         // The previous child was launched in the background. Resume only once it is idle; a
         // missed notification (restart, lost watcher) is recovered here instead of going fresh.
-        if (!(await childIdle(match.session_id, CHILD_IDLE_PROBE_MS))) return rememberFresh("child_still_running", match.files_read ?? [])
+        // Redispatching while the first child still works starts a second worker on the same files.
+        if (!(await childIdle(match.session_id, CHILD_IDLE_PROBE_MS))) {
+          throw new Error(`CHILD_STILL_RUNNING: ${match.session_id} is still working on ${ctx.work_item_id}; wait for its completion notification instead of dispatching again`)
+        }
         settleBackground(ctx.run_id, identity(match as RuntimeContext), match.session_id, true)
         match.status = "healthy"
       }
@@ -611,6 +671,12 @@ export default Plugin.define({
         return
       }
       const callID = String(event.id)
+      // Any background child of an OpenStage session (worker, reviewer, GateRunner) keeps the wake
+      // timer quiet until it settles: its completion notification is the parent's next event.
+      if (event.status === "completed") {
+        const ack = BACKGROUND_ACK_RE.exec(String(event.result?.content ?? event.result?.output ?? ""))?.[1]
+        if (ack && orchestratorRun.has(String(event.sessionID))) trackChild(String(event.sessionID), ack)
+      }
       const invocation = invocationByCallID.get(callID)
       if (!invocation) return
       const ctx = invocation.ctx
