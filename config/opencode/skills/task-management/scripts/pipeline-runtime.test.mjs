@@ -419,11 +419,9 @@ test('a background worker is resumed only after its child session is idle, and t
   assert.equal(compact.session_reuse,'fresh:no_prior_session');
   assert.equal(JSON.parse(await readFile(registryFile,'utf8'))[0].status,'background');
 
-  // While the child still works, a new dispatch must not resume it.
-  const busy={tool:'subagent',sessionID:'parent',id:'busy',input:input()}; await hooks['execute.before'](busy);
-  assert.equal(busy.input.sessionID,undefined);
-  assert.equal((await metrics()).filter(m=>m.event==='reuse_decision').at(-1).fallback_reason,'child_still_running');
-  await hooks['execute.after']({...busy,status:'cancelled',error:{message:'not needed'}});
+  // While the child still works, a new dispatch is refused instead of starting a second worker.
+  const busy={tool:'subagent',sessionID:'parent',id:'busy',input:input()};
+  await assert.rejects(hooks['execute.before'](busy),/CHILD_STILL_RUNNING: bg-worker/);
 
   finish(); await new Promise(resolve=>setTimeout(resolve,20));
   assert.equal(JSON.parse(await readFile(registryFile,'utf8'))[0].status,'healthy');
@@ -465,4 +463,46 @@ test('a runtime version change during a RUN is surfaced to the parent and record
   const events=(await readFile(path.join(root,'.tmp/pipelines/version-run/reuse-metrics/events.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
   assert.equal(events.at(-1).event,'runtime_version');
  } finally {process.chdir(previousCwd);await rm(root,{recursive:true,force:true});}
+});
+
+test('wake decision: only an active RUN with no child, no owner checkpoint and new state is woken', async () => {
+  const { wakeDecision } = await import('./orchestrator-wake.mjs');
+  const state = (extra = {}) => JSON.stringify({ status: 'in_progress', pipelines: { p: { status: 'in_progress', stages: { implementation: { status: 'completed' }, accept: { status: 'pending' } } } }, ...extra });
+  const manifest = { pipelines: [{ id: 'p', executors: { implementation: 'agent', accept: 'owner_acceptance' } }] };
+  const first = wakeDecision({ stateRaw: state(), manifest });
+  assert.equal(first.wake, true);
+  assert.equal(wakeDecision({ stateRaw: state(), manifest, lastFingerprint: first.fingerprint }).reason, 'no_progress_since_last_wake');
+  assert.equal(wakeDecision({ stateRaw: state(), manifest, pendingChildren: 1 }).reason, 'child_running');
+  assert.equal(wakeDecision({ stateRaw: JSON.stringify({ status: 'blocked' }), manifest }).wake, false);
+  assert.equal(wakeDecision({ stateRaw: state({ runtime_replan: { status: 'awaiting_owner_approval' } }), manifest }).reason, 'owner_checkpoint');
+  const accepting = JSON.stringify({ status: 'in_progress', pipelines: { p: { status: 'in_progress', stages: { accept: { status: 'in_progress' } } } } });
+  assert.equal(wakeDecision({ stateRaw: accepting, manifest }).reason, 'owner_acceptance');
+});
+
+test('an OpenStage turn that ends with nothing running is woken once', async () => {
+  const previousCwd=process.cwd(), root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='10';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/wake-run'); await mkdir(runDir,{recursive:true});
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{}}));
+    const sessionHooks={}, synthetic=[]; let push;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async()=>{},transform:async fn=>fn({add:()=>{}})},
+      event:{subscribe:()=>events},
+      session:{hook:async(name,fn)=>{sessionHooks[name]=fn;},get:async()=>({data:{}}),wait:async()=>{},synthetic:async input=>{synthetic.push(input);}}});
+    process.chdir(root);
+    sessionHooks.prompt({sessionID:'orch',prompt:{text:'/pipeline-run wake-run --unattended'}});
+    await new Promise(resolve=>setTimeout(resolve,5));
+    push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,60));
+    assert.equal(synthetic.length,1);
+    assert.match(synthetic[0].text,/<pipeline_wake\/>.*wake-run/);
+    assert.equal(synthetic[0].resume,true);
+    push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,60));
+    assert.equal(synthetic.length,1);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    process.chdir(previousCwd); await rm(root,{recursive:true,force:true});
+  }
 });
