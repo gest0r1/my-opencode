@@ -6,7 +6,7 @@ import process from 'node:process';
 import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
 import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGateTestingFile } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
-import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, readTestReports } from './gate-diagnostics.mjs';
+import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 
 type PipelineSpec = {
@@ -382,6 +382,7 @@ async function main(): Promise<void> {
           started_at: commandStarted, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(commandStarted),
           exit_code: result.exit_code, stdout, stderr, output_truncated: result.truncated,
           failure_summary: result.exit_code === 0 ? [] : failureSummary(stdout, stderr),
+          output_tail: result.exit_code === 0 ? [] : outputTail(stdout, stderr),
           stdout_sha256: sha256(result.stdout), stderr_sha256: sha256(result.stderr),
         } };
       }));

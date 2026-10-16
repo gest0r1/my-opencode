@@ -22,8 +22,11 @@ The parent gives you one exact `gate-runner-cli.ts ... --advisory ...` command.
 1. Run it verbatim as one foreground shell call with `timeout: 3600000`. Never run it in the
    background, never change, split or repeat it, and run nothing else.
 2. The runner prints one JSON line with `status` and `evidence`. Only on FAIL read that evidence
-   file to name the failing commands and test files. A `BLOCKED: ...` line on stderr is status
-   BLOCKED; quote it in `failed`.
+   file to name the failing commands and test files: use `failure_summary` and `output_tail` of
+   each result with a non-zero `exit_code`, never the raw `stdout`/`stderr` strings (they are one
+   line that file readers cut off). If those two arrays do not name the failure, write
+   `failed: <index> (cause not in evidence)` and stop; do not search further. A `BLOCKED: ...`
+   line on stderr is status BLOCKED; quote it in `failed`.
 3. Reply with exactly these lines and stop:
 
 ```text

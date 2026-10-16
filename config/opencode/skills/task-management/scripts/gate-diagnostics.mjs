@@ -106,8 +106,27 @@ export async function readDiagnosticHypothesis(path, runDirectory) {
   return createHash('sha256').update(text).digest('hex');
 }
 
+// Failure sections first, then keyword lines that are not passing results, then the runner's closing
+// summary. Passing lines whose test names merely contain "fail"/"error" are left out.
+const FAILURE_SECTION = /Failed (Tests|Suites)|Unhandled (Errors?|Rejection)|^\s*(FAIL\b|×|✗|✖)|\(\d+ tests?\s*\|\s*\d+ failed/;
+const PASSED_LINE = /^\s*(✓|√|✔|PASS\b|↓)/;
 export function failureSummary(stdout, stderr) {
-  return `${stdout}\n${stderr}`.split(/\r?\n/).filter(line => /fail|error|exception|assertion|tests?\s+\d|suites?\s+\d/i.test(line)).slice(0, 30).map(line => line.slice(0, 400));
+  const lines = `${stdout}\n${stderr}`.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/);
+  const picked = new Set();
+  const start = lines.findIndex(line => FAILURE_SECTION.test(line));
+  if (start >= 0) for (let i = start; i < lines.length && picked.size < 40; i++) if (lines[i].trim() && !PASSED_LINE.test(lines[i])) picked.add(i);
+  for (let i = 0; i < lines.length && picked.size < 50; i++) {
+    if (!PASSED_LINE.test(lines[i]) && /fail|error|exception|assertion|tests?\s+\d|suites?\s+\d/i.test(lines[i])) picked.add(i);
+  }
+  const nonEmpty = lines.map((line, i) => [line, i]).filter(([line]) => line.trim() && !PASSED_LINE.test(line));
+  for (const [, i] of nonEmpty.slice(-15)) picked.add(i);
+  return [...picked].sort((a, b) => a - b).map(i => lines[i].slice(0, 400));
+}
+
+// Evidence keeps stdout as one JSON string that line-based readers cut off; the tail as an array
+// is where vitest prints its failure sections and closing summary.
+export function outputTail(stdout, stderr, count = 80) {
+  return `${stdout}\n${stderr}`.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/).filter(line => line.trim()).slice(-count).map(line => line.slice(0, 400));
 }
 
 export async function readTestReports(files, runDirectory, startedAt) {
