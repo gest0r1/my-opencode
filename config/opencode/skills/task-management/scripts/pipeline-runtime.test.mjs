@@ -252,6 +252,9 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   unavailable=true;e={tool:'subagent',sessionID:'parent',id:'unavailable',input:input()};await hooks['execute.before'](e);assert.equal(e.input.sessionID,undefined);
   await sessionHooks.prompt({sessionID:'parent',prompt:'/pipeline-run runtime-test --no-session-reuse'});
   unavailable=false;e={tool:'subagent',sessionID:'parent',id:'disabled',input:input()};await hooks['execute.before'](e);assert.equal(e.input.sessionID,undefined);
+  const template='/pipeline-run <run-id> [--unattended] [--no-session-reuse]\n- `--no-session-reuse` — force fresh sessions.';
+  await sessionHooks.prompt({sessionID:'parent',prompt:`/pipeline-run runtime-test --unattended --fix-cycles 10\n${template}`});
+  e={tool:'subagent',sessionID:'parent',id:'template-only',input:input()};await hooks['execute.before'](e);assert.equal(e.input.sessionID,'worker');
   await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','unknown','CoderAgent'),/WORK_ITEM_IDENTITY/);
   await assert.rejects(dispatchPacket(root,'runtime-test','p','missing','wi-p','CoderAgent'),/STAGE_NOT_RUNNABLE/);
   await writeFile(path.join(root,'review.json'),'changed');
