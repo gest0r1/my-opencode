@@ -20,7 +20,7 @@ const ignored = { ignored_input_rules: [{ pattern: 'docs/**', except: ['docs/tes
 test('ignored inputs select nothing; docs/testing stays mapped', () => {
   const config = { ...map, ignored_inputs: ignored.ignored_input_rules };
   assert.equal(selectAffectedCommands(commands, config, ['docs/features/a.md', 'README.md']).selected.length, 0);
-  assert.equal(selectAffectedCommands(commands, config, ['docs/testing/blocks.json']).reason, 'unmapped change');
+  assert.equal(selectAffectedCommands(commands, config, ['docs/testing/blocks.json']).reason, 'unmapped change: docs/testing/blocks.json');
 });
 
 test('a new test file runs alone with the command owning its directory', () => {
@@ -31,15 +31,23 @@ test('a new test file runs alone with the command owning its directory', () => {
   assert.deepEqual(viaGlob.selected.map(item => [item.index, item.test_files]), [[1, ['apps/api/test/refunds.test.ts']]]);
 });
 
+test('a new test folder runs with the single command owning its nearest parent directory', () => {
+  const selection = selectAffectedCommands(commands, map, ['apps/web/src/test/components/picker.test.tsx'], [], { isNew: () => true });
+  assert.deepEqual(selection.selected.map(item => [item.index, item.test_files]), [[2, ['apps/web/src/test/components/picker.test.tsx']]]);
+  // `apps/` holds tests of two commands: the owner is ambiguous, so the full set runs.
+  const ambiguous = selectAffectedCommands(commands, map, ['apps/shared/test/x.test.ts'], [], { isNew: () => true });
+  assert.equal(ambiguous.reason, 'unmapped change: apps/shared/test/x.test.ts');
+});
+
 test('a new source file is reached through changed mapped importers; alone it runs the full set', () => {
   const isNew = file => file === 'apps/api/src/refunds.ts';
   let selection = selectAffectedCommands(commands, map, ['apps/api/src/refunds.ts', 'apps/api/src/orders.ts'], [], { isNew });
   assert.deepEqual(selection.selected.map(item => item.index), [1]);
   assert.deepEqual(selection.deferred, [0]);
   selection = selectAffectedCommands(commands, map, ['apps/api/src/refunds.ts'], [], { isNew });
-  assert.equal(selection.reason, 'unmapped change');
+  assert.equal(selection.reason, 'unmapped change: apps/api/src/refunds.ts');
   selection = selectAffectedCommands(commands, map, ['apps/api/src/legacy.ts', 'apps/api/src/orders.ts']);
-  assert.equal(selection.reason, 'unmapped change');
+  assert.equal(selection.reason, 'unmapped change: apps/api/src/legacy.ts');
 });
 
 async function fixture() {
