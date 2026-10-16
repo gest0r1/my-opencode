@@ -446,8 +446,10 @@ export default Plugin.define({
       // An owner prompt reopens waking; our own wake does not.
       if (!text.includes(WAKE_MARKER)) lastWake.delete(String(event.sessionID))
       if (/pipeline-run/.test(text)) {
+        // Only the owner's invocation line counts; the expanded command body documents the flag in its usage template.
+        const optedOut = [...text.matchAll(/pip(?:e)?line-run\s+[A-Za-z0-9._-]+([^\\"]*)/g)].some((m) => /(?:^|\s)--no-session-reuse(?=\s|$)/.test(m[1]))
         const file = optionFile(String(event.sessionID)); ensureDir(path.dirname(file))
-        fs.writeFileSync(file, JSON.stringify({ no_session_reuse: /--no-session-reuse/.test(text) }))
+        fs.writeFileSync(file, JSON.stringify({ no_session_reuse: optedOut }))
       }
     })
     await plugin.session.hook("compaction", (event) => {
