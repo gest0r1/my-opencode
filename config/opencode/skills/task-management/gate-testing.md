@@ -120,7 +120,10 @@ selected delta, auth/security paths, `package.json` or lockfile changes select t
 command array. Schema, migration, configuration and shared-contract paths follow the frozen
 impact groups like any other input, so PLAN must map them to every consuming suite (for example
 `packages/db/migrations/**` → db and live-PG commands); an unmapped one still selects the
-complete array. Final authoritative gates always cover the original complete array. No
+complete array. A new test file runs alone with the command that owns tests in its directory, or,
+in a new test folder, with the single command whose tests sit under its nearest parent directory;
+two commands there leave it unmapped. `selection_reason` names the first unmapped path.
+Final authoritative gates always cover the original complete array. No
 dependency graph is guessed by the model during RUN.
 
 ## Coordinator-only commands, parallel groups and reuse

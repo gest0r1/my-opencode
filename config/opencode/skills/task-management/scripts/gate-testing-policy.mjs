@@ -185,6 +185,22 @@ export function ignoredInput(rules, file) {
   });
 }
 
+// The command that runs a test file nobody mapped: the owner of a test in its own directory, else
+// the single command whose tests live under the nearest parent directory (a new test folder).
+// Two commands under that parent are ambiguous and leave the file unmapped.
+function testOwnerIndex(groups, file) {
+  const directory = file.slice(0, file.lastIndexOf('/') + 1);
+  const sibling = groups.find(group => (group.test_files ?? []).some(test => test.startsWith(directory) && !test.slice(directory.length).includes('/')));
+  if (sibling) return sibling.command_index;
+  for (let end = directory.lastIndexOf('/', directory.length - 2); end > 0; end = directory.lastIndexOf('/', end - 1)) {
+    const parent = directory.slice(0, end + 1);
+    const owners = new Set(groups.filter(group => (group.test_files ?? []).some(test => test.startsWith(parent))).map(group => group.command_index));
+    if (owners.size === 1) return [...owners][0];
+    if (owners.size > 1) return undefined;
+  }
+  return undefined;
+}
+
 // `options.isNew(path)` says the path did not exist when the work item was dispatched. A generated
 // project map cannot know files written after it was frozen, so a new test file runs alone with
 // the command that owns its directory, and a new source file is reached through the changed
@@ -214,12 +230,11 @@ export function selectAffectedCommands(commands, config, changed, previousFailur
   // A new test file is listed in no group's test_files even when a directory glob maps it.
   for (const file of relevant.filter(file => (!mapped(file) || (isNew(file) && TEST_FILE.test(file))))) {
     if (TEST_FILE.test(file)) {
-      const directory = file.slice(0, file.lastIndexOf('/') + 1);
-      const owner = config.impact_groups.find(group => (group.test_files ?? []).some(test => test.startsWith(directory) && !test.slice(directory.length).includes('/')));
-      if (!owner) return full('unmapped change');
-      add(owner.command_index, [file]);
+      const index = testOwnerIndex(config.impact_groups, file);
+      if (index === undefined) return full(`unmapped change: ${file}`);
+      add(index, [file]);
     } else if (!(isNew(file) && anyMapped)) {
-      return full('unmapped change');
+      return full(`unmapped change: ${file}`);
     }
   }
   // Schema/migration/configuration/shared-contract changes use the frozen, reviewed transitive
