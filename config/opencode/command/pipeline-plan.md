@@ -225,7 +225,7 @@ git-worktree-cli.ts verify .tmp/pipelines/{run-id}/manifest.json
 
 All three must PASS. `plan-run-preflight` accepts only schema version 2. `verify` must prove that the complete current branch diff is either the frozen preserved baseline or inside writable `allowed_change_paths`; do not defer a baseline/scope mismatch until RUN. Preflight verifies planning evidence hashes, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Before `init`, deterministic manifest corrections remain the same draft/run-id and are simply revalidated; after `init`, use the trusted revise-plan lifecycle until implementation starts; after first implementation start, never mutate that manifest.
 
-## Preservation, migration, supersede and refresh
+## Preservation, migration and replan
 
 Canonical results stay under `.tmp/pipelines/{run-id}/`. Deterministic tools own `state.json`, locks, candidate and machine evidence. Never manually edit runtime state; before implementation use revise-plan to authorize in-place manifest changes.
 

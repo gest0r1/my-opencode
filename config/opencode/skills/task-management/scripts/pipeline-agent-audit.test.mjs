@@ -404,3 +404,13 @@ test('RUN instructions carry architecture checkpoint, cross-lane repair, bounded
   assert.match(await flatRun('config/opencode/agent/subagents/code/coder-agent.md'), /Never raise a test time limit/);
   assert.match(await flatRun('config/opencode/agent/subagents/code/gate-runner.md'), /obey them/);
 });
+
+test('OpenStage cannot run the legacy supersede clone that closes a RUN irreversibly', async () => {
+  const text = await readFile('config/opencode/agent/core/openstage-orchestrator.md', 'utf8');
+  const lines = text.split('\n');
+  const allow = lines.findIndex(line => line.includes('scripts/stage-cli.ts*": allow'));
+  for (const prefix of ['npx --yes tsx', 'npx tsx']) {
+    const deny = lines.findIndex(line => line.includes(`"${prefix} $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts supersede*": deny`));
+    assert.ok(deny > allow && allow >= 0, `${prefix} supersede deny must follow the stage-cli allow`);
+  }
+});

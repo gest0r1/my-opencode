@@ -2514,7 +2514,12 @@ export async function runCli(args: string[]): Promise<void> {
     if (state.superseded_by) {
       throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
     }
-    await requirePlanProbes(rawManifest, rawState.manifest_file);
+    // Plan probes guard the untouched base. Once a source agent stage has started the checkout is no
+    // longer that base and a probe cannot be produced, so a resumed RUN does not need one.
+    const implementationStarted = rawManifest.pipelines.some((pipeline) => Object.entries(pipeline.executors ?? {})
+      .some(([stage, executor]) => executor === 'agent' && Boolean(state.pipelines[pipeline.id]?.stages[stage]?.started_at
+        || ['in_progress', 'completed', 'failed', 'blocked'].includes(String(state.pipelines[pipeline.id]?.stages[stage]?.status)))));
+    if (!implementationStarted) await requirePlanProbes(rawManifest, rawState.manifest_file);
     if (options.json) console.log(JSON.stringify({ status: 'PASS', run_id: runId, schema_version: 2 }, null, 2));
     else console.log(`PASS run_id=${runId} schema_version=2`);
     return;
