@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -251,5 +251,64 @@ test('quarantine-strays moves only untracked out-of-scope files created after th
     await rm(path.join(runDir, 'checks/baselines/first.json'));
     result = gate(root, ['quarantine-strays', manifestPath]);
     assert.notEqual(result.status, 0); assert.match(result.stderr, /QUARANTINE_REQUIRES_DISPATCH_BASELINE/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('quarantine-strays --include-pre-run --paths moves exactly the listed pre-run untracked files and refuses unsafe paths', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'prerun-'));
+  try {
+    exec(root, 'git', ['init']);
+    exec(root, 'git', ['config', 'user.name', 'Pipeline Test']);
+    exec(root, 'git', ['config', 'user.email', 'pipeline@example.invalid']);
+    await writeFile(path.join(root, '.gitignore'), '.tmp/\n');
+    await mkdir(path.join(root, 'src'));
+    await writeFile(path.join(root, 'src/app.ts'), 'base\n');
+    exec(root, 'git', ['add', '.gitignore', 'src']);
+    exec(root, 'git', ['commit', '-m', 'base']);
+    exec(root, 'git', ['checkout', '-b', 'pipeline/pre-run']);
+    const runDir = path.join(root, '.tmp/pipelines/pre-run');
+    await mkdir(runDir, { recursive: true });
+    const manifestPath = path.join(runDir, 'manifest.json');
+    await writeFile(manifestPath, JSON.stringify({ run_id: 'pre-run', allowed_change_paths: ['src/**'], git_setup: { branch: 'pipeline/pre-run' } }));
+    await writeFile(path.join(root, 'old-notes.txt'), 'pre-run\n');
+    await utimes(path.join(root, 'old-notes.txt'), new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:00:00Z'));
+    await writeFile(path.join(root, 'src/old.ts'), 'in scope\n');
+    await writeFile(path.join(root, 'untouched.txt'), 'keep\n');
+    await writeFile(path.join(root, 'secret.key'), 'secret\n');
+    await mkdir(path.join(root, 'adir'));
+    await writeFile(path.join(root, 'adir/f.txt'), 'x\n');
+    await symlink('untouched.txt', path.join(root, 'link.txt'));
+    const refuse = (paths, code) => {
+      const r = gate(root, ['quarantine-strays', manifestPath, '--apply', '--include-pre-run', '--paths', 'old-notes.txt', ...paths]);
+      assert.notEqual(r.status, 0); assert.match(r.stderr, new RegExp(code));
+    };
+    refuse(['src/app.ts'], 'QUARANTINE_PATH_TRACKED');
+    refuse(['adir'], 'QUARANTINE_PATH_DIRECTORY');
+    refuse(['link.txt'], 'QUARANTINE_PATH_SYMLINK');
+    refuse(['secret.key'], 'QUARANTINE_PATH_PROTECTED');
+    refuse(['.github/x.yml'], 'QUARANTINE_PATH_PROTECTED');
+    refuse(['.tmp/pipelines/pre-run/manifest.json'], 'QUARANTINE_PATH_FORBIDDEN');
+    refuse(['.git/config'], 'QUARANTINE_PATH_INVALID');
+    refuse(['missing.txt'], 'QUARANTINE_PATH_MISSING');
+    assert.equal(await readFile(path.join(root, 'old-notes.txt'), 'utf8'), 'pre-run\n');
+    let r = gate(root, ['quarantine-strays', manifestPath, '--include-pre-run']);
+    assert.notEqual(r.status, 0); assert.match(r.stderr, /usage: quarantine-strays/);
+    r = gate(root, ['quarantine-strays', manifestPath, '--paths', 'old-notes.txt']);
+    assert.notEqual(r.status, 0); assert.match(r.stderr, /usage: quarantine-strays/);
+    r = gate(root, ['quarantine-strays', manifestPath, '--include-pre-run', '--paths', 'old-notes.txt']);
+    assert.equal(r.status, 0, r.stderr); assert.deepEqual(JSON.parse(r.stdout).strays, ['old-notes.txt']);
+    assert.equal(await readFile(path.join(root, 'old-notes.txt'), 'utf8'), 'pre-run\n');
+    r = gate(root, ['quarantine-strays', manifestPath, '--apply', '--include-pre-run', '--paths', 'old-notes.txt', 'src/old.ts']);
+    assert.equal(r.status, 0, r.stderr);
+    const output = JSON.parse(r.stdout);
+    assert.equal(output.kind, 'stray_quarantine');
+    assert.deepEqual(output.moved.map(item => item.path), ['old-notes.txt', 'src/old.ts']);
+    assert.equal(await readFile(path.join(output.quarantine_dir, 'old-notes.txt'), 'utf8'), 'pre-run\n');
+    assert.equal(JSON.parse(await readFile(path.join(output.quarantine_dir, 'quarantine.json'), 'utf8')).moved.length, 2);
+    await assert.rejects(readFile(path.join(root, 'old-notes.txt')));
+    assert.equal(await readFile(path.join(root, 'untouched.txt'), 'utf8'), 'keep\n');
+    exec(root, 'git', ['checkout', '-b', 'other-branch']);
+    r = gate(root, ['quarantine-strays', manifestPath, '--apply', '--include-pre-run', '--paths', 'untouched.txt']);
+    assert.notEqual(r.status, 0); assert.match(r.stderr, /QUARANTINE_BRANCH_MISMATCH/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

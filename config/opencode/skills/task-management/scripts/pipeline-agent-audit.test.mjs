@@ -121,7 +121,7 @@ test('OpenStage exposes only deterministic GitHub lifecycle commands', async () 
     /github-pr-cli\.ts\*": allow/,
     /github-actions-gate-cli\.ts\*": allow/,
     /deployment-target-cli\.ts\*": allow/,
-    /pipeline-refresh-cli\.ts\*": allow/,
+    /pipeline-replan-cli\.ts\*": allow/,
     /pipeline-github-sync\.mjs\*": allow/,
   ]) {
     assert.match(yaml, required);
@@ -339,7 +339,7 @@ test('RUN authorizes bounded runtime scope before consuming technical-fix cycles
 test('parent keeps pipeline transport file-backed and orchestration-only', async () => {
   const parent = await text('config/opencode/agent/core/openstage-orchestrator.md');
   assert.match(parent, /At entry load only the active installed command/);
-  assert.match(parent, /commands\/pipeline-\{plan,run,refresh,status\}/);
+  assert.match(parent, /commands\/pipeline-\{plan,run,replan,status\}/);
   assert.match(parent, /context\/transport rules below own what crosses the parent conversation boundary/i);
   assert.match(parent, /do not read that packet in the parent/i);
   assert.match(parent, /detail_required=false/);
@@ -356,4 +356,51 @@ test('shell-running workers keep every command in the foreground until it finish
     assert.match(content, /Every shell command runs in the foreground with `timeout: 3600000`/, relative);
     assert.match(content, /never end your turn while a command you started is still running/, relative);
   }
+});
+
+test('PLAN instructions carry test rework, plan probe and checkpoint rules', async () => {
+  const flat = async (p) => (await text(p)).replace(/\s+/g, ' ');
+  const plan = await flat('config/opencode/command/pipeline-plan.md');
+  for (const re of [/test_rework: \[\{id, path, action, reason, work_item_id\}\]/, /`test_preparation: true`/, /Never raise a test timeout/,
+    /--plan-probe/, /planning\/probes\//, /PLAN_PROBE_REQUIRED/, /TEST_REWORK_\*/, /pre-publish/, /PIPELINE_SCRATCH_DIR/,
+    /real production entry/, /openchamber_render/, /awaitAnswer/, /only the artifact's author agent edits it/]) {
+    assert.match(plan, re);
+  }
+  assert.doesNotMatch(plan, /RUN may add concrete test\/support paths inside an already-approved/);
+  const arch = await flat('config/opencode/agent/subagents/planning/architecture-analyzer.md');
+  assert.match(arch, /Repair checkpoint mode/);
+  assert.match(arch, /no_change \| apply_within_requirements \| requirements_change/);
+  assert.match(arch, /architecture-review-record/);
+  const reviewer = await flat('config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md');
+  assert.match(reviewer, /test rework completeness/);
+  assert.match(reviewer, /Do not demand contradictory test splitting/);
+  assert.match(reviewer, /PASS `planning\/probes\//);
+  assert.match(await flat('config/opencode/agent/subagents/code/senior-story-reviewer.md'), /Never demand further atomisation/);
+  assert.match(await flat('config/opencode/agent/subagents/core/task-manager.md'), /`test_preparation: true` lane/);
+  assert.match(await flat('config/opencode/agent/subagents/core/contextscout.md'), /one level up/);
+});
+
+const flatRun = async (relative) => (await text(relative)).replace(/\s+/g, ' ');
+
+test('RUN instructions carry architecture checkpoint, cross-lane repair, bounded diagnostics and Russian owner messages', async () => {
+  const run = await flatRun('config/opencode/command/pipeline-run.md');
+  const orch = await text('config/opencode/agent/core/openstage-orchestrator.md');
+  assert.match(run, /architecture_review_due.*ARCHITECTURE_REVIEW_REQUIRED.*architecture-review-record/i);
+  assert.match(run, /apply_within_requirements.*one `⚠` line.*requirements_change.*only that stage.*other runnable lane/i);
+  assert.match(run, /--repair-pipeline <lane>/);
+  assert.match(run, /--include-pre-run --paths/);
+  assert.match(run, /OpenStage runs short sequential commands itself in the foreground/);
+  assert.match(run, /explicit limit: at most N shell calls and M minutes/);
+  assert.match(run, /always in Russian/);
+  assert.match(run, /ask once/);
+  assert.match(run, /openchamber_render/);
+  assert.match(run, /gh issue create --repo .* --body-file \.tmp\/pipelines\/<run-id>\//);
+  assert.match(orch, /"gh issue create --repo \* --title \* --body-file \.tmp\/pipelines\/\*": allow/);
+  assert.match(orch, /"gh issue create -R \* -t \* -F \.tmp\/pipelines\/\*": allow/);
+  assert.doesNotMatch(orch, /"gh \*"/);
+  const reviewer = await flatRun('config/opencode/agent/subagents/code/reviewer.md');
+  assert.match(reviewer, /enumerate the whole class across the reviewed change/);
+  assert.match(reviewer, /name the class and list the instances still remaining/i);
+  assert.match(await flatRun('config/opencode/agent/subagents/code/coder-agent.md'), /Never raise a test time limit/);
+  assert.match(await flatRun('config/opencode/agent/subagents/code/gate-runner.md'), /obey them/);
 });

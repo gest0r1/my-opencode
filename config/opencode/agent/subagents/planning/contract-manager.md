@@ -31,7 +31,7 @@ For every materially affected interface record:
 - exact inputs/outputs/errors;
 - compatibility and breaking-change rules;
 - auth/security/tenant implications;
-- validation/test expectation;
+- validation/test expectation (the scenario test on the real production entry that proves it; contract tests that existing code breaks are listed for `test_rework[]`);
 - dependency/migration implications;
 - unresolved owner decision IDs.
 

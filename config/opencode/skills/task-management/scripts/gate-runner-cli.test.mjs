@@ -460,3 +460,117 @@ const until = Date.now() + 600; while (Date.now() < until) {}
     result = run(fx.root, fx.args); assert.notEqual(result.status, 0); assert.match(result.stderr, /parallel_groups/);
   } finally { process.env.PATH = oldPath; }
 });
+
+// Fixture whose fake pnpm records the gate environment of every command it runs.
+async function envFixture() {
+  const fx = await diagnosticFixture();
+  await writeFile(path.join(fx.root, 'bin/pnpm'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const keys = ['PIPELINE_RUN_ID', 'PIPELINE_ID', 'PIPELINE_GATE', 'PIPELINE_GATE_ATTEMPT', 'CANDIDATE_SHA', 'PIPELINE_SCRATCH_DIR'];
+const entry = Object.fromEntries(keys.map(key => [key, process.env[key] ?? null]));
+entry.scratch_entries = process.env.PIPELINE_SCRATCH_DIR ? fs.readdirSync(process.env.PIPELINE_SCRATCH_DIR) : null;
+if (process.env.PIPELINE_SCRATCH_DIR) fs.writeFileSync(process.env.PIPELINE_SCRATCH_DIR + '/marker', 'x');
+fs.appendFileSync('.tmp/env.log', JSON.stringify(entry) + '\\n');
+if (fs.existsSync('.tmp/fail')) { console.error('FAIL orders invariant'); process.exit(1); }
+`, { mode: 0o755 });
+  const git = (...args) => spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
+  git('checkout', '--', 'src/orders.ts');
+  git('add', 'bin'); assert.equal(git('commit', '-m', 'env pnpm').status, 0);
+  const manifestFile = path.join(fx.stateRoot, fx.runId, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  manifest.git_setup = { base_sha: git('rev-parse', 'HEAD').stdout.trim() };
+  const content = JSON.stringify(manifest);
+  await writeFile(manifestFile, content);
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8')); state.manifest_sha256 = sha256(content);
+  await writeFile(statePath, JSON.stringify(state));
+  return { ...fx, manifestFile, manifest, envLog: async () => (await readFile(path.join(fx.root, '.tmp/env.log'), 'utf8')).trim().split('\n').map(JSON.parse) };
+}
+
+test('gate commands get identity env, a fresh scratch dir per attempt and CANDIDATE_SHA only with a candidate', async () => {
+  const fx = await envFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    const outer = process.env.CANDIDATE_SHA; process.env.CANDIDATE_SHA = 'f'.repeat(40);
+    let result; try { result = run(fx.root, [...fx.args, '--advisory']); } finally { if (outer === undefined) delete process.env.CANDIDATE_SHA; else process.env.CANDIDATE_SHA = outer; }
+    assert.equal(result.status, 0, result.stderr);
+    let output = JSON.parse(result.stdout); let evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.equal(evidence.attempt, 1);
+    assert.equal(evidence.scratch_dir, path.join(fx.stateRoot, fx.runId, 'scratch', 'app-build-1'));
+    assert.deepEqual((await fx.envLog())[0], { PIPELINE_RUN_ID: fx.runId, PIPELINE_ID: 'app', PIPELINE_GATE: 'build', PIPELINE_GATE_ATTEMPT: '1',
+      CANDIDATE_SHA: null, PIPELINE_SCRATCH_DIR: evidence.scratch_dir, scratch_entries: [] });
+    result = run(fx.root, [...fx.args, '--advisory', '--no-reuse']); assert.equal(result.status, 0, result.stderr);
+    evidence = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(evidence.attempt, 2); assert.match(evidence.scratch_dir, /app-build-2$/);
+    const log = await fx.envLog(); assert.equal(log.at(-1).PIPELINE_GATE_ATTEMPT, '2'); assert.deepEqual(log.at(-2).scratch_entries, []); assert.deepEqual(log.at(-1).scratch_entries, ['marker']);
+    const candidate = 'a'.repeat(40);
+    await writeFile(path.join(path.dirname(fx.manifestFile), 'candidate.json'), JSON.stringify({ candidate_sha: candidate }));
+    result = run(fx.root, [...fx.args, '--no-reuse']); assert.equal(result.status, 0, result.stderr);
+    output = JSON.parse(result.stdout); evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.equal(evidence.attempt, 1); assert.equal((await fx.envLog()).at(-1).CANDIDATE_SHA, candidate);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('gate env vars leave environment_digest unchanged so evidence reuse still works', async () => {
+  const fx = await envFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, [...fx.args, '--advisory']); assert.equal(result.status, 0, result.stderr);
+    const first = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    result = run(fx.root, [...fx.args, '--advisory', '--no-reuse']); assert.equal(result.status, 0, result.stderr);
+    const second = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(second.attempt, 2); assert.equal(second.environment_digest, first.environment_digest);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout); assert.equal(output.commands_run, 0); assert.match(output.reused_from, /checks\/app-build\.json$/);
+    assert.equal(JSON.parse(await readFile(output.evidence, 'utf8')).scratch_dir, null);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('plan probe runs the complete frozen set statelessly and writes planning/probes evidence', async () => {
+  const fx = await envFixture(); const oldPath = process.env.PATH;
+  const probeArgs = ['--plan-probe', fx.manifestFile, 'app', 'build'];
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    await unlink(path.join(fx.stateRoot, fx.runId, 'state.json'));
+    await writeFile(path.join(fx.root, 'src/orders.ts'), 'dirty\n');
+    let result = run(fx.root, probeArgs);
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /BASE_PROBE_REQUIRES_CLEAN_CHECKOUT/);
+    assert.equal(spawnSync('git', ['checkout', '--', 'src/orders.ts'], { cwd: fx.root }).status, 0);
+    result = run(fx.root, probeArgs); assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.status, 'PASS'); assert.equal(output.commands_run, 2); assert.equal(output.candidate_sha, null);
+    assert.equal(output.evidence, path.join(path.dirname(fx.manifestFile), 'planning/probes/app-build.json'));
+    const evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: fx.root, encoding: 'utf8' }).stdout.trim();
+    assert.deepEqual([evidence.kind, evidence.status, evidence.run_id, evidence.pipeline_id, evidence.gate, evidence.profile, evidence.head_sha, evidence.base_sha, evidence.error],
+      ['plan_probe', 'PASS', fx.runId, 'app', 'build', 'default', head, head, null]);
+    assert.equal(evidence.commands_sha256, sha256(JSON.stringify(fx.manifest.gate_profiles.default.build)));
+    assert.equal(evidence.results.length, 2); assert.equal(evidence.results[1].command_index, 1);
+    const env = (await fx.envLog())[0];
+    assert.equal(env.PIPELINE_RUN_ID, fx.runId); assert.equal(env.CANDIDATE_SHA, null); assert.equal(env.PIPELINE_GATE_ATTEMPT, '1');
+    assert.equal(env.PIPELINE_SCRATCH_DIR, evidence.scratch_dir); assert.equal(evidence.scratch_dir.startsWith(path.dirname(fx.manifestFile)), true);
+    result = run(fx.root, probeArgs); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(await readFile(output.evidence, 'utf8')).attempt, 2);
+    assert.equal(JSON.parse(await readFile(output.evidence, 'utf8')).results.length, 2);
+    await writeFile(path.join(fx.root, '.tmp/fail'), '');
+    result = run(fx.root, probeArgs); assert.notEqual(result.status, 0);
+    const failed = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.equal(failed.status, 'FAIL'); assert.match(failed.error, /gate command failed/);
+    assert.ok(failed.results[0].failure_summary.length + failed.results[0].output_tail.length > 0);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('plan probe refuses candidate-sha and deployment gates and unknown pipelines', async () => {
+  const candidate = await makeRun('bash scripts/install.sh {candidate_sha}', 'verify');
+  const manifestFile = path.join(candidate.root, 'manifest.json');
+  let result = run(candidate.root, ['--plan-probe', manifestFile, 'app', 'verify']);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /PLAN_PROBE_UNSUPPORTED: .*candidate_sha/);
+  // Position decides, not the name: a gate without a later git_publish is pre-publish, deployment gates never are.
+  const runtime = await makeRun('bash -n check.sh', 'deploy_validation');
+  result = run(runtime.root, ['--plan-probe', path.join(runtime.root, 'manifest.json'), 'app', 'deploy_validation']);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /PLAN_PROBE_UNSUPPORTED: deploy_validation is not a pre-publish local gate/);
+  result = run(runtime.root, ['--plan-probe', path.join(runtime.root, 'manifest.json'), 'nope', 'build']);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /pipeline not found/);
+  result = run(runtime.root, ['--plan-probe', path.join(runtime.root, 'manifest.json'), 'app']);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /usage/);
+});

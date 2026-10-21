@@ -11,10 +11,10 @@ The owner creates/selects worktrees and sessions in OpenChamber, approves each d
 5. In the already-open B worktree session, owner invokes exactly **one command**:
 
 ```text
-/pipeline-refresh
+/pipeline-replan
 ```
 
-Optional nonmutating preflight: `/pipeline-refresh --check`.
+Optional nonmutating preflight: `/pipeline-replan --check`.
 
 6. Only after `REFRESH PASS`, in the SAME B session:
 
@@ -24,7 +24,7 @@ Optional nonmutating preflight: `/pipeline-refresh --check`.
 
 Owner reviews and explicitly approves the new manifest, then runs `/pipeline-run <new-run-id> --unattended`. Repeat for C after owner merges B into main. Never run B with the old approved manifest: its `base_sha` is stale. The final integrated main SHA needs its own release verification.
 
-## What /pipeline-refresh does (installed distribution, no custom OpenChamber patch)
+## What /pipeline-replan does (installed distribution, no custom OpenChamber patch)
 
 The command invokes only the installed deterministic `~/.config/opencode/skills/task-management/scripts/worktree-refresh.sh` in the CURRENT session. It has no path or branch arguments: it derives B and the checked-out main from the shared Git repository and rejects main/primary or detached sessions. The script:
 

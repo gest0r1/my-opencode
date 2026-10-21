@@ -139,10 +139,12 @@ export async function verifyAgentAdvisoryCompletion(root: string, args: string[]
   // evidence of work items the repair did not redispatch is superseded: their files may have
   // changed under the repair, and the repair's own bound check covers the repaired scope.
   const runtime = state.pipelines?.[pipelineId]?.stages?.[stage];
-  const origin = runtime?.repair_origin_stage ? state.pipelines?.[pipelineId]?.stages?.[runtime.repair_origin_stage] : null;
+  const originPipelineId = runtime?.repair_origin_pipeline ?? pipelineId;
+  const origin = runtime?.repair_origin_stage ? state.pipelines?.[originPipelineId]?.stages?.[runtime.repair_origin_stage] : null;
   const loop = Number(origin?.technical_fix_cycles ?? 0);
   if (origin && loop > 0) {
-    const current = baselines.filter(({ baseline }) => Number(baseline.loop ?? 0) === loop && baseline.repair_origin_stage === runtime.repair_origin_stage);
+    const current = baselines.filter(({ baseline }) => Number(baseline.loop ?? 0) === loop && baseline.repair_origin_stage === runtime.repair_origin_stage &&
+      (baseline.repair_origin_pipeline ?? pipelineId) === originPipelineId);
     if (current.length === 0) throw new StageCompleteError(`ADVISORY_REPAIR_DISPATCH_REQUIRED: ${pipelineId}/${stage} loop ${loop}`);
     baselines.splice(0, baselines.length, ...current);
   }

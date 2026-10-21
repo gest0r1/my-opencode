@@ -31,6 +31,7 @@ Discover the smallest useful set of verified context files for the caller.
 - Prefer project-local context. If local core context is absent, use the configured
   global core context once; never substitute global project-intelligence for local context.
 - Return only files relevant to the requested work, ranked Critical / High / Medium.
+- Also look one level up from each touched module for other implementations of the same concept (integration-level drift) and list them as High with the shared concept named. When the work changes tests, list tests that assert lists/counts/order of what changes (inventories, pins, registries) and the generated test-map files they depend on.
 - If external library/API documentation is missing locally, say that ExternalScout is
   required; do not fetch it yourself.
 
