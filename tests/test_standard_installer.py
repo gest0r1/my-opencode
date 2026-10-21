@@ -22,8 +22,8 @@ def forbid(text: str, needle: str, label: str):
 
 def main():
     # Version/network contract.
-    require(core, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.29}"', "OpenCode pin")
-    require(core, 'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.3.3}"',
+    require(core, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.0.32}"', "OpenCode pin")
+    require(core, 'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.5.0}"',
             "OpenChamber pin")
     require(core, 'HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"', "wildcard listener allows loopback callback")
     require(core, 'PORT="${OPENCHAMBER_BIND_PORT:-3000}"', "default port")

@@ -1,7 +1,7 @@
 {
   "type": "module",
   "dependencies": {
-    "@opencode/plugin": "2.0.29"
+    "@opencode/plugin": "2.0.32"
   }
 }
 
