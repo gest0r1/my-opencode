@@ -263,7 +263,8 @@ async function freshness(manifest:Manifest,manifestPath:string,cwd:string,prefli
 // Safe main sync: never resets, forces or rebases. A dirty in-scope tree is checkpointed in one commit first so the
 // existing freshness merge (clean-tree, plan-relevant STALE_PLAN check, git-runtime.json, run base) can run unchanged.
 async function syncMain(manifest:Manifest,manifestPath:string,cwd:string,check:boolean):Promise<Record<string,unknown>>{
-  assertSetup(manifest.git_setup);await assertIdentity(manifest.git_setup,cwd,manifestPath);
+  assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
+  const identity=await inspect(cwd);if(!identity.linked_worktree||identity.branch!==manifest.git_setup.branch)throw new GateError('sync-main requires the approved owner-created linked worktree');
   await git(['fetch','origin','main:refs/remotes/origin/main'],cwd);const mainSha=await git(['rev-parse','refs/remotes/origin/main'],cwd);const headSha=await git(['rev-parse','HEAD'],cwd);
   const contains=await gitSucceeds(['merge-base','--is-ancestor',mainSha,'HEAD'],cwd);const clean=Boolean((await inspect(cwd)).clean);
   const action=contains?'none':clean?'merge':'checkpoint_and_merge';const base={contains_main:contains,clean,main_sha:mainSha,head_sha:headSha,action};
@@ -274,7 +275,7 @@ async function syncMain(manifest:Manifest,manifestPath:string,cwd:string,check:b
   if(outside.length)throw new GateError(`SYNC_MAIN_OUT_OF_SCOPE: ${outside.join(', ')}`);
   await freshness(manifest,manifestPath,cwd,true);
   const run=String(manifest.run_id??'run').replace(/[^A-Za-z0-9._-]/g,'-').slice(0,80);
-  await git(['add','-A','--','.',':(exclude).tmp'],cwd);await git(['commit','-m',`pipeline(${run}): checkpoint before main sync`],cwd);
+  await git(['add','-A'],cwd);await git(['commit','-m',`pipeline(${run}): checkpoint before main sync`],cwd);
   const checkpoint=await git(['rev-parse','HEAD'],cwd);
   try{const runtime=await freshness(manifest,manifestPath,cwd);return {...base,head_sha:runtime.merged_head_sha,run_base_sha:runtime.run_base_sha,checkpoint_sha:checkpoint};}
   catch(error){throw new GateError(`${error instanceof Error?error.message:String(error)}; checkpoint commit ${checkpoint} kept (no reset)`);}

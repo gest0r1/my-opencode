@@ -312,3 +312,101 @@ test('quarantine-strays --include-pre-run --paths moves exactly the listed pre-r
     assert.notEqual(r.status, 0); assert.match(r.stderr, /QUARANTINE_BRANCH_MISMATCH/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+async function moveMain(f, file = 'notes/unrelated.txt') {
+  await mkdir(path.dirname(path.join(f.main, file)), { recursive: true });
+  await writeFile(path.join(f.main, file), 'upstream\n');
+  exec(f.main, 'git', ['add', file]); exec(f.main, 'git', ['commit', '-m', `upstream ${file}`]); exec(f.main, 'git', ['push', 'origin', 'main']);
+  return exec(f.main, 'git', ['rev-parse', 'HEAD']);
+}
+const head = (f) => exec(f.b, 'git', ['rev-parse', 'HEAD']);
+
+test('sync-main --check is read-only and reports contains_main, clean and action', async (t) => {
+  const f = await fixture(); t.after(() => rm(f.root, { recursive: true, force: true }));
+  let out = JSON.parse(gate(f.b, ['sync-main', f.manifestPath, '--check']).stdout);
+  assert.deepEqual([out.contains_main, out.clean, out.action], [true, true, 'none']);
+  const newMain = await moveMain(f);
+  await writeFile(path.join(f.b, 'src/work.txt'), 'wip\n');
+  const before = head(f);
+  const result = gate(f.b, ['sync-main', f.manifestPath, '--check']);
+  assert.equal(result.status, 0, result.stderr);
+  out = JSON.parse(result.stdout);
+  assert.deepEqual([out.contains_main, out.clean, out.action, out.main_sha, out.head_sha], [false, false, 'checkpoint_and_merge', newMain, before]);
+  assert.equal(head(f), before);
+  assert.match(exec(f.b, 'git', ['status', '--porcelain']), /src\/work\.txt/);
+  await rm(path.join(f.b, 'src/work.txt'));
+  assert.equal(JSON.parse(gate(f.b, ['sync-main', f.manifestPath, '--check']).stdout).action, 'merge');
+  assert.equal(head(f), before);
+});
+
+test('sync-main does nothing when main is already contained, even with a dirty tree', async (t) => {
+  const f = await fixture(); t.after(() => rm(f.root, { recursive: true, force: true }));
+  await writeFile(path.join(f.b, 'outside.txt'), 'dirty\n');
+  const before = head(f);
+  const result = gate(f.b, ['sync-main', f.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).action, 'none');
+  assert.equal(head(f), before);
+  assert.match(exec(f.b, 'git', ['status', '--porcelain']), /outside\.txt/);
+});
+
+test('sync-main merges a clean tree and records the new run base', async (t) => {
+  const f = await fixture(); t.after(() => rm(f.root, { recursive: true, force: true }));
+  const newMain = await moveMain(f);
+  const result = gate(f.b, ['sync-main', f.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  const out = JSON.parse(result.stdout);
+  assert.equal(out.action, 'merge'); assert.equal(out.checkpoint_sha, undefined);
+  assert.equal(JSON.parse(await readFile(path.join(f.artifactRoot, 'git-runtime.json'))).run_base_sha, newMain);
+  exec(f.b, 'git', ['merge-base', '--is-ancestor', newMain, 'HEAD']);
+});
+
+test('sync-main refuses out-of-scope dirty paths without changing anything', async (t) => {
+  const f = await fixture(); t.after(() => rm(f.root, { recursive: true, force: true }));
+  await moveMain(f);
+  await writeFile(path.join(f.b, 'src/ok.txt'), 'ok\n'); await writeFile(path.join(f.b, 'outside.txt'), 'no\n');
+  const before = head(f), status = exec(f.b, 'git', ['status', '--porcelain']);
+  const result = gate(f.b, ['sync-main', f.manifestPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SYNC_MAIN_OUT_OF_SCOPE: outside\.txt/);
+  assert.equal(head(f), before); assert.equal(exec(f.b, 'git', ['status', '--porcelain']), status);
+});
+
+test('sync-main checkpoints dirty in-scope work, merges, and verify and publish accept the result', async (t) => {
+  const f = await fixture(); t.after(() => rm(f.root, { recursive: true, force: true }));
+  const newMain = await moveMain(f);
+  await writeFile(path.join(f.b, 'src/base.txt'), 'edited\n'); await writeFile(path.join(f.b, 'src/new.txt'), 'new\n');
+  let result = gate(f.b, ['sync-main', f.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  const out = JSON.parse(result.stdout);
+  assert.equal(out.action, 'checkpoint_and_merge');
+  assert.equal(exec(f.b, 'git', ['log', '-1', '--format=%s', out.checkpoint_sha]), 'pipeline(run-b): checkpoint before main sync');
+  assert.equal(exec(f.b, 'git', ['status', '--porcelain']), '');
+  assert.equal(JSON.parse(await readFile(path.join(f.artifactRoot, 'git-runtime.json'))).run_base_sha, newMain);
+  result = gate(f.b, ['verify', f.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout).changed_files, ['src/base.txt', 'src/new.txt']);
+  result = gate(f.b, ['publish', f.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  const published = JSON.parse(result.stdout);
+  assert.equal(published.candidate_sha, published.remote_sha);
+  assert.equal(published.candidate_sha, head(f));
+});
+
+test('sync-main conflict keeps checkpoint commit and leaves no merge in progress', async (t) => {
+  const f = await fixture(); t.after(() => rm(f.root, { recursive: true, force: true }));
+  // Scope excludes the conflicting file so the plan-relevant check passes and git itself conflicts.
+  await writeFile(f.manifestPath, JSON.stringify({ ...f.manifest, allowed_change_paths: ['src/work.txt'] }));
+  await writeFile(path.join(f.main, 'src/shared.txt'), 'main\n');
+  exec(f.main, 'git', ['add', '.']); exec(f.main, 'git', ['commit', '-m', 'main shared']); exec(f.main, 'git', ['push', 'origin', 'main']);
+  await writeFile(path.join(f.b, 'src/shared.txt'), 'branch\n');
+  exec(f.b, 'git', ['add', '.']); exec(f.b, 'git', ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-m', 'branch shared']);
+  await writeFile(path.join(f.b, 'src/work.txt'), 'wip\n');
+  const result = gate(f.b, ['sync-main', f.manifestPath]);
+  assert.notEqual(result.status, 0);
+  const sha = head(f);
+  assert.match(result.stderr, new RegExp(`STALE_PLAN: safe main merge conflicted[\\s\\S]*checkpoint commit ${sha}`));
+  assert.equal(exec(f.b, 'git', ['log', '-1', '--format=%s']), 'pipeline(run-b): checkpoint before main sync');
+  assert.equal(run(f.b, 'git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).status, 1);
+  assert.equal(exec(f.b, 'git', ['status', '--porcelain']), '');
+});
