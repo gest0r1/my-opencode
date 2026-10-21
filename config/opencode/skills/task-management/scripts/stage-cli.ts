@@ -8,7 +8,7 @@ import { dirname, resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { applyOwnerAmendment, runCli } from './stage-cli-core.ts';
-import { prepareProjectTooling } from './project-tooling.mjs';
+import { prepareProjectTooling, restoreDependencies } from './project-tooling.mjs';
 import { preflightFile } from './manifest-preflight.mjs';
 import { freezeGateTesting } from './gate-testing-freeze.mjs';
 import { runGenerator } from './generator-cli.mjs';
@@ -377,11 +377,13 @@ async function main(args: string[]): Promise<void> {
     return;
   }
   if (command === 'prepare-environment') {
-    if (!identifier || args.length !== 2) throw new Error('usage: stage-cli prepare-environment <manifest.json>');
+    const dependencies = args[2] === '--dependencies';
+    if (!identifier || args.length !== (dependencies ? 3 : 2) || (args.length === 3 && !dependencies)) throw new Error('usage: stage-cli prepare-environment <manifest.json> [--dependencies]');
     await preflightFile(resolve(identifier));
     const tooling = prepareProjectTooling(process.cwd());
     const preflight = await preflightFile(resolve(identifier), { environment: true });
-    console.log(JSON.stringify({tooling, preflight}));
+    const restored = dependencies ? restoreDependencies(process.cwd(), tooling, { evidenceFile: join(dirname(resolve(identifier)), 'checks', 'dependencies.json') }) : undefined;
+    console.log(JSON.stringify({tooling, preflight, ...(restored ? { dependencies: restored } : {})}));
     return;
   }
   if (command === 'generate') {

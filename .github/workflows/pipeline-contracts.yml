@@ -111,7 +111,8 @@ jobs:
             config/opencode/skills/task-management/scripts/pipeline-tmp-permissions.test.mjs \
             config/opencode/skills/task-management/scripts/early-advisory-contract.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-runtime.test.mjs \
-            config/opencode/skills/task-management/scripts/reuse-report.test.mjs
+            config/opencode/skills/task-management/scripts/reuse-report.test.mjs \
+            config/opencode/skills/task-management/scripts/project-tooling.test.mjs
 
       - name: Verify permanent installer contracts
         run: |
