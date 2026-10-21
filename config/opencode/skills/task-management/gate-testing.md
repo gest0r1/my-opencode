@@ -173,7 +173,34 @@ implementation start and records `base_probe.head_sha/base_sha` in
 `checks/<pipeline>-<gate>-base-probe.json`, so a suite that is already red on the base is
 classified before any work item starts instead of surfacing inside an unrelated one. The first
 source dispatch of a RUN is refused without a PASS probe (`BASE_PROBE_REQUIRED`); one probe
-serves every pipeline that shares the frozen profile.
+serves every pipeline that shares the frozen profile. A PASS plan probe (below) for the same profile/gate at the same clean HEAD with equal `commands_sha256` satisfies the requirement without a rerun; a FAIL plan probe counts like a FAIL base probe.
+
+## Gate environment and PLAN probe
+
+Every command a gate runs (authoritative and advisory) gets, besides the process env and any
+`live_postgres` env: `PIPELINE_RUN_ID`, `PIPELINE_ID`, `PIPELINE_GATE`; `PIPELINE_GATE_ATTEMPT`
+(1-based count of runs of that evidence file, stored as `attempt`); `CANDIDATE_SHA` (only when a
+candidate is loaded: non-advisory run with a PASS `candidate.json`, same value as
+`{candidate_sha}`; otherwise it is removed from the command env); `PIPELINE_SCRATCH_DIR`, a fresh
+empty directory `<state-root>/<run-id>/scratch/<pipeline>-<gate><suffix>-<attempt>` created before
+the first command and recorded as `scratch_dir` in the evidence. Gates install and write there,
+never into the source tree, and take identity and install roots from these vars, not from owner
+shell. None of them enters `environment_digest`, so evidence reuse is unaffected.
+
+`gate-runner-cli.ts --plan-probe <manifest-path> <pipeline-id> <gate>` runs the complete frozen
+command set of one local gate against the draft `.tmp/pipelines/<run>/manifest.json` before any
+`state.json` exists (no approval, no reuse, clean checkout required like `--base-probe`,
+`live_postgres` provisioned as usual, `CANDIDATE_SHA` unset). Gates with `{candidate_sha}` or a
+runtime/deploy/release/smoke/install name are refused (`PLAN_PROBE_UNSUPPORTED`). Evidence:
+`<manifest-dir>/planning/probes/<pipeline>-<gate>.json` with `kind: "plan_probe"`, `status`
+PASS|FAIL|BLOCKED, `run_id`, `pipeline_id`, `gate`, `profile`, `head_sha`, `base_sha`,
+`commands_sha256` (sha256 of `JSON.stringify` of the frozen command array of that profile/gate,
+exported as `planProbeCommandsSha256`), `attempt`, `scratch_dir`, `results` (per command as in the
+base probe, with `failure_summary`/`output_tail`), `started_at`, `completed_at`, `duration_ms`,
+`error`. FAIL means the suite is red on the base (baseline repair or gate fix before approval);
+BLOCKED means the gate could not start (fix env/resources in the gate contract).
+
+At RUN, post-publish gates (dev-install, release checks needing the candidate) are not probed in PLAN; they get `CANDIDATE_SHA` and `PIPELINE_SCRATCH_DIR` from the gate environment when they run, so OpenStage never asks the owner for an identity or install root.
 
 ## Disposable PostgreSQL
 

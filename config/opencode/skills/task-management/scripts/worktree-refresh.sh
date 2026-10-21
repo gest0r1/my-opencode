@@ -86,5 +86,5 @@ CURRENT_SHA="$(tar "${TAR_ARGS[@]}" -C "$B" -cf - .tmp/pipelines | sha256sum | a
 sha256sum -c "$BACKUP.sha256"
 git -C "$B" check-ignore -q .tmp/pipelines/__probe__ || fail 'updated B no longer ignores .tmp/pipelines; do NOT start RUN'
 [[ -z "$(git -C "$B" ls-files -- .tmp/pipelines)" ]] || fail 'updated B tracks pipeline evidence; do NOT start RUN'
-printf 'REFRESH PASS\nBRANCH: %s\nNEW_BASE_SHA: %s\nB_HEAD: %s\nHISTORICAL_PLAN: unchanged\nSNAPSHOT: %s\nNEXT: run pipeline-refresh-cli apply [run-id] to classify NO_IMPACT / BOUNDED_IMPACT / STRUCTURAL_IMPACT; do not copy artifacts manually\n' \
+printf 'REFRESH PASS\nBRANCH: %s\nNEW_BASE_SHA: %s\nB_HEAD: %s\nHISTORICAL_PLAN: unchanged\nSNAPSHOT: %s\nNEXT: run pipeline-replan-cli apply [run-id] (reconcile COMPATIBLE or PLAN_INVALID) and pipeline-replan-cli delta [run-id]; do not copy artifacts manually\n' \
   "$BRANCH" "$NEW_MAIN" "$(git -C "$B" rev-parse HEAD)" "$BACKUP"

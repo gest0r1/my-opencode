@@ -509,3 +509,38 @@ test('an OpenStage turn that ends with nothing running is woken once', async () 
     process.chdir(previousCwd); await rm(root,{recursive:true,force:true});
   }
 });
+
+test('a plan probe at the clean HEAD replaces the base probe; a stale PASS does not, a FAIL counts as a red base', async () => {
+ const previousCwd = process.cwd(), root = await tempProject();
+ try {
+  const git=(...args)=>spawnSync('git',args,{cwd:root,encoding:'utf8'});
+  git('init'); git('config','user.email','test@example.invalid'); git('config','user.name','Test');
+  await mkdir(path.join(root,'src'),{recursive:true});
+  await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
+  git('add','src'); git('commit','-m','base');
+  const head=git('rev-parse','HEAD').stdout.trim();
+  const manifest = await baseManifest(root,'plan-probe-run',[{id:'p',stages:['implementation']}]);
+  manifest.allowed_change_paths=['src/**'];
+  manifest.pipelines[0].profile='local';
+  manifest.gate_profiles={local:{'local-test':['npm test']}};
+  manifest.gate_testing={local:{'local-test':{impact_groups:[{inputs:['src/**'],command_index:0}]}}};
+  const raw=JSON.stringify({id:'wi-p',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent',allowed_change_paths:['src/**']});
+  await writeFile(path.join(root,manifest.work_items[0].path),raw); manifest.work_items[0].sha256=sha(raw);
+  const manifestPath=await writeManifest(root,manifest);
+  run(root,['init',manifestPath]); run(root,['approve','plan-probe-run']); run(root,['start','plan-probe-run','implementation','--pipeline','p']);
+  process.chdir(root);
+  const probeDir=path.join(root,'planning/probes'); // the manifest sits in the run directory (here: the project root)
+  await mkdir(probeDir,{recursive:true});
+  const writeProbe=(overrides)=>writeFile(path.join(probeDir,'p-local-test.json'),JSON.stringify({kind:'plan_probe',status:'PASS',run_id:'plan-probe-run',pipeline_id:'p',gate:'local-test',profile:'local',head_sha:head,base_sha:head,commands_sha256:sha(JSON.stringify(['npm test'])),...overrides}));
+  await writeProbe({commands_sha256:'f'.repeat(64)});
+  await assert.rejects(dispatchPacket(root,'plan-probe-run','p','implementation','wi-p','CoderAgent'),/BASE_PROBE_REQUIRED/);
+  await writeProbe({head_sha:'b'.repeat(40)});
+  await assert.rejects(dispatchPacket(root,'plan-probe-run','p','implementation','wi-p','CoderAgent'),/BASE_PROBE_REQUIRED/);
+  await writeProbe({status:'FAIL'});
+  await assert.rejects(dispatchPacket(root,'plan-probe-run','p','implementation','wi-p','CoderAgent'),/BASE_RED_REPAIR_REQUIRED/);
+  await writeProbe({});
+  const packet=await dispatchPacket(root,'plan-probe-run','p','implementation','wi-p','CoderAgent');
+  const baseline=JSON.parse(await readFile(path.join(root,'.tmp/pipelines/plan-probe-run',packet.advisory_checks[0].baseline_path),'utf8'));
+  assert.deepEqual(baseline.base_probe,{'local-test':'PASS'});
+ } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
+});

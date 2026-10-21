@@ -35,5 +35,7 @@ evidence: <evidence path>
 failed: <failing command indexes and test files, or none>
 ```
 
+If the prompt gives limits (maximum shell calls and/or minutes), obey them: never exceed the call count, and when the minute limit is reached or the call is stopped, do not start another. Return what you have: the three lines above with `failed:` naming what is known (or `status: INTERRUPTED` plus `failed: partial, limit reached` and the evidence path if one was written). A partial result is a valid answer; never keep working past a limit.
+
 `INTERRUPTED` means the shell call was killed or timed out before the runner finished. Do not
 fix code or tests, do not diagnose failures and do not rerun: the parent decides the next step.

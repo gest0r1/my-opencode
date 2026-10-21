@@ -25,7 +25,7 @@ stories/issue-N.md paths. Owner corrections may rewrite those story files; revie
 Each story contains only behavior needed by the source:
 - goal/actors where material;
 - primary and failure/edge scenarios;
-- binary testable acceptance criteria;
+- binary testable acceptance criteria, each one mapping to exactly one acceptance item of the Issue and one named check (never split an item further);
 - dependencies/assumptions;
 - unresolved owner/product decisions.
 

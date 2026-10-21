@@ -327,6 +327,44 @@ async function quarantineStrays(manifestPath:string,cwd:string,apply:boolean):Pr
   if(moved.length){await mkdir(target,{recursive:true});await writeJsonAtomic(join(target,'quarantine.json'),evidence);}
   return {mode:'apply',...evidence};
 }
+// `--include-pre-run --paths <p>...`: moves exactly the listed untracked regular files (any mtime, in or out of
+// scope) into the run quarantine with the same evidence format. All paths are validated first; one refusal moves
+// nothing. Tracked files, directories, symlinks, sensitive/protected names, .tmp/pipelines, .git and missing paths
+// are refused. Never deletes.
+async function quarantinePreRun(manifestPath:string,cwd:string,apply:boolean,paths:string[]):Promise<Record<string,unknown>>{
+  if(!paths.length)throw new GateError('QUARANTINE_PATHS_REQUIRED: --include-pre-run needs at least one path after --paths');
+  const manifest=JSON.parse(await readFile(manifestPath,'utf8')) as Manifest;
+  const runDir=dirname(resolve(manifestPath));
+  const branch=await git(['branch','--show-current'],cwd);
+  if(branch!==manifest.git_setup?.branch)throw new GateError(`QUARANTINE_BRANCH_MISMATCH: checkout is on ${branch||'<detached>'}, RUN branch is ${String(manifest.git_setup?.branch)}`);
+  const requested=[...new Set(paths)].sort();
+  const tracked=new Set((await git(['ls-files','-z'],cwd).catch(()=>'')).split('\0').filter(Boolean));
+  for(const path of requested){
+    if(!safePath(path)||path.split('/').some(part=>part===''||part==='.'))throw new GateError(`QUARANTINE_PATH_INVALID: ${path}`);
+    if(path==='.tmp/pipelines'||path.startsWith('.tmp/pipelines/'))throw new GateError(`QUARANTINE_PATH_FORBIDDEN: ${path} is under .tmp/pipelines`);
+    if(sensitive(path)||freshnessGlobal(path))throw new GateError(`QUARANTINE_PATH_PROTECTED: ${path}`);
+    const stat=await lstat(join(cwd,path)).catch(()=>undefined);
+    if(!stat)throw new GateError(`QUARANTINE_PATH_MISSING: ${path}`);
+    if(stat.isSymbolicLink())throw new GateError(`QUARANTINE_PATH_SYMLINK: ${path}`);
+    if(stat.isDirectory())throw new GateError(`QUARANTINE_PATH_DIRECTORY: ${path}; list files explicitly`);
+    if(!stat.isFile())throw new GateError(`QUARANTINE_PATH_NOT_FILE: ${path}`);
+    if(tracked.has(path))throw new GateError(`QUARANTINE_PATH_TRACKED: ${path}`);
+  }
+  if(!apply)return {mode:'dry-run',include_pre_run:true,strays:requested};
+  const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+  const target=join(runDir,'quarantine',stamp);
+  const moved:Array<{path:string;sha256:string}>=[];
+  for(const path of requested){
+    const destination=join(target,path);
+    await mkdir(dirname(destination),{recursive:true});
+    const digest=createHash('sha256').update(await readFile(join(cwd,path))).digest('hex');
+    await rename(join(cwd,path),destination);
+    moved.push({path,sha256:digest});
+  }
+  const evidence={status:'PASS',kind:'stray_quarantine',run_id:manifest.run_id??null,quarantine_dir:target,moved,recorded_at:new Date().toISOString()};
+  await mkdir(target,{recursive:true});await writeJsonAtomic(join(target,'quarantine.json'),evidence);
+  return {mode:'apply',include_pre_run:true,...evidence};
+}
 // Project tooling that lists files through the git index (`git ls-files`: generated test maps,
 // release metadata) does not see files a worker created. This records exactly the untracked files
 // inside the effective scope as intent-to-add entries: no content is staged, nothing is committed,
@@ -361,7 +399,16 @@ async function main(): Promise<void> {
   }
   if (command === 'quarantine-strays' && manifestPath) {
     const extra = process.argv.slice(4);
-    if (extra.some(arg => arg !== '--apply')) throw new GateError('usage: quarantine-strays <manifest.json> [--apply]');
+    const pathsAt = extra.indexOf('--paths');
+    const flags = pathsAt < 0 ? extra : extra.slice(0, pathsAt);
+    const preRun = flags.includes('--include-pre-run');
+    if (flags.some(arg => arg !== '--apply' && arg !== '--include-pre-run') || (pathsAt >= 0 && !preRun) || (preRun && pathsAt < 0)) {
+      throw new GateError('usage: quarantine-strays <manifest.json> [--apply] [--include-pre-run --paths <path>...]');
+    }
+    if (preRun) {
+      console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await quarantinePreRun(manifestPath, cwd, flags.includes('--apply'), extra.slice(pathsAt + 1)) }));
+      return;
+    }
     console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await quarantineStrays(manifestPath, cwd, extra.includes('--apply')) }));
     return;
   }
@@ -379,7 +426,7 @@ async function main(): Promise<void> {
     return;
   }
   if (!manifestPath || !['freshness', 'adopt', 'verify', 'publish'].includes(command ?? '')) {
-    throw new GateError('usage: git-worktree-cli.ts inspect | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | quarantine-strays <manifest.json> [--apply] | stage-new <manifest.json> | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
+    throw new GateError('usage: git-worktree-cli.ts inspect | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | quarantine-strays <manifest.json> [--apply] [--include-pre-run --paths <path>...] | stage-new <manifest.json> | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
   assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);

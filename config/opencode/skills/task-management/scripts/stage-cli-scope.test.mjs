@@ -26,7 +26,7 @@ async function frozen(root, relative, content) {
   await writeFile(file, content, 'utf8');
   return { path: relative, sha256: sha(content) };
 }
-async function fixture(runId = 'scope-run', extra = {}) {
+async function fixture(runId = 'scope-run', extra = {}, mutate = () => {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'stage-cli-scope-'));
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const architecture = await frozen(root, 'planning/architecture.md', '# architecture\n');
@@ -77,6 +77,7 @@ async function fixture(runId = 'scope-run', extra = {}) {
     }],
     work_items: [{ id: 'wi-app', pipeline_id: 'app', ...item }],
   };
+  await mutate(manifest, root);
   const manifestPath = path.join(root, 'manifest.json');
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
   let result = run(root, ['init', manifestPath, '--state-root', stateRoot, '--json']);
@@ -274,4 +275,79 @@ test('owner-skip needs the owner decision and makes the stage skipped', async ()
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'state.json'), 'utf8'));
   assert.equal(state.pipelines.app.stages.implementation.status, 'skipped');
+});
+
+test('scope-check extends to siblings of an exact in-scope test path, not to other directories or protected paths', async () => {
+  const fx = await fixture('scope-sibling', { allowed_change_paths: ['packages/db/src/**', 'tools/gen/inventory.test.mjs'] });
+  const sibling = 'tools/gen/pin.test.mjs';
+  let result = run(fx.root, ['scope-check', fx.runId, 'implementation', sibling,
+    '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.runtime_scope_extensions[0].scope_class, 'test');
+  assert.deepEqual(output.runtime_scope_extensions[0].paths, [sibling]);
+  result = run(fx.root, ['scope-check', fx.runId, 'implementation', 'tools/other/pin.test.mjs', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /TECHNICAL_SCOPE_REVIEW_REQUIRED/);
+  result = run(fx.root, ['scope-check', fx.runId, 'implementation', 'tools/gen/not-a-test.mjs', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /TECHNICAL_SCOPE_REVIEW_REQUIRED/);
+  result = run(fx.root, ['scope-check', fx.runId, 'implementation', 'tools/gen/fixtures/list.json', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  assert.notEqual(result.status, 0, 'fixtures subdirectory is not a sibling');
+});
+
+test('scope-check never auto-authorizes protected paths as test siblings', async () => {
+  const fx = await fixture('scope-sibling-protected', { allowed_change_paths: ['packages/db/src/**', '.github/workflows/ci.test.yml'] });
+  const result = run(fx.root, ['scope-check', fx.runId, 'implementation', '.github/workflows/other.test.yml', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /OWNER_OR_REPLAN_REQUIRED/);
+});
+
+async function withTestPreparation(manifest, root, reworkPath = 'tools/gen/inventory.test.mjs') {
+  const prep = await frozen(root, 'work-items/wi-prep.json', '{"id":"wi-prep","pipeline_id":"prep"}\n');
+  manifest.test_rework = [{ id: 'tr-1', path: reworkPath, action: 'update', reason: 'pins the list this run changes', work_item_id: 'wi-prep' }];
+  manifest.pipelines.unshift({
+    id: 'prep', deployable: false, test_preparation: true, stages: ['implementation', 'code-review'],
+    executors: { implementation: 'agent', 'code-review': 'review' }, ready_after_stage: 'code-review',
+    work_items: ['wi-prep'], decision_ids: [], research_ids: [], contract_ids: [],
+  });
+  manifest.pipelines.find(p => p.id === 'app').depends_on = ['prep'];
+  manifest.work_items.push({ id: 'wi-prep', pipeline_id: 'prep', ...prep });
+}
+
+test('scope-check authorizes tests under the directory of a test_rework entry', async () => {
+  const fx = await fixture('scope-rework', { allowed_change_paths: ['packages/db/src/**', 'tools/gen/inventory.test.mjs'] }, withTestPreparation);
+  const result = run(fx.root, ['scope-check', fx.runId, 'implementation', 'tools/gen/fixtures/list.json',
+    '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout).runtime_scope_extensions[0].paths, ['tools/gen/fixtures/list.json']);
+  const other = run(fx.root, ['scope-check', fx.runId, 'implementation', 'tools/elsewhere/fixtures/list.json', '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  assert.notEqual(other.status, 0);
+});
+
+test('v2 policy validates test_rework entries and the test_preparation lane', async () => {
+  const { validateTestRework } = await import('./manifest-v2-policy.mjs');
+  const base = () => ({
+    allowed_change_paths: ['tools/gen/inventory.test.mjs', 'src/**'],
+    test_rework: [{ id: 'tr-1', path: 'tools/gen/inventory.test.mjs', action: 'update', reason: 'pin', work_item_id: 'wi-prep' }],
+    pipelines: [
+      { id: 'prep', deployable: false, test_preparation: true, stages: ['implementation'], executors: { implementation: 'agent' }, work_items: ['wi-prep'] },
+      { id: 'app', deployable: false, stages: ['implementation'], executors: { implementation: 'agent' }, depends_on: ['mid'], work_items: ['wi-app'] },
+      { id: 'mid', deployable: false, stages: ['implementation'], executors: { implementation: 'agent' }, depends_on: ['prep'], work_items: ['wi-mid'] },
+    ],
+    work_items: [{ id: 'wi-prep', pipeline_id: 'prep' }, { id: 'wi-app', pipeline_id: 'app' }, { id: 'wi-mid', pipeline_id: 'mid' }],
+  });
+  validateTestRework(base());
+  const reject = (mutate, code) => { const m = base(); mutate(m); assert.throws(() => validateTestRework(m), new RegExp(code)); };
+  reject(m => { m.test_rework[0].action = 'delete'; }, 'TEST_REWORK_ACTION_INVALID');
+  reject(m => { m.test_rework.push({ ...m.test_rework[0] }); }, 'TEST_REWORK_DUPLICATE_ID');
+  reject(m => { m.test_rework[0].path = 'src/**'; }, 'TEST_REWORK_PATH_INVALID');
+  reject(m => { m.test_rework[0].path = 'tools/other.test.mjs'; }, 'TEST_REWORK_PATH_OUT_OF_SCOPE');
+  reject(m => { m.test_rework[0].work_item_id = 'wi-app'; }, 'TEST_REWORK_WORK_ITEM_INVALID');
+  reject(m => { m.test_rework[0].work_item_id = 'missing'; }, 'TEST_REWORK_WORK_ITEM_INVALID');
+  reject(m => { m.test_rework[0].reason = ' '; }, 'TEST_REWORK_INVALID');
+  reject(m => { delete m.pipelines[0].test_preparation; }, 'TEST_REWORK_LANE_MISSING');
+  reject(m => { m.pipelines[0].deployable = true; }, 'TEST_REWORK_LANE_DEPLOYABLE');
+  reject(m => { m.pipelines[1].depends_on = []; }, 'TEST_REWORK_LANE_NOT_FIRST');
+  reject(m => { m.pipelines[0].test_preparation = 'yes'; }, 'TEST_REWORK_LANE_INVALID');
 });

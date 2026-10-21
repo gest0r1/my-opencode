@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { validateGateManifest } from './manifest-preflight.mjs';
+import { planProbeCommandsSha256, validatePlanProbes } from './manifest-v2-policy.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STAGE_CLI = path.join(HERE, 'stage-cli.ts');
@@ -1494,4 +1495,81 @@ test('schema v2 rejects parallel pipelines whose work items may change the same 
   const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/web/**'] }));
   fx.manifest.work_items[1] = { id: 'wi-2', pipeline_id: 'b', ...disjoint };
   assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
+});
+
+async function planProbeFixture(runId) {
+  const fx = await fixture(runId);
+  fx.manifest.pipelines[0].stages.push('fast-tests');
+  fx.manifest.pipelines[0].executors['fast-tests'] = 'local_gate';
+  fx.manifest.pipelines[0].profile = 'default';
+  fx.manifest.gate_profiles = { default: { 'fast-tests': ['pnpm exec vitest run'] } };
+  await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
+  fx.writeProbe = async (overrides = {}, pipeline = 'app') => {
+    const dir = path.join(fx.runRoot, 'planning', 'probes');
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${pipeline}-fast-tests.json`), JSON.stringify({
+      kind: 'plan_probe', status: 'PASS', run_id: runId, pipeline_id: pipeline, gate: 'fast-tests', profile: 'default',
+      head_sha: 'a'.repeat(40), base_sha: 'a'.repeat(40), commands_sha256: planProbeCommandsSha256(fx.manifest.gate_profiles.default['fast-tests']),
+      ...overrides,
+    }));
+  };
+  return fx;
+}
+
+test('PLAN probe is required for supported local gates and bound to run, gate, profile and frozen commands', async () => {
+  const fx = await planProbeFixture('v2-plan-probe');
+  const check = () => validatePlanProbes(fx.manifest, { manifestPath: fx.manifestPath, cwd: fx.root });
+  assert.throws(check, /PLAN_PROBE_REQUIRED: app\/fast-tests.*gate-runner-cli\.ts --plan-probe .*manifest\.json app fast-tests/);
+  await fx.writeProbe();
+  assert.doesNotThrow(check);
+  assert.equal(planProbeCommandsSha256(['a']), sha(JSON.stringify(['a'])));
+  for (const override of [{ commands_sha256: 'b'.repeat(64) }, { run_id: 'other' }, { gate: 'tests' }, { profile: 'other' }, { kind: 'base_probe' }, { status: 'BLOCKED' }, { status: 'FAIL' }]) {
+    await fx.writeProbe(override);
+    assert.throws(check, /PLAN_PROBE_REQUIRED/, JSON.stringify(override));
+  }
+});
+
+test('a FAIL plan probe passes only with a baseline_repair work item on the profile', async () => {
+  const fx = await planProbeFixture('v2-plan-probe-red');
+  await fx.writeProbe({ status: 'FAIL' });
+  const check = () => validatePlanProbes(fx.manifest, { manifestPath: fx.manifestPath, cwd: fx.root });
+  assert.throws(check, /PLAN_PROBE_REQUIRED/);
+  const repaired = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', baseline_repair: true }));
+  fx.manifest.work_items[0] = { id: 'wi-1', pipeline_id: 'app', ...repaired };
+  assert.doesNotThrow(check);
+});
+
+test('pipelines sharing profile and gate share one plan probe; runtime and candidate gates need none', async () => {
+  const fx = await planProbeFixture('v2-plan-probe-shared');
+  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/b/**'] }));
+  fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...second });
+  fx.manifest.pipelines.push({ id: 'b', deployable: false, profile: 'default', stages: ['implementation', 'fast-tests'],
+    executors: { implementation: 'agent', 'fast-tests': 'local_gate' }, work_items: ['wi-2'], decision_ids: [], research_ids: [], contract_ids: [] });
+  await fx.writeProbe({}, 'b');
+  assert.doesNotThrow(() => validatePlanProbes(fx.manifest, { manifestPath: fx.manifestPath, cwd: fx.root }));
+  fx.manifest.pipelines[0].stages.push('runtime-smoke', 'install-check');
+  fx.manifest.pipelines[0].executors['runtime-smoke'] = 'local_gate';
+  fx.manifest.pipelines[0].executors['install-check'] = 'local_gate';
+  fx.manifest.gate_profiles.default['runtime-smoke'] = ['pnpm exec vitest run smoke'];
+  fx.manifest.gate_profiles.default['install-check'] = ['pnpm exec echo {candidate_sha}'];
+  assert.doesNotThrow(() => validatePlanProbes(fx.manifest, { manifestPath: fx.manifestPath, cwd: fx.root }));
+});
+
+test('plan-run-preflight and run-preflight enforce the plan probe', async () => {
+  const fx = await planProbeFixture('v2-plan-probe-cli');
+  let result = run(fx.root, ['plan-run-preflight', fx.manifestPath]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /PLAN_PROBE_REQUIRED: app\/fast-tests/);
+  await fx.writeProbe();
+  result = run(fx.root, ['plan-run-preflight', fx.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  const stateRoot = path.join(fx.root, '.tmp', 'pipelines');
+  result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['run-preflight', 'v2-plan-probe-cli', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  await fx.writeProbe({ commands_sha256: 'c'.repeat(64) });
+  result = run(fx.root, ['run-preflight', 'v2-plan-probe-cli', '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /PLAN_PROBE_REQUIRED/);
 });
