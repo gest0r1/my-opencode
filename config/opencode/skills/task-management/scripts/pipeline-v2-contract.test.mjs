@@ -1572,4 +1572,11 @@ test('plan-run-preflight and run-preflight enforce the plan probe', async () => 
   result = run(fx.root, ['run-preflight', 'v2-plan-probe-cli', '--state-root', stateRoot]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /PLAN_PROBE_REQUIRED/);
+  // A resumed RUN whose source agent stage already started cannot reproduce the untouched base,
+  // so its run-preflight no longer asks for a plan probe.
+  assert.equal(run(fx.root, ['approve', 'v2-plan-probe-cli', '--state-root', stateRoot]).status, 0);
+  result = run(fx.root, ['start', 'v2-plan-probe-cli', 'implementation', '--pipeline', 'app', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fx.root, ['run-preflight', 'v2-plan-probe-cli', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
 });

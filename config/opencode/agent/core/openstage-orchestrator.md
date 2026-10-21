@@ -14,6 +14,8 @@ permission:
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*": deny
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*": deny
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts supersede*": deny
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts supersede*": deny
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
