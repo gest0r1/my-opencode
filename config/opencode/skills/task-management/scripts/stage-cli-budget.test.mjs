@@ -871,7 +871,7 @@ test('cross-lane fix-cycle reopens the upstream lane, charges the sink gate and 
   assert.deepEqual(fx.next(), ['lane/implementation', 'other/implementation']);
 
   // The lane agent borrows the sink gate's evidence, paths and loop number.
-  const packet = fx.cli('dispatch', fx.runId, '--pipeline', 'lane', '--stage', 'implementation', '--work-item', 'wi-lane', '--role', 'CoderAgent');
+  const packet = run(fx.root, ['dispatch', fx.runId, '--pipeline', 'lane', '--stage', 'implementation', '--work-item', 'wi-lane', '--role', 'CoderAgent']);
   assert.equal(packet.status, 0, packet.stderr);
   const dispatched = JSON.parse(packet.stdout);
   assert.equal(dispatched.loop, 1);
@@ -881,7 +881,7 @@ test('cross-lane fix-cycle reopens the upstream lane, charges the sink gate and 
   assert.ok(dispatched.evidence_paths.some(file => file.endsWith('negative-5.json')), dispatched.evidence_paths.join(','));
 
   fx.finish('lane', 'implementation');
-  assert.deepEqual(fx.next(), ['other/implementation']);
+  assert.deepEqual(fx.next(), ['lane/code-review', 'other/implementation']);
   fx.finish('lane', 'code-review');
   assert.deepEqual(fx.next(), ['other/implementation', 'sink/implementation']);
   // Same-pipeline fix-cycle without the flag is unchanged.
