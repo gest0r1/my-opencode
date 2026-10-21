@@ -7,7 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const CLI = path.join(HERE, 'pipeline-refresh-cli.ts');
+const CLI = path.join(HERE, 'pipeline-replan-cli.ts');
 
 function runCommand(exe, args, cwd) {
   const result = spawnSync(exe, args, { cwd, encoding: 'utf8', env: process.env });
@@ -124,4 +124,46 @@ test('real active stage blocks refresh before mutations', async () => {
   const result=spawnSync('npx',['--yes','tsx',CLI,'preflight',fx.runId],{cwd:fx.b,encoding:'utf8'});
   assert.notEqual(result.status,0);
   assert.match(result.stderr,/RUN_ACTIVE/);
+});
+
+test('delta lists main changes against planning inputs, scopes, test_rework and gate sources', async () => {
+  const fx=await fixture();
+  const manifestPath=path.join(fx.runRoot,'manifest.json');
+  const manifest=JSON.parse(await readFile(manifestPath,'utf8'));
+  manifest.planning_scope=['docs/pipeline-rules.md'];
+  manifest.allowed_change_paths=['src/**','tests/rework.test.mjs'];
+  manifest.test_rework=[{id:'tr1',path:'tests/rework.test.mjs',action:'update',reason:'pin',work_item_id:'wi1'}];
+  manifest.gate_testing={ci:{test:{impact_groups:[{paths:['tools/map.json']}]}}};
+  await writeFile(manifestPath,JSON.stringify(manifest));
+  const before=await readFile(manifestPath,'utf8');
+  const none=invoke(fx.b,['delta',fx.runId,'--json']);
+  assert.deepEqual(none.changed_files,[]);
+  assert.deepEqual(none.affected_gates,[]);
+  assert.equal(none.base_sha,fx.base);
+  await advanceMain(fx,'README.md','# readme');
+  const docsOnly=invoke(fx.b,['delta',fx.runId]);
+  assert.deepEqual(docsOnly.changed_files,['README.md']);
+  assert.deepEqual(docsOnly.affected_gates,['gate_probes']);
+  await advanceMain(fx,'tests/rework.test.mjs','x');
+  await advanceMain(fx,'tools/map.json','{}');
+  await advanceMain(fx,'docs/pipeline-rules.md','# rules 2');
+  const result=invoke(fx.b,['delta','--json',fx.runId]);
+  assert.deepEqual(result.intersections.planning_scope,['docs/pipeline-rules.md']);
+  assert.deepEqual(result.intersections.test_rework,['tests/rework.test.mjs']);
+  assert.deepEqual(result.intersections.allowed_change_paths,['tests/rework.test.mjs']);
+  assert.deepEqual(result.intersections.gate_testing_source,['tools/map.json']);
+  assert.deepEqual(result.affected_gates,['stories','architecture','contracts','work_items','gate_probes']);
+  assert.equal(result.implementation_started,false);
+  assert.equal(await readFile(manifestPath,'utf8'),before);
+});
+test('delta measures from the last adopted reconcile base', async () => {
+  const fx=await fixture();
+  await advanceMain(fx,'docs/unrelated.md','# other');
+  const applied=invoke(fx.b,['apply',fx.runId]);
+  assert.equal(applied.result,'COMPATIBLE');
+  const after=await advanceMain(fx,'README.md','# readme');
+  const result=invoke(fx.b,['delta',fx.runId]);
+  assert.equal(result.base_source,'reconcile');
+  assert.deepEqual(result.changed_files,['README.md']);
+  assert.equal(result.main_sha,after);
 });

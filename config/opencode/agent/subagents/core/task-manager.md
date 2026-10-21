@@ -48,6 +48,8 @@ components; use conflict/dependency metadata when they genuinely overlap. RUN us
 frozen subset only to attribute the dispatch delta and choose affected advisory tests; it does
 not widen authorization.
 
+When the manifest has `test_rework[]`, build the `test_preparation: true` lane and its work items first (one item per rework group, each `test_rework` entry's `work_item_id` mapped to it, paths exact and inside base scope, tests only; no product code) and make every other lane's items depend on that lane. Keep shared-code adoption (callers of changed shared code) in the lane that changes the shared code, not in the sink. When the plan names a release version bump, emit it as a work item. The repository rule "1-2 test blocks per task" is a size estimate: never move tests out of the item that changes the product to satisfy it. Do not split an item along the Issue's acceptance items beyond the frozen story.
+
 If a required decision or implementation boundary is missing, return needs_revision.
 
 ## Output

@@ -18,7 +18,18 @@ permission:
 
 # ArchitectureAnalyzer
 
-Run when /pipeline-plan selected an architecture/domain/cross-module trigger, or when /pipeline-run receives `TECHNICAL_SCOPE_REVIEW_REQUIRED` for a concrete additional production/config path. Do not force DDD onto a local technical change.
+Run when /pipeline-plan selected an architecture/domain/cross-module trigger, when /pipeline-run receives `TECHNICAL_SCOPE_REVIEW_REQUIRED` for a concrete additional production/config path, or for a repair checkpoint (below). Do not force DDD onto a local technical change.
+
+## Repair checkpoint mode
+
+Run fresh when /pipeline-run reports `architecture_review_due` after 5 (then 10, 15) charged repair cycles of one block. Input: the repeatedly repaired block (pipeline, stage, work items, paths), the findings history of all cycles and the frozen requirements/AC/contracts. Do not redesign the feature. Decide whether the defects share a design cause (a crutch such as a patch around a wrong owner, duplicated logic or a test that pins the wrong behavior) or are independent.
+
+Write the supplied versioned artifact under `.tmp/pipelines/{run-id}/planning/**`. State explicitly:
+- `result: no_change | apply_within_requirements | requirements_change`;
+- the defect classes across cycles and the structural cause, or why the current design is sound;
+- `requirements_changed`, `acceptance_criteria_changed`, `external_contract_changed`, `security_boundary_changed`, `destructive_change`, each with the literal value `false` or `true`.
+
+`apply_within_requirements` requires all five flags `false`; then also give the concrete replacement design (modules, owner of each concept, affected paths and tests) and the list of crutches to remove. `requirements_change` (any flag true, or the fix needs an owner decision) names the changed requirement; the lane pauses for the owner. `no_change` means the repair loop continues unchanged. OpenStage records the result with `stage-cli architecture-review-record`; this mode never changes the frozen manifest.
 
 ## Runtime scope clarification mode
 
@@ -82,7 +93,7 @@ Apply this check in every mode, including PLAN, runtime scope clarification, run
 
 Prefer reuse of the existing implementation, then a focused extraction/shared abstraction when necessary. Avoid parallel implementations and copied contracts that can diverge into multiple sources of truth. Do not introduce speculative abstractions or unrelated refactors merely to remove similar-looking code.
 
-Record a `reuse_drift_analysis` section in the supplied architecture artifact: searched paths/symbols, existing candidates and their consumers, the chosen reuse/extraction/new-implementation approach, and the canonical owner of shared behavior. If duplication is justified, state the concrete boundary or compatibility constraint, why reuse is unsuitable, and how equivalence will be maintained and verified across affected consumers. Include exact affected paths and cross-consumer regression checks without silently expanding approved scope.
+Check composition owners as well as helpers (who composes the delivery plan, links, keyboards, identity), including other implementations of the same concept one level up from the touched module. Record a `reuse_drift_analysis` section in the supplied architecture artifact: searched paths/symbols, existing candidates and their consumers, the chosen reuse/extraction/new-implementation approach, and the canonical owner of shared behavior. If duplication is justified, state the concrete boundary or compatibility constraint, why reuse is unsuitable, and how equivalence will be maintained and verified across affected consumers. Include exact affected paths and cross-consumer regression checks without silently expanding approved scope.
 
 Missing repository evidence is a blocker; ask OpenStage to fetch the specific gap. Do not claim a project-wide search was performed when it was not.
 
@@ -96,7 +107,12 @@ Check the smallest useful architecture surface:
 - state/consistency/migration compatibility, rerun and rollback;
 - security/reliability/performance and deployment/runtime risks;
 - explicit test strategy: deterministic local checks, independent CI, runtime/smoke and owner acceptance when applicable;
-- test selection: when the repository generates its own test impact map (for example `docs/testing/*.json` and the command array it indexes), name both paths so PLAN binds them with `stage-cli gate-testing-freeze`; split work items along that map's test blocks (one or two blocks per item) and keep each item's tests in its own lane;
+- test selection: when the repository generates its own test impact map (for example `docs/testing/*.json` and the command array it indexes), name both paths so PLAN binds them with `stage-cli gate-testing-freeze`; split work items along that map's test blocks and keep each item's tests in its own lane. "1-2 blocks per item" is a size estimate: for a hub file it never moves tests out of the item that changes the product;
+- test rework (mandatory, no new gate): list tests that assert lists/counts/order of what the change touches (inventories, pins, registries), generated-map selection-budget thresholds the new tests would exceed (recompute with the frozen generator check), tests near their time limit or flaky under parallel load (cold module import inside the test body) and tests that prove a helper instead of the user path. Give each an exact path, `action` (`update | split | rewrite | add | move_setup | remove`) and reason for manifest `test_rework[]`; they form the `test_preparation: true` lane every other lane depends on. Never propose raising a timeout or budget;
+- behavior scenarios: every acceptance-criteria user path has a scenario test on the real production entry (route, handler, worker job) with only the provider transport stubbed; a repository mutation/behavior-cell checker is named as a frozen gate command;
+- gate inputs: name which gates are pre-publish (PLAN-probed) and which post-publish gates need `CANDIDATE_SHA`/`PIPELINE_SCRATCH_DIR` from the gate environment; no input from the owner shell;
+- single owner module per concept the change touches (delivery plan, links, keyboards, identity, ...) and the data model the feature builds on (what is stored in which column for each creation path), checked before the design; shared-code adoption belongs to the lane that changes the shared code, not the sink;
+- release version work item when the project versions releases;
 - accepted/residual risks, rollback expectation and operational failure modes;
 - implementation ordering, overlap/conflict metadata and release implications;
 - conformance to owner decisions and affected contracts.

@@ -1,5 +1,6 @@
 import { accessSync, constants, lstatSync, readFileSync, realpathSync, mkdirSync, renameSync, rmSync, writeFileSync, existsSync } from 'node:fs';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 
@@ -163,4 +164,49 @@ process.exit(result.status??1);
   writeFileSync(temporary, source, {mode: 0o755});
   renameSync(temporary, launcher);
   return checkProjectTooling(cwd, env);
+}
+
+const LOCKFILES = {pnpm: ['pnpm-lock.yaml'], npm: ['package-lock.json'], yarn: ['yarn.lock'], bun: ['bun.lock', 'bun.lockb']};
+const FROZEN_INSTALL = {pnpm: ['install', '--frozen-lockfile'], npm: ['ci'], yarn: ['install', '--immutable'], bun: ['install', '--frozen-lockfile']};
+
+function fileSha256(file) { return createHash('sha256').update(readFileSync(file)).digest('hex'); }
+
+function redact(text) {
+  return text
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+(?::[^\s/@]*)?@/gi, '$1***@')
+    .replace(/(_authToken|_auth|_password|token|password|secret|api[_-]?key)(\s*[=:]\s*)\S+/gi, '$1$2***')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ***')
+    .replace(/\b(?:npm_|ghp_|gho_|github_pat_|glpat-)[A-Za-z0-9_-]{8,}/g, '***');
+}
+
+// Frozen dependency restore with the prepared manager. The install must not change package.json or the lockfile;
+// evidence is written for PASS and FAIL alike, and failures throw a stable DEPENDENCY_* code.
+export function restoreDependencies(cwd, tooling, {env = process.env, evidenceFile, timeout = 15 * 60 * 1000} = {}) {
+  const manager = tooling?.package_manager;
+  if (!manager) throw new Error('DEPENDENCY_MANAGER_REQUIRED: package.json packageManager is not pinned');
+  const lockfile = LOCKFILES[manager].find(name => existsSync(join(cwd, name)));
+  if (!lockfile) throw new Error(`DEPENDENCY_LOCK_MISSING: ${LOCKFILES[manager].join(' or ')} is required for ${manager}`);
+  const files = ['package.json', lockfile];
+  const before = Object.fromEntries(files.map(name => [name, fileSha256(join(cwd, name))]));
+  const args = FROZEN_INSTALL[manager];
+  const started = Date.now();
+  const result = spawnSync(tooling.executable ?? executablePath(manager, env), args, {cwd, env, encoding: 'utf8', shell: false, timeout, maxBuffer: 16 * 1024 * 1024});
+  const changed = files.filter(name => fileSha256(join(cwd, name)) !== before[name]);
+  const exitCode = result.status ?? null;
+  const output = redact(`${result.stdout ?? ''}${result.stderr ?? ''}${result.error ? `\n${result.error.code ?? result.error.message}` : ''}`.trim());
+  const evidence = {
+    kind: 'dependency_restore', status: changed.length ? 'FAIL' : exitCode === 0 && !result.error ? 'PASS' : 'FAIL',
+    manager, version: tooling.version, command: [manager, ...args].join(' '), lockfile, lockfile_sha256: before[lockfile],
+    duration_ms: Date.now() - started, exit_code: exitCode, output_tail: output.slice(-2000), at: new Date().toISOString(),
+    ...(changed.length ? {changed_files: changed} : {}),
+  };
+  if (evidenceFile) {
+    mkdirSync(dirname(evidenceFile), {recursive: true});
+    const temporary = `${evidenceFile}.tmp-${process.pid}`;
+    writeFileSync(temporary, `${JSON.stringify(evidence, null, 2)}\n`);
+    renameSync(temporary, evidenceFile);
+  }
+  if (changed.length) throw new Error(`DEPENDENCY_LOCK_CHANGED: install modified ${changed.join(', ')}`);
+  if (evidence.status !== 'PASS') throw new Error(`DEPENDENCY_INSTALL_FAILED: ${manager} ${args.join(' ')} exit=${exitCode ?? 'none'}: ${evidence.output_tail.slice(-500)}`);
+  return evidence;
 }

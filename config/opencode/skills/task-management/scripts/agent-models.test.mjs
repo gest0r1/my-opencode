@@ -135,3 +135,11 @@ test('architecture and technical review retain evidence-based reuse/drift checks
     }
   }
 });
+
+test('OpenStage stays on DeepSeek V4.1 Flash with the max reasoning variant', () => {
+  // OpenCode 2.x joins a legacy `variant` with `model` (model#variant); the opencode-go catalog
+  // offers low/high/max for this model, and max is one step above the provider default.
+  const path = 'config/opencode/agent/core/openstage-orchestrator.md';
+  assert.equal(value(path, 'model'), 'opencode-go/deepseek-v4.1-flash');
+  assert.equal(value(path, 'variant'), 'max');
+});

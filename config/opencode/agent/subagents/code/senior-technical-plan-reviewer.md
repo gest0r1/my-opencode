@@ -126,11 +126,18 @@ Review decisions, architecture, contracts, evidence, work decomposition and DAG 
 - dependency cycles, un-serialized exclusive/migration/fixture conflicts;
 - lost parallelism: independent work items with disjoint paths placed in one pipeline (one stage at a time) instead of separate lanes; work items marked `parallel: true` inside one pipeline are always this finding;
 - CI mode: `github_ci_mode: off` without a local CI-parity `local_gate` as deployment validation;
+- test rework completeness: `test_rework[]` covers inventory/pin tests of what the run changes, generated-map selection-budget thresholds (recomputed with the frozen generator check), tests near their limit or with cold module import under parallel load, and helper-only tests; each entry has an exact path inside base scope, an action and a `test_preparation: true` work item, and every other lane depends on that lane. Raising a timeout instead of reworking the test is a blocking `technical_fix`. Do not demand contradictory test splitting: the "1-2 test blocks" repository rule is a size estimate and never forces tests out of the item that changes the product;
+- scenario coverage: every acceptance-criteria user path has a scenario test on the real production entry with only the provider transport stubbed (a helper-only test does not count); when the repository has a mutation/behavior-cell checker it is a frozen gate command, and a manual check replaces it only by recorded owner decision;
+- plan probes: a PASS `planning/probes/<pipeline>-<gate>.json` exists for every pre-publish gate (matching `commands_sha256`); FAIL is accepted only with a `baseline_repair: true` work item; post-publish gates (candidate SHA, contour install) get inputs from the gate environment (`CANDIDATE_SHA`, `PIPELINE_SCRATCH_DIR`) and never from the owner shell;
+- release version: a work item bumps the version when the project versions releases;
+- single owner module per concept (including composition owners, not only helpers) and a data-model check of what is stored in which column for each creation path; shared-code adoption sits in the lane that changes the shared code, not in the sink;
 - late tests: a source lane without its own `review` stage, or a lane whose tests (unit, live, inventory registration) are left to a later test-only sink item;
 - unbound test selection: the repository generates a test impact map but the manifest copies groups by hand or leaves selection non-narrowing instead of `gate_testing.source`;
 - migration/data/security/reliability/rollback gaps;
 - testability and runtime/release evidence gaps;
 - scope expansion or vague work items.
+
+Collect every finding of the review in one pass so the author revises once.
 
 Classify findings only as:
 technical_fix | security_fix | replan | security_stop | scope_stop | secret_stop |

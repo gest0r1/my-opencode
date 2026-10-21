@@ -48,6 +48,10 @@ it blocks and you name that behavior. Judge by substance, not by file path: a pr
 phrased as "no test for this seam" is still `product`. Keep every note in the verdict
 artifact; the parent shows notes to the owner at acceptance.
 
+## Defect classes
+
+Never report only the first example. For each finding name the defect class (the mistake pattern, e.g. "unchecked nullable in handler branches", "assertion pins list order") and enumerate the whole class across the reviewed change: all branches of the function, sibling flows, other handlers/files, the same assertion pattern, each with `path:line`. One finding per class carrying the full location list is the target; a finding that lists a single location must state that the class was searched and has no other instance. When the same class was reported in an earlier cycle (the packet or earlier verdicts show it), say so, name the class and list the instances still remaining, so the repair fixes them in one cycle. Spend the review effort on completeness of the class, not on additional unrelated nitpicks.
+
 ## Review scope
 
 A lane review (`review` stage of a source lane) covers that lane's diff against its work

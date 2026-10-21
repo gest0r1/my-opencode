@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { selectAffectedCommands, validateGateTesting, parallelBatches } from './gate-testing-policy.mjs';
+import { selectAffectedCommands, validateGateTesting, parallelBatches, isPrePublishGate } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
 import { readTestReports, sourceSnapshot, sourceInventory } from './gate-diagnostics.mjs';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
@@ -190,4 +190,19 @@ test('the reuse digest covers the whole tree while the scoped digest stays bound
   assert.notEqual((await sourceSnapshot(root, {}, invoke, baseline)).digest, outside.digest);
   await writeFile(join(root, '.env.local'), 'SECRET=1\n');
   assert.ok(!('.env.local' in (await sourceInventory(root, invoke)).files), 'untracked sensitive files stay out');
+});
+
+test('pre-publish release and install gates may hold test resources; post-publish and deployment gates may not', () => {
+  const manifest = (stages, executors) => ({
+    pipelines: [{ id: 'sink', profile: 'release', stages, executors }],
+    gate_profiles: { release: { 'release-parity': ['pnpm exec vitest run'], 'dev-install': ['bash install.sh'] } },
+  });
+  const pre = manifest(['implementation', 'release-parity', 'git_publish'], { implementation: 'agent', 'release-parity': 'local_gate', git_publish: 'git_publish' });
+  assert.equal(isPrePublishGate(pre, 'release', 'release-parity'), true);
+  validateGateTesting({ ...pre, gate_testing: { release: { 'release-parity': { live_postgres: { image: 'postgres:16@sha256:' + 'a'.repeat(64), command_indexes: [0] } } } } });
+  const post = manifest(['implementation', 'git_publish', 'release-parity'], { implementation: 'agent', git_publish: 'git_publish', 'release-parity': 'local_gate' });
+  assert.equal(isPrePublishGate(post, 'release', 'release-parity'), false);
+  assert.throws(() => validateGateTesting({ ...post, gate_testing: { release: { 'release-parity': { timeout_seconds: 60 } } } }), /test resources cannot wrap deployment gates/);
+  const deploy = manifest(['dev-install'], { 'dev-install': 'local_gate' });
+  assert.equal(isPrePublishGate({ ...deploy, gate_profiles: { release: { 'dev-deploy': ['x'] } } }, 'release', 'dev-deploy'), false);
 });

@@ -29,10 +29,10 @@ When a second worktree was planned while another RUN was executing and `main`
 moves before that second RUN starts, use:
 
 ```text
-/pipeline-refresh [run-id]
+/pipeline-replan [run-id]
 ```
 
-Refresh uses the same reconciliation as RUN. Trusted `worktree-refresh.sh` preserves a verified snapshot while syncing main. `pipeline-reconcile-cli` returns only COMPATIBLE or PLAN_INVALID; a changed hash first requests semantic review, never automatic replan. Before implementation begins, revise the same folder and only affected gates. After source implementation starts, compatible amendments may include new runtime work units; incompatible PLAN requires a new folder with reusable context under planning/inherited, keeping the old folder intact. Owner feedback is accepted at any checkpoint. Technical corrections preserve approval; changed owner scope/behavior/constraints require approval again.
+Replan uses the same reconciliation as RUN. Trusted `worktree-refresh.sh` preserves a verified snapshot while syncing main. `pipeline-reconcile-cli` returns only COMPATIBLE or PLAN_INVALID; a changed hash first requests semantic review, never automatic replan. Before implementation begins, revise the same folder and only affected gates. After source implementation starts, compatible amendments may include new runtime work units; incompatible PLAN requires a new folder with reusable context under planning/inherited, keeping the old folder intact. Owner feedback is accepted at any checkpoint. Technical corrections preserve approval; changed owner scope/behavior/constraints require approval again.
 
 ## Manifest v2 and planning gates
 
@@ -67,7 +67,9 @@ RUN may add exact machine-owned test/support paths inside an already-approved ap
 component. Additional production/config paths require fresh architecture + senior review proving
 a decision-free bounded clarification. Protected/security/trust-boundary paths still require
 owner/replan. Scope authorization happens before a new automatic repair cycle is counted. The
-shared automatic budget covers both `technical_fix` and bounded `security_fix`.
+shared automatic budget covers both `technical_fix` and bounded `security_fix`. Test paths named in `test_rework[]` and sibling test/support files of an in-scope test are authorized by `scope-check` without owner amendment; the `test_preparation` lane (reworked tests) runs first and every source lane depends on it.
+
+After every 5 charged repair cycles of one stage RUN must record an architecture review (`architecture_review_due`, then `ARCHITECTURE_REVIEW_REQUIRED` on the next charged cycle): ArchitectureAnalyzer in repair-checkpoint mode, SeniorTechnicalPlanReviewer on its artifact, `stage-cli architecture-review-record`. `apply_within_requirements` continues with one `⚠` line; `requirements_change` blocks only that lane (other lanes continue) and goes to the owner through the runtime-replan path. A defect found by a sink gate in an upstream lane is repaired with `stage-cli fix-cycle ... --repair-pipeline <lane>`, which reopens that lane. Owner-facing RUN messages are always Russian; the owner pre-grants `gh issue create --body-file .tmp/pipelines/<run>/...` for follow-up issues.
 
 Planning/review evidence is append-only. Stable Issue story files are the
 exception: owner corrections update the same `stories/issue-N.md` file.
@@ -341,7 +343,7 @@ a duplicate.
 Use different mechanisms for different changes:
 
 - planning revision before init → same run-id;
-- technical/security fix during RUN → same run-id with an initial five-cycle budget; owner may pre-authorize a higher run-wide ceiling with `--fix-cycles N` (max 20), grant `+N` to one active stage later, or approve a block-local runtime replan; all remain in the same run and are audited without rewriting the manifest;
+- technical/security fix during RUN → same run-id with an initial five-cycle budget and an architecture checkpoint after every 5 charged cycles (no owner step unless requirements change); owner may pre-authorize a higher run-wide ceiling with `--fix-cycles N` (max 20), grant `+N` to one active stage later, or approve a block-local runtime replan; all remain in the same run and are audited without rewriting the manifest;
 - frozen V2 manifest correction after init → `stage-cli supersede <old> <new> --reason <code>`;
 - architecture/scope/structural main-drift replan → new run with reason-coded `lineage.change_class=replan`;
 - main/source drift → same-run reconciliation; pre-implementation revision stays in the same folder;

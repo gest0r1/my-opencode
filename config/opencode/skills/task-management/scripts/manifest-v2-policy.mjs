@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { accessSync, constants, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { validateGateTesting, resolveGateTesting } from './gate-testing-policy.mjs';
+import { validateGateTesting, resolveGateTesting, commandsDigest, isPrePublishGate } from './gate-testing-policy.mjs';
 import { validateGenerators } from './generator-cli.mjs';
 
 export class ManifestV2PolicyError extends Error {}
@@ -334,6 +334,117 @@ function validateWorkItems(manifest, root) {
       if (!Array.isArray(pipeline[field])) {
         throw new ManifestV2PolicyError(`schema v2 pipeline must define ${field}: ${pipeline.id}`);
       }
+    }
+  }
+}
+
+const TEST_REWORK_ACTIONS = new Set(['update', 'split', 'rewrite', 'add', 'move_setup', 'remove']);
+
+// `test_rework[]` freezes tests the run must rework before source lanes start (inventories, pins,
+// near-limit or cold-import tests). They form the `test_preparation` lane that every other lane
+// with an agent stage depends on, so RUN starts there and test time limits never rise.
+export function validateTestRework(manifest) {
+  const pipelines = manifest.pipelines ?? [];
+  const lanes = pipelines.filter((pipeline) => pipeline.test_preparation !== undefined);
+  for (const lane of lanes) {
+    if (typeof lane.test_preparation !== 'boolean') throw new ManifestV2PolicyError(`TEST_REWORK_LANE_INVALID: ${lane.id} test_preparation must be boolean`);
+  }
+  const prep = pipelines.filter((pipeline) => pipeline.test_preparation === true);
+  const rework = manifest.test_rework;
+  if (rework !== undefined && !Array.isArray(rework)) throw new ManifestV2PolicyError('TEST_REWORK_INVALID: test_rework must be an array');
+  const entries = rework ?? [];
+  if (entries.length && !prep.length) {
+    throw new ManifestV2PolicyError('TEST_REWORK_LANE_MISSING: test_rework needs a pipeline with test_preparation=true');
+  }
+  const ids = new Set();
+  const workItems = new Map((manifest.work_items ?? []).map((item) => [item.id, item]));
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) || typeof entry.id !== 'string' || !entry.id.trim()) {
+      throw new ManifestV2PolicyError('TEST_REWORK_INVALID: every entry needs a non-empty id');
+    }
+    if (ids.has(entry.id)) throw new ManifestV2PolicyError(`TEST_REWORK_DUPLICATE_ID: ${entry.id}`);
+    ids.add(entry.id);
+    if (!TEST_REWORK_ACTIONS.has(entry.action)) {
+      throw new ManifestV2PolicyError(`TEST_REWORK_ACTION_INVALID: ${entry.id} action must be one of ${[...TEST_REWORK_ACTIONS].join('|')}`);
+    }
+    if (typeof entry.reason !== 'string' || !entry.reason.trim()) throw new ManifestV2PolicyError(`TEST_REWORK_INVALID: ${entry.id} needs a reason`);
+    if (typeof entry.path !== 'string' || !safeRelativePath(entry.path) || /[*?\[\]{}]/.test(entry.path) || entry.path.endsWith('/')) {
+      throw new ManifestV2PolicyError(`TEST_REWORK_PATH_INVALID: ${entry.id} path must be an exact repository path without globs`);
+    }
+    if (!(manifest.allowed_change_paths ?? []).some((scope) => typeof scope === 'string' && scopeContains(scope, entry.path))) {
+      throw new ManifestV2PolicyError(`TEST_REWORK_PATH_OUT_OF_SCOPE: ${entry.id} ${entry.path} is not covered by allowed_change_paths`);
+    }
+    const item = workItems.get(entry.work_item_id);
+    const owner = item && pipelines.find((pipeline) => pipeline.id === item.pipeline_id);
+    if (!owner || owner.test_preparation !== true) {
+      throw new ManifestV2PolicyError(`TEST_REWORK_WORK_ITEM_INVALID: ${entry.id} work_item_id must be a frozen work item of a test_preparation pipeline`);
+    }
+  }
+  for (const lane of prep) {
+    if (lane.deployable !== false) throw new ManifestV2PolicyError(`TEST_REWORK_LANE_DEPLOYABLE: ${lane.id} test_preparation pipeline must declare deployable=false`);
+    for (const other of pipelines) {
+      if (other.test_preparation === true || !Object.values(other.executors ?? {}).includes('agent')) continue;
+      if (!dependencyReachable(pipelines, other.id, lane.id)) {
+        throw new ManifestV2PolicyError(`TEST_REWORK_LANE_NOT_FIRST: ${other.id} must depend (directly or transitively) on test_preparation pipeline ${lane.id}`);
+      }
+    }
+  }
+}
+
+// PLAN probe: one `gate-runner-cli.ts --plan-probe` result per supported local gate, taken on the
+// clean base before owner approval; its hash binds the evidence to the exact frozen commands.
+export const planProbeCommandsSha256 = (commands) => commandsDigest(commands);
+
+export function planProbePath(runDirectory, pipelineId, gate) {
+  return join(runDirectory, 'planning', 'probes', `${pipelineId}-${gate}.json`);
+}
+
+export function planProbeGates(manifest) {
+  const gates = [];
+  for (const pipeline of manifest.pipelines ?? []) {
+    if (typeof pipeline.profile !== 'string' || !pipeline.profile) continue;
+    for (const stage of pipeline.stages ?? []) {
+      if (pipeline.executors?.[stage] !== 'local_gate') continue;
+      const commands = manifest.gate_profiles?.[pipeline.profile]?.[stage];
+      if (!Array.isArray(commands) || !commands.length) continue;
+      if (!isPrePublishGate(manifest, pipeline.profile, stage) || commands.some((command) => String(command).includes('{candidate_sha}'))) continue;
+      gates.push({ pipeline_id: pipeline.id, profile: pipeline.profile, gate: stage, commands });
+    }
+  }
+  return gates;
+}
+
+function readPlanProbe(runDirectory, pipelineId, gate) {
+  try { return JSON.parse(readFileSync(planProbePath(runDirectory, pipelineId, gate), 'utf8')); } catch { return undefined; }
+}
+
+export function planProbeMatches(probe, manifest, { pipeline_id, profile, gate, commands }) {
+  return probe?.kind === 'plan_probe' && probe.run_id === manifest.run_id && probe.profile === profile && probe.gate === gate &&
+    typeof probe.pipeline_id === 'string' && (manifest.pipelines ?? []).some((p) => p.id === probe.pipeline_id && p.profile === profile) &&
+    probe.commands_sha256 === planProbeCommandsSha256(commands);
+}
+
+// A baseline_repair item of the profile lets a red base through: PLAN assigned the failing suites to it.
+export function profileHasBaselineRepairItem(manifest, runDirectory, profile) {
+  const ids = new Set((manifest.pipelines ?? []).filter((pipeline) => pipeline.profile === profile).map((pipeline) => pipeline.id));
+  for (const unit of manifest.work_items ?? []) {
+    if (!ids.has(unit.pipeline_id) || typeof unit.path !== 'string') continue;
+    try { if (JSON.parse(readFileSync(resolve(runDirectory, unit.path), 'utf8'))?.baseline_repair === true) return true; } catch {}
+  }
+  return false;
+}
+
+// PLAN_PROBE_REQUIRED: every supported local gate of a profiled pipeline needs a current probe.
+export function validatePlanProbes(manifest, { manifestPath, cwd = process.cwd() } = {}) {
+  const runDirectory = runRoot(manifest, cwd, manifestPath);
+  for (const target of planProbeGates(manifest)) {
+    const sharing = (manifest.pipelines ?? []).filter((pipeline) => pipeline.profile === target.profile).map((pipeline) => pipeline.id);
+    const candidates = sharing.map((id) => readPlanProbe(runDirectory, id, target.gate)).filter((probe) => planProbeMatches(probe, manifest, target));
+    const passed = candidates.some((probe) => probe.status === 'PASS');
+    const repaired = candidates.some((probe) => probe.status === 'FAIL') && profileHasBaselineRepairItem(manifest, runDirectory, target.profile);
+    if (!passed && !repaired) {
+      const state = candidates.length ? `latest probe status ${candidates.map((probe) => String(probe.status)).join('/')} does not pass` : 'no current probe';
+      throw new ManifestV2PolicyError(`PLAN_PROBE_REQUIRED: ${target.pipeline_id}/${target.gate}: ${state}; run on the clean checkout: npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts --plan-probe ${manifestPath ?? `.tmp/pipelines/${manifest.run_id}/manifest.json`} ${target.pipeline_id} ${target.gate}`);
     }
   }
 }
@@ -830,6 +941,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
   validatePreservedBaseline(manifest);
   validateLineage(manifest);
   validateGithubExecutionContract(manifest);
+  validateTestRework(manifest);
   validateSourceRequirements(manifest);
   assertConflictSerialization(manifest);
   const projectPolicy = validateProjectPolicy(manifest, cwd);
