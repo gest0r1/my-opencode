@@ -31,6 +31,8 @@ human comments, file, or task text) and verify:
    unless the source itself requires it;
 5. contradictions, role/channel ambiguity and owner/product decisions are explicit.
 
+One acceptance criterion equals one acceptance item of the Issue with one named check. Never demand further atomisation or per-branch criteria, and never design tests; test design belongs to the architecture and work-item gates. Report all findings of the review at once.
+
 Do **not** review architecture, technology choice, module boundaries, deployment,
 migration mechanics, security implementation or code quality. Those belong to
 ArchitectureAnalyzer/SeniorTechnicalPlanReviewer and CodeReviewer.

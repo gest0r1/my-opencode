@@ -70,6 +70,19 @@ export function impactMatches(pattern, file) {
   return pattern.endsWith('/**') ? file.startsWith(pattern.slice(0, -2)) || file === pattern.slice(0, -3) : pattern === file;
 }
 
+// A local gate is pre-publish when every pipeline that freezes it on this profile runs it before
+// git_publish (or has no git_publish stage). Pre-publish gates may hold test resources and run in
+// the PLAN probe whatever their name; deployment and smoke gates never do.
+export function isPrePublishGate(manifest, profile, gate) {
+  if (/(deploy|smoke)/i.test(gate)) return false;
+  const users = (manifest.pipelines ?? []).filter(pipeline => pipeline?.profile === profile && (pipeline.stages ?? []).includes(gate));
+  if (!users.length) return false;
+  return users.every(pipeline => {
+    const publish = pipeline.stages.findIndex(stage => pipeline.executors?.[stage] === 'git_publish');
+    return (pipeline.executors?.[gate] ?? 'local_gate') === 'local_gate' && (publish < 0 || pipeline.stages.indexOf(gate) < publish);
+  });
+}
+
 export function validateGateTesting(manifest) {
   const testing = manifest.gate_testing;
   if (testing === undefined) return;
@@ -79,7 +92,7 @@ export function validateGateTesting(manifest) {
     for (const [gate, config] of Object.entries(gates)) {
       const commands = manifest.gate_profiles?.[profile]?.[gate];
       if (!Array.isArray(commands) || !config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`GATE_TESTING_INVALID: ${profile}/${gate}`);
-      if (/(runtime|deploy|release|smoke|install)/i.test(gate)) throw new Error('GATE_TESTING_INVALID: test resources cannot wrap deployment gates');
+      if (/(runtime|deploy|release|smoke|install)/i.test(gate) && !isPrePublishGate(manifest, profile, gate)) throw new Error('GATE_TESTING_INVALID: test resources cannot wrap deployment gates');
       if (Object.keys(config).some(key => !['impact_groups', 'live_postgres', 'timeout_seconds', 'report_files', 'coordinator_only', 'parallel_groups', 'ignored_inputs', 'source'].includes(key))) throw new Error('GATE_TESTING_INVALID: unknown option');
       // An unresolved source reference is validated after resolveGateTesting merges its snapshot.
       if (config.source !== undefined) continue;

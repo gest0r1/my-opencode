@@ -292,6 +292,13 @@ async function exhaustFive(fx) {
     }
   }
 }
+async function recordNoChangeReview(fx) {
+  const file = path.join(fx.stateRoot, fx.runId, `architecture-${Date.now()}.json`);
+  await writeFile(file, JSON.stringify({ kind: 'architecture_review', run_id: fx.runId, pipeline_id: 'app', stage: 'code-review',
+    result: 'no_change', summary: 'design holds; repeat findings were local' }));
+  const result = run(fx.root, ['architecture-review-record', fx.runId, 'code-review', '--pipeline', 'app', '--evidence', file, '--state-root', fx.stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+}
 async function writeReview(fx, name, review) {
   const file = path.join(fx.stateRoot, fx.runId, name);
   await writeFile(file, JSON.stringify({ status: 'needs_revision', ...review }, null, 2) + '\n');
@@ -345,6 +352,7 @@ test('initial budget is 5 and owner can grant +3 after exhaustion', async () => 
     previous_limit: 5,
     new_limit: 8,
   });
+  await recordNoChangeReview(fx);
 
   result = run(fx.root, [
     'scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts',
@@ -605,6 +613,7 @@ test('runtime replan approval can add cycles before exhaustion (5/6 -> 5/10)', a
   assert.equal(runtime.technical_fix_budget_grants[0].source, 'owner_direct');
   assert.equal(runtime.technical_fix_budget_grants[1].source, 'runtime_replan');
   assert.equal(runtime.technical_fix_budget_grants[1].runtime_replan_revision, 2);
+  await recordNoChangeReview(fx);
 
   result = run(fx.root, [
     'scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts',
@@ -683,4 +692,215 @@ test('live PASS followed by bounded review findings reopens completed implementa
   result = cli(['status', fx.runId]); assert.equal(result.status, 0, result.stderr);
   const line = result.stdout.split('\n').find(line => line.includes('implementation:'));
   assert.ok(!line.includes('fix_budget')); assert.match(line, /repair_from=code-review/);
+});
+
+// ---- architecture checkpoint (B2.1) and cross-lane repair (B2.2) ----
+
+const sh = (root, args) => run(root, args);
+async function lanesFixture(runId, { sinkScope = ['packages/sink/**'], laneScope = ['packages/lane/**'], laneExtra = {} } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'stage-cli-lanes-'));
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const architecture = await frozen(root, 'planning/architecture.md', '# architecture\n');
+  const review = await frozen(root, 'reviews/architecture.md', '# review\n');
+  const requiredArtifacts = {
+    decision_register: await frozen(root, 'decision-register.md', '# decisions\n'),
+    technology_evidence: await frozen(root, 'technology-evidence.md', '# evidence\n'),
+    contract_inventory: await frozen(root, 'contract-inventory.md', '# contracts\n'),
+    test_strategy: await frozen(root, 'test-strategy.md', '# tests\n'),
+    accepted_risks: await frozen(root, 'accepted-risks.md', '# risks\n'),
+    work_items: await frozen(root, 'work-items/index.json', '{"schema":2}\n'),
+  };
+  const scopes = { lane: laneScope, sink: sinkScope, other: ['packages/other/**'] };
+  const workItems = [];
+  for (const id of ['lane', 'sink', 'other']) {
+    const artifact = await frozen(root, `work-items/wi-${id}.json`, JSON.stringify({ id: `wi-${id}`, pipeline_id: id, allowed_change_paths: scopes[id] }));
+    workItems.push({ id: `wi-${id}`, pipeline_id: id, ...artifact });
+  }
+  const gated = ['implementation', 'code-review'];
+  const executors = { implementation: 'agent', 'code-review': 'review' };
+  const pipeline = (id, extra = {}) => ({ id, deployable: false, stages: gated, executors, work_items: [`wi-${id}`],
+    decision_ids: [], research_ids: [], contract_ids: [], ...extra });
+  const manifest = {
+    schema_version: 2, run_id: runId, rules_file: 'docs/pipeline-rules.md', rules_version: 2, planning_mode: 'design-freeze',
+    planning_readiness: { design_freeze: true, required_gates: ['architecture'],
+      gates: { architecture: { required: true, status: 'ready', cycles: 1, artifact: architecture, review, blocking_decision_ids: [] } },
+      required_artifacts: requiredArtifacts },
+    open_decisions: [], allowed_change_paths: ['packages/**'], gate_profiles: {},
+    pipelines: [
+      pipeline('lane', { ready_after_stage: 'code-review', ...laneExtra }),
+      pipeline('sink', { depends_on: ['lane'] }),
+      pipeline('other', { stages: ['implementation'], executors: { implementation: 'agent' } }),
+    ],
+    work_items: workItems,
+  };
+  const manifestPath = path.join(root, 'manifest.json');
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  const cli = (...args) => sh(root, [...args, '--state-root', stateRoot]);
+  let result = cli('init', manifestPath, '--json'); assert.equal(result.status, 0, result.stderr);
+  result = cli('approve', runId, '--json'); assert.equal(result.status, 0, result.stderr);
+  let seq = 0;
+  const fx = {
+    root, stateRoot, runId, cli,
+    step(pipeline, stage, command) {
+      const r = cli(command, runId, stage, '--pipeline', pipeline, '--json'); assert.equal(r.status, 0, `${pipeline}/${stage} ${command}: ${r.stderr}`); return JSON.parse(r.stdout);
+    },
+    finish(pipeline, stage) { this.step(pipeline, stage, 'start'); return this.step(pipeline, stage, 'complete'); },
+    async evidence(pipeline, stage = 'code-review') {
+      const file = path.join(root, `negative-${++seq}.json`);
+      await writeFile(file, JSON.stringify({ status: 'needs_revision', run_id: runId, pipeline_id: pipeline, stage, result_id: seq }));
+      return file;
+    },
+    next() { const r = cli('next', runId, '--json'); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout).runnable.map(i => `${i.pipeline_id}/${i.stage}`).sort(); },
+    status() { const r = cli('status', runId, '--json'); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout); },
+    async fixCycle(pipeline, scopePaths, extra = []) {
+      let r = cli('scope-check', runId, 'code-review', ...scopePaths, '--pipeline', pipeline); assert.equal(r.status, 0, r.stderr);
+      return cli('fix-cycle', runId, 'code-review', '--pipeline', pipeline, '--evidence', await this.evidence(pipeline), '--json', ...extra);
+    },
+  };
+  return fx;
+}
+
+test('the 5th charged cycle flags an architecture checkpoint; the next cycle needs a recorded review', async () => {
+  const fx = await lanesFixture('arch-checkpoint');
+  fx.finish('lane', 'implementation');
+  fx.step('lane', 'code-review', 'start');
+  for (let cycle = 1; cycle <= 5; cycle += 1) {
+    const result = await fx.fixCycle('lane', ['packages/lane/src/a.ts']);
+    assert.equal(result.status, 0, result.stderr);
+    const runtime = JSON.parse(result.stdout).pipelines.lane.stages['code-review'];
+    assert.equal(runtime.technical_fix_cycles, cycle);
+    assert.equal(runtime.architecture_review_due === true, cycle === 5);
+    if (cycle < 5) fx.finish('lane', 'implementation'), fx.step('lane', 'code-review', 'start');
+  }
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].architecture_review_due, true);
+  assert.match(fx.cli('status', fx.runId).stdout, /architecture_review_due=true/);
+  // Exhausted budget keeps its own error; after an owner grant the checkpoint gates the next cycle.
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  let result = await fx.fixCycle('lane', ['packages/lane/src/a.ts']);
+  assert.match(result.stderr, /TECHNICAL_FIX_LIMIT_EXCEEDED/);
+  result = fx.cli('fix-budget-add', fx.runId, 'code-review', '--pipeline', 'lane', '--cycles', '5'); assert.equal(result.status, 0, result.stderr);
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts']);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /ARCHITECTURE_REVIEW_REQUIRED: lane\/code-review/);
+
+  const record = async (patch) => {
+    const file = path.join(fx.stateRoot, fx.runId, `arch-${Math.random().toString(36).slice(2)}.json`);
+    await writeFile(file, JSON.stringify({ kind: 'architecture_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
+      result: 'apply_within_requirements', summary: 'extract the shared helper', requirements_changed: false, acceptance_criteria_changed: false,
+      external_contract_changed: false, security_boundary_changed: false, destructive_change: false, ...patch }));
+    return fx.cli('architecture-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
+  };
+  result = await record({ external_contract_changed: true }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
+  result = await record({ summary: ' ' }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
+  result = await record({ result: 'maybe' }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
+  result = await record({ stage: 'implementation' }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
+  result = await record({}); assert.equal(result.status, 0, result.stderr);
+  const runtime = JSON.parse(result.stdout).pipelines.lane.stages['code-review'];
+  assert.equal(runtime.architecture_review_due, false);
+  assert.equal(runtime.architecture_reviews.length, 1);
+  assert.equal(runtime.architecture_reviews[0].result, 'apply_within_requirements');
+  assert.match(runtime.architecture_reviews[0].sha256, /^[0-9a-f]{64}$/);
+  result = await record({}); assert.match(result.stderr, /ARCHITECTURE_REVIEW_NOT_DUE/);
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts']); assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).pipelines.lane.stages['code-review'].technical_fix_cycles, 6);
+});
+
+test('architecture requirements_change blocks only that lane; other pipelines stay runnable and the owner path resumes it', async () => {
+  const fx = await lanesFixture('arch-requirements-change');
+  fx.finish('lane', 'implementation');
+  fx.step('lane', 'code-review', 'start');
+  for (let cycle = 1; cycle <= 5; cycle += 1) {
+    const result = await fx.fixCycle('lane', ['packages/lane/src/a.ts']); assert.equal(result.status, 0, result.stderr);
+    if (cycle < 5) fx.finish('lane', 'implementation'), fx.step('lane', 'code-review', 'start');
+  }
+  const file = path.join(fx.stateRoot, fx.runId, 'arch-rc.json');
+  await writeFile(file, JSON.stringify({ kind: 'architecture_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
+    result: 'requirements_change', summary: 'the acceptance criteria cannot be met with this design' }));
+  let result = fx.cli('architecture-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout);
+  assert.equal(state.pipelines.lane.stages['code-review'].status, 'blocked');
+  assert.equal(state.pipelines.lane.stages['code-review'].message, 'ARCHITECTURE_REQUIREMENTS_CHANGE: owner decision; other lanes continue');
+  assert.equal(state.pipelines.lane.status, 'blocked');
+  assert.equal(state.pipelines.other.status, 'approved');
+  assert.deepEqual(fx.next(), ['other/implementation']);
+
+  const replan = path.join(fx.stateRoot, fx.runId, 'replan.json');
+  await writeFile(replan, JSON.stringify({ kind: 'runtime_replan', status: 'ready_for_owner_approval', pipeline_id: 'lane', stage: 'code-review',
+    summary: 'owner decided the new criteria', owner_questions: [], requirements_changed: false, acceptance_criteria_changed: false,
+    external_contract_changed: false, security_boundary_changed: false, destructive_change: false }));
+  result = fx.cli('runtime-replan-propose', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', replan, '--json'); assert.equal(result.status, 0, result.stderr);
+  result = fx.cli('runtime-replan-approve', fx.runId, 'code-review', '--pipeline', 'lane', '--cycles', '2', '--json'); assert.equal(result.status, 0, result.stderr);
+  const resumed = JSON.parse(result.stdout);
+  assert.equal(resumed.pipelines.lane.stages['code-review'].status, 'pending');
+  assert.equal(resumed.pipelines.lane.status, 'approved');
+  assert.deepEqual(fx.next(), ['lane/implementation', 'other/implementation']);
+});
+
+test('cross-lane fix-cycle reopens the upstream lane, charges the sink gate and the sink waits for the lane milestone', async () => {
+  const fx = await lanesFixture('cross-lane');
+  fx.finish('lane', 'implementation'); fx.finish('lane', 'code-review');
+  fx.finish('sink', 'implementation'); fx.step('sink', 'code-review', 'start');
+  assert.deepEqual(fx.next(), ['other/implementation']);
+
+  // Ownership and topology are checked before any state change.
+  let result = await fx.fixCycle('sink', ['packages/lane/src/a.ts'], ['--repair-pipeline', 'other']);
+  assert.match(result.stderr, /CROSS_LANE_NOT_UPSTREAM/);
+  result = await fx.fixCycle('sink', ['packages/lane/src/a.ts'], ['--repair-pipeline', 'sink']);
+  assert.match(result.stderr, /CROSS_LANE_NOT_UPSTREAM/);
+  result = await fx.fixCycle('sink', ['packages/sink/src/own.ts'], ['--repair-pipeline', 'lane']);
+  assert.match(result.stderr, /CROSS_LANE_OWNER_AMBIGUOUS/);
+  result = await fx.fixCycle('sink', ['packages/lane/src/a.ts', 'packages/sink/src/own.ts'], ['--repair-pipeline', 'lane']);
+  assert.match(result.stderr, /CROSS_LANE_OWNER_AMBIGUOUS/);
+  assert.equal(fx.status().pipelines.sink.stages['code-review'].technical_fix_cycles ?? 0, 0);
+  assert.equal(fx.status().pipelines.lane.status, 'completed');
+
+  result = await fx.fixCycle('sink', ['packages/lane/src/a.ts'], ['--repair-pipeline', 'lane']);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout);
+  const sink = state.pipelines.sink.stages; const lane = state.pipelines.lane.stages;
+  assert.equal(sink['code-review'].technical_fix_cycles, 1);
+  assert.equal(sink.implementation.repair_origin_stage, 'code-review');
+  assert.equal(sink.implementation.repair_origin_pipeline, undefined);
+  assert.equal(lane.implementation.status, 'pending');
+  assert.equal(lane.implementation.repair_origin_stage, 'code-review');
+  assert.equal(lane.implementation.repair_origin_pipeline, 'sink');
+  assert.equal(lane['code-review'].status, 'pending');
+  assert.equal(state.pipelines.lane.status, 'approved');
+  assert.match(fx.cli('status', fx.runId).stdout, /repair_from=sink\/code-review/);
+  // The sink must wait: only the lane (and the unrelated pipeline) are runnable.
+  assert.deepEqual(fx.next(), ['lane/implementation', 'other/implementation']);
+
+  // The lane agent borrows the sink gate's evidence, paths and loop number.
+  const packet = run(fx.root, ['dispatch', fx.runId, '--pipeline', 'lane', '--stage', 'implementation', '--work-item', 'wi-lane', '--role', 'CoderAgent']);
+  assert.equal(packet.status, 0, packet.stderr);
+  const dispatched = JSON.parse(packet.stdout);
+  assert.equal(dispatched.loop, 1);
+  assert.equal(dispatched.repair_origin_stage, 'code-review');
+  assert.equal(dispatched.repair_origin_pipeline, 'sink');
+  assert.deepEqual(dispatched.repair_paths, ['packages/lane/src/a.ts']);
+  assert.ok(dispatched.evidence_paths.some(file => file.endsWith('negative-5.json')), dispatched.evidence_paths.join(','));
+
+  fx.finish('lane', 'implementation');
+  assert.deepEqual(fx.next(), ['lane/code-review', 'other/implementation']);
+  fx.finish('lane', 'code-review');
+  assert.deepEqual(fx.next(), ['other/implementation', 'sink/implementation']);
+  // Same-pipeline fix-cycle without the flag is unchanged.
+  fx.finish('sink', 'implementation'); fx.step('sink', 'code-review', 'start');
+  result = await fx.fixCycle('sink', ['packages/sink/src/own.ts']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).pipelines.sink.stages['code-review'].technical_fix_cycles, 2);
+  assert.equal(fx.status().pipelines.lane.status, 'completed');
+});
+
+test('cross-lane ownership is ambiguous when another pipeline also declares the path or the lane declares nothing', async () => {
+  const shared = await lanesFixture('cross-lane-shared', { sinkScope: ['packages/lane/src/**'] });
+  shared.finish('lane', 'implementation'); shared.finish('lane', 'code-review');
+  shared.finish('sink', 'implementation'); shared.step('sink', 'code-review', 'start');
+  let result = await shared.fixCycle('sink', ['packages/lane/src/a.ts'], ['--repair-pipeline', 'lane']);
+  assert.match(result.stderr, /CROSS_LANE_OWNER_AMBIGUOUS/);
+  const none = await lanesFixture('cross-lane-none', { laneScope: [] });
+  none.finish('lane', 'implementation'); none.finish('lane', 'code-review');
+  none.finish('sink', 'implementation'); none.step('sink', 'code-review', 'start');
+  result = await none.fixCycle('sink', ['packages/lane/src/a.ts'], ['--repair-pipeline', 'lane']);
+  assert.match(result.stderr, /CROSS_LANE_OWNER_AMBIGUOUS/);
 });

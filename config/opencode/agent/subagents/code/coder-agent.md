@@ -112,8 +112,11 @@ session would be woken, and the parent never sees your result. If the bound chec
 coordinator runs those once on the combined tree.
 
 When a review finding is the reason for this dispatch, fix the defect class, not only the cited
-line: check every branch and sibling file where the same mistake can occur and add a regression
-that fails without the fix.
+line: when the repair prompt or verdict names a class and lists instances, fix every listed
+instance and search for further ones (every branch and sibling file where the same mistake can
+occur), then add a regression that fails without the fix. Never raise a test time limit, timeout
+or retry count to make a slow or flaky test pass: move heavy setup/module loading out of the timed
+body, split or rework the test inside your scope, or report the blocker to the parent.
 
 While correcting a failing suite, iterate quickly with the entry's `focus_command`: pick the
 failing `frozen_commands[].index` (an explicit `vitest run` command) and one or more existing

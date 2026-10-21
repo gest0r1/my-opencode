@@ -7,6 +7,7 @@ import { validateOwnerAmendmentEvidence } from './owner-amendment-policy.ts';
 import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 import { sourceInventory } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
+import { planProbeCommandsSha256 } from './manifest-v2-policy.mjs';
 
 const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -111,6 +112,18 @@ async function requireBaseProbe(root: string, run: string, manifestFile: string,
         if (probe?.purpose === 'advisory' && probe?.base_probe) statuses.push(String(probe.status));
       } catch {}
     }
+    // A plan probe of the same profile/gate stands in for the base probe: PASS only when taken at the
+    // current clean HEAD, FAIL as soon as its commands are still the frozen ones.
+    const commands = manifest.gate_profiles?.[pipeline.profile]?.[gate];
+    for (const id of sharing) {
+      try {
+        const probe = JSON.parse(await readFile(join(dirname(manifestFile), 'planning', 'probes', `${id}-${gate}.json`), 'utf8'));
+        if (probe?.kind !== 'plan_probe' || probe.run_id !== run || probe.profile !== pipeline.profile || probe.gate !== gate ||
+            !Array.isArray(commands) || probe.commands_sha256 !== planProbeCommandsSha256(commands)) continue;
+        if (probe.status === 'FAIL') statuses.push('FAIL');
+        else if (probe.status === 'PASS' && cleanHeadIs(root, effectiveScope, probe.head_sha)) statuses.push('PASS');
+      } catch {}
+    }
     if (statuses.includes('PASS')) { results[gate] = 'PASS'; continue; }
     if (statuses.includes('FAIL')) {
       if (item?.baseline_repair !== true && !(await profileHasBaselineRepair(manifestFile, manifest, sharing))) {
@@ -136,6 +149,16 @@ async function profileHasBaselineRepair(manifestFile: string, manifest: any, pip
   return false;
 }
 
+function cleanHeadIs(root: string, effectiveScope: string[], sha: unknown): boolean {
+  if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/i.test(sha)) return false;
+  const run = (args: string[]) => spawnSync('git', args, { cwd: root, shell: false, encoding: 'utf8', timeout: 30_000, env: gitReadEnv() });
+  const status = run(['status', '--porcelain', '-z', '--untracked-files=all']);
+  const head = run(['rev-parse', 'HEAD']);
+  if (status.status !== 0 || head.status !== 0) return false;
+  const paths = String(status.stdout).split('\0').filter(Boolean).map(entry => entry.slice(3));
+  return !paths.some(file => effectiveScope.some(scope => scopeContained(file, scope))) && String(head.stdout).trim().toLowerCase() === sha.toLowerCase();
+}
+
 // Started = the RUN branch moved past its base, or an authorized path differs from it. Files outside
 // the RUN scope (owner scratch, planning artifacts) say nothing about implementation.
 function implementationStarted(root: string, manifest: any, effectiveScope: string[]): boolean {
@@ -158,8 +181,9 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   const runtime = state.pipelines[pipelineId]?.stages[stage];
   if (!pipeline || (!computeRunnable(state).some(p => p.pipeline_id === pipelineId && p.stage === stage) && runtime?.status !== 'in_progress')) throw Error('STAGE_NOT_RUNNABLE');
   const executor = pipeline.executors[stage];
+  // Cross-lane repair: the lane agent stage borrows the evidence/paths/loop of the sink gate in repair_origin_pipeline.
   const repairRuntime = runtime?.repair_origin_stage
-    ? state.pipelines[pipelineId].stages[runtime.repair_origin_stage] : runtime;
+    ? state.pipelines[runtime.repair_origin_pipeline ?? pipelineId]?.stages[runtime.repair_origin_stage] : runtime;
   if (!['agent', 'review'].includes(executor) || !roles.has(role) || (executor === 'review' && role !== 'CodeReviewer')) throw Error('INVALID_DISPATCH_ROLE');
 
   const amendmentRecords = (state.owner_amendments ?? []).filter((a: any) => a.pipeline_id === pipelineId);
@@ -261,6 +285,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       // only from the current loop, not from work items the repair did not redispatch.
       loop: repairRuntime?.technical_fix_cycles ?? 0,
       repair_origin_stage: runtime?.repair_origin_stage ?? null,
+      repair_origin_pipeline: runtime?.repair_origin_stage ? (runtime.repair_origin_pipeline ?? pipelineId) : null,
       base_probe: baseProbe,
       source_digest: inventory.digest,
       files: inventory.files,
@@ -283,6 +308,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     decision_ids: item.decision_ids ?? pipeline.decision_ids ?? [], research_ids: item.research_ids ?? pipeline.research_ids ?? [], contract_ids: item.contract_ids ?? pipeline.contract_ids ?? [],
     effective_scope: effectiveScope, work_item_scope: itemScope, repair_paths: repairPaths, state_revision: revision, loop: repairRuntime?.technical_fix_cycles ?? 0,
     repair_origin_stage: runtime?.repair_origin_stage,
+    repair_origin_pipeline: runtime?.repair_origin_stage ? (runtime.repair_origin_pipeline ?? pipelineId) : undefined,
     evidence_paths: [...new Set(evidencePaths)],
     advisory_checks: advisoryChecks,
     reuse: { eligible: executor === 'agent' && ['CoderAgent', 'TestEngineer', 'BuildAgent'].includes(role) },

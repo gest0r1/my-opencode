@@ -20,6 +20,8 @@ import type {
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
 const DEFAULT_TECHNICAL_FIX_LIMIT = 5;
 const MAX_TECHNICAL_FIX_LIMIT = 20;
+// Every ARCHITECTURE_REVIEW_AFTER-th charged cycle of one stage flags an architecture checkpoint.
+const ARCHITECTURE_REVIEW_AFTER = 5;
 const STATE_FILE = 'state.json';
 const LOCK_FILE = '.lock';
 const HUMAN_ONLY = 'human_only';
@@ -69,6 +71,7 @@ export interface StageCommandOptions {
   scopeClass?: 'test' | 'technical';
   repairClass?: 'technical_fix' | 'security_fix';
   cycles?: number;
+  repairPipelineId?: string;
 }
 
 export interface RunnableStage {
@@ -235,13 +238,28 @@ function isTestSupportPath(path: string): boolean {
   return testSegment || testFile;
 }
 
+function parentDirectory(path: string): string {
+  const index = path.lastIndexOf('/');
+  return index < 0 ? '' : path.slice(0, index);
+}
+
+// A test/support path is authorized by an already-approved component (apps/<x>, packages/<x>), by a
+// sibling of an exact test/support path in scope (same directory), or inside the directory of a
+// frozen test_rework entry. Protected paths were refused before this runs.
 function canAutoExtendTestScope(path: string, manifest: PipelineManifest, state: PipelineState): boolean {
   if (!isTestSupportPath(path)) return false;
+  const scopes = effectiveAllowedChangePaths(manifest, state);
   const root = componentRoot(path);
-  if (!root) return false;
-  return effectiveAllowedChangePaths(manifest, state).some((scope) => {
+  if (root && scopes.some((scope) => {
     const normalized = scope.endsWith('/**') ? scope.slice(0, -3).replace(/\/$/, '') : scope;
     return normalized === root || normalized.startsWith(`${root}/`);
+  })) return true;
+  const directory = parentDirectory(path);
+  if (scopes.some((scope) => !scope.endsWith('/**') && isTestSupportPath(scope) && parentDirectory(scope) === directory)) return true;
+  return (manifest.test_rework ?? []).some((entry) => {
+    const reworkDirectory = parentDirectory(entry.path);
+    return scopes.some((scope) => scope === entry.path || pathMatchesScope(entry.path, scope)) &&
+      (reworkDirectory === '' ? directory === '' : directory === reworkDirectory || directory.startsWith(`${reworkDirectory}/`));
   });
 }
 
@@ -1704,6 +1722,12 @@ export async function approveRuntimeReplan(
       runtime_replan_revision: pending.revision,
     });
     runtime.message = `owner approved runtime_replan revision ${pending.revision} and granted +${cycles} cycles; budget ${runtime.technical_fix_cycles ?? 0}/${newLimit}`;
+    // An architecture requirements_change block ends with the owner approval: the stage reruns from pending.
+    if (runtime.status === 'blocked' && runtime.architecture_reviews?.at(-1)?.result === 'requirements_change' &&
+        pipeline.status === 'blocked' && Object.values(pipeline.stages).every((item) => item === runtime || item.status !== 'blocked')) {
+      runtime.status = 'pending';
+      pipeline.status = 'approved';
+    }
     addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
   });
 }
@@ -1801,6 +1825,7 @@ export async function recordTechnicalFixCycle(
   pipelineId?: string,
   repairClass: 'technical_fix' | 'security_fix' = 'technical_fix',
   evidencePath?: string,
+  repairPipelineId?: string,
 ): Promise<PipelineState> {
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
@@ -1857,6 +1882,7 @@ export async function recordTechnicalFixCycle(
         `SCOPE_PREFLIGHT_REQUIRED: run stage-cli scope-check ${runId} ${stage} <planned-path>... --pipeline ${pipeline.id} before fix-cycle`,
       );
     }
+    const lane = repairPipelineId ? resolveRepairLane(state, manifest, pipeline, repairPipelineId, scopePreflight.paths) : undefined;
     const securityFixPreflight = state.security_fix_preflight;
     // One repair cycle closes a review's technical and security findings together: the security
     // paths must all be in the repair scope, which may also hold the technical repair paths.
@@ -1896,9 +1922,16 @@ export async function recordTechnicalFixCycle(
         `TECHNICAL_FIX_LIMIT_EXCEEDED: ${pipeline.id}/${stage} used=${runtime.technical_fix_cycles ?? 0} limit=${limit}; owner may grant +N cycles or request runtime replan`,
       );
     }
+    // Checked after the limit so an exhausted budget keeps its own error; resuming an already charged attempt is free.
+    if (!resumeChargedRepair && runtime.architecture_review_due) {
+      throw new StageCliError(
+        `ARCHITECTURE_REVIEW_REQUIRED: ${pipeline.id}/${stage}; run stage-cli architecture-review-record ${runId} ${stage} --pipeline ${pipeline.id} --evidence <architecture-review.json>`,
+      );
+    }
     runtime.repair_evidence = { path: absoluteRepair, sha256: repairHash };
     runtime.repair_paths = [...scopePreflight.paths];
     runtime.technical_fix_cycles = next;
+    if (!resumeChargedRepair && next > 0 && next % ARCHITECTURE_REVIEW_AFTER === 0) runtime.architecture_review_due = true;
     runtime.message = `${repairClass} cycle ${next}/${limit}`;
     state.scope_preflight = undefined;
     if (repairClass === 'security_fix') state.security_fix_preflight = undefined;
@@ -1914,12 +1947,155 @@ export async function recordTechnicalFixCycle(
         item.completed_at = undefined;
         item.evidence = undefined;
         item.repair_origin_stage = undefined;
+        item.repair_origin_pipeline = undefined;
         if (name !== stage) item.message = undefined;
         addHistory(state, pipeline.id, name, 'pending', `invalidated by ${repairClass} cycle ${next}/${limit} for ${stage}`);
       }
       pipeline.stages[pipeline.stage_order[repairIndex]].repair_origin_stage = stage;
       pipeline.status = 'approved';
       pipeline.current_stage = undefined;
+    }
+    // Cross-lane: the defect lives in an upstream lane. Reopen it from its last agent stage; the lane agent
+    // borrows this gate's evidence/paths/loop. The sink waits because the lane's ready milestone is pending again.
+    if (lane) {
+      const laneRuntime = state.pipelines[lane.id];
+      for (const name of laneRuntime.stage_order.slice(lane.repairIndex)) {
+        const item = laneRuntime.stages[name];
+        item.status = 'pending';
+        item.started_at = undefined;
+        item.completed_at = undefined;
+        item.evidence = undefined;
+        item.message = undefined;
+        item.repair_origin_stage = undefined;
+        item.repair_origin_pipeline = undefined;
+        addHistory(state, lane.id, name, 'pending', `invalidated by cross-lane repair from ${pipeline.id}/${stage} cycle ${next}/${limit}`);
+      }
+      const laneAgent = laneRuntime.stages[laneRuntime.stage_order[lane.repairIndex]];
+      laneAgent.repair_origin_stage = stage;
+      laneAgent.repair_origin_pipeline = pipeline.id;
+      laneRuntime.status = 'approved';
+      laneRuntime.current_stage = undefined;
+    }
+  });
+}
+
+function pipelineDependsOn(state: PipelineState, pipelineId: string, targetId: string, seen = new Set<string>()): boolean {
+  if (seen.has(pipelineId)) return false;
+  seen.add(pipelineId);
+  return (state.pipelines[pipelineId]?.depends_on ?? []).some((id) => id === targetId || pipelineDependsOn(state, id, targetId, seen));
+}
+
+// Declared ownership of a pipeline: allowed_change_paths of its frozen (and runtime-amended) work items plus the
+// pipeline's own exclusive/migration/fixture paths. Unreadable work items declare nothing.
+function declaredPipelineScope(state: PipelineState, manifest: PipelineManifest, pipelineId: string): string[] {
+  const spec = manifest.pipelines.find((item) => item.id === pipelineId);
+  const base = state.manifest_file ? dirname(state.manifest_file) : process.cwd();
+  const items = [
+    ...(manifest.work_items ?? []).filter((item) => item.pipeline_id === pipelineId),
+    ...(state.owner_amendments ?? []).filter((item) => item.pipeline_id === pipelineId).flatMap((item) => item.work_items),
+  ];
+  const scopes: string[] = [...(spec?.exclusive_paths ?? []), ...(spec?.migration_paths ?? []), ...(spec?.fixture_paths ?? [])];
+  for (const item of items) {
+    try {
+      const record = JSON.parse(readFileSync(resolve(base, item.path), 'utf8'));
+      if (Array.isArray(record?.allowed_change_paths)) scopes.push(...record.allowed_change_paths.filter((value: unknown): value is string => typeof value === 'string'));
+    } catch { /* declares nothing */ }
+  }
+  return scopes;
+}
+
+// Narrowest deterministic owner rule: every scope-preflight path must be declared by the repair lane and by no other
+// pipeline (the sink included); anything else is ambiguous and refused.
+function resolveRepairLane(
+  state: PipelineState,
+  manifest: PipelineManifest,
+  sink: PipelineRuntime,
+  laneId: string,
+  paths: string[],
+): { id: string; repairIndex: number } {
+  const lane = state.pipelines[laneId];
+  if (!lane) throw new StageCliError(`Pipeline not found: ${laneId}`);
+  if (lane.id === sink.id || !pipelineDependsOn(state, sink.id, lane.id)) {
+    throw new StageCliError(`CROSS_LANE_NOT_UPSTREAM: ${lane.id} is not an upstream dependency of ${sink.id}`);
+  }
+  const owners = new Map(Object.keys(state.pipelines).map((id) => [id, declaredPipelineScope(state, manifest, id)]));
+  for (const path of paths) {
+    const owning = [...owners].filter(([, scopes]) => scopes.some((scope) => pathMatchesScope(path, scope))).map(([id]) => id);
+    if (owning.length !== 1 || owning[0] !== lane.id) {
+      throw new StageCliError(`CROSS_LANE_OWNER_AMBIGUOUS: ${path} is declared by [${owning.join(', ') || 'no pipeline'}], expected only ${lane.id}`);
+    }
+  }
+  const laneSpec = manifest.pipelines.find((item) => item.id === lane.id);
+  let repairIndex = -1;
+  for (let index = lane.stage_order.length - 1; index >= 0; index -= 1) {
+    if (laneSpec?.executors?.[lane.stage_order[index]] === 'agent') { repairIndex = index; break; }
+  }
+  if (repairIndex < 0) throw new StageCliError(`REPAIR_TARGET_MISSING: ${lane.id} has no agent stage`);
+  if (lane.stage_order.slice(repairIndex).some((name) => lane.stages[name]?.status === 'in_progress')) {
+    throw new StageCliError(`CROSS_LANE_ACTIVE: ${lane.id} has a stage in progress`);
+  }
+  const milestone = lane.ready_after_stage ?? lane.release_ready_after_stage;
+  if (milestone && lane.stage_order.indexOf(milestone) < repairIndex) {
+    throw new StageCliError(`CROSS_LANE_MILESTONE_BEFORE_REPAIR: ${lane.id} ready_after_stage ${milestone} precedes its agent stage; the sink would not wait`);
+  }
+  return { id: lane.id, repairIndex };
+}
+
+type ArchitectureReview = {
+  kind?: unknown; run_id?: unknown; pipeline_id?: unknown; stage?: unknown; result?: unknown; summary?: unknown;
+  requirements_changed?: unknown; acceptance_criteria_changed?: unknown; external_contract_changed?: unknown;
+  security_boundary_changed?: unknown; destructive_change?: unknown;
+};
+
+// Records the architecture checkpoint of a repeatedly repaired stage. Only requirements_change stops work, and only
+// this stage/pipeline; the owner resumes it through runtime-replan-propose/approve.
+export async function recordArchitectureReview(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  evidencePath: string,
+  pipelineId?: string,
+): Promise<PipelineState> {
+  const root = stateDir(stateRoot, runId);
+  const absoluteEvidence = resolve(evidencePath.startsWith('/') ? evidencePath : join(process.cwd(), evidencePath));
+  if (!absoluteEvidence.startsWith(`${root}/`)) throw new StageCliError('architecture review evidence must live inside the current run directory');
+  const content = await readFile(absoluteEvidence, 'utf8').catch(() => {
+    throw new StageCliError(`architecture review evidence not found: ${evidencePath}`);
+  });
+  let review: ArchitectureReview;
+  try { review = JSON.parse(content) as ArchitectureReview; } catch { throw new StageCliError('architecture review evidence is not valid JSON'); }
+  return updateState(stateRoot, runId, (state) => {
+    const pipeline = getPipeline(state, pipelineId);
+    const runtime = pipeline.stages[stage];
+    if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    const spec = readFrozenManifestFromState(state).pipelines.find((item) => item.id === pipeline.id);
+    if (!spec || !hasRepairBudget(spec, stage)) throw new StageCliError('REPAIR_BUDGET_NOT_APPLICABLE: use the initiating review/gate stage');
+    if (!runtime.architecture_review_due) throw new StageCliError(`ARCHITECTURE_REVIEW_NOT_DUE: ${pipeline.id}/${stage}`);
+    if (review.kind !== 'architecture_review' || review.run_id !== runId || review.pipeline_id !== pipeline.id || review.stage !== stage) {
+      throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: kind=architecture_review with matching run_id, pipeline_id and stage required');
+    }
+    const result = review.result;
+    if (result !== 'no_change' && result !== 'apply_within_requirements' && result !== 'requirements_change') {
+      throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: result must be no_change, apply_within_requirements or requirements_change');
+    }
+    if (typeof review.summary !== 'string' || !review.summary.trim()) throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: summary is required');
+    if (result === 'apply_within_requirements' &&
+        [review.requirements_changed, review.acceptance_criteria_changed, review.external_contract_changed,
+          review.security_boundary_changed, review.destructive_change].some((value) => value !== false)) {
+      throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: apply_within_requirements needs requirements_changed, acceptance_criteria_changed, external_contract_changed, security_boundary_changed and destructive_change all false');
+    }
+    runtime.architecture_review_due = false;
+    runtime.architecture_reviews ??= [];
+    runtime.architecture_reviews.push({ path: absoluteEvidence, sha256: sha256(content), result, at: now() });
+    if (result === 'requirements_change') {
+      runtime.status = 'blocked';
+      runtime.message = 'ARCHITECTURE_REQUIREMENTS_CHANGE: owner decision; other lanes continue';
+      pipeline.status = 'blocked';
+      pipeline.current_stage = undefined;
+      addHistory(state, pipeline.id, stage, 'blocked', runtime.message);
+    } else {
+      runtime.message = `architecture review recorded: ${result}`;
+      addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
     }
   });
 }
@@ -2125,6 +2301,7 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
     if (argument === '--json') options.json = true;
     else if (argument === '--state-root') options.stateRoot = args[++index] ?? DEFAULT_STATE_ROOT;
     else if (argument === '--pipeline') options.pipelineId = args[++index];
+    else if (argument === '--repair-pipeline') options.repairPipelineId = args[++index];
     else if (argument === '--message') options.message = args[++index];
     else if (argument === '--evidence') options.evidencePath = args[++index];
     else if (argument === '--environment') options.environment = true;
@@ -2173,8 +2350,10 @@ function printState(state: PipelineState, asJson: boolean): void {
       const limit = runtime ? technicalFixLimit(runtime) : DEFAULT_TECHNICAL_FIX_LIMIT;
       const spec = manifest?.pipelines.find((item) => item.id === pipeline.id);
       const budget = spec && hasRepairBudget(spec, stage) ? ` fix_budget=${used}/${limit}` : '';
-      const repair = runtime?.repair_origin_stage ? ` repair_from=${runtime.repair_origin_stage}` : '';
-      console.log(`  ${marker} ${stage}: ${status}${budget}${repair}`);
+      const repair = runtime?.repair_origin_stage
+        ? ` repair_from=${runtime.repair_origin_pipeline ? `${runtime.repair_origin_pipeline}/` : ''}${runtime.repair_origin_stage}` : '';
+      const due = runtime?.architecture_review_due ? ' architecture_review_due=true' : '';
+      console.log(`  ${marker} ${stage}: ${status}${budget}${repair}${due}`);
       const pendingReplan = runtime ? activeRuntimeReplan(runtime) : undefined;
       if (pendingReplan) console.log(`      runtime_replan=${pendingReplan.revision}:${pendingReplan.status}`);
     }
@@ -2205,6 +2384,15 @@ function printRules(rules: ResolvedRules, asJson: boolean): void {
   }
 }
 
+async function requirePlanProbes(manifest: PipelineManifest, manifestPath: string): Promise<void> {
+  const { validatePlanProbes } = await import('./manifest-v2-policy.mjs');
+  try {
+    validatePlanProbes(manifest, { manifestPath, cwd: process.cwd() });
+  } catch (error) {
+    throw new StageCliError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function usage(): string {
   return [
     'Usage:',
@@ -2227,7 +2415,8 @@ function usage(): string {
     '  stage-cli scope-check <run-id> <stage> <path>... [--pipeline <id>] [--json]',
     '  stage-cli scope-extend <run-id> <stage> <path>... --class technical --evidence <run-artifact.json> [--pipeline <id>] [--json]',
     '  stage-cli security-fix-check <run-id> <stage> --pipeline <id> --evidence <review.json> [--json]',
-    '  stage-cli fix-cycle <run-id> <stage> --evidence <negative-result> [--pipeline <id>] [--repair-class technical_fix|security_fix] [--json]',
+    '  stage-cli fix-cycle <run-id> <stage> --evidence <negative-result> [--pipeline <id>] [--repair-class technical_fix|security_fix] [--repair-pipeline <upstream-lane>] [--json]',
+    '  stage-cli architecture-review-record <run-id> <stage> --pipeline <id> --evidence <architecture-review.json> [--json]',
     '  stage-cli fix-budget-set <run-id> --cycles <1..20> [--json]',
     '  stage-cli fix-budget-add <run-id> <stage> --pipeline <id> --cycles <1..20> [--json]',
     '  stage-cli runtime-replan-propose <run-id> <stage> --pipeline <id> --evidence <review.json> [--json]',
@@ -2263,6 +2452,7 @@ export async function runCli(args: string[]): Promise<void> {
     }
     const { preflightFile } = await import('./manifest-preflight.mjs');
     const result = await preflightFile(manifestPath, { environment: options.environment, cwd: process.cwd() });
+    await requirePlanProbes(manifest, manifestPath);
     const output = { status: 'PASS', run_id: manifest.run_id, schema_version: 2, checked_commands: result.checked_commands,
       environment_checked: result.environment_checked };
     if (options.json) console.log(JSON.stringify(output, null, 2));
@@ -2324,6 +2514,12 @@ export async function runCli(args: string[]): Promise<void> {
     if (state.superseded_by) {
       throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
     }
+    // Plan probes guard the untouched base. Once a source agent stage has started the checkout is no
+    // longer that base and a probe cannot be produced, so a resumed RUN does not need one.
+    const implementationStarted = rawManifest.pipelines.some((pipeline) => Object.entries(pipeline.executors ?? {})
+      .some(([stage, executor]) => executor === 'agent' && Boolean(state.pipelines[pipeline.id]?.stages[stage]?.started_at
+        || ['in_progress', 'completed', 'failed', 'blocked'].includes(String(state.pipelines[pipeline.id]?.stages[stage]?.status)))));
+    if (!implementationStarted) await requirePlanProbes(rawManifest, rawState.manifest_file);
     if (options.json) console.log(JSON.stringify({ status: 'PASS', run_id: runId, schema_version: 2 }, null, 2));
     else console.log(`PASS run_id=${runId} schema_version=2`);
     return;
@@ -2402,9 +2598,18 @@ export async function runCli(args: string[]): Promise<void> {
         options.pipelineId,
         options.repairClass ?? 'technical_fix',
         options.evidencePath,
+        options.repairPipelineId,
       ),
       options.json,
     );
+    return;
+  }
+  if (command === 'architecture-review-record') {
+    const stage = positional[2];
+    if (!stage || !options.pipelineId || !options.evidencePath) {
+      throw new StageCliError('architecture-review-record requires <stage> --pipeline <id> --evidence <architecture-review.json>');
+    }
+    printState(await recordArchitectureReview(options.stateRoot, runId, stage, options.evidencePath, options.pipelineId), options.json);
     return;
   }
   if (command === 'fix-budget-set') {

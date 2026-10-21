@@ -156,6 +156,18 @@ export interface PipelineManifestPipeline {
   conflict_group?: string;
   ready_after_stage?: string;
   release_ready_after_stage?: string;
+  /** First lane: holds the `test_rework` work items; every other agent lane depends on it. */
+  test_preparation?: boolean;
+}
+
+export type TestReworkAction = 'update' | 'split' | 'rewrite' | 'add' | 'move_setup' | 'remove';
+
+export interface TestReworkEntry {
+  id: string;
+  path: string;
+  action: TestReworkAction;
+  reason: string;
+  work_item_id: string;
 }
 
 export interface GitSetup {
@@ -224,6 +236,8 @@ export interface PipelineManifest {
   source_requirements_sha256?: string;
   planning_base_sha?: string;
   planning_scope?: string[];
+  /** Tests reworked by the test_preparation lane before source lanes start. */
+  test_rework?: TestReworkEntry[];
   planning_inputs?: Record<string, string[]>;
   freshness_sensitive_paths?: string[];
   work_items?: FrozenWorkItem[];
@@ -293,9 +307,21 @@ export interface OwnerAmendmentRecord {
   work_items: OwnerAmendmentWorkItem[];
 }
 
+export interface ArchitectureReviewRecord {
+  path: string;
+  sha256: string;
+  result: 'no_change' | 'apply_within_requirements' | 'requirements_change';
+  at: string;
+}
+
 export interface StageRuntime {
   // Repair execution borrows the initiating gate's existing budget; never a second loop.
   repair_origin_stage?: string;
+  /** Cross-lane repair: pipeline whose gate stage `repair_origin_stage` holds the evidence and loop number (default: same pipeline). */
+  repair_origin_pipeline?: string;
+  /** Set when technical_fix_cycles reaches a multiple of ARCHITECTURE_REVIEW_AFTER; the next charged fix-cycle needs a recorded review. */
+  architecture_review_due?: boolean;
+  architecture_reviews?: ArchitectureReviewRecord[];
   repair_evidence?: FrozenArtifact;
   repair_paths?: string[];
   status: StageStatus;

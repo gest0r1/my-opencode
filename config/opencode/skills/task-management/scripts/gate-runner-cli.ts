@@ -4,7 +4,7 @@ import { access, mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/p
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
-import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGateTestingFile } from './gate-testing-policy.mjs';
+import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGateTestingFile, isPrePublishGate } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
 import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
@@ -84,10 +84,12 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => 
   for (const child of activeChildren) terminate(child, 'SIGTERM');
 });
 
-async function runInvocation(exe: string, args: string[], cwd: string, env: Record<string, string> = {}, timeout = 1800, cleanup = false): Promise<{ exit_code: number; stdout: string; stderr: string; truncated: boolean }> {
+async function runInvocation(exe: string, args: string[], cwd: string, env: Record<string, string | undefined> = {}, timeout = 1800, cleanup = false): Promise<{ exit_code: number; stdout: string; stderr: string; truncated: boolean }> {
   if (interrupted && !cleanup) throw new GateRunnerError('execution interrupted');
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(exe, args, { cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: process.platform !== 'win32' });
+    const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+    for (const key of Object.keys(childEnv)) if (childEnv[key] === undefined) delete childEnv[key];
+    const child = spawn(exe, args, { cwd, env: childEnv as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: process.platform !== 'win32' });
     activeChildren.add(child);
     let stdout = ''; let stderr = ''; let timedOut = false; let truncated = false;
     const timer = setTimeout(() => { timedOut = true; terminate(child, 'SIGTERM'); }, timeout * 1000);
@@ -178,8 +180,116 @@ async function findReusableResults(query: ReuseQuery): Promise<Map<number, { pat
   return found;
 }
 
+// sha256 of JSON.stringify(frozen command array); same digest as gate-testing-policy commandsDigest.
+export function planProbeCommandsSha256(commands: string[]): string {
+  return sha256(JSON.stringify(commands));
+}
+
+// Gate environment (A1): identity + per-attempt scratch dir for every gate command. These vars are
+// deliberately not part of environment_digest, so evidence reuse keeps working. CANDIDATE_SHA is
+// explicitly unset when no candidate is loaded, so an inherited outer value never leaks in.
+function gateEnv(identity: { runId: string; pipelineId: string; gate: string; attempt: number; candidateSha?: string; scratchDir: string }): Record<string, string | undefined> {
+  return { PIPELINE_RUN_ID: identity.runId, PIPELINE_ID: identity.pipelineId, PIPELINE_GATE: identity.gate, PIPELINE_GATE_ATTEMPT: String(identity.attempt),
+    CANDIDATE_SHA: identity.candidateSha, PIPELINE_SCRATCH_DIR: identity.scratchDir };
+}
+
+type Invocation = { command: string; index: number; test_files: string[]; exe: string; args: string[] };
+
+async function executeInvocation(invocation: Invocation, env: Record<string, string | undefined>, timeout: number): Promise<{ result: Record<string, any>; exit_code: number }> {
+  const commandStarted = new Date().toISOString();
+  const result = await runInvocation(invocation.exe, invocation.args, process.cwd(), env, timeout)
+    .catch(error => {
+      if (interrupted) throw error;
+      return { exit_code: 127, stdout: '', stderr: `COMMAND_START_FAILED: ${String((error as Error)?.message ?? error)}`, truncated: false };
+    });
+  const stdout = redact(result.stdout); const stderr = redact(result.stderr);
+  return { exit_code: result.exit_code, result: {
+    command: invocation.command, command_index: invocation.index, executable: invocation.exe, argv: invocation.args, test_files: invocation.test_files,
+    started_at: commandStarted, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(commandStarted),
+    exit_code: result.exit_code, stdout, stderr, output_truncated: result.truncated,
+    failure_summary: result.exit_code === 0 ? [] : failureSummary(stdout, stderr),
+    output_tail: result.exit_code === 0 ? [] : outputTail(stdout, stderr),
+    stdout_sha256: sha256(result.stdout), stderr_sha256: sha256(result.stderr),
+  } };
+}
+
+async function requireCleanCheckout(): Promise<string> {
+  const status = await runInvocation('git', ['status', '--porcelain', '--untracked-files=all'], process.cwd(), gitReadEnv({}), 30);
+  const dirty = status.stdout.split('\n').filter(line => line.trim() && !/^.. \.tmp\//.test(line));
+  if (status.exit_code !== 0 || dirty.length) throw new GateRunnerError('BASE_PROBE_REQUIRES_CLEAN_CHECKOUT');
+  const head = await runInvocation('git', ['rev-parse', 'HEAD'], process.cwd(), gitReadEnv({}), 30);
+  return head.stdout.trim();
+}
+
+// PLAN probe: stateless, runs the complete frozen set of one local gate against the draft manifest
+// before any state.json exists, so unstartable gate commands surface during PLAN, not at the end of RUN.
+async function planProbe(args: string[]): Promise<void> {
+  const [manifestArg, pipelineId, gate] = args;
+  if (!manifestArg || !pipelineId || !gate || args.length !== 3) throw new GateRunnerError('usage: gate-runner-cli.ts --plan-probe <manifest-path> <pipeline-id> <gate>');
+  const manifestFile = resolve(manifestArg);
+  const manifest = resolveGateTestingFile(JSON.parse(await readFile(manifestFile, 'utf8')), manifestFile) as Manifest;
+  const pipeline = manifest.pipelines?.find(item => item.id === pipelineId);
+  if (!pipeline) throw new GateRunnerError(`pipeline not found: ${pipelineId}`);
+  if (!pipeline.profile) throw new GateRunnerError(`pipeline has no gate profile: ${pipelineId}`);
+  const commands = manifest.gate_profiles?.[pipeline.profile]?.[gate];
+  if (!Array.isArray(commands) || commands.length === 0) throw new GateRunnerError(`no executable gate commands: profile=${pipeline.profile} gate=${gate}`);
+  validateGateTesting(manifest);
+  if (!isPrePublishGate(manifest, pipeline.profile, gate)) throw new GateRunnerError(`PLAN_PROBE_UNSUPPORTED: ${gate} is not a pre-publish local gate`);
+  if (commands.some(command => command.includes('{candidate_sha}'))) throw new GateRunnerError(`PLAN_PROBE_UNSUPPORTED: ${pipeline.profile}/${gate} uses {candidate_sha}`);
+  const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
+  const invocations: Invocation[] = commands.map((command, index) => {
+    const tokens = tokenizeCommand(command);
+    assertSafeInvocation(tokens, gate);
+    return { command, index, test_files: [], exe: tokens[0], args: tokens.slice(1) };
+  });
+  const headSha = await requireCleanCheckout();
+  const root = dirname(manifestFile);
+  const evidenceFile = join(root, 'planning', 'probes', `${pipelineId}-${gate}.json`);
+  await mkdir(dirname(evidenceFile), { recursive: true });
+  let previous: any;
+  try { previous = JSON.parse(await readFile(evidenceFile, 'utf8')); } catch {}
+  const attempt = (Number.isInteger(previous?.attempt) ? previous.attempt : 0) + 1;
+  const scratchDir = join(root, 'scratch', `${pipelineId}-${gate}-plan-probe-${attempt}`);
+  await mkdir(scratchDir, { recursive: true });
+  const env = gateEnv({ runId: manifest.run_id, pipelineId, gate, attempt, scratchDir });
+  const results: Array<Record<string, any>> = [];
+  let resource: Awaited<ReturnType<typeof createLivePostgres>> | undefined;
+  let failure: unknown; let status = 'PASS';
+  const startedAt = new Date().toISOString();
+  try {
+    if (config?.live_postgres && invocations.some(item => config.live_postgres.command_indexes.includes(item.index))) {
+      resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${manifest.run_id}:${pipelineId}:${gate}`, (exe: string, argv: string[], liveEnv?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), liveEnv, 60, ['inspect', 'rm'].includes(argv[0])));
+    }
+    for (const batch of parallelBatches(invocations, config, liveIndexes(config))) {
+      const settled = await Promise.all(batch.map((invocation: Invocation) => {
+        const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
+        return executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800);
+      }));
+      for (const item of settled) results.push(item.result);
+      const failed = settled.find(item => item.exit_code !== 0);
+      if (failed) { status = 'FAIL'; throw new GateRunnerError(`gate command failed (${failed.exit_code}): ${failed.result.command}; evidence=${evidenceFile}`); }
+    }
+  } catch (error) {
+    failure = error; if (status !== 'FAIL') status = 'BLOCKED';
+  } finally {
+    if (resource) {
+      try { await resource.cleanup(); }
+      catch (error) { status = 'BLOCKED'; failure = new GateRunnerError(`${failure ? String(failure) + '; ' : ''}${String(error)}`); }
+    }
+    await writeFile(evidenceFile, `${JSON.stringify({ kind: 'plan_probe', status, run_id: manifest.run_id, pipeline_id: pipelineId, gate, profile: pipeline.profile,
+      head_sha: headSha, base_sha: manifest.git_setup?.base_sha ?? null, commands_sha256: planProbeCommandsSha256(commands), attempt, scratch_dir: scratchDir,
+      results: [...results].sort((a, b) => a.command_index - b.command_index),
+      started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
+      error: failure ? redact(String(failure)) : null }, null, 2)}\n`, 'utf8');
+  }
+  if (failure) throw failure;
+  console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: null, candidate_sha: null, evidence: evidenceFile,
+    selection_reason: 'plan probe: full frozen set', commands_run: results.length, commands_reused: 0, reused_from: null }));
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] === '--plan-probe') return planProbe(args.slice(1));
   const runId = args[0];
   const pipelineId = args[1];
   const gate = args[2];
@@ -288,11 +398,7 @@ async function main(): Promise<void> {
   let probe: { head_sha: string; base_sha: string | null } | null = null;
   if (baseProbe) {
     if (!advisory || affected || selection >= 0 || hasBoundBaseline || coordinator) throw new GateRunnerError('base-probe requires --advisory and the complete frozen set');
-    const status = await runInvocation('git', ['status', '--porcelain', '--untracked-files=all'], process.cwd(), gitReadEnv({}), 30);
-    const dirty = status.stdout.split('\n').filter(line => line.trim() && !/^.. \.tmp\//.test(line));
-    if (status.exit_code !== 0 || dirty.length) throw new GateRunnerError('BASE_PROBE_REQUIRES_CLEAN_CHECKOUT');
-    const head = await runInvocation('git', ['rev-parse', 'HEAD'], process.cwd(), gitReadEnv({}), 30);
-    probe = { head_sha: head.stdout.trim(), base_sha: manifest.git_setup?.base_sha ?? null };
+    probe = { head_sha: await requireCleanCheckout(), base_sha: manifest.git_setup?.base_sha ?? null };
   }
 
   const evidenceSuffix = workItemId ? `-${sha256(`${baseline?.stage ?? ''}:${workItemId}`).slice(0, 16)}`
@@ -303,6 +409,7 @@ async function main(): Promise<void> {
   await mkdir(dirname(evidenceFile), { recursive: true });
   let previous: any;
   try { previous = JSON.parse(await readFile(evidenceFile, 'utf8')); } catch {}
+  const attempt = (Number.isInteger(previous?.attempt) ? previous.attempt : 0) + 1;
   // Read-only inventory: never take .git/index.lock while a worker or publish may be writing.
   const snapshot = await sourceSnapshot(process.cwd(), manifest, (exe: string, argv: string[]) => runInvocation(exe, argv, process.cwd(), gitReadEnv({}), 30), advisory ? baseline : null);
   let deferred: number[] = [];
@@ -357,7 +464,11 @@ async function main(): Promise<void> {
   const pending = invocations.filter(item => !reusable.has(item.index));
   // Whole-run reuse keeps the old evidence shape (`reused_from` set, zero commands run).
   const reuse = invocations.length > 0 && pending.length === 0 ? { path: [...reusable.values()][0].path } : null;
+  // Fresh empty scratch dir per run of this evidence file; only created when a command will run.
+  const scratchDir = pending.length ? join(resolve(stateRoot), runId, 'scratch', `${pipelineId}-${gate}${evidenceSuffix}-${attempt}`) : null;
+  const env = gateEnv({ runId, pipelineId, gate, attempt, candidateSha, scratchDir: scratchDir ?? '' });
   try {
+    if (scratchDir) await mkdir(scratchDir, { recursive: true });
     for (const [, item] of reusable) results.push({ ...item.result, reused_from: item.path });
     {
     if (config?.live_postgres && pending.some(item => config.live_postgres.command_indexes.includes(item.index))) {
@@ -369,22 +480,9 @@ async function main(): Promise<void> {
       // Every member settles to a recorded result (a start failure is exit 127), so one failing to
       // start never leaves its siblings running unrecorded.
       const settled = await Promise.all(batch.map(async invocation => {
-        const commandStarted = new Date().toISOString();
         const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
-        const result = await runInvocation(invocation.exe, invocation.args, process.cwd(), usesLive ? resource.env : {}, config?.timeout_seconds ?? 1800)
-          .catch(error => {
-            if (interrupted) throw error;
-            return { exit_code: 127, stdout: '', stderr: `COMMAND_START_FAILED: ${String((error as Error)?.message ?? error)}`, truncated: false };
-          });
-        const stdout = redact(result.stdout); const stderr = redact(result.stderr);
-        return { invocation, result: {
-          command: invocation.command, command_index: invocation.index, executable: invocation.exe, argv: invocation.args, test_files: invocation.test_files,
-          started_at: commandStarted, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(commandStarted),
-          exit_code: result.exit_code, stdout, stderr, output_truncated: result.truncated,
-          failure_summary: result.exit_code === 0 ? [] : failureSummary(stdout, stderr),
-          output_tail: result.exit_code === 0 ? [] : outputTail(stdout, stderr),
-          stdout_sha256: sha256(result.stdout), stderr_sha256: sha256(result.stderr),
-        } };
+        const done = await executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800);
+        return { invocation, result: done.result };
       }));
       for (const item of settled) results.push(item.result);
       const failed = settled.find(item => item.result.exit_code !== 0);
@@ -410,7 +508,7 @@ async function main(): Promise<void> {
     try {
       await writeFile(evidenceFile, `${JSON.stringify({ status, purpose: advisory ? 'advisory' : 'authoritative', run_id: runId, pipeline_id: pipelineId, gate,
         work_item_id: workItemId ?? null, dispatch_stage: baseline?.stage ?? null, baseline_path: baselinePath ?? null, baseline_sha256: baselineSha ?? null,
-        runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, fingerprint,
+        runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, fingerprint, attempt, scratch_dir: scratchDir,
         manifest_sha256: state.manifest_sha256, environment_digest: environmentDigest, reused_from: reuse?.path ?? null,
         hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])],
         selection_reason: selectionReason, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,

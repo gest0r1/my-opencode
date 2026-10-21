@@ -97,7 +97,7 @@ jobs:
             config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs \
             config/opencode/skills/task-management/scripts/git-worktree-cli.test.mjs \
             config/opencode/skills/task-management/scripts/worktree-refresh.test.mjs \
-            config/opencode/skills/task-management/scripts/pipeline-refresh-cli.test.mjs \
+            config/opencode/skills/task-management/scripts/pipeline-replan-cli.test.mjs \
             config/opencode/skills/task-management/scripts/github-handoff-core.test.mjs \
             config/opencode/skills/task-management/scripts/github-actions-gate-cli.test.mjs \
             config/opencode/skills/task-management/scripts/github-actions-gate-runtime.test.mjs \
@@ -111,7 +111,8 @@ jobs:
             config/opencode/skills/task-management/scripts/pipeline-tmp-permissions.test.mjs \
             config/opencode/skills/task-management/scripts/early-advisory-contract.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-runtime.test.mjs \
-            config/opencode/skills/task-management/scripts/reuse-report.test.mjs
+            config/opencode/skills/task-management/scripts/reuse-report.test.mjs \
+            config/opencode/skills/task-management/scripts/project-tooling.test.mjs
 
       - name: Verify permanent installer contracts
         run: |

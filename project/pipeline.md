@@ -95,7 +95,7 @@ Manifest фиксирует `planning_base_sha` и `freshness_sensitive_paths`. 
 - `/pipeline-plan`
 - `/pipeline-run <run-id> [--unattended] [--fix-cycles <5..20>] [--no-session-reuse]`
 - `/pipeline-status <run-id>`
-- `/pipeline-refresh` при релевантном main drift
+- `/pipeline-replan` при релевантном main drift
 
 Общая `/pipeline` не используется.
 
