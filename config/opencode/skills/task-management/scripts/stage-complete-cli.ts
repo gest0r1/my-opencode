@@ -202,15 +202,69 @@ export async function verifyReviewClosing(root: string, args: string[]): Promise
   if (record?.role === 'FindingsReviewer') throw new StageCompleteError(`REVIEW_CLOSING_FULL_REQUIRED: ${pipelineId}/${stage}; dispatch a full CodeReviewer before completing the review`);
 }
 
-async function main(args: string[]): Promise<void> {
-  if (args[0] !== 'complete') throw new StageCompleteError('usage: stage-complete-cli.ts complete <run-id> <stage> --pipeline <id> [stage-cli options]');
+function stageCli(args: string[]) {
+  const result = spawnSync(TSX, [STAGE_CLI, ...args], { cwd: process.cwd(), shell: false, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  if (result.error) throw result.error;
+  return result;
+}
+
+async function complete(args: string[]): Promise<string> {
   await verifyAgentAdvisoryCompletion(process.cwd(), args);
   await verifyReviewClosing(process.cwd(), args);
-  const result = spawnSync(TSX, [STAGE_CLI, ...args], { cwd: process.cwd(), shell: false, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  if (result.stdout) process.stdout.write(result.stdout);
+  const result = stageCli(['complete', ...args.slice(1)]);
   if (result.stderr) process.stderr.write(result.stderr);
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new StageCompleteError(`STAGE_COMPLETE_DELEGATE_FAILED: ${result.status ?? 'unknown'}`);
+  if (result.status !== 0) {
+    throw new StageCompleteError(`STAGE_COMPLETE_DELEGATE_FAILED: ${result.status ?? 'unknown'}`);
+  }
+  return result.stdout;
+}
+
+// Stages that need nothing between `start` and their dispatch or gate run. git_verify waits for
+// sync-main, publication, CI, deploy and owner stages keep their own preparation, so they are
+// returned as waiting rather than started.
+const AUTO_START_EXECUTORS = new Set(['agent', 'review', 'local_gate']);
+
+// advance = complete + GitHub sync + next + start of every runnable stage that needs no preparation:
+// one call per transition instead of four. The completion checks are the same as `complete`.
+async function advance(args: string[]): Promise<void> {
+  const runId = args[1];
+  if (!runId || !SAFE_ID.test(runId) || !args[2] || !option(args, '--pipeline')) {
+    throw new StageCompleteError('usage: stage-complete-cli.ts advance <run-id> <stage> --pipeline <id> [stage-cli options]');
+  }
+  await complete(['complete', ...args.slice(1)]);
+  const rootArgs = option(args, '--state-root') ? ['--state-root', option(args, '--state-root')!] : [];
+  const stateRoot = resolve(process.cwd(), option(args, '--state-root') ?? '.tmp/pipelines');
+  const state = JSON.parse(await readFile(join(stateRoot, runId, 'state.json'), 'utf8'));
+  const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+  const executorOf = (pipelineId: string, stage: string) =>
+    String(manifest.pipelines?.find((pipeline: any) => pipeline.id === pipelineId)?.executors?.[stage] ?? 'unknown');
+  const queued = stageCli(['next', runId, '--json', ...rootArgs]);
+  if (queued.status !== 0) throw new StageCompleteError(`STAGE_NEXT_FAILED: ${queued.stderr.trim()}`);
+  const started: Array<Record<string, string>> = [];
+  const waiting: Array<Record<string, string>> = [];
+  for (const item of JSON.parse(queued.stdout).runnable ?? []) {
+    const executor = executorOf(item.pipeline_id, item.stage);
+    if (!AUTO_START_EXECUTORS.has(executor)) { waiting.push({ ...item, executor }); continue; }
+    const start = stageCli(['start', runId, item.stage, '--pipeline', item.pipeline_id, ...rootArgs]);
+    if (start.status !== 0) waiting.push({ ...item, executor, start_error: start.stderr.trim() });
+    else started.push({ ...item, executor });
+  }
+  let github: Record<string, unknown>;
+  try {
+    const { syncRun } = await import('./pipeline-github-sync.mjs');
+    github = await syncRun(runId, { stateRoot });
+  } catch (error) {
+    github = { status: 'RETRY', error: error instanceof Error ? error.message : String(error) };
+  }
+  const run = JSON.parse(await readFile(join(stateRoot, runId, 'state.json'), 'utf8'));
+  console.log(JSON.stringify({ status: 'PASS', run_id: runId, run_status: run.status,
+    completed: { pipeline_id: option(args, '--pipeline'), stage: args[2] }, started, waiting, github_sync: github }, null, 2));
+}
+
+async function main(args: string[]): Promise<void> {
+  if (args[0] === 'advance') return advance(args);
+  if (args[0] !== 'complete') throw new StageCompleteError('usage: stage-complete-cli.ts complete|advance <run-id> <stage> --pipeline <id> [stage-cli options]');
+  process.stdout.write(await complete(args));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

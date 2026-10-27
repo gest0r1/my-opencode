@@ -19,3 +19,22 @@ test('output tail is an ANSI-free array of the last non-empty lines', () => {
   assert.equal(tail.at(-1), 'stderr line');
   assert.ok(tail.every(line => !line.includes('\u001b')));
 });
+
+test('a timed-out command is rerun once alone and keeps its first attempt; other failures are not rerun', async () => {
+  const { retryTimeouts } = await import('./gate-diagnostics.mjs');
+  const reruns = [];
+  const settled = [
+    { invocation: { index: 0 }, result: { exit_code: 124, duration_ms: 60000, started_at: 't0', output_tail: ['COMMAND_TIMEOUT'] } },
+    { invocation: { index: 1 }, result: { exit_code: 1 } },
+    { invocation: { index: 2 }, result: { exit_code: 0 } },
+  ];
+  await retryTimeouts(settled, () => false, async (invocation) => { reruns.push(invocation.index); return { result: { exit_code: 0, command_index: invocation.index } }; });
+  assert.deepEqual(reruns, [0]);
+  assert.equal(settled[0].result.exit_code, 0);
+  assert.deepEqual(settled[0].result.timeout_retry, { first_exit_code: 124, first_duration_ms: 60000, first_started_at: 't0', first_output_tail: ['COMMAND_TIMEOUT'] });
+  assert.equal(settled[1].result.exit_code, 1);
+
+  const interrupted = [{ invocation: { index: 0 }, result: { exit_code: 124 } }];
+  await retryTimeouts(interrupted, () => true, async () => { throw new Error('must not rerun'); });
+  assert.equal(interrupted[0].result.exit_code, 124);
+});

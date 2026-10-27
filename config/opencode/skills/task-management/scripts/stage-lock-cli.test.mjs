@@ -82,3 +82,30 @@ test('runtime lock of a dead owner is reclaimed, a live owner keeps it', async (
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('the heavy gate slot admits one full set at a time and narrow checks wait for it', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'heavy-slot-'));
+  const previous = process.env.PIPELINE_HEAVY_LOCK_DIR;
+  process.env.PIPELINE_HEAVY_LOCK_DIR = root;
+  try {
+    const { acquireHeavySlot, waitForHeavySlot } = await import('./runtime-locks.mjs');
+    assert.equal(await waitForHeavySlot({ pollMs: 10 }), 0);
+    const first = await acquireHeavySlot({ gate: 'a' }, { pollMs: 10 });
+    let secondAcquired = false;
+    const second = acquireHeavySlot({ gate: 'b' }, { pollMs: 10 }).then((slot) => { secondAcquired = true; return slot; });
+    const narrow = waitForHeavySlot({ pollMs: 10 });
+    await new Promise((done) => setTimeout(done, 50));
+    assert.equal(secondAcquired, false);
+    await first.release();
+    const slot = await second;
+    assert.ok(slot.waited_ms >= 40);
+    await slot.release();
+    assert.ok(await narrow >= 40);
+    await assert.rejects(acquireHeavySlot({ gate: 'c' }, { pollMs: 10 }).then(async (held) => {
+      try { await acquireHeavySlot({ gate: 'd' }, { pollMs: 10, maxWaitMs: 30 }); } finally { await held.release(); }
+    }), /HEAVY_GATE_SLOT_TIMEOUT/);
+  } finally {
+    if (previous === undefined) delete process.env.PIPELINE_HEAVY_LOCK_DIR; else process.env.PIPELINE_HEAVY_LOCK_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});

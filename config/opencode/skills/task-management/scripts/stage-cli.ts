@@ -5,7 +5,7 @@ import { candidateEvidenceMatches } from './github-actions-gate-core.mjs';
 export * from './stage-cli-core.ts';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { applyOwnerAmendment, runCli } from './stage-cli-core.ts';
 import { prepareProjectTooling, restoreDependencies } from './project-tooling.mjs';
@@ -333,8 +333,51 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
   return args;
 }
 
+const TSX = fileURLToPath(new URL('../../../node_modules/.bin/tsx', import.meta.url));
+const script = (name: string) => fileURLToPath(new URL(`./${name}`, import.meta.url));
+
+// The PLAN freeze checks and the post-approval start each ran as 3 and 8 separate calls. plan-check
+// and plan-start run the same CLIs in the same order, stop at the first failure and report every step.
+async function planSequence(command: 'plan-check' | 'plan-start', manifest: string | undefined, args: string[]): Promise<void> {
+  const extra = args.slice(2);
+  if (!manifest || !(extra.length === 0 || (extra.length === 2 && extra[0] === '--state-root' && extra[1]))) {
+    throw new Error(`usage: stage-cli ${command} <manifest.json> [--state-root <path>]`);
+  }
+  const root = extra.length ? extra : [];
+  const steps: Array<[string, string[]]> = [
+    ['plan-run-preflight', [script('stage-cli.ts'), 'plan-run-preflight', manifest, '--environment', '--json']],
+    ['adopt', [script('git-worktree-cli.ts'), 'adopt', manifest]],
+    ['verify', [script('git-worktree-cli.ts'), 'verify', manifest]],
+  ];
+  if (command === 'plan-start') {
+    const runId = JSON.parse(await readFile(resolve(manifest), 'utf8')).run_id;
+    steps.push(
+      ['init', [script('stage-cli.ts'), 'init', manifest, ...root, '--json']],
+      ['approve', [script('stage-cli.ts'), 'approve', runId, ...root, '--json']],
+      ['github-sync', [script('pipeline-github-sync.mjs'), 'sync', runId, ...root]],
+      ['validate', [script('stage-cli.ts'), 'validate', runId, ...root, '--json']],
+      ['next', [script('stage-cli.ts'), 'next', runId, ...root, '--json']],
+    );
+  }
+  const report: Array<Record<string, unknown>> = [];
+  let last: unknown;
+  for (const [name, argv] of steps) {
+    const result = spawnSync(TSX, argv, { shell: false, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      console.log(JSON.stringify({ status: 'FAIL', command, failed_step: name, steps: report, error: String(result.stderr || result.stdout).trim() }, null, 2));
+      process.exitCode = 1;
+      return;
+    }
+    try { last = JSON.parse(result.stdout); } catch { last = result.stdout.trim(); }
+    report.push({ step: name, status: 'PASS' });
+  }
+  console.log(JSON.stringify({ status: 'PASS', command, steps: report, ...(command === 'plan-start' ? { next: last } : {}) }, null, 2));
+}
+
 async function main(args: string[]): Promise<void> {
   const [command, identifier] = args;
+  if (command === 'plan-check' || command === 'plan-start') return planSequence(command, identifier, args);
   if (command === 'dispatch') {
     if (!identifier) throw new Error('run-id is required');
     const allowed = new Set(['--pipeline', '--stage', '--work-item', '--role']);

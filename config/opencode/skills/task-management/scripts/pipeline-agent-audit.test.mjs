@@ -266,9 +266,10 @@ test('pipeline contracts require source-ready scheduling, local fail-fast, and a
 
 test('PLAN proves v2 run viability and baseline scope before owner approval', async () => {
   const plan = await text('config/opencode/command/pipeline-plan.md');
-  assert.match(plan, /stage-cli\.ts plan-run-preflight/);
-  assert.match(plan, /git-worktree-cli\.ts adopt/);
-  assert.match(plan, /git-worktree-cli\.ts verify/);
+  const cli = await text('config/opencode/skills/task-management/scripts/stage-cli.ts');
+  assert.match(plan, /stage-cli\.ts plan-check \.tmp\/pipelines\/\{run-id\}\/manifest\.json/);
+  assert.match(plan, /stage-cli\.ts plan-start \.tmp\/pipelines\/\{run-id\}\/manifest\.json/);
+  assert.match(cli, /'plan-run-preflight', manifest, '--environment'[\s\S]*'adopt', manifest[\s\S]*'verify', manifest/);
   assert.match(plan, /git-worktree-cli\.ts baseline <planning-base-sha>/);
   assert.match(plan, /preserved_baseline/);
 });

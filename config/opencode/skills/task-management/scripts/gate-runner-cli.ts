@@ -2,13 +2,14 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import os from 'node:os';
 import process from 'node:process';
 import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
 import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGateTestingFile, isPrePublishGate } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
-import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports } from './gate-diagnostics.mjs';
+import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports, retryTimeouts } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
-import { openRuntimeLock } from './runtime-locks.mjs';
+import { acquireHeavySlot, openRuntimeLock, waitForHeavySlot } from './runtime-locks.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -191,10 +192,14 @@ export function planProbeCommandsSha256(commands: string[]): string {
 // explicitly unset when no candidate is loaded, so an inherited outer value never leaks in.
 function gateEnv(identity: { runId: string; pipelineId: string; gate: string; attempt: number; candidateSha?: string; scratchDir: string }): Record<string, string | undefined> {
   return { PIPELINE_RUN_ID: identity.runId, PIPELINE_ID: identity.pipelineId, PIPELINE_GATE: identity.gate, PIPELINE_GATE_ATTEMPT: String(identity.attempt),
-    CANDIDATE_SHA: identity.candidateSha, PIPELINE_SCRATCH_DIR: identity.scratchDir };
+    CANDIDATE_SHA: identity.candidateSha, PIPELINE_SCRATCH_DIR: identity.scratchDir,
+    // Half the machine for a gate's own workers; a project wires it into its runner (vitest --maxWorkers,
+    // jest --maxWorkers, pytest -n) in the frozen command. Set PIPELINE_MAX_WORKERS outside to override.
+    PIPELINE_MAX_WORKERS: process.env.PIPELINE_MAX_WORKERS || String(Math.max(1, Math.floor(os.availableParallelism() / 2))) };
 }
 
 type Invocation = { command: string; index: number; test_files: string[]; exe: string; args: string[] };
+
 
 async function executeInvocation(invocation: Invocation, env: Record<string, string | undefined>, timeout: number): Promise<{ result: Record<string, any>; exit_code: number }> {
   const commandStarted = new Date().toISOString();
@@ -257,6 +262,7 @@ async function planProbe(args: string[]): Promise<void> {
   let resource: Awaited<ReturnType<typeof createLivePostgres>> | undefined;
   let failure: unknown; let status = 'PASS';
   const startedAt = new Date().toISOString();
+  const heavySlot = await acquireHeavySlot({ run_id: manifest.run_id, pipeline_id: pipelineId, gate, plan_probe: true });
   try {
     if (config?.live_postgres && invocations.some(item => config.live_postgres.command_indexes.includes(item.index))) {
       resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${manifest.run_id}:${pipelineId}:${gate}`, (exe: string, argv: string[], liveEnv?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), liveEnv, 60, ['inspect', 'rm'].includes(argv[0])));
@@ -264,11 +270,15 @@ async function planProbe(args: string[]): Promise<void> {
     for (const batch of parallelBatches(invocations, config, liveIndexes(config))) {
       const settled = await Promise.all(batch.map((invocation: Invocation) => {
         const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
-        return executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800);
+        return executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800).then(done => ({ invocation, ...done }));
       }));
+      await retryTimeouts(settled, () => interrupted, (invocation: Invocation) => {
+        const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
+        return executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800);
+      });
       for (const item of settled) results.push(item.result);
-      const failed = settled.find(item => item.exit_code !== 0);
-      if (failed) { status = 'FAIL'; throw new GateRunnerError(`gate command failed (${failed.exit_code}): ${failed.result.command}; evidence=${evidenceFile}`); }
+      const failed = settled.find(item => item.result.exit_code !== 0);
+      if (failed) { status = 'FAIL'; throw new GateRunnerError(`gate command failed (${failed.result.exit_code}): ${failed.result.command}; evidence=${evidenceFile}`); }
     }
   } catch (error) {
     failure = error; if (status !== 'FAIL') status = 'BLOCKED';
@@ -282,6 +292,7 @@ async function planProbe(args: string[]): Promise<void> {
       results: [...results].sort((a, b) => a.command_index - b.command_index),
       started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
       error: failure ? redact(String(failure)) : null }, null, 2)}\n`, 'utf8');
+    await heavySlot.release();
   }
   if (failure) throw failure;
   console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: null, candidate_sha: null, evidence: evidenceFile,
@@ -468,9 +479,15 @@ async function main(): Promise<void> {
   // Fresh empty scratch dir per run of this evidence file; only created when a command will run.
   const scratchDir = pending.length ? join(resolve(stateRoot), runId, 'scratch', `${pipelineId}-${gate}${evidenceSuffix}-${attempt}`) : null;
   const env = gateEnv({ runId, pipelineId, gate, attempt, candidateSha, scratchDir: scratchDir ?? '' });
+  // A full set takes the machine-wide heavy slot; a narrow check waits while a full set holds it.
+  const heavy = pending.length > 0 && !affected && selection < 0;
+  let heavySlot: { waited_ms: number; release: () => Promise<void> } | undefined;
+  let slotWaitMs = 0;
   try {
     if (scratchDir) await mkdir(scratchDir, { recursive: true });
     for (const [, item] of reusable) results.push({ ...item.result, reused_from: item.path });
+    if (heavy) { heavySlot = await acquireHeavySlot({ run_id: runId, pipeline_id: pipelineId, gate }); slotWaitMs = heavySlot.waited_ms; }
+    else if (pending.length) slotWaitMs = await waitForHeavySlot();
     {
     if (config?.live_postgres && pending.some(item => config.live_postgres.command_indexes.includes(item.index))) {
       resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${runId}:${pipelineId}:${gate}`, (exe: string, argv: string[], env?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), env, 60, ['inspect', 'rm'].includes(argv[0])));
@@ -485,6 +502,10 @@ async function main(): Promise<void> {
         const done = await executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800);
         return { invocation, result: done.result };
       }));
+      await retryTimeouts(settled, () => interrupted, (invocation: Invocation) => {
+        const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
+        return executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800);
+      });
       for (const item of settled) results.push(item.result);
       const failed = settled.find(item => item.result.exit_code !== 0);
       if (failed) {
@@ -515,7 +536,7 @@ async function main(): Promise<void> {
         selection_reason: selectionReason, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
-        live_postgres: resource?.evidence ?? null, cleanup_complete: cleanupComplete,
+        live_postgres: resource?.evidence ?? null, cleanup_complete: cleanupComplete, heavy_slot: heavy, heavy_slot_wait_ms: slotWaitMs,
         test_reports: reuse ? [] : JSON.parse(redact(JSON.stringify(await readTestReports(config?.report_files, join(resolve(stateRoot), runId), startedAt)))),
         error: failure ? redact(String(failure)) : null, results: [...results].sort((a: any, b: any) => a.command_index - b.command_index) }, null, 2)}\n`, 'utf8');
       // Append-only gate timeline for the RUN report: the main wall-clock cost is gate time.
@@ -528,11 +549,11 @@ async function main(): Promise<void> {
         ledger.attempts[fingerprint] = { status, hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])] };
         await writeFile(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8');
       }
-    } finally { await release(); }
+    } finally { await heavySlot?.release(); await release(); }
   }
   if (failure) throw failure;
   console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: workItemId ?? null, candidate_sha: candidateSha ?? null, evidence: evidenceFile,
-    selection_reason: selectionReason, commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused_from: reuse?.path ?? null }));
+    heavy_slot_wait_ms: slotWaitMs, selection_reason: selectionReason, commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused_from: reuse?.path ?? null }));
 }
 
 main().catch((error: unknown) => {

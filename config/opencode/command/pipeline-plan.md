@@ -229,12 +229,10 @@ It needs a clean checkout (`BASE_PROBE_REQUIRES_CLEAN_CHECKOUT`), runs the compl
 Before presenting owner approval run the **same executable contract that RUN will depend on**, while no state exists yet:
 
 ```text
-stage-cli.ts plan-run-preflight .tmp/pipelines/{run-id}/manifest.json --environment
-git-worktree-cli.ts adopt .tmp/pipelines/{run-id}/manifest.json
-git-worktree-cli.ts verify .tmp/pipelines/{run-id}/manifest.json
+stage-cli.ts plan-check .tmp/pipelines/{run-id}/manifest.json
 ```
 
-All three must PASS. `plan-run-preflight` accepts only schema version 2. `verify` must prove that the complete current branch diff is either the frozen preserved baseline or inside writable `allowed_change_paths`; do not defer a baseline/scope mismatch until RUN. Preflight verifies planning evidence hashes, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Before `init`, deterministic manifest corrections remain the same draft/run-id and are simply revalidated; after `init`, use the trusted revise-plan lifecycle until implementation starts; after first implementation start, never mutate that manifest.
+It runs `plan-run-preflight --environment`, `git-worktree-cli.ts adopt` and `git-worktree-cli.ts verify` in that order, stops at the first failure and names it (`failed_step`). All three must PASS. `plan-run-preflight` accepts only schema version 2. `verify` must prove that the complete current branch diff is either the frozen preserved baseline or inside writable `allowed_change_paths`; do not defer a baseline/scope mismatch until RUN. Preflight verifies planning evidence hashes, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Before `init`, deterministic manifest corrections remain the same draft/run-id and are simply revalidated; after `init`, use the trusted revise-plan lifecycle until implementation starts; after first implementation start, never mutate that manifest.
 
 ## Preservation, migration and replan
 
@@ -259,15 +257,10 @@ For a new PLAN or owner-contract-changing revision, present gate readiness, bran
 Only AFTER a separate explicit owner message approving this exact v2 manifest/run ID, with every owner decision resolved and every required planning gate `ready`, run:
 
 ```text
-stage-cli.ts plan-run-preflight .tmp/pipelines/{run-id}/manifest.json --environment
-git-worktree-cli.ts adopt .tmp/pipelines/{run-id}/manifest.json
-git-worktree-cli.ts verify .tmp/pipelines/{run-id}/manifest.json
-stage-cli.ts init .tmp/pipelines/{run-id}/manifest.json
-stage-cli.ts approve {run-id}
-node $HOME/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs sync {run-id}
-stage-cli.ts validate {run-id} --json
-stage-cli.ts next {run-id} --json
+stage-cli.ts plan-start .tmp/pipelines/{run-id}/manifest.json
 ```
+
+It runs `plan-check`, then `init`, `approve`, the GitHub sync, `validate` and `next`, in that order, and stops at the first failure with `failed_step`.
 
 The initial PLAN invocation never runs init/approve. `--unattended` and reviewer approval are not owner approval. Approval sync for Issue runs must finish with `pending=0`. GitHub audit delivery is event-oriented, not a sticky-status comment: `init` queues a separate `created -> planned` event for every mapped pipeline and `approve` queues a separate `planned -> approved` event. `pipeline-github-sync` posts each distinct event as its own idempotent Issue comment; it does not edit the previous comment, and one Issue mapped to several pipelines may therefore receive several audit comments from one PLAN approval sequence.
 

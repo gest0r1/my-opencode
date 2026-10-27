@@ -153,3 +153,16 @@ export async function readTestReports(files, runDirectory, startedAt) {
   }
   return reports;
 }
+
+// A command that hit its time limit is rerun once, alone, after the rest of its batch has settled,
+// before it counts as a failure: under load a timeout says more about the machine than the code.
+// Limits and tests stay as frozen. The first attempt stays in the evidence next to the rerun.
+export async function retryTimeouts(settled, isInterrupted, rerun) {
+  for (const item of settled) {
+    if (item.result.exit_code !== 124 || isInterrupted()) continue;
+    const first = item.result;
+    const second = await rerun(item.invocation);
+    item.result = { ...second.result, timeout_retry: { first_exit_code: first.exit_code, first_duration_ms: first.duration_ms,
+      first_started_at: first.started_at, first_output_tail: first.output_tail } };
+  }
+}
