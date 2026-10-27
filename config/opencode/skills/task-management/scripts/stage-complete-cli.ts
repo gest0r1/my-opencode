@@ -9,6 +9,8 @@ import { gitReadEnv } from './git-readonly.mjs';
 import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 
 const STAGE_CLI = fileURLToPath(new URL('./stage-cli.ts', import.meta.url));
+// The config-owned tsx (config/opencode/node_modules), never the project's, which a gate may break.
+const TSX = fileURLToPath(new URL('../../../node_modules/.bin/tsx', import.meta.url));
 // Same literal as the dispatch packet, so GateRunner's allowlist accepts the rerun command verbatim.
 const GATE_RUNNER = '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts';
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -204,7 +206,7 @@ async function main(args: string[]): Promise<void> {
   if (args[0] !== 'complete') throw new StageCompleteError('usage: stage-complete-cli.ts complete <run-id> <stage> --pipeline <id> [stage-cli options]');
   await verifyAgentAdvisoryCompletion(process.cwd(), args);
   await verifyReviewClosing(process.cwd(), args);
-  const result = spawnSync('npx', ['tsx', STAGE_CLI, ...args], { cwd: process.cwd(), shell: false, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const result = spawnSync(TSX, [STAGE_CLI, ...args], { cwd: process.cwd(), shell: false, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) throw result.error;
