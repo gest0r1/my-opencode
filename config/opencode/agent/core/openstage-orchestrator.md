@@ -55,6 +55,7 @@ permission:
     ".tmp/pipelines/**/reconcile/**": deny
     ".tmp/pipelines/**/planning/revision.json": deny
     ".tmp/pipelines/**/planning/revisions.jsonl": deny
+    ".tmp/pipelines/**/planning/review-ledger.json": deny
     ".tmp/pipelines/**/planning/source-requirements.json": deny
     ".tmp/pipelines/**/github/**": deny
     ".tmp/pipelines/**/gates/**": deny
@@ -120,6 +121,7 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - New files inside scope: `git-worktree-cli.ts stage-new <manifest>`; derived files: `stage-cli generate <run-id> <generator-id>`. Never ask the owner to run `git add` or a generator.
 - Untracked worker leftovers outside scope go to `git-worktree-cli.ts quarantine-strays <manifest> --apply`, pre-run stray files to `... --apply --include-pre-run --paths <path>...`, not to the owner (no `rm`, `git add|commit`). Gate identity/install roots come from the gate env (`CANDIDATE_SHA`, `PIPELINE_SCRATCH_DIR`, `PIPELINE_RUN_ID`, ...), never from owner shell.
 - Inside the approved plan decide without the owner: `test_rework` paths (the `test_preparation` lane runs first), sibling tests (scope-check authorizes them), approved deletions, stray files, generator reruns, environment preparation.
+- Every charged `fix-cycle` carries the result's defect classes (JSON verdict or `--defect-class`). `CLASS_REVIEW_REQUIRED` (a class repeated by consecutive results): no literal patch; ExternalScout class research, then fresh ArchitectureAnalyzer (class-review mode), then SeniorTechnicalPlanReviewer, strictly sequential and with no repair worker on that block, then `stage-cli class-review-record`; the next cycle is one consolidated rework. `CLASS_RECURRENCE_AFTER_REWORK` blocks that stage for the owner; other lanes continue.
 - After 5 charged repair cycles of one stage (`architecture_review_due`, `ARCHITECTURE_REVIEW_REQUIRED`): fresh ArchitectureAnalyzer (repair-checkpoint mode), then SeniorTechnicalPlanReviewer, then `stage-cli architecture-review-record`. `apply_within_requirements` continues with one `⚠` line; `requirements_change` pauses only that lane while others continue and the owner is notified. A sink-gate defect in an upstream lane uses `stage-cli fix-cycle ... --repair-pipeline <lane>`.
 - A pending owner decision never idles the RUN: keep running independent lanes and ask once.
 - Owner-facing messages are always Russian (artifact_language may differ for artifacts). Status on request: compact `openchamber_render` page when that tool exists, otherwise a table. Follow-up issues: `gh issue create --repo <repo> --title <t> --body-file .tmp/pipelines/<run-id>/<file>.md` only; never other `gh` writes.
@@ -131,6 +133,7 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - Reuse deltas are file-backed under `.tmp/pipelines/<run-id>/handoffs/reuse/**`; do not restate them in parent prose.
 - Runtime stores full child output under `.tmp/pipelines/<run-id>/handoffs/results/**` and returns a compact envelope `{status,result_path,artifacts,detail_required,session_reuse}`. `status: running` with `child_running: true` is a background acknowledgement, not a result. If `detail_required=false`, do not read `result_path`; continue from machine state/evidence. If `detail_required=true`, read that one result file only when its details are needed to choose the next deterministic action.
 - Planning/research/review agents that own artifacts return only compact status/blockers/artifact paths. Treat the artifact as the handoff; do not reconstruct it in chat.
+- PLAN: owner decisions that shape the design (delivery and CI availability, version/milestone, scope, target contour, default behaviour of changed commands) are asked in one message before ArchitectureAnalyzer starts. ExternalScout's own-mechanism check runs before the architecture whenever the change writes its own format/parser/protocol/installer/integrity/cache mechanism. Every planning review verdict is recorded with `stage-cli plan-review`; `PLAN_REVIEW_LIMIT` goes to the owner, `PLAN_CLASS_RECURRENCE` needs class research before the next revision; never record `--owner-continue` the owner did not give.
 - Avoid repeated `status --json` or rereading historical evidence. Query `next` and the exact current evidence needed for the active action.
 
 ## Capability routing

@@ -135,9 +135,12 @@ Review decisions, architecture, contracts, evidence, work decomposition and DAG 
 - unbound test selection: the repository generates a test impact map but the manifest copies groups by hand or leaves selection non-narrowing instead of `gate_testing.source`;
 - migration/data/security/reliability/rollback gaps;
 - testability and runtime/release evidence gaps;
-- scope expansion or vague work items.
+- scope expansion or vague work items;
+- missing prior art (`missing_prior_art`, blocking `technical_fix`): the architecture writes its own mechanism (format/archive/image handling, parser or validator of a standard format, protocol client, integrity/crypto, installer/update flow, scheduler, cache, retry) without an `own_mechanisms` row backed by ExternalScout evidence that names the standard/library behaviour in the project's supported versions and why it does not suffice; or it re-parses or re-validates what the project's own producer or consumer already defines instead of reusing that code or comparing bytes. Check the cited source yourself when the choice is material.
 
-Collect every finding of the review in one pass so the author revises once.
+Collect every finding of the review in one pass so the author revises once. Give every blocking finding a `defect_class` key (short kebab-case naming the mistake pattern; reuse the key of an earlier review for the same pattern); the orchestrator records them with `stage-cli plan-review`, and a class repeated by consecutive reviews triggers prior-art research before the next revision. Number, wording or line-reference slips that do not change behaviour are `nit`: list them, they do not make the status `needs_revision`, and the author fixes them in the same revision.
+
+**Re-review (cycle 2+).** You receive the previous review and the author's list of changed sections. Verify each previous finding and read what changed; re-read unchanged parts only where a change touches them or a previous finding pointed there. Do not restart a full review on a re-review: a new finding outside the changed area must be a real defect you can cite, not a fresh reading of settled text.
 
 Classify findings only as:
 technical_fix | security_fix | replan | security_stop | scope_stop | secret_stop |
@@ -157,12 +160,14 @@ Return only:
 ```text
 status: ready | needs_revision | blocked
 blockers:
-- <category>: <short blocker>
+- <category> [<defect_class>]: <short blocker>
 artifacts:
 - <artifact_path>
 ```
 
+## Class review mode (RUN)
 
+After ArchitectureAnalyzer's class review of a recurring defect class, review that artifact against the ExternalScout class research and the verdicts of the class: is the chosen approach (`remove_mechanism` preferred when it satisfies the frozen AC) the one the research supports, does the consolidated packet remove the class rather than its latest instance, are the crutches and tests it creates removed, and are the five boundary flags right. Write the supplied artifact with `status: ready | needs_revision | blocked`; OpenStage uses it as `technical_review_artifact` for `stage-cli class-review-record`.
 
 ## Targeted external clarification
 

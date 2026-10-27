@@ -187,7 +187,18 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   const reviewer = await text('config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md');
   const codeReviewer = await text('config/opencode/agent/subagents/code/reviewer.md');
 
-  assert.match(plan, /up to \*\*3 cycles\*\*/); // planning-gate revision budget remains separate
+  assert.match(plan, /up to \*\*3 autonomous revisions\*\*/); // planning-gate revision budget remains separate
+  // The ledger, not the orchestrator, counts planning reviews; recurring classes need research first.
+  assert.match(plan, /stage-cli plan-review <run-id> <gate> --evidence <review>/);
+  assert.match(plan, /PLAN_CLASS_RECURRENCE/);
+  assert.match(plan, /--owner-continue/);
+  assert.match(orchestrator, /planning\/review-ledger\.json": deny/);
+  // A recurring defect class stops the RUN patch loop for research and a class review.
+  assert.match(run, /CLASS_REVIEW_REQUIRED/);
+  assert.match(run, /stage-cli class-review-record <run-id> <stage> --pipeline <id> --evidence <file>/);
+  assert.match(run, /CLASS_RECURRENCE_AFTER_REWORK/);
+  assert.match(codeReviewer, /`defect_class` key/);
+  assert.match(reviewer, /missing_prior_art/);
   assert.match(plan, /--fix-cycles <5\.\.20>/);
   assert.match(run, /default automatic budget is \*\*5 cycles per review\/final machine gate\*\*/i);
   assert.match(run, /stage-cli fix-budget-set/);
