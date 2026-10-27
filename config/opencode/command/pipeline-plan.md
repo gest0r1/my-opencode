@@ -13,7 +13,7 @@ Before creating or starting any PLAN/RUN, call `pipeline_runtime_preflight`. Req
 
 Build a design-freeze PLAN only. Never implement source changes, create a worktree/branch/session, switch checkout, rebase, merge, clean, reset or invoke `openchamber session.create`. Owner opens an existing worktree-session and invokes this command inside that session. Other worktrees may PLAN concurrently; only one RUN executes at a time.
 
-`$ARGUMENTS` selects exactly one source mode: `--revise <run-id>` for a not-yet-implemented PLAN; same-repository Issue refs such as `#51 #47`; an existing task/plan file path; or free task text. Empty arguments are invalid. There is NO fallback to `docs/plan.md` and no OpenChamber linked-Issue source: GitHub Issues are selected explicitly with `#N`. `docs/pipeline-rules.md` remains the rules path; project rules take precedence and invalid rules BLOCK. PLAN and all delegated agents must never edit project or distribution rules.
+`$ARGUMENTS` selects exactly one source mode: `--revise <run-id>` for a not-yet-implemented PLAN; `--milestone <title|number>` for every open Issue of a milestone; same-repository Issue refs such as `#51 #47`; an existing task/plan file path; or free task text. Empty arguments are invalid. There is NO fallback to `docs/plan.md` and no OpenChamber linked-Issue source: GitHub Issues are selected explicitly with `#N`. `docs/pipeline-rules.md` remains the rules path; project rules take precedence and invalid rules BLOCK. PLAN and all delegated agents must never edit project or distribution rules.
 
 For `--revise <run-id>`, use the existing folder. Before changing manifest or gate artifacts, write a fresh independent revision review containing the current `manifest_sha256`, `owner_contract_changed: true|false`, `affected_gates[]` and `reason`, then call `pipeline-reconcile-cli.ts revise-plan <run-id> --evidence <review-path>`. It rejects revision after any source-changing agent stage actually started. Replace stories/manifest/work items in place; repeat only invalidated gates, keeping unaffected ready artifacts. Never reset state manually. If owner scope/behavior/constraints changed, obtain approval again; technical corrections reuse the previous approval when the validated revised manifest is initialized. Log a short reason/gate list, not old story versions.
 
@@ -23,17 +23,17 @@ All distribution CLI invocations use the current runtime user's `$HOME/.config/o
 
 ## Preflight: inspect only
 
-0. Resolve source first. For GitHub Issue mode use only:
+0. Resolve source first. For `--milestone`, first run `$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts milestone <title|number>`. Its `issue_numbers` are the Issue refs of this PLAN. Its `version` is the release version: freeze `release: {version, milestone: {number, title}, rc_tags}` in the manifest. Set `rc_tags` to `true` only when `.opencode/pipeline-policy.json` has `release.rc_tags: true`, which means the project's dev installer accepts `vX.Y.Z-rc.N`. Never ask the owner about the version and never choose another one. `status: BLOCKED` stops PLAN with its `conflicts[]` quoted as they are: the owner fixes the milestone (name, tag, VERSION) and PLAN starts again. For GitHub Issue mode use only:
 
 ```text
-npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts probe <issue-number>...
-npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts show <issue-number>...
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts probe <issue-number>...
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts show <issue-number>...
 ```
 
 The GitHub Issue itself is authoritative; PLAN persists normalized semantic evidence via `pipeline-reconcile-cli.ts snapshot-source <run-id>` after writing the draft manifest and before initialization. GitHub remains authoritative; `planning/source-requirements.json` is only the planning baseline for future diff. Freeze the returned repository/source Issue metadata and semantic `requirements_sha256` as `source_requirements_sha256`. The digest covers Issue title/body and human comments while excluding pipeline-owned audit/planning comments. Immediately before design freeze, run the same `probe` again and require the digest to equal the value used for planning. Do not substitute anonymous GitHub HTML/API requests, `webfetch`, free-form `curl` or `github_handoff_probe`.
 
 1. `git-worktree-cli.ts inspect`: require owner-created linked worktree, non-default branch, valid local main and clean tracked checkout. Verify `.tmp/pipelines/` is ignored; tracked pipeline state BLOCKS.
-2. Record exact worktree directory, branch, HEAD and local main SHA in `git_setup.base_sha`; require main ancestor of HEAD. `stage-cli.ts rules docs/pipeline-rules.md --json` must PASS. PLAN never mutates Git.
+2. Run `git-worktree-cli.ts sync-plan`: it fast-forwards local main to origin/main and merges main into the PLAN branch (never reset, rebase or force). Do not ask the owner to update main or the branch; stop only on `SYNC_PLAN_CONFLICT`, `SYNC_PLAN_DIRTY`, `SYNC_PLAN_MAIN_CHECKOUT_DIRTY` or `SYNC_PLAN_LOCAL_MAIN_DIVERGED`, quoting the error. Then record exact worktree directory, branch, HEAD and local main SHA in `git_setup.base_sha`; require main ancestor of HEAD. `stage-cli.ts rules docs/pipeline-rules.md --json` must PASS. Apart from `sync-plan`, PLAN never mutates Git; after `stage-cli init` only `sync-main <manifest>` syncs.
 3. Inspect repository policy only through `stage-cli.ts policy --json`. If `.opencode/pipeline-policy.json` exists, freeze the returned path+SHA-256 in `project_policy`; v2 preflight enforces protected paths and triggered project gates.
 4. If project policy declares `deployment_target.kind=opencode_host`, run `deployment-target-cli.ts inspect {run-id} --policy .opencode/pipeline-policy.json` as a **capability probe**. It dispatches the trusted GitHub probe workflow, validates the protected Environment/trusted ref, verifies required Environment secret names without reading values, and requires the configured probe job to PASS. On READY freeze `planning/deployment-target.json` path+SHA-256 as `deployment_target_check`. Probe failure does not by itself kill PLAN: it makes only GitHub-initiated `opencode_host` CD unavailable for this run and must be shown to the owner. Local `hybrid` CD does not depend on this probe. Agents never receive raw `gh`/SSH credentials or SSH permission.
 
@@ -145,7 +145,7 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
    Build a capability matrix and present exactly three owner choices with an advisory recommendation:
    1. `github` — local fail-fast first, then final GitHub CI; no OpenCode-host CD stage;
    2. `opencode_host` — local fail-fast, final GitHub CI, then the existing trusted GitHub-driven stateful `github_dev` CD to the OpenCode host; this special mode requires the READY deployment-target probe;
-   3. `hybrid` — local fail-fast, final GitHub CI, then a frozen post-CI `local_gate` installs/updates the exact `candidate_sha` on the OpenCode/dev host and runs smoke; owner acceptance is added only when requested.
+   3. `hybrid` — local fail-fast, final GitHub CI, then a frozen post-CI `local_gate` installs/updates the exact `candidate_sha` on the OpenCode/dev host and runs smoke; owner acceptance is added only when requested. Freeze the dev contour as `deploy_target` (default `svd1`; another key only when the owner named it). The install itself is done by the root helper `opencode-deploy-target`, so that `local_gate` holds only the post-install checks (installed version, smoke).
 
    In the same question ask the GitHub CI mode and freeze it per deployable pipeline as `github_ci_mode`: `required` (default; an infrastructure blocker stops for the owner), `optional` (CI runs; if GitHub does not start it — billing, spending limit, no runner — the stage is skipped with a ⚠ warning and RUN continues; a code failure still blocks), or `off` (no `github_ci` stage; `deployment_validation.stage` is the authoritative local `ci-parity`/`fail-fast` `local_gate`). Recommend `optional` on a free GitHub plan and `required` for release branches.
 
@@ -164,13 +164,13 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
 stage-cli.ts artifacts {run-id} <run-relative-path>... --json
 ```
 
-Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum` or model-computed hashes.
+Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum` or model-computed hashes. After any work item, required artifact or carried-findings file changes, run `stage-cli.ts manifest-refresh .tmp/pipelines/{run-id}/manifest.json` instead of editing hashes: it rewrites those SHA-256 values from disk and refuses (`GATE_ARTIFACT_CHANGED_AFTER_REVIEW`) when a reviewed gate artifact changed, which needs `plan-review` again. `plan-check` fails on a stale hash, so run `manifest-refresh --check` first when unsure.
 
 
 For GitHub Issue sourced PLANs, after all required planning gates and deterministic preflight pass and the owner explicitly approves the design freeze, publish the frozen Story/Architecture comments idempotently:
 
 ```text
-npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts publish-plan {run-id}
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts publish-plan {run-id}
 ```
 
 A document longer than one GitHub comment (65 536 characters; the CLI keeps under 65 000) is posted as numbered parts "Pipeline Architecture (i/N)", split at `##` sections, so never shorten the frozen architecture to fit. A publish failure BLOCKS initialization/handoff; it must not alter the requirements digest because pipeline-owned artifact comments are excluded.
@@ -209,7 +209,7 @@ For every `github_ci`/`github_dev` stage freeze `github_gates[stage_id]` with:
 Before freeze inspect the proposed project workflow:
 
 ```text
-npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts inspect <workflow> <terminal-job> --trigger <push|workflow_dispatch> [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode stateful --environment <env> --trusted-ref <ref> --concurrency-group <group>]
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts inspect <workflow> <terminal-job> --trigger <push|workflow_dispatch> [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode stateful --environment <env> --trusted-ref <ref> --concurrency-group <group>]
 ```
 
 TestEngineer/DevOps author the test/resource contract and transitive consumer coverage inside the approved work items; independent planning review checks it. Keep full required commands in `gate_profiles`; diagnostic filters never replace them. Missing impact coverage falls back to full tests. Do not retrofit frozen RUN manifests.
@@ -229,12 +229,10 @@ It needs a clean checkout (`BASE_PROBE_REQUIRES_CLEAN_CHECKOUT`), runs the compl
 Before presenting owner approval run the **same executable contract that RUN will depend on**, while no state exists yet:
 
 ```text
-stage-cli.ts plan-run-preflight .tmp/pipelines/{run-id}/manifest.json --environment
-git-worktree-cli.ts adopt .tmp/pipelines/{run-id}/manifest.json
-git-worktree-cli.ts verify .tmp/pipelines/{run-id}/manifest.json
+stage-cli.ts plan-check .tmp/pipelines/{run-id}/manifest.json
 ```
 
-All three must PASS. `plan-run-preflight` accepts only schema version 2. `verify` must prove that the complete current branch diff is either the frozen preserved baseline or inside writable `allowed_change_paths`; do not defer a baseline/scope mismatch until RUN. Preflight verifies planning evidence hashes, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Before `init`, deterministic manifest corrections remain the same draft/run-id and are simply revalidated; after `init`, use the trusted revise-plan lifecycle until implementation starts; after first implementation start, never mutate that manifest.
+It runs `plan-run-preflight --environment`, `git-worktree-cli.ts adopt` and `git-worktree-cli.ts verify` in that order, stops at the first failure and names it (`failed_step`). All three must PASS. `plan-run-preflight` accepts only schema version 2. `verify` must prove that the complete current branch diff is either the frozen preserved baseline or inside writable `allowed_change_paths`; do not defer a baseline/scope mismatch until RUN. Preflight verifies planning evidence hashes, frozen work items, project policy/conflict serialization, explicit executor coverage, GitHub gate/bootstrap contracts and package-manager contract only for `local_gate`. Before `init`, deterministic manifest corrections remain the same draft/run-id and are simply revalidated; after `init`, use the trusted revise-plan lifecycle until implementation starts; after first implementation start, never mutate that manifest.
 
 ## Preservation, migration and replan
 
@@ -259,15 +257,10 @@ For a new PLAN or owner-contract-changing revision, present gate readiness, bran
 Only AFTER a separate explicit owner message approving this exact v2 manifest/run ID, with every owner decision resolved and every required planning gate `ready`, run:
 
 ```text
-stage-cli.ts plan-run-preflight .tmp/pipelines/{run-id}/manifest.json --environment
-git-worktree-cli.ts adopt .tmp/pipelines/{run-id}/manifest.json
-git-worktree-cli.ts verify .tmp/pipelines/{run-id}/manifest.json
-stage-cli.ts init .tmp/pipelines/{run-id}/manifest.json
-stage-cli.ts approve {run-id}
-node $HOME/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs sync {run-id}
-stage-cli.ts validate {run-id} --json
-stage-cli.ts next {run-id} --json
+stage-cli.ts plan-start .tmp/pipelines/{run-id}/manifest.json
 ```
+
+It runs `plan-check`, then `init`, `approve`, the GitHub sync, `validate` and `next`, in that order, and stops at the first failure with `failed_step`.
 
 The initial PLAN invocation never runs init/approve. `--unattended` and reviewer approval are not owner approval. Approval sync for Issue runs must finish with `pending=0`. GitHub audit delivery is event-oriented, not a sticky-status comment: `init` queues a separate `created -> planned` event for every mapped pipeline and `approve` queues a separate `planned -> approved` event. `pipeline-github-sync` posts each distinct event as its own idempotent Issue comment; it does not edit the previous comment, and one Issue mapped to several pipelines may therefore receive several audit comments from one PLAN approval sequence.
 

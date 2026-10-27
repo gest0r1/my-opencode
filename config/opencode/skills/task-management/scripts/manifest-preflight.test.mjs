@@ -166,3 +166,38 @@ test('rejects unsafe or unfrozen uv forms identically', async () => {
     );
   }
 });
+
+test('manifest-refresh takes work-item and artifact hashes from disk but never refreshes a reviewed gate artifact', async () => {
+  const { refreshManifestHashes } = await import('./manifest-refresh.mjs');
+  const { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } = await import('node:fs');
+  const { createHash } = await import('node:crypto');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const hash = (text) => createHash('sha256').update(text).digest('hex');
+  const root = mkdtempSync(join(tmpdir(), 'manifest-refresh-'));
+  try {
+    mkdirSync(join(root, 'work-items')); mkdirSync(join(root, 'planning'));
+    writeFileSync(join(root, 'work-items/wi.json'), '{"id":"wi","v":2}\n');
+    writeFileSync(join(root, 'decision-register.md'), '# decisions v2\n');
+    writeFileSync(join(root, 'planning/architecture.md'), '# arch\n');
+    const manifest = {
+      run_id: 'r', work_items: [{ id: 'wi', pipeline_id: 'app', path: 'work-items/wi.json', sha256: hash('{"id":"wi","v":1}\n') }],
+      planning_readiness: { gates: { architecture: { artifact: { path: 'planning/architecture.md', sha256: hash('# arch\n') } } },
+        required_artifacts: { decision_register: { path: 'decision-register.md', sha256: hash('# decisions v2\n') } } },
+    };
+    const file = join(root, 'manifest.json');
+    writeFileSync(file, JSON.stringify(manifest));
+    let result = refreshManifestHashes(file, { check: true });
+    assert.equal(result.status, 'STALE');
+    assert.deepEqual(result.updated.map((item) => item.field), ['work_items.wi']);
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).work_items[0].sha256, hash('{"id":"wi","v":1}\n'));
+    result = refreshManifestHashes(file);
+    assert.equal(result.status, 'PASS');
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).work_items[0].sha256, hash('{"id":"wi","v":2}\n'));
+    assert.equal(refreshManifestHashes(file, { check: true }).status, 'PASS');
+    writeFileSync(join(root, 'planning/architecture.md'), '# arch edited after review\n');
+    assert.throws(() => refreshManifestHashes(file), /GATE_ARTIFACT_CHANGED_AFTER_REVIEW: planning_readiness\.gates\.architecture\.artifact/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

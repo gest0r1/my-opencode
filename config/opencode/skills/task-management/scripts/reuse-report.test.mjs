@@ -41,3 +41,18 @@ test('agent reuse, background children and runtime changes are reported apart fr
   assert.deepEqual(summary.runtime, { reload_required: 1, changed_during_run: 0 });
   assert.equal(summary.gates['advisory:affected'].reused, 1);
 });
+
+test('token and cost usage is summed per role and model from per-session deltas', () => {
+  const summary = summarize([
+    { event: 'subagent_complete', role: 'CodeReviewer', usage: { model: 'go/deepseek', input: 100, output: 10, reasoning: 5, cache_read: 50, cache_write: 0, cost: 0.02 },
+      parent_usage: { model: 'go/opus', input: 1000, output: 20, reasoning: 0, cache_read: 900, cache_write: 10, cost: 0.1 } },
+    { event: 'subagent_complete', role: 'CodeReviewer', usage: { model: 'go/deepseek', input: 40, output: 4, reasoning: 0, cache_read: 0, cache_write: 0, cost: 0.01 }, parent_usage: null },
+    { event: 'subagent_complete', role: 'CoderAgent', background: true, usage: null },
+    { event: 'background_child_settled', role: 'CoderAgent', usage: { model: 'go/kimi', input: 7, output: 3, reasoning: 0, cache_read: 0, cache_write: 0, cost: 0 } },
+  ]);
+  assert.deepEqual(summary.usage.by_role.CodeReviewer, { input: 140, output: 14, reasoning: 5, cache_read: 50, cache_write: 0, cost: 0.03 });
+  assert.equal(summary.usage.by_role.OpenStageOrchestrator.input, 1000);
+  assert.equal(summary.usage.by_role.CoderAgent.output, 3);
+  assert.equal(summary.usage.by_model['go/deepseek'].input, 140);
+  assert.equal(summary.usage.total.input, 1147);
+});

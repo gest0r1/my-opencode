@@ -143,7 +143,7 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   assert.equal(baselinePacket.advisory_checks[0].work_item_id,'wi-p');
   assert.match(baselinePacket.advisory_checks[0].baseline_path,/^checks\/baselines\//);
   assert.match(baselinePacket.advisory_checks[0].baseline_sha256,/^[0-9a-f]{64}$/);
-  assert.equal(baselinePacket.advisory_checks[0].command,`npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts ${baselinePacket.run_id} ${baselinePacket.pipeline_id} local-test --advisory --affected --work-item wi-p --baseline ${baselinePacket.advisory_checks[0].baseline_path} --baseline-sha256 ${baselinePacket.advisory_checks[0].baseline_sha256}`);
+  assert.equal(baselinePacket.advisory_checks[0].command,`$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts ${baselinePacket.run_id} ${baselinePacket.pipeline_id} local-test --advisory --affected --work-item wi-p --baseline ${baselinePacket.advisory_checks[0].baseline_path} --baseline-sha256 ${baselinePacket.advisory_checks[0].baseline_sha256}`);
   assert.match(baselinePacket.advisory_checks[0].focus_command,/gate-runner-cli\.ts \S+ \S+ local-test --advisory --command-index /);
   assert.equal(baselinePacket.advisory_checks[0].frozen_commands[0].index,0);
   await assert.rejects(dispatchPacket(root,'runtime-test','p','implementation','wi-p','TestEngineer'),/WORK_ITEM_ROLE_MISMATCH/);
@@ -286,12 +286,12 @@ test('runtime preflight forwards selected research roles and checks their effect
  const root = await tempProject();
  try {
   const registered = new Map();
-  const ids = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist', 'WebResearcher'];
+  const ids = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'QuickReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist', 'WebResearcher'];
   let denied = false;
   const parent = {id:'OpenStageOrchestrator', mode:'primary', permissions:[
     ...ids.map(resource => ({action:'subagent', resource, effect:'allow'})),
     {action:'bash',resource:'*',effect:'deny'},
-    {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*',effect:'allow'},
+    {action:'bash',resource:'$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*',effect:'allow'},
   ]};
   await runtime.setup({location:{directory:root},
    tool:{hook:async()=>{}, transform:async fn=>fn({add:t=>registered.set(t.name,t)}),
@@ -300,12 +300,12 @@ test('runtime preflight forwards selected research roles and checks their effect
    agent:{list:async()=>({data:[parent,...ids.map(id=>({id,mode:'subagent',permissions:[
     ...(['CoderAgent','TestEngineer','GateRunner'].includes(id) ? [
       {action:'bash',resource:'*',effect:'deny'},
-      {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*',effect:'allow'},
+      {action:'bash',resource:'$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*',effect:'allow'},
     ] : []),
     ...(id === 'TestEngineer' ? [{action:'bash',resource:'pytest *',effect:'allow'}] : []),
     ...(id === 'OpenDevopsSpecialist' ? [
       {action:'bash',resource:'*',effect:'deny'},
-      {action:'bash',resource:'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *',effect:'allow'},
+      {action:'bash',resource:'$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *',effect:'allow'},
     ] : []),
     {action:'webfetch',resource:'*',effect:denied?'deny':'allow'}, {action:'gh_grep_*',resource:'*',effect:'allow'}]}))]})},
    skill:{list:async()=>({data:[{name:'task-management'}]})},

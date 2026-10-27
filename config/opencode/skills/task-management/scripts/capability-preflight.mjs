@@ -1,13 +1,11 @@
-const WORKERS = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
+const WORKERS = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'QuickReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
 
 const RESEARCH_ROLES = new Set(['ExternalScout', 'WebResearcher', 'ArchitectureAnalyzer', 'CoderAgent', 'CodeReviewer', 'SeniorTechnicalPlanReviewer']);
 const STAGE_COMPLETE_INVOCATIONS = [
-  'npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts complete RUN STAGE --pipeline PIPELINE',
-  'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts complete RUN STAGE --pipeline PIPELINE',
+  '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts complete RUN STAGE --pipeline PIPELINE',
 ];
 const ADVISORY_RUNNER_INVOCATIONS = [
-  'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected',
-  'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected',
+  '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected',
 ];
 const TEST_DIAGNOSTIC_INVOCATIONS = [
   'npx vitest run example.test.ts',
@@ -25,15 +23,13 @@ const RUNTIME_DIAGNOSTIC_REQUIREMENTS = [
   {
     name: 'http',
     invocations: [
-      'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts http-get https://example.invalid/health',
-      'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts http-get https://example.invalid/health',
+      '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts http-get https://example.invalid/health',
     ],
   },
   {
     name: 'postgres',
     invocations: [
-      'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts postgres-compose --project demo --compose-file compose.yml --service db --query SELECT 1',
-      'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts postgres-compose --project demo --compose-file compose.yml --service db --query SELECT 1',
+      '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts postgres-compose --project demo --compose-file compose.yml --service db --query SELECT 1',
     ],
   },
 ];

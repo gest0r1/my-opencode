@@ -118,7 +118,7 @@ the current worktree repository from `origin` and reads every requested Issue
 through the authenticated deterministic reader:
 
 ```text
-npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts \
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts \
   fetch <run-id> <issue-number>...
 ```
 
@@ -144,7 +144,7 @@ The reader:
 Read full bodies/comments without modifying the saved source material via:
 
 ```text
-npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-issue-cli.ts \\
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts \\
   show <run-id> [issue-number...]
 ```
 
@@ -237,7 +237,7 @@ Release packaging is outside candidate validation. If the target project has a r
 After the GitHub-backed run is fully completed, OpenStage invokes only:
 
 ```text
-npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts \
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts \
   create <run-id>
 ```
 

@@ -72,7 +72,7 @@ test('agent completion requires bound PASS and only invalidates on work-item sco
   await writeFile(path.join(fx.root, 'src', 'a', 'a.ts'), 'export const a = 2;\n');
   await assert.rejects(verifyAgentAdvisoryCompletion(fx.root, args), error => {
     assert.match(error.message, /ADVISORY_PASS_REQUIRED/);
-    assert.ok(error.message.includes(`rerun via GateRunner: npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts ${fx.runId} app tests --advisory --affected --work-item wi-1 --baseline checks/baselines/wi-1.json --baseline-sha256 ${sha(baselineRaw)}`), error.message);
+    assert.ok(error.message.includes(`rerun via GateRunner: $HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts ${fx.runId} app tests --advisory --affected --work-item wi-1 --baseline checks/baselines/wi-1.json --baseline-sha256 ${sha(baselineRaw)}`), error.message);
     return true;
   });
 

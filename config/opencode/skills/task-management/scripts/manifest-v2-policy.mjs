@@ -451,9 +451,27 @@ export function validatePlanProbes(manifest, { manifestPath, cwd = process.cwd()
     const repaired = candidates.some((probe) => probe.status === 'FAIL') && profileHasBaselineRepairItem(manifest, runDirectory, target.profile);
     if (!passed && !repaired) {
       const state = candidates.length ? `latest probe status ${candidates.map((probe) => String(probe.status)).join('/')} does not pass` : 'no current probe';
-      throw new ManifestV2PolicyError(`PLAN_PROBE_REQUIRED: ${target.pipeline_id}/${target.gate}: ${state}; run on the clean checkout: npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts --plan-probe ${manifestPath ?? `.tmp/pipelines/${manifest.run_id}/manifest.json`} ${target.pipeline_id} ${target.gate}`);
+      throw new ManifestV2PolicyError(`PLAN_PROBE_REQUIRED: ${target.pipeline_id}/${target.gate}: ${state}; run on the clean checkout: $HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts --plan-probe ${manifestPath ?? `.tmp/pipelines/${manifest.run_id}/manifest.json`} ${target.pipeline_id} ${target.gate}`);
     }
   }
+}
+
+// release: the version PLAN took from the milestone name (github-issue-cli milestone). rc_tags turns on
+// vX.Y.Z-rc.N tags at publication; it stays off until the project's dev installer accepts them.
+function validateRelease(manifest) {
+  if (manifest.release === undefined) return;
+  const release = manifest.release;
+  if (!release || typeof release !== 'object' || !/^\d+\.\d+\.\d+$/.test(String(release.version ?? '')) ||
+      !release.milestone || !Number.isInteger(release.milestone.number) || typeof release.milestone.title !== 'string' ||
+      (release.rc_tags !== undefined && typeof release.rc_tags !== 'boolean')) {
+    throw new ManifestV2PolicyError('release must be {version: "X.Y.Z", milestone: {number, title}, rc_tags?: boolean}');
+  }
+}
+
+// deploy_target: the owner's dev contour key for the root helper opencode-deploy-target (svd1 by default).
+function validateDeployTarget(manifest) {
+  if (manifest.deploy_target === undefined) return;
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(String(manifest.deploy_target))) throw new ManifestV2PolicyError('deploy_target must be a contour key like svd1');
 }
 
 function validateSourceRequirements(manifest) {
@@ -950,6 +968,8 @@ export function validateManifestV2Policy(manifest, options = {}) {
   validateGithubExecutionContract(manifest);
   validateTestRework(manifest);
   validateSourceRequirements(manifest);
+  validateRelease(manifest);
+  validateDeployTarget(manifest);
   assertConflictSerialization(manifest);
   const projectPolicy = validateProjectPolicy(manifest, cwd);
   const usesOpenCodeHost = (manifest.pipelines ?? []).some((pipeline) =>

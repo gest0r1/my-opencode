@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+const USAGE_KEYS = ['input', 'output', 'reasoning', 'cache_read', 'cache_write', 'cost'];
+const emptyUsage = () => Object.fromEntries(USAGE_KEYS.map(key => [key, 0]));
 export function summarize(events) {
   const rows = events.filter(e => e.event === 'subagent_complete');
   const groups = {};
@@ -36,7 +38,20 @@ export function summarize(events) {
     reload_required: events.filter(e => e.event === 'runtime_version' && e.runtime_reload_required).length,
     changed_during_run: events.filter(e => e.event === 'runtime_version' && e.runtime_changed_during_run).length,
   };
-  return { schema_version: 2, groups, agents, fallback_reasons: reasons, gates, runtime,
+  // Token and cost per role: events carry per-session deltas, so plain sums are exact. The
+  // orchestrator's own spend comes from parent_usage on each child completion.
+  const usage = { by_role: {}, by_model: {}, total: emptyUsage() };
+  const addUsage = (role, delta) => {
+    if (!delta) return;
+    for (const bucket of [usage.by_role[role] ??= emptyUsage(), usage.by_model[delta.model ?? 'unknown'] ??= emptyUsage(), usage.total]) {
+      for (const key of USAGE_KEYS) bucket[key] += Number(delta[key] ?? 0);
+    }
+  };
+  for (const e of events) {
+    if (['subagent_complete', 'background_child_settled'].includes(e.event)) addUsage(e.role ?? 'unknown', e.usage);
+    if (e.event === 'subagent_complete') addUsage('OpenStageOrchestrator', e.parent_usage);
+  }
+  return { schema_version: 3, groups, agents, fallback_reasons: reasons, gates, runtime, usage,
     parent: {
       tool_calls: events.filter(e => e.event === 'parent_tool').length,
       read_bytes: events.filter(e => e.event === 'parent_read').reduce((a, e) => a + Number(e.bytes_read ?? 0), 0),
@@ -53,13 +68,14 @@ export function exportReport(runId, output) {
   const readLines = file => { try { return fs.readFileSync(path.join(root, file), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch (error) { if (error.code === 'ENOENT') return []; throw error; } };
   const events = [...readLines('reuse-metrics/events.jsonl'), ...readLines('reuse-metrics/gates.jsonl')];
   // Explicit allowlist prevents prompts, source contents, credentials and raw tool outputs entering export.
-  const allowed = ['timestamp', 'event', 'identity', 'run_id', 'pipeline_id', 'stage', 'role', 'work_item_id', 'loop', 'decision', 'fallback_reason', 'session_health', 'latency_ms', 'orientation_ms', 'prompt_bytes', 'response_bytes', 'parent_response_bytes', 'packet_bytes', 'tool_calls', 'read_calls', 'grep_calls', 'glob_calls', 'edit_calls', 'shell_calls', 'unique_files_read', 'reread_file_count', 'context_reread_ratio', 'bytes_read', 'tool', 'context_bytes', 'model_requests', 'model', 'gate', 'purpose', 'mode', 'status', 'duration_ms', 'commands_run', 'reused', 'background', 'runtime_reload_required', 'runtime_changed_during_run'];
+  const allowed = ['timestamp', 'event', 'identity', 'run_id', 'pipeline_id', 'stage', 'role', 'work_item_id', 'loop', 'decision', 'fallback_reason', 'session_health', 'latency_ms', 'orientation_ms', 'prompt_bytes', 'response_bytes', 'parent_response_bytes', 'packet_bytes', 'tool_calls', 'read_calls', 'grep_calls', 'glob_calls', 'edit_calls', 'shell_calls', 'unique_files_read', 'reread_file_count', 'context_reread_ratio', 'bytes_read', 'tool', 'context_bytes', 'model_requests', 'model', 'gate', 'purpose', 'mode', 'status', 'duration_ms', 'commands_run', 'reused', 'background', 'runtime_reload_required', 'runtime_changed_during_run', 'usage', 'parent_usage'];
   const safe = events.map(e => Object.fromEntries(allowed.filter(k => k in e).map(k => [k, e[k]])));
   const summary = summarize(safe);
   fs.mkdirSync(output, { recursive: true });
   fs.writeFileSync(path.join(output, 'events.jsonl'), safe.map(e => JSON.stringify(e)).join('\n') + '\n');
   fs.writeFileSync(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
   fs.writeFileSync(path.join(output, 'summary.csv'), 'decision,calls,failures,latency_ms,prompt_bytes,response_bytes,parent_response_bytes,read_calls,context_bytes,model_requests\n' + Object.entries(summary.groups).map(([k,v]) => [k,...Object.values(v)].join(',')).join('\n') + '\n');
+  fs.writeFileSync(path.join(output, 'usage.csv'), `role,${USAGE_KEYS.join(',')}\n` + Object.entries(summary.usage.by_role).map(([k, v]) => [k, ...USAGE_KEYS.map(key => v[key])].join(',')).join('\n') + '\n');
   fs.writeFileSync(path.join(output, 'gates.csv'), 'purpose_mode,runs,reused,interrupted,failed,duration_ms,commands_run\n' + Object.entries(summary.gates).map(([k,v]) => [k,...Object.values(v)].join(',')).join('\n') + '\n');
   return summary;
 }

@@ -26,6 +26,8 @@ const aliases = new Map(Object.entries({
   reviewer: 'CodeReviewer',
   'findings-reviewer': 'FindingsReviewer',
   findingsreviewer: 'FindingsReviewer',
+  'quick-reviewer': 'QuickReviewer',
+  quickreviewer: 'QuickReviewer',
   buildagent: 'BuildAgent',
   'build-agent': 'BuildAgent',
   batchexecutor: 'BatchExecutor',

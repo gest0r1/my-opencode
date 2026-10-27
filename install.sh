@@ -41,7 +41,7 @@ reexec_as_runtime_user() {
   [[ "$provision_sha" =~ ^[a-f0-9]{40}$ ]] || exit 1
   provision_dir="$(mktemp -d /tmp/my-opencode-provision.XXXXXXXX)"
   chmod 755 "$provision_dir"
-  for file in provision-runtime-user.sh setup-opencode-package-sudo.sh; do
+  for file in provision-runtime-user.sh setup-opencode-package-sudo.sh setup-opencode-deploy-sudo.sh; do
     gh api -H 'Accept: application/vnd.github.raw' \
       "repos/$provision_repo/contents/scripts/$file?ref=$provision_sha" > "$provision_dir/$file"
     chmod 755 "$provision_dir/$file"
