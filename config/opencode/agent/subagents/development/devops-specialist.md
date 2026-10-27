@@ -12,8 +12,10 @@ permission:
   bash:
     "*": deny
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *": allow
     "docker compose ps *": allow
     "docker ps *": allow

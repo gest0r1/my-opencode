@@ -10,30 +10,43 @@ permission:
   bash:
     "*": deny
     "sudo -n /usr/local/sbin/opencode-install-packages*": ask
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*": deny
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*": deny
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*": deny
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts supersede*": deny
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts supersede*": deny
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts supersede*": deny
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-replan-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-replan-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-replan-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
     "node $HOME/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow

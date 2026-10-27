@@ -43,7 +43,7 @@ function coderScope(item: any, effectiveScope: string[]): string[] {
   return checkedScope(item.allowed_change_paths, effectiveScope);
 }
 
-const GATE_RUNNER = 'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts';
+const GATE_RUNNER = '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts';
 
 function affectedAdvisoryChecks(manifest: any, pipeline: any, role: string) {
   if (role !== 'CoderAgent' || typeof pipeline?.profile !== 'string' || !pipeline.profile) return [];

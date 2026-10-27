@@ -7,6 +7,7 @@ temperature: 0
 permission:
   bash:
     "*": deny
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "bash $HOME/.config/opencode/skills/task-management/router.sh complete*": allow
@@ -97,7 +98,7 @@ gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected \
   --baseline-sha256 BASELINE_SHA256
 ```
 
-Keep the literal `npx --yes tsx $HOME/.config/opencode/...` prefix: never expand `$HOME`,
+Keep the literal `$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/...` prefix: never expand `$HOME`,
 rewrite the path, prepend `cd`/env or reorder arguments, because the bash allowlist matches the
 exact text. Do not substitute another baseline, guess a profile/dependency graph/test command,
 or edit machine evidence. The baseline was captured at this dispatch and its frozen work-item

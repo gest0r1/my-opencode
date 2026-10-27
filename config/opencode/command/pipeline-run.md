@@ -280,7 +280,7 @@ Issue audit comments are append-only **per distinct pipeline lifecycle event**. 
 After every frozen stage is completed and `git-worktree-cli publish` produced PASS `candidate.json`, create/update the one delivery PR only through:
 
 ```text
-npx --yes tsx /root/.config/opencode/skills/task-management/scripts/github-pr-cli.ts create <run-id>
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts create <run-id>
 ```
 
 The deterministic PR boundary verifies frozen repository, completed Issue mapping, non-default candidate branch, `candidate_sha == remote_sha`, and that every deployable pipeline's frozen `deployment_validation.stage` has PASS evidence for that **same final cumulative candidate SHA**; it writes close keywords for completed Issues and requires PR-link outbox `pending=0`. Never use free-form `gh pr create`, `gh api` or merge commands. Owner merges manually.
