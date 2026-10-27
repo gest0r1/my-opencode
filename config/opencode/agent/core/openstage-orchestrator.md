@@ -10,6 +10,7 @@ permission:
   bash:
     "*": deny
     "sudo -n /usr/local/sbin/opencode-install-packages*": ask
+    "sudo -n /usr/local/sbin/opencode-deploy-target *": ask
     "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow

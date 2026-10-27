@@ -145,7 +145,7 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
    Build a capability matrix and present exactly three owner choices with an advisory recommendation:
    1. `github` — local fail-fast first, then final GitHub CI; no OpenCode-host CD stage;
    2. `opencode_host` — local fail-fast, final GitHub CI, then the existing trusted GitHub-driven stateful `github_dev` CD to the OpenCode host; this special mode requires the READY deployment-target probe;
-   3. `hybrid` — local fail-fast, final GitHub CI, then a frozen post-CI `local_gate` installs/updates the exact `candidate_sha` on the OpenCode/dev host and runs smoke; owner acceptance is added only when requested.
+   3. `hybrid` — local fail-fast, final GitHub CI, then a frozen post-CI `local_gate` installs/updates the exact `candidate_sha` on the OpenCode/dev host and runs smoke; owner acceptance is added only when requested. Freeze the dev contour as `deploy_target` (default `svd1`; another key only when the owner named it). The install itself is done by the root helper `opencode-deploy-target`, so that `local_gate` holds only the post-install checks (installed version, smoke).
 
    In the same question ask the GitHub CI mode and freeze it per deployable pipeline as `github_ci_mode`: `required` (default; an infrastructure blocker stops for the owner), `optional` (CI runs; if GitHub does not start it — billing, spending limit, no runner — the stage is skipped with a ⚠ warning and RUN continues; a code failure still blocks), or `off` (no `github_ci` stage; `deployment_validation.stage` is the authoritative local `ci-parity`/`fail-fast` `local_gate`). Recommend `optional` on a free GitHub plan and `required` for release branches.
 

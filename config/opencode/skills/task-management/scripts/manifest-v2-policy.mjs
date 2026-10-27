@@ -468,6 +468,12 @@ function validateRelease(manifest) {
   }
 }
 
+// deploy_target: the owner's dev contour key for the root helper opencode-deploy-target (svd1 by default).
+function validateDeployTarget(manifest) {
+  if (manifest.deploy_target === undefined) return;
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(String(manifest.deploy_target))) throw new ManifestV2PolicyError('deploy_target must be a contour key like svd1');
+}
+
 function validateSourceRequirements(manifest) {
   if (manifest.source_type !== 'github_issues') return;
   if (!SHA256.test(String(manifest.source_requirements_sha256 ?? ''))) {
@@ -963,6 +969,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
   validateTestRework(manifest);
   validateSourceRequirements(manifest);
   validateRelease(manifest);
+  validateDeployTarget(manifest);
   assertConflictSerialization(manifest);
   const projectPolicy = validateProjectPolicy(manifest, cwd);
   const usesOpenCodeHost = (manifest.pipelines ?? []).some((pipeline) =>
