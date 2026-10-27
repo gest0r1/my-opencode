@@ -164,7 +164,7 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
 stage-cli.ts artifacts {run-id} <run-relative-path>... --json
 ```
 
-Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum` or model-computed hashes.
+Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum` or model-computed hashes. After any work item, required artifact or carried-findings file changes, run `stage-cli.ts manifest-refresh .tmp/pipelines/{run-id}/manifest.json` instead of editing hashes: it rewrites those SHA-256 values from disk and refuses (`GATE_ARTIFACT_CHANGED_AFTER_REVIEW`) when a reviewed gate artifact changed, which needs `plan-review` again. `plan-check` fails on a stale hash, so run `manifest-refresh --check` first when unsure.
 
 
 For GitHub Issue sourced PLANs, after all required planning gates and deterministic preflight pass and the owner explicitly approves the design freeze, publish the frozen Story/Architecture comments idempotently:

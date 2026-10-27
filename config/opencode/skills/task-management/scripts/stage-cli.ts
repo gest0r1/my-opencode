@@ -14,6 +14,7 @@ import { freezeGateTesting } from './gate-testing-freeze.mjs';
 import { runGenerator } from './generator-cli.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { validateOwnerAmendmentForApply } from './owner-amendment-policy.ts';
+import { refreshManifestHashes } from './manifest-refresh.mjs';
 
 function stateRootFromArgs(args: string[]): string {
   const index = args.indexOf('--state-root');
@@ -378,6 +379,15 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
 async function main(args: string[]): Promise<void> {
   const [command, identifier] = args;
   if (command === 'plan-check' || command === 'plan-start') return planSequence(command, identifier, args);
+  if (command === 'manifest-refresh') {
+    if (!identifier || args.slice(2).some(arg => arg !== '--check')) throw new Error('usage: stage-cli manifest-refresh <manifest.json> [--check]');
+    const state = join(dirname(resolve(identifier)), 'state.json');
+    if (await readFile(state, 'utf8').then(() => true, () => false)) throw new Error('MANIFEST_FROZEN: the run is initialized; amend it through revise-plan or an owner amendment');
+    const result = refreshManifestHashes(identifier, { check: args.includes('--check') });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.status !== 'PASS') process.exitCode = 1;
+    return;
+  }
   if (command === 'dispatch') {
     if (!identifier) throw new Error('run-id is required');
     const allowed = new Set(['--pipeline', '--stage', '--work-item', '--role']);

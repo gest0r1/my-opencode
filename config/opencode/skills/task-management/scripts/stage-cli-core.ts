@@ -2578,6 +2578,7 @@ function usage(): string {
     '  stage-cli rules [rules-file] [--json]',
     '  stage-cli preflight <manifest> [--environment] [--json]',
     '  stage-cli plan-run-preflight <manifest> [--environment] [--json]',
+    '  stage-cli manifest-refresh <manifest> [--check]   (SHA-256 of work items and planning artifacts from disk; before init only)',
     '  stage-cli plan-check <manifest> [--state-root <path>]   (plan-run-preflight + adopt + verify)',
     '  stage-cli plan-start <manifest> [--state-root <path>]   (plan-check + init + approve + sync + validate + next)',
     '  stage-cli artifacts <run-id> <run-relative-path>... [--state-root <path>] [--json]',
