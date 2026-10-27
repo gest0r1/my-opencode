@@ -321,6 +321,16 @@
       "tags": ["review", "findings", "delta"],
       "dependencies": []
     },
+    "quick-reviewer": {
+      "id": "quick-reviewer",
+      "name": "QuickReviewer",
+      "category": "subagents/code",
+      "type": "subagent",
+      "version": "1.0.0",
+      "author": "opencode",
+      "tags": ["review", "quick"],
+      "dependencies": []
+    },
     "build-agent": {
       "id": "build-agent",
       "name": "BuildAgent",

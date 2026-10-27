@@ -69,6 +69,7 @@ test('runner executes an approved argv command without a shell and records evide
   assert.equal(evidence.results[0].executable, 'bash');
   assert.deepEqual(evidence.results[0].argv, ['-n', 'check.sh']);
   assert.equal(evidence.results[0].exit_code, 0);
+  assert.equal(evidence.heavy_slot, true);
 });
 
 test('runner rejects shell composition before any command is executed', async () => {

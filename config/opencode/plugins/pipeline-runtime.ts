@@ -134,6 +134,26 @@ function registryPath(root: string, runID: string) {
 function metricsFile(root: string, runID: string) {
   return path.join(root, ".tmp", "pipelines", runID, "reuse-metrics", "events.jsonl")
 }
+type UsageTotals = { input: number; output: number; reasoning: number; cache_read: number; cache_write: number; cost: number }
+// OpenCode reports a session's tokens and cost as running totals. A resumed child keeps adding to
+// the same totals, so the run stores the last totals seen per session and each event carries only
+// the difference: summing events per role never counts a resumed session twice.
+function usageDelta(root: string, runID: string, sessionID: string, info: any) {
+  const tokens = info?.tokens
+  if (!tokens || typeof tokens.input !== "number") return null
+  const totals: UsageTotals = { input: tokens.input, output: tokens.output ?? 0, reasoning: tokens.reasoning ?? 0,
+    cache_read: tokens.cache?.read ?? 0, cache_write: tokens.cache?.write ?? 0, cost: Number(info.cost ?? 0) }
+  const file = path.join(root, ".tmp", "pipelines", runID, "reuse-metrics", "usage-baseline.json")
+  let seen: Record<string, UsageTotals> = {}
+  try { seen = JSON.parse(fs.readFileSync(file, "utf8")) } catch {}
+  const key = sha256(sessionID).slice(0, 24)
+  const before = seen[key]
+  seen[key] = totals
+  ensureDir(path.dirname(file)); fs.writeFileSync(file, JSON.stringify(seen))
+  const delta = Object.fromEntries(Object.entries(totals).map(([name, value]) =>
+    [name, Math.max(0, value - (before?.[name as keyof UsageTotals] ?? 0))])) as UsageTotals
+  return { model: info.model ? `${info.model.providerID}/${info.model.id}` : null, ...delta }
+}
 function safeHandoffPart(value: string) {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "")
   return (normalized || "item").slice(0, 96)
@@ -374,14 +394,16 @@ export default Plugin.define({
       if (timeoutMs === undefined) return done
       return Promise.race([done, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))])
     }
-    const settleBackground = (runID: string, key: string, childID: string, idle: boolean) => {
+    const settleBackground = async (runID: string, key: string, childID: string, idle: boolean) => {
       const registry = loadRegistry(root, runID)
       const entry = registry.find((item) => identity(item as RuntimeContext) === key && item.session_id === childID)
       if (!entry || entry.status !== "background") return
       entry.status = idle ? "healthy" : "error"; entry.updated_at = new Date().toISOString()
       saveRegistry(root, runID, registry)
+      let info: any
+      try { info = await plugin.session.get({ sessionID: childID as any }); info = info?.data ?? info } catch {}
       appendJsonLine(metricsFile(root, runID), { timestamp: entry.updated_at, event: "background_child_settled",
-        identity: key, run_id: runID, session_health: entry.status })
+        identity: key, run_id: runID, role: entry.role, session_health: entry.status, usage: usageDelta(root, runID, childID, info) })
     }
     // Orchestrator wake: OpenStage sessions running a RUN, their running background children and
     // the state fingerprint at the last wake (one wake per fingerprint).
@@ -742,8 +764,14 @@ export default Plugin.define({
         previous.status = "error"; previous.updated_at = now; saveRegistry(root, ctx.run_id, registry)
       }
 
+      const sessionInfo = async (sessionID: string) => {
+        try { const info: any = await plugin.session.get({ sessionID: sessionID as any }); return info?.data ?? info } catch { return undefined }
+      }
+      // A background child is still working at this point; its usage is recorded when it settles.
+      const usage = childID && !background ? usageDelta(root, ctx.run_id, childID, await sessionInfo(childID)) : null
+      const parentUsage = event.sessionID ? usageDelta(root, ctx.run_id, String(event.sessionID), await sessionInfo(String(event.sessionID))) : null
       appendJsonLine(metricsFile(root, ctx.run_id), {
-        timestamp: now, event: "subagent_complete", identity: identity(ctx, role), call_id: callID, background,
+        timestamp: now, event: "subagent_complete", identity: identity(ctx, role), call_id: callID, background, role, usage, parent_usage: parentUsage,
         decision: invocation.decision, fallback_reason: invocation.fallback_reason ?? null,
         session_id: childID || null, session_health: event.status !== "completed" ? "error" : background ? "background" : "healthy",
         latency_ms: Date.now() - invocation.started_at,

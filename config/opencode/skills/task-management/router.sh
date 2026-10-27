@@ -95,14 +95,18 @@ if [ $# -eq 0 ]; then
 fi
 
 PROJECT_ROOT="$(find_project_root)"
+# The task CLI runs on the installer-owned tsx, so a broken or missing
+# node_modules in the project cannot stop the commands that repair it.
+TSX="$HOME/.config/opencode/node_modules/.bin/tsx"
+[[ -x "$TSX" ]] || { echo "Pipeline tsx missing: $TSX (re-run the installer)" >&2; exit 1; }
 
 # Route commands
 case "$1" in
   migrate)
-    cd "$PROJECT_ROOT" && npx --yes tsx "$MIGRATE_SCRIPT" "$@"
+    cd "$PROJECT_ROOT" && "$TSX" "$MIGRATE_SCRIPT" "$@"
     ;;
   *)
     # Run the task CLI with all arguments
-    cd "$PROJECT_ROOT" && npx --yes tsx "$CLI_SCRIPT" "$@"
+    cd "$PROJECT_ROOT" && "$TSX" "$CLI_SCRIPT" "$@"
     ;;
 esac

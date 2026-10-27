@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 let reviewSequence = 0;
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, writeFile, unlink, symlink } from 'node:fs/promises';
@@ -195,6 +195,32 @@ test('FindingsReviewer only re-checks issued findings, and a review stage closes
   assert.notEqual(result.status, 0); assert.match(result.stderr, /REVIEW_CLOSING_FULL_REQUIRED: app\/code-review/);
   result = dispatch('code-review', 'CodeReviewer'); assert.equal(result.status, 0, result.stderr);
   result = complete('code-review'); assert.equal(result.status, 0, result.stderr);
+});
+
+test('advance completes a stage, starts the next stage that needs no preparation and leaves the rest waiting', async () => {
+  const fx = await fixture('advance-run', ['implementation', 'second-review', 'verify'], { implementation: 'agent', 'second-review': 'review', verify: 'git_verify' });
+  const advance = (stage) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'), 'advance', fx.runId, stage, '--pipeline', 'app'],
+    { cwd: fx.root, encoding: 'utf8', env: process.env });
+  let result = advance('implementation');
+  assert.equal(result.status, 0, result.stderr);
+  let out = JSON.parse(result.stdout);
+  assert.deepEqual(out.completed, { pipeline_id: 'app', stage: 'implementation' });
+  assert.deepEqual(out.started, [{ pipeline_id: 'app', stage: 'second-review', executor: 'review' }]);
+  assert.deepEqual(out.waiting, []);
+  assert.equal(out.github_sync.status, 'PASS');
+  result = run(fx.root, ['dispatch', fx.runId, '--pipeline', 'app', '--stage', 'second-review', '--work-item', 'second-review', '--role', 'CodeReviewer']);
+  assert.equal(result.status, 0, result.stderr);
+  result = advance('second-review');
+  assert.equal(result.status, 0, result.stderr);
+  out = JSON.parse(result.stdout);
+  assert.deepEqual(out.started, []);
+  assert.deepEqual(out.waiting, [{ pipeline_id: 'app', stage: 'verify', executor: 'git_verify' }]);
+  const state = JSON.parse(readFileSync(path.join(fx.stateRoot, fx.runId, 'state.json'), 'utf8'));
+  assert.equal(state.pipelines.app.stages.verify.status, 'pending');
+  result = run(fx.root, ['status', fx.runId, '--chart', '--state-root', fx.stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^advance-run  \S+  █+░+ 2\/3 stages 67%  fix cycles 0\n/);
+  assert.match(result.stdout, /\napp +\S+ +✓ implementation → ✓ second-review → · verify\n/);
 });
 
 function run(cwd, args) {

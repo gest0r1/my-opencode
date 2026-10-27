@@ -18,7 +18,7 @@ test('PLAN uses runtime-user HOME instead of root config paths', async () => {
   assert.doesNotMatch(plan, hardCodedRootInvocation, 'pipeline-plan.md: executable command hard-codes root runtime path');
   assert.match(plan, /\$HOME\/\.config\/opencode\/skills\/task-management\/scripts\/github-issue-cli\.ts probe/);
   assert.match(plan, /\$HOME\/\.config\/opencode\/skills\/task-management\/scripts\/github-actions-gate-cli\.ts inspect/);
-  assert.match(plan, /node \$HOME\/\.config\/opencode\/skills\/task-management\/scripts\/pipeline-github-sync\.mjs sync/);
+  assert.match(await text('config/opencode/skills/task-management/scripts/stage-cli.ts'), /\['github-sync', \[script\('pipeline-github-sync\.mjs'\), 'sync', runId/);
 });
 
 test('replan stays parent-owned and uses exact allowlisted invocations', async () => {
@@ -26,7 +26,7 @@ test('replan stays parent-owned and uses exact allowlisted invocations', async (
   const parent = await text('config/opencode/agent/core/openstage-orchestrator.md');
 
   assert.doesNotMatch(replan, hardCodedRootInvocation, 'pipeline-replan.md: executable command hard-codes root runtime path');
-  assert.match(replan, /npx --yes tsx \$HOME\/\.config\/opencode\/skills\/task-management\/scripts\/pipeline-replan-cli\.ts preflight/);
+  assert.match(replan, /\$HOME\/\.config\/opencode\/node_modules\/\.bin\/tsx \$HOME\/\.config\/opencode\/skills\/task-management\/scripts\/pipeline-replan-cli\.ts preflight/);
   assert.match(replan, /bash \$HOME\/\.config\/opencode\/skills\/task-management\/scripts\/worktree-refresh\.sh --check/);
   assert.match(replan, /do not delegate them to `OpenDevopsSpecialist`/i);
 

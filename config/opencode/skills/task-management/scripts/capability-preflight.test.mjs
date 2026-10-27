@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertPipelineCapabilities } from './capability-preflight.mjs';
 
-const workers = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
+const workers = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'QuickReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
 const advisoryPermissions = [
   {action: 'bash', resource: '*', effect: 'deny'},
-  {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*', effect: 'allow'},
+  {action: 'bash', resource: '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*', effect: 'allow'},
 ];
 const coderPermissions = advisoryPermissions;
 const testEngineerPermissions = [
@@ -14,12 +14,12 @@ const testEngineerPermissions = [
 ];
 const devopsPermissions = [
   {action: 'bash', resource: '*', effect: 'deny'},
-  {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *', effect: 'allow'},
+  {action: 'bash', resource: '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts *', effect: 'allow'},
 ];
 const parentPermissions = [
   ...workers.map(resource => ({ action: 'subagent', resource, effect: 'allow' })),
   {action: 'bash', resource: '*', effect: 'deny'},
-  {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*', effect: 'allow'},
+  {action: 'bash', resource: '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*', effect: 'allow'},
 ];
 const workerAgent = id => ({ id, mode: 'subagent', ...(id === 'CoderAgent' ? { permissions: coderPermissions } : {}), ...(id === 'TestEngineer' ? { permissions: testEngineerPermissions } : {}), ...(id === 'GateRunner' ? { permissions: advisoryPermissions } : {}), ...(id === 'OpenDevopsSpecialist' ? { permissions: devopsPermissions } : {}) });
 const valid = { tools: ['read', 'shell', 'subagent', 'pipeline_runtime_prepare'].map(id => ({ id })), agents: workers.map(workerAgent), skills: [{ name: 'task-management' }], permissions: parentPermissions };
@@ -49,7 +49,7 @@ test('preflight requires OpenStage access to the deterministic completion bounda
   const directStageCompleteOnly = [
     ...workers.map(resource => ({ action: 'subagent', resource, effect: 'allow' })),
     {action: 'bash', resource: '*', effect: 'deny'},
-    {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*', effect: 'allow'},
+    {action: 'bash', resource: '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*', effect: 'allow'},
   ];
   assert.throws(
     () => assertPipelineCapabilities({...valid, permissions: directStageCompleteOnly}),
@@ -88,7 +88,7 @@ test('preflight requires both HTTP and PostgreSQL DevOps diagnostic routes', () 
 
   const httpOnlyPermissions = [
     {action: 'bash', resource: '*', effect: 'deny'},
-    {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts http-get *', effect: 'allow'},
+    {action: 'bash', resource: '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/runtime-diagnostic-cli.ts http-get *', effect: 'allow'},
   ];
   const httpOnly = valid.agents.map(agent => agent.id === 'OpenDevopsSpecialist'
     ? {...agent, permissions: httpOnlyPermissions}

@@ -10,30 +10,44 @@ permission:
   bash:
     "*": deny
     "sudo -n /usr/local/sbin/opencode-install-packages*": ask
+    "sudo -n /usr/local/sbin/opencode-deploy-target *": ask
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*": deny
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*": deny
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts complete*": deny
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts supersede*": deny
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts supersede*": deny
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts supersede*": deny
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-complete-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-lock-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/git-worktree-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/deployment-target-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-replan-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-replan-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-replan-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
     "node $HOME/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
@@ -86,6 +100,7 @@ permission:
     BuildAgent: allow
     CodeReviewer: allow
     FindingsReviewer: allow
+    QuickReviewer: allow
     TestEngineer: allow
     GateRunner: allow
     DocWriter: allow
@@ -97,7 +112,7 @@ permission:
 Single parent for canonical pipeline PLAN/RUN/replan/status.
 
 ## Contracts
-At entry load only the active installed command from `$HOME/.config/opencode/commands/pipeline-{plan,run,replan,status}.md`. The selected command owns workflow semantics, repair accounting and owner checkpoints. The context/transport rules below own what crosses the parent conversation boundary: when command prose describes inspecting or passing a dispatch packet, satisfy that requirement through the runtime's compact envelope and file-backed packet rather than loading/copying the full packet into OpenStage. Distribution script paths are runtime-user-relative: execute installed pipeline tooling through `$HOME/.config/opencode/...`, never a hard-coded `/root/.config/opencode/...` path.
+At entry load only the active installed command from `$HOME/.config/opencode/commands/pipeline-{plan,run,replan,status,release,quick}.md`. The selected command owns workflow semantics, repair accounting and owner checkpoints. The context/transport rules below own what crosses the parent conversation boundary: when command prose describes inspecting or passing a dispatch packet, satisfy that requirement through the runtime's compact envelope and file-backed packet rather than loading/copying the full packet into OpenStage. Distribution script paths are runtime-user-relative: execute installed pipeline tooling through `$HOME/.config/opencode/...`, never a hard-coded `/root/.config/opencode/...` path.
 
 ## Invariants
 - `stage-cli` owns frozen manifest/work-item verification, DAG/state, scope extensions and negative transitions. `stage-cli next` is the only scheduler. Deterministic FAIL/BLOCKED outranks model judgement.

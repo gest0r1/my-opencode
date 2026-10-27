@@ -266,9 +266,10 @@ test('pipeline contracts require source-ready scheduling, local fail-fast, and a
 
 test('PLAN proves v2 run viability and baseline scope before owner approval', async () => {
   const plan = await text('config/opencode/command/pipeline-plan.md');
-  assert.match(plan, /stage-cli\.ts plan-run-preflight/);
-  assert.match(plan, /git-worktree-cli\.ts adopt/);
-  assert.match(plan, /git-worktree-cli\.ts verify/);
+  const cli = await text('config/opencode/skills/task-management/scripts/stage-cli.ts');
+  assert.match(plan, /stage-cli\.ts plan-check \.tmp\/pipelines\/\{run-id\}\/manifest\.json/);
+  assert.match(plan, /stage-cli\.ts plan-start \.tmp\/pipelines\/\{run-id\}\/manifest\.json/);
+  assert.match(cli, /'plan-run-preflight', manifest, '--environment'[\s\S]*'adopt', manifest[\s\S]*'verify', manifest/);
   assert.match(plan, /git-worktree-cli\.ts baseline <planning-base-sha>/);
   assert.match(plan, /preserved_baseline/);
 });
@@ -353,7 +354,7 @@ test('RUN authorizes bounded runtime scope before consuming technical-fix cycles
 test('parent keeps pipeline transport file-backed and orchestration-only', async () => {
   const parent = await text('config/opencode/agent/core/openstage-orchestrator.md');
   assert.match(parent, /At entry load only the active installed command/);
-  assert.match(parent, /commands\/pipeline-\{plan,run,replan,status\}/);
+  assert.match(parent, /commands\/pipeline-\{plan,run,replan,status,release,quick\}/);
   assert.match(parent, /context\/transport rules below own what crosses the parent conversation boundary/i);
   assert.match(parent, /do not read that packet in the parent/i);
   assert.match(parent, /detail_required=false/);
@@ -423,7 +424,7 @@ test('OpenStage cannot run the legacy supersede clone that closes a RUN irrevers
   const text = await readFile('config/opencode/agent/core/openstage-orchestrator.md', 'utf8');
   const lines = text.split('\n');
   const allow = lines.findIndex(line => line.includes('scripts/stage-cli.ts*": allow'));
-  for (const prefix of ['npx --yes tsx', 'npx tsx']) {
+  for (const prefix of ['$HOME/.config/opencode/node_modules/.bin/tsx', 'npx --yes tsx', 'npx tsx']) {
     const deny = lines.findIndex(line => line.includes(`"${prefix} $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts supersede*": deny`));
     assert.ok(deny > allow && allow >= 0, `${prefix} supersede deny must follow the stage-cli allow`);
   }

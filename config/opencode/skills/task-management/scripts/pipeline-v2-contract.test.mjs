@@ -1580,3 +1580,20 @@ test('plan-run-preflight and run-preflight enforce the plan probe', async () => 
   result = run(fx.root, ['run-preflight', 'v2-plan-probe-cli', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 });
+
+test('plan-check runs preflight, adopt and verify in order and stops at the first failure', async () => {
+  const fx = await planProbeFixture('v2-plan-check');
+  let result = run(fx.root, ['plan-check', fx.manifestPath]);
+  assert.notEqual(result.status, 0);
+  let out = JSON.parse(result.stdout);
+  assert.equal(out.failed_step, 'plan-run-preflight');
+  assert.deepEqual(out.steps, []);
+  assert.match(out.error, /PLAN_PROBE_REQUIRED: app\/fast-tests/);
+  await fx.writeProbe();
+  result = run(fx.root, ['plan-check', fx.manifestPath]);
+  assert.notEqual(result.status, 0);
+  out = JSON.parse(result.stdout);
+  assert.deepEqual(out.steps, [{ step: 'plan-run-preflight', status: 'PASS' }]);
+  assert.equal(out.failed_step, 'adopt');
+  assert.equal(run(fx.root, ['plan-check', fx.manifestPath, '--bogus']).status, 1);
+});

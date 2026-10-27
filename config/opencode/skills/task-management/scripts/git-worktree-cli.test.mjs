@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -409,4 +409,88 @@ test('sync-main conflict keeps checkpoint commit and leaves no merge in progress
   assert.equal(exec(f.b, 'git', ['log', '-1', '--format=%s']), 'pipeline(run-b): checkpoint before main sync');
   assert.equal(run(f.b, 'git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).status, 1);
   assert.equal(exec(f.b, 'git', ['status', '--porcelain']), '');
+});
+
+test('sync-plan fast-forwards main and merges it into the PLAN branch before any run is initialized', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const other = path.join(f.root, 'other');
+  exec(f.root, 'git', ['clone', '-b', 'main', f.remote, other]);
+  exec(other, 'git', ['config', 'user.name', 'Other']);
+  exec(other, 'git', ['config', 'user.email', 'other@example.invalid']);
+  await writeFile(path.join(other, 'src/upstream.txt'), 'upstream\n');
+  exec(other, 'git', ['add', '.']);
+  exec(other, 'git', ['commit', '-m', 'upstream']);
+  exec(other, 'git', ['push', 'origin', 'main']);
+  const upstream = exec(other, 'git', ['rev-parse', 'HEAD']);
+  await writeFile(path.join(f.b, 'src/plan.txt'), 'plan\n');
+  exec(f.b, 'git', ['add', 'src/plan.txt']);
+  exec(f.b, 'git', ['commit', '-m', 'plan work']);
+
+  let result = gate(f.b, ['sync-plan', '--check']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).action, 'sync');
+  assert.equal(exec(f.main, 'git', ['rev-parse', 'HEAD']), f.base);
+
+  result = gate(f.b, ['sync-plan']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).action, 'merged');
+  assert.equal(exec(f.main, 'git', ['rev-parse', 'HEAD']), upstream);
+  assert.equal(run(f.b, 'git', ['merge-base', '--is-ancestor', upstream, 'HEAD']).status, 0);
+  assert.equal(await readFile(path.join(f.b, 'src/plan.txt'), 'utf8'), 'plan\n');
+  assert.equal(JSON.parse(gate(f.b, ['sync-plan']).stdout).action, 'none');
+
+  await writeFile(path.join(f.artifactRoot, 'state.json'), '{}\n');
+  result = gate(f.b, ['sync-plan']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SYNC_PLAN_AFTER_FREEZE: run run-b/);
+});
+
+test('a versioned run tags each new candidate as rc.N and tags the release on the candidate after a merge-commit merge', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const manifest = { ...f.manifest, release: { version: '0.6.5', milestone: { number: 7, title: 'v.0.6.5' }, rc_tags: true } };
+  await writeFile(f.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  assert.equal(gate(f.b, ['adopt', f.manifestPath]).status, 0);
+  await writeFile(path.join(f.b, 'src/allowed.txt'), 'one\n');
+  let result = gate(f.b, ['publish', f.manifestPath]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).rc_tag, 'v0.6.5-rc.1');
+  result = gate(f.b, ['publish', f.manifestPath]);
+  assert.equal(JSON.parse(result.stdout).rc_tag, 'v0.6.5-rc.1');
+  await writeFile(path.join(f.b, 'src/allowed.txt'), 'two\n');
+  result = gate(f.b, ['publish', f.manifestPath]);
+  const candidate = JSON.parse(result.stdout).candidate_sha;
+  assert.equal(JSON.parse(result.stdout).rc_tag, 'v0.6.5-rc.2');
+  assert.equal(exec(f.root, 'git', ['--git-dir', f.remote, 'rev-parse', 'v0.6.5-rc.2^{commit}']), candidate);
+
+  // The owner merges the PR with a merge commit; release tags the tested candidate.
+  exec(f.main, 'git', ['merge', '--no-ff', '-m', 'Merge PR', 'feature/B']);
+  exec(f.main, 'git', ['push', 'origin', 'main']);
+  const mergeSha = exec(f.main, 'git', ['rev-parse', 'HEAD']);
+  await writeFile(path.join(f.artifactRoot, 'state.json'), JSON.stringify({ run_id: 'run-b', status: 'completed', manifest_file: f.manifestPath }));
+  const bin = path.join(f.root, 'bin'); await mkdir(bin);
+  const realGit = exec(f.root, 'which', ['git']);
+  await writeFile(path.join(bin, 'git'), `#!/bin/sh\nif [ "$*" = "remote get-url origin" ]; then echo git@github.com:o/r.git; exit 0; fi\nexec ${realGit} "$@"\n`);
+  await writeFile(path.join(bin, 'gh'), `#!/bin/bash
+if [[ "$1" == auth ]]; then exit 0; fi
+if [[ "$1" == pr ]]; then echo '{"number":5,"state":"'"\${PR_STATE:-MERGED}"'","headRefOid":"${candidate}","mergeCommit":{"oid":"${mergeSha}"}}'; exit 0; fi
+if [[ "$*" == *"--method PATCH"* ]]; then echo closed >> "${path.join(f.root, 'patched')}"; exit 0; fi
+if [[ "$*" == *milestones/7* ]]; then echo '{"state":"open","open_issues":0}'; exit 0; fi
+exit 2
+`);
+  await chmod(path.join(bin, 'git'), 0o755); await chmod(path.join(bin, 'gh'), 0o755);
+  const release = (env = {}) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'github-pr-cli.ts'), 'release', 'run-b'],
+    { cwd: f.b, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ...env } });
+  result = release({ PR_STATE: 'OPEN' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /RELEASE_PR_NOT_MERGED/);
+  result = release();
+  assert.equal(result.status, 0, result.stderr);
+  const out = JSON.parse(result.stdout);
+  assert.equal(out.tag, 'v0.6.5');
+  assert.equal(out.merge_sha, mergeSha);
+  assert.equal(exec(f.root, 'git', ['--git-dir', f.remote, 'rev-parse', 'v0.6.5^{commit}']), candidate);
+  assert.equal((await readFile(path.join(f.root, 'patched'), 'utf8')).trim(), 'closed');
+  assert.equal(release().status, 0);
 });

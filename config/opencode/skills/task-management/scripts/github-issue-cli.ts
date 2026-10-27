@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const ISSUE_NUMBER = /^[1-9][0-9]*$/;
@@ -428,13 +428,75 @@ export async function publishPlanningArtifacts(
   return { status: 'PASS', run_id: runId, repository: live.repository, published, existing };
 }
 
+// Version comes from the milestone name only (`v.0.6.4`, `v0.6.4`, `0.6.4` -> 0.6.4): PLAN never asks
+// the owner for it. Anything that makes that version unusable stops PLAN with the reason, and the
+// owner fixes the milestone instead of discussing versions inside the pipeline.
+export function versionFromMilestone(title: string): string | undefined {
+  return /^v?\.?(\d+\.\d+\.\d+)$/i.exec(title.trim())?.[1];
+}
+
+function compareVersions(a: string, b: string): number {
+  const left = a.split('.').map(Number); const right = b.split('.').map(Number);
+  for (let i = 0; i < 3; i += 1) if (left[i] !== right[i]) return left[i] - right[i];
+  return 0;
+}
+
+export async function milestoneRequirements(name: string, options: { cwd?: string; stateRoot?: string } = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  requireGitHubAuth(cwd);
+  const repository = currentRepository(cwd);
+  const milestones = flattenPages(parseJson<unknown>(gh(['api', '--paginate', '--slurp', `repos/${repository}/milestones?state=all&per_page=100`], cwd), 'milestones')) as any[];
+  const milestone = milestones.find((item) => String(item.title) === name || String(item.number) === name);
+  if (!milestone) throw new GitHubIssueCliError(`MILESTONE_NOT_FOUND: ${name}`);
+  const issues = (flattenPages(parseJson<unknown>(gh(['api', '--paginate', '--slurp',
+    `repos/${repository}/issues?milestone=${Number(milestone.number)}&state=open&per_page=100`], cwd), 'milestone issues')) as any[])
+    .filter((issue) => !issue.pull_request)
+    .map((issue) => ({ number: Number(issue.number), title: String(issue.title ?? '') }))
+    .sort((a, b) => a.number - b.number);
+  const version = versionFromMilestone(String(milestone.title));
+  const conflicts: string[] = [];
+  if (!version) conflicts.push(`MILESTONE_NOT_SEMVER: "${String(milestone.title)}" does not name a version like v0.6.5`);
+  if (!issues.length) conflicts.push('MILESTONE_EMPTY: no open issues');
+  if (version) {
+    command('git', ['fetch', '--quiet', '--tags', 'origin', 'main:refs/remotes/origin/main'], { cwd });
+    if (gitSucceeds(['rev-parse', '--verify', '--quiet', `refs/tags/v${version}`], cwd)) conflicts.push(`VERSION_TAGGED: tag v${version} already exists`);
+    const mainVersion = gitOutput(['show', 'refs/remotes/origin/main:VERSION'], cwd)?.trim().replace(/^v/, '');
+    if (mainVersion && /^\d+\.\d+\.\d+$/.test(mainVersion) && compareVersions(mainVersion, version) >= 0) {
+      conflicts.push(`VERSION_BEHIND_MAIN: main VERSION is ${mainVersion}, milestone asks for ${version}`);
+    }
+    const root = path.resolve(cwd, options.stateRoot ?? '.tmp/pipelines');
+    for (const run of await readdir(root).catch(() => [] as string[])) {
+      const manifest = await readFile(path.join(root, run, 'manifest.json'), 'utf8').then((raw) => JSON.parse(raw), () => undefined);
+      const state = await readFile(path.join(root, run, 'state.json'), 'utf8').then((raw) => JSON.parse(raw), () => undefined);
+      if (manifest?.release?.version === version && state && state.status !== 'completed' && !state.superseded_by) {
+        conflicts.push(`VERSION_TAKEN: run ${run} already plans ${version}`);
+      }
+    }
+  }
+  return { status: conflicts.length ? 'BLOCKED' : 'PASS', repository, milestone: { number: Number(milestone.number), title: String(milestone.title) },
+    version: version ?? null, issue_numbers: issues.map((issue) => issue.number), issues, conflicts };
+}
+
+function gitSucceeds(args: string[], cwd: string): boolean {
+  return spawnSync('git', args, { cwd, encoding: 'utf8' }).status === 0;
+}
+function gitOutput(args: string[], cwd: string): string | undefined {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  return result.status === 0 ? result.stdout : undefined;
+}
+
 function parseArgs(args: string[]): {
-  commandName: 'probe' | 'show' | 'check' | 'publish-plan';
+  commandName: 'probe' | 'show' | 'check' | 'publish-plan' | 'milestone';
   issueNumbers: number[];
   runId?: string;
   stateRoot?: string;
+  milestone?: string;
 } {
   const [commandName, ...rest] = args;
+  if (commandName === 'milestone') {
+    if (rest.length !== 1 || !rest[0]) throw new GitHubIssueCliError('usage: github-issue-cli.ts milestone <title|number>');
+    return { commandName, issueNumbers: [], milestone: rest[0] };
+  }
   if (commandName === 'check' || commandName === 'publish-plan') {
     const runId = rest[0];
     if (!runId) throw new GitHubIssueCliError(`${commandName} requires run-id`);
@@ -449,7 +511,7 @@ function parseArgs(args: string[]): {
   }
   if (commandName !== 'probe' && commandName !== 'show') {
     throw new GitHubIssueCliError(
-      'usage: github-issue-cli.ts probe <issue-number>... | show <issue-number>... | check <run-id> [--state-root <path>] | publish-plan <run-id> [--state-root <path>]',
+      'usage: github-issue-cli.ts probe <issue-number>... | show <issue-number>... | milestone <title|number> | check <run-id> [--state-root <path>] | publish-plan <run-id> [--state-root <path>]',
     );
   }
   const issueNumbers = rest.map(parseIssueNumber);
@@ -458,6 +520,12 @@ function parseArgs(args: string[]): {
 }
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
+  if (parsed.commandName === 'milestone') {
+    const result = await milestoneRequirements(parsed.milestone!);
+    console.log(JSON.stringify(result, null, 2));
+    if (result.status !== 'PASS') process.exitCode = 1;
+    return;
+  }
   if (parsed.commandName === 'check') {
     console.log(JSON.stringify(await checkFrozenRequirements(parsed.runId!, { stateRoot: parsed.stateRoot }), null, 2));
     return;
