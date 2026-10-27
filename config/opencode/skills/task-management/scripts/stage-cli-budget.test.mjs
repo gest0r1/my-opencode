@@ -804,6 +804,109 @@ test('the 5th charged cycle flags an architecture checkpoint; the next cycle nee
   assert.equal(JSON.parse(result.stdout).pipelines.lane.stages['code-review'].technical_fix_cycles, 6);
 });
 
+test('a defect class repeated by consecutive reviews needs a class review; a recurrence after the rework goes to the owner', async () => {
+  const fx = await lanesFixture('class-recurrence');
+  const again = () => { fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start'); };
+  const runtime = () => fx.status().pipelines.lane.stages['code-review'];
+  fx.finish('lane', 'implementation');
+  fx.step('lane', 'code-review', 'start');
+  let result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'Bad Class!']);
+  assert.match(result.stderr, /DEFECT_CLASS_INVALID/);
+  // Classes also come from the review JSON itself.
+  let r = fx.cli('scope-check', fx.runId, 'code-review', 'packages/lane/src/a.ts', '--pipeline', 'lane'); assert.equal(r.status, 0, r.stderr);
+  const reviewFile = path.join(fx.root, 'review-with-classes.json');
+  await writeFile(reviewFile, JSON.stringify({ status: 'needs_revision', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
+    findings: [{ id: 'R1', defect_class: 'validator-laxer-than-consumer' }] }));
+  result = fx.cli('fix-cycle', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', reviewFile, '--json');
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(runtime().defect_class_history.map((item) => item.classes), [['validator-laxer-than-consumer']]);
+
+  again();
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer,readme-drift']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED: lane\/code-review classes=validator-laxer-than-consumer recurred/);
+  assert.equal(runtime().technical_fix_cycles, 1);
+  assert.deepEqual(runtime().class_review_due, ['validator-laxer-than-consumer']);
+  assert.match(fx.cli('status', fx.runId).stdout, /class_review_due=validator-laxer-than-consumer/);
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'readme-drift']);
+  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED/);
+
+  const runDir = path.join(fx.stateRoot, fx.runId);
+  await writeFile(path.join(runDir, 'research.md'), '# prior art\nByte comparison instead of a second HTML reader.\n');
+  await writeFile(path.join(runDir, 'class-review-tech.md'), 'status: ready\n');
+  const record = async (patch) => {
+    const file = path.join(runDir, `class-${Math.random().toString(36).slice(2)}.json`);
+    await writeFile(file, JSON.stringify({ kind: 'class_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
+      classes: ['validator-laxer-than-consumer'], approach: 'rework_block', summary: 'compare served bytes with the built artifact',
+      research_artifact: path.join(runDir, 'research.md'), technical_review_artifact: path.join(runDir, 'class-review-tech.md'),
+      requirements_changed: false, acceptance_criteria_changed: false, external_contract_changed: false,
+      security_boundary_changed: false, destructive_change: false, ...patch }));
+    return fx.cli('class-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
+  };
+  result = await record({ research_artifact: path.join(runDir, 'missing.md') }); assert.match(result.stderr, /CLASS_REVIEW_INVALID: research_artifact/);
+  result = await record({ technical_review_artifact: undefined }); assert.match(result.stderr, /CLASS_REVIEW_INVALID: technical_review_artifact/);
+  result = await record({ classes: ['readme-drift'] }); assert.match(result.stderr, /CLASS_REVIEW_INVALID: classes must cover validator-laxer-than-consumer/);
+  result = await record({ approach: 'patch_again' }); assert.match(result.stderr, /CLASS_REVIEW_INVALID: approach/);
+  result = await record({ destructive_change: true }); assert.match(result.stderr, /CLASS_REVIEW_INVALID/);
+  result = await record({}); assert.equal(result.status, 0, result.stderr);
+  assert.equal(runtime().class_review_due, undefined);
+  assert.equal(runtime().class_reviews[0].after_cycle, 1);
+  result = await record({}); assert.match(result.stderr, /CLASS_REVIEW_NOT_DUE/);
+
+  // One consolidated rework cycle is charged for the reviewed class.
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(runtime().technical_fix_cycles, 2);
+
+  // The same class after its rework is no longer the coder's to patch.
+  again();
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /CLASS_RECURRENCE_AFTER_REWORK: validator-laxer-than-consumer/);
+  const state = fx.status();
+  assert.equal(state.pipelines.lane.stages['code-review'].status, 'blocked');
+  assert.equal(state.pipelines.lane.stages['code-review'].technical_fix_cycles, 2);
+  assert.equal(state.pipelines.lane.status, 'blocked');
+  assert.deepEqual(fx.next(), ['other/implementation']);
+});
+
+test('a class review satisfies a pending architecture checkpoint; unrelated classes keep the plain loop', async () => {
+  const fx = await lanesFixture('class-and-checkpoint');
+  fx.finish('lane', 'implementation');
+  fx.step('lane', 'code-review', 'start');
+  for (let cycle = 1; cycle <= 4; cycle += 1) {
+    const result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', `class-${cycle}`]);
+    assert.equal(result.status, 0, result.stderr);
+    fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  }
+  let result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'class-4']);
+  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED/);
+  const runDir = path.join(fx.stateRoot, fx.runId);
+  await writeFile(path.join(runDir, 'research.md'), 'evidence\n');
+  await writeFile(path.join(runDir, 'tech.md'), 'status: ready\n');
+  const file = path.join(runDir, 'class.json');
+  await writeFile(file, JSON.stringify({ kind: 'class_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
+    classes: ['class-4'], approach: 'remove_mechanism', summary: 'use the standard format; delete the converter',
+    research_artifact: 'research.md', technical_review_artifact: path.join(runDir, 'tech.md'),
+    requirements_changed: false, acceptance_criteria_changed: false, external_contract_changed: false,
+    security_boundary_changed: false, destructive_change: false }));
+  result = fx.cli('class-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
+  assert.match(result.stderr, /research_artifact must live inside the current run directory/);
+  await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), research_artifact: path.join(runDir, 'research.md') }));
+  result = fx.cli('class-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
+  assert.equal(result.status, 0, result.stderr);
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'class-4']);
+  assert.equal(result.status, 0, result.stderr);
+  const runtime = JSON.parse(result.stdout).pipelines.lane.stages['code-review'];
+  assert.equal(runtime.technical_fix_cycles, 5);
+  // The 5th charged cycle still flags the count-based checkpoint as a backstop.
+  assert.equal(runtime.architecture_review_due, true);
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  result = fx.cli('fix-budget-add', fx.runId, 'code-review', '--pipeline', 'lane', '--cycles', '1'); assert.equal(result.status, 0, result.stderr);
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'class-new']);
+  assert.match(result.stderr, /ARCHITECTURE_REVIEW_REQUIRED: lane\/code-review/);
+});
+
 test('architecture requirements_change blocks only that lane; other pipelines stay runnable and the owner path resumes it', async () => {
   const fx = await lanesFixture('arch-requirements-change');
   fx.finish('lane', 'implementation');

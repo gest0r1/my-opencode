@@ -52,6 +52,8 @@ artifact; the parent shows notes to the owner at acceptance.
 
 Never report only the first example. For each finding name the defect class (the mistake pattern, e.g. "unchecked nullable in handler branches", "assertion pins list order") and enumerate the whole class across the reviewed change: all branches of the function, sibling flows, other handlers/files, the same assertion pattern, each with `path:line`. One finding per class carrying the full location list is the target; a finding that lists a single location must state that the class was searched and has no other instance. When the same class was reported in an earlier cycle (the packet or earlier verdicts show it), say so, name the class and list the instances still remaining, so the repair fixes them in one cycle. Spend the review effort on completeness of the class, not on additional unrelated nitpicks.
 
+Give every blocking finding a `defect_class` key: short kebab-case, naming the mistake pattern rather than the file (`validator-laxer-than-consumer`, `fixture-not-real-output`, `readme-stale-behavior`). Reuse the exact key an earlier verdict used for the same pattern; `stage-cli fix-cycle` compares keys between consecutive cycles, and a repeated key stops the patch loop for a class review. Do not rename a class to avoid that, and do not split one pattern into several keys. When a class repeats, also say whether the mechanism itself looks wrong (a second implementation of what the consumer already does, a hand-written parser or format where a standard or library exists, a check that only fixtures can satisfy), because the next step is a rework of the block, not another literal fix.
+
 ## Review scope
 
 A lane review (`review` stage of a source lane) covers that lane's diff against its work
@@ -113,7 +115,7 @@ or security rule. Do not block merely because another architecture is preferable
 When requested, write evidence only below `.tmp/pipelines/{run-id}/**`.
 Return readiness plus concise actionable findings; never apply fixes or advance state.
 
-For RUN reviews write an explicit `status: needs_revision|ready` verdict (or JSON equivalent) with findings and affected work-item IDs/paths. Review packets may use the stage name as identity and include `review_work_items`; no standalone review task file is required. Classify missing implementation separately from owner decisions. Repeated transport or environment failure is not a negative code-review result.
+For RUN reviews write the verdict as JSON: `{status: needs_revision|ready, run_id, pipeline_id, stage, defect_classes: [...], findings: [{id, defect_class, subject, blocking, classification, locations: ["path:line"], work_items}]}`; `defect_classes` lists the classes of blocking findings. A Markdown verdict is accepted only if the parent can pass the classes with `--defect-class`. Review packets may use the stage name as identity and include `review_work_items`; no standalone review task file is required. Classify missing implementation separately from owner decisions. Repeated transport or environment failure is not a negative code-review result.
 
 ## Targeted external clarification
 

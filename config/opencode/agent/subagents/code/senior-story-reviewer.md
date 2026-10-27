@@ -41,7 +41,12 @@ Write a NEW append-only/versioned review at the exact artifact_path, in
 artifact_language. Never overwrite or translate an existing review in place.
 
 ready means the story set is complete and faithful and no product/owner decision
-blocks it. Style-only preferences are optional, not blockers.
+blocks it. Style-only preferences are optional, not blockers. Counting, numbering or
+wording slips that do not lose a requirement are `nit`: list them; they do not make the
+status `needs_revision`.
+
+On a re-review you get the previous review and the list of changed stories/sections:
+verify the previous findings and read the changes; do not start the whole review again.
 
 Return only:
 

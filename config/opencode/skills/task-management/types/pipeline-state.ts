@@ -314,6 +314,24 @@ export interface ArchitectureReviewRecord {
   at: string;
 }
 
+/** Defect classes named by the negative result that charged one repair cycle. */
+export interface DefectClassCycle {
+  cycle: number;
+  classes: string[];
+  evidence_sha256: string;
+}
+
+export interface ClassReviewRecord {
+  path: string;
+  sha256: string;
+  classes: string[];
+  approach: 'rework_block' | 'remove_mechanism' | 'requirements_change';
+  research_artifact: string;
+  /** technical_fix_cycles when recorded; the next charged cycle is the consolidated rework of these classes. */
+  after_cycle: number;
+  at: string;
+}
+
 export interface StageRuntime {
   // Repair execution borrows the initiating gate's existing budget; never a second loop.
   repair_origin_stage?: string;
@@ -322,6 +340,10 @@ export interface StageRuntime {
   /** Set when technical_fix_cycles reaches a multiple of ARCHITECTURE_REVIEW_AFTER; the next charged fix-cycle needs a recorded review. */
   architecture_review_due?: boolean;
   architecture_reviews?: ArchitectureReviewRecord[];
+  defect_class_history?: DefectClassCycle[];
+  /** Classes that recurred in consecutive negative results; the next cycle needs a recorded class review. */
+  class_review_due?: string[];
+  class_reviews?: ClassReviewRecord[];
   repair_evidence?: FrozenArtifact;
   repair_paths?: string[];
   status: StageStatus;
