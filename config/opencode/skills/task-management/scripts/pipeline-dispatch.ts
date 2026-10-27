@@ -9,7 +9,9 @@ import { sourceInventory } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { planProbeCommandsSha256 } from './manifest-v2-policy.mjs';
 
-const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
+const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
+// A review stage runs a full CodeReviewer; FindingsReviewer (cheaper model) only re-checks findings a review already issued.
+const REVIEW_ROLES = new Set(['CodeReviewer', 'FindingsReviewer']);
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 
 function scopePath(value: unknown): value is string {
@@ -172,6 +174,19 @@ function implementationStarted(root: string, manifest: any, effectiveScope: stri
   return /^[0-9a-f]{40}$/i.test(base ?? '') && head.status === 0 && String(head.stdout).trim().toLowerCase() !== base.toLowerCase();
 }
 
+// The last reviewer dispatched on a review stage; completion requires it to be a full CodeReviewer.
+export function reviewDispatchPath(root: string, run: string, pipelineId: string, stage: string): string {
+  return join(root, '.tmp/pipelines', run, 'checks', 'review-dispatch', `${pipelineId}--${stage}.json`);
+}
+
+async function recordReviewDispatch(root: string, run: string, pipelineId: string, stage: string, role: string, loop: number) {
+  const target = reviewDispatchPath(root, run, pipelineId, stage);
+  await mkdir(dirname(target), { recursive: true });
+  const temporary = `${target}.tmp-${process.pid}`;
+  await writeFile(temporary, `${JSON.stringify({ run_id: run, pipeline_id: pipelineId, stage, role, loop, recorded_at: new Date().toISOString() }, null, 2)}\n`, 'utf8');
+  await rename(temporary, target);
+}
+
 export async function dispatchPacket(root: string, run: string, pipelineId: string, stage: string, workItemId: string, role: string) {
   if (!/^[A-Za-z0-9._-]+$/.test(run)) throw Error('INVALID_RUN_ID');
   const state = await validateState(join(root, '.tmp/pipelines'), run);
@@ -184,7 +199,8 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   // Cross-lane repair: the lane agent stage borrows the evidence/paths/loop of the sink gate in repair_origin_pipeline.
   const repairRuntime = runtime?.repair_origin_stage
     ? state.pipelines[runtime.repair_origin_pipeline ?? pipelineId]?.stages[runtime.repair_origin_stage] : runtime;
-  if (!['agent', 'review'].includes(executor) || !roles.has(role) || (executor === 'review' && role !== 'CodeReviewer')) throw Error('INVALID_DISPATCH_ROLE');
+  if (!['agent', 'review'].includes(executor) || !roles.has(role) || (executor === 'review' && !REVIEW_ROLES.has(role)) || (executor !== 'review' && role === 'FindingsReviewer')) throw Error('INVALID_DISPATCH_ROLE');
+  if (role === 'FindingsReviewer' && !(Number(runtime?.technical_fix_cycles ?? 0) > 0 && runtime?.repair_evidence)) throw Error('FINDINGS_REVIEW_NEEDS_ISSUED_FINDINGS');
 
   const amendmentRecords = (state.owner_amendments ?? []).filter((a: any) => a.pipeline_id === pipelineId);
   const amendmentItems = amendmentRecords.flatMap((a: any) => a.work_items ?? []);
@@ -301,6 +317,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       shell: { background: false, timeout: 3_600_000 },
       frozen_commands: (manifest.gate_profiles[pipeline.profile][check.gate] as string[]).map((command, index) => ({ index, command })) }));
   }
+  if (executor === 'review') await recordReviewDispatch(root, run, pipelineId, stage, role, Number(runtime?.technical_fix_cycles ?? 0));
   return { run_id: run, pipeline_id: pipelineId, stage, executor, role, work_item_id: workItemId,
     work_item_path: workItemPath, work_item_sha256: frozen.sha256, authoritative_paths: [state.manifest_file, state.rules_file, ...referencePaths, ...amendmentEvidence],
     review_work_items: stageReview ? [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems].map((w: any) => ({ id: w.id, path: resolve(dirname(state.manifest_file), w.path), sha256: w.sha256 })) : undefined,

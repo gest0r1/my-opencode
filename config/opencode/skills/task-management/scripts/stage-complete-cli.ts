@@ -186,9 +186,24 @@ export async function verifyAgentAdvisoryCompletion(root: string, args: string[]
   return { checked };
 }
 
+// A review stage closes only on a full CodeReviewer review: FindingsReviewer verifies issued findings and
+// the repair delta, and its ready verdict leads to the closing full review rather than to completion.
+export async function verifyReviewClosing(root: string, args: string[]): Promise<void> {
+  const runId = args[1];
+  const stage = args[2];
+  const pipelineId = option(args, '--pipeline');
+  if (args[0] !== 'complete' || !runId || !stage || !pipelineId || !SAFE_ID.test(runId)) return;
+  const stateRoot = resolve(root, option(args, '--state-root') ?? '.tmp/pipelines');
+  let record: any;
+  try { record = JSON.parse(await readFile(join(stateRoot, runId, 'checks', 'review-dispatch', `${pipelineId}--${stage}.json`), 'utf8')); }
+  catch { return; }
+  if (record?.role === 'FindingsReviewer') throw new StageCompleteError(`REVIEW_CLOSING_FULL_REQUIRED: ${pipelineId}/${stage}; dispatch a full CodeReviewer before completing the review`);
+}
+
 async function main(args: string[]): Promise<void> {
   if (args[0] !== 'complete') throw new StageCompleteError('usage: stage-complete-cli.ts complete <run-id> <stage> --pipeline <id> [stage-cli options]');
   await verifyAgentAdvisoryCompletion(process.cwd(), args);
+  await verifyReviewClosing(process.cwd(), args);
   const result = spawnSync('npx', ['tsx', STAGE_CLI, ...args], { cwd: process.cwd(), shell: false, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);

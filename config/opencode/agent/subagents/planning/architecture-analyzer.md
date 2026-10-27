@@ -3,7 +3,7 @@ name: ArchitectureAnalyzer
 description: Analyzes architecture boundaries during PLAN, runtime scope/replanning, and bounded owner amendments.
 mode: subagent
 model: openai/gpt-6.1-sol
-reasoningEffort: low
+reasoningEffort: medium
 permission:
   bash: deny
   edit:

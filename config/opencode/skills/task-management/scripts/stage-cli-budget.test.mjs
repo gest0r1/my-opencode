@@ -171,6 +171,32 @@ test('review repairs reopen implementation and share the initiating gate budget 
   assert.match(result.stderr, /TECHNICAL_FIX_LIMIT_EXCEEDED/);
 });
 
+test('FindingsReviewer only re-checks issued findings, and a review stage closes on a full CodeReviewer', async () => {
+  const fx = await fixture('findings-review', ['implementation', 'code-review'], { implementation: 'agent', 'code-review': 'review' });
+  const cli = (args) => run(fx.root, [...args, '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  const dispatch = (stage, role) => run(fx.root, ['dispatch', fx.runId, '--pipeline', 'app', '--stage', stage, '--work-item', stage === 'code-review' ? stage : 'wi-app', '--role', role]);
+  const complete = (stage) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'), 'complete', fx.runId, stage, '--pipeline', 'app'],
+    { cwd: fx.root, encoding: 'utf8', env: process.env });
+  // The fixture leaves implementation completed and code-review in progress.
+  let result;
+  result = dispatch('code-review', 'FindingsReviewer');
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /FINDINGS_REVIEW_NEEDS_ISSUED_FINDINGS/);
+  result = dispatch('code-review', 'CodeReviewer'); assert.equal(result.status, 0, result.stderr);
+  result = cli(['scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts']); assert.equal(result.status, 0, result.stderr);
+  result = cli(['fix-cycle', fx.runId, 'code-review', '--evidence', await writeReview(fx, 'findings-1.json', { findings: ['R1'] })]);
+  assert.equal(result.status, 0, result.stderr);
+  result = dispatch('implementation', 'FindingsReviewer');
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /INVALID_DISPATCH_ROLE/);
+  for (const command of ['start', 'complete']) { result = cli([command, fx.runId, 'implementation']); assert.equal(result.status, 0, `${command}: ${result.stderr}`); }
+  result = cli(['start', fx.runId, 'code-review']); assert.equal(result.status, 0, result.stderr);
+  result = dispatch('code-review', 'FindingsReviewer'); assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).role, 'FindingsReviewer');
+  result = complete('code-review');
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /REVIEW_CLOSING_FULL_REQUIRED: app\/code-review/);
+  result = dispatch('code-review', 'CodeReviewer'); assert.equal(result.status, 0, result.stderr);
+  result = complete('code-review'); assert.equal(result.status, 0, result.stderr);
+});
+
 function run(cwd, args) {
   if (args[0] === 'fix-cycle' && args[2] === 'code-review' && !args.includes('--evidence')) {
     const file = path.join(cwd, 'review-result.json');
