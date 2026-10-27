@@ -1,6 +1,8 @@
 // Deterministic ledger of PLAN gate reviews. The orchestrator records every review verdict here instead of
-// counting cycles itself: three autonomous `needs_revision` rounds per gate, then an owner checkpoint; a defect
-// class repeated by consecutive verdicts needs recorded prior-art research before the author revises again.
+// counting cycles itself. Nothing in it waits for the owner unless a verdict needs an owner decision:
+// a repeated defect class or a third autonomous revision requires recorded research and a whole-section
+// rework; a gate still open after that carries its technical findings into RUN as work-item checks.
+// Intermediate re-reviews may read the delta; the review that freezes a gate is a full fresh review.
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
@@ -9,11 +11,16 @@ import { dirname, join, resolve } from 'node:path';
 export const PLAN_REVIEW_AUTONOMOUS_CYCLES = 3;
 const CLASS_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}$/;
 const GATE_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+const OWNER_CLASSIFICATIONS = ['replan', 'security_stop', 'scope_stop', 'secret_stop', 'destructive_stop'];
 
+type Review = {
+  kind: 'review'; gate: string; status: 'ready' | 'needs_revision' | 'blocked'; scope: 'full' | 'delta';
+  owner_decision: boolean; path: string; sha256: string; classes: string[]; at: string;
+};
 type Entry =
-  | { kind: 'review'; gate: string; status: 'ready' | 'needs_revision' | 'blocked'; path: string; sha256: string; classes: string[]; at: string }
+  | Review
   | { kind: 'research'; gate: string; path: string; sha256: string; at: string }
-  | { kind: 'owner_continue'; gate: string; reason: string; at: string };
+  | { kind: 'carry'; gate: string; path: string; sha256: string; review_sha256: string; at: string };
 
 interface Ledger { schema: 1; run_id: string; entries: Entry[] }
 
@@ -31,23 +38,35 @@ function normalizeClass(value: unknown): string {
   return name;
 }
 
-function parseVerdict(raw: string, extra: string[]): { status: 'ready' | 'needs_revision' | 'blocked'; classes: string[] } {
+function parseVerdict(raw: string, extra: string[]) {
   let result: any;
+  let json = true;
   try { result = JSON.parse(raw); } catch {
-    const match = /^\s*(?:[-*]\s*)?(?:\*\*)?status(?:\*\*)?\s*:\s*(?:\*\*)?\s*`?(ready|needs_revision|blocked)\b/im.exec(raw);
-    result = { status: match?.[1] };
+    json = false;
+    const field = (name: string, values: string) =>
+      new RegExp(`^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${name}(?:\\*\\*)?\\s*:\\s*(?:\\*\\*)?\\s*\`?(${values})\\b`, 'im').exec(raw)?.[1];
+    result = { status: field('status', 'ready|needs_revision|blocked'), review_scope: field('review_scope', 'full|delta') };
   }
   const status = String(result?.status ?? '').toLowerCase();
   if (status !== 'ready' && status !== 'needs_revision' && status !== 'blocked') {
     throw new PlanReviewError('PLAN_REVIEW_STATUS_REQUIRED: the review must state status: ready | needs_revision | blocked');
   }
+  const scope = String(result?.review_scope ?? '').toLowerCase();
+  if (scope !== 'full' && scope !== 'delta') throw new PlanReviewError('PLAN_REVIEW_SCOPE_REQUIRED: the review must state review_scope: full | delta');
   const named: unknown[] = [...extra];
+  let owner = result?.owner_decision_required === true;
   if (Array.isArray(result?.defect_classes)) named.push(...result.defect_classes);
   for (const list of [result?.findings, result?.blockers]) {
     if (!Array.isArray(list)) continue;
-    for (const finding of list) if (finding && typeof finding === 'object' && finding.defect_class) named.push(finding.defect_class);
+    for (const finding of list) {
+      if (!finding || typeof finding !== 'object') continue;
+      if (finding.defect_class) named.push(finding.defect_class);
+      if (OWNER_CLASSIFICATIONS.includes(String(finding.classification ?? finding.category ?? ''))) owner = true;
+    }
   }
-  return { status, classes: [...new Set(named.map(normalizeClass))].sort() };
+  // Text verdicts list blockers as "- <category> [<class>]: <text>".
+  if (!json && new RegExp(`^\\s*-\\s*(?:${OWNER_CLASSIFICATIONS.join('|')})\\b`, 'im').test(raw)) owner = true;
+  return { status: status as Review['status'], scope: scope as Review['scope'], owner_decision: owner, classes: [...new Set(named.map(normalizeClass))].sort() };
 }
 
 async function readLedger(runDir: string, runId: string): Promise<Ledger> {
@@ -75,40 +94,54 @@ function runFile(runDir: string, value: string, field: string): { path: string; 
   return { path: absolute, raw };
 }
 
-// Entries of one gate since the owner last let it continue.
-function window(ledger: Ledger, gate: string): Entry[] {
-  const entries = ledger.entries.filter((entry) => entry.gate === gate);
-  const reset = entries.map((entry) => entry.kind).lastIndexOf('owner_continue');
-  return entries.slice(reset + 1);
-}
+const gateEntries = (ledger: Ledger, gate: string) => ledger.entries.filter((entry) => entry.gate === gate);
+const reviewsOf = (entries: Entry[]) => entries.filter((entry): entry is Review => entry.kind === 'review');
 
 function recurringClasses(entries: Entry[]): string[] {
-  const reviews = entries.filter((entry): entry is Extract<Entry, { kind: 'review' }> => entry.kind === 'review');
-  const [previous, last] = reviews.slice(-2);
+  const [previous, last] = reviewsOf(entries).slice(-2);
   if (!previous || !last || previous.status !== 'needs_revision' || last.status !== 'needs_revision') return [];
   return last.classes.filter((name) => previous.classes.includes(name));
 }
 
-// Research is due when the last two verdicts share a class and no research was recorded after the last one.
-function researchDue(entries: Entry[]): string[] {
-  const recurring = recurringClasses(entries);
-  if (!recurring.length) return [];
-  const lastReview = entries.map((entry) => entry.kind).lastIndexOf('review');
-  return entries.slice(lastReview + 1).some((entry) => entry.kind === 'research') ? [] : recurring;
+// Why research is due before the next revision is reviewed: a class repeated by the last two verdicts,
+// or the autonomous revision count reached (escalation: research + whole-section rework by a fresh author).
+function researchDue(entries: Entry[]): { classes: string[]; escalation: boolean } {
+  const reviews = reviewsOf(entries);
+  const last = reviews.at(-1);
+  if (!last || last.status !== 'needs_revision' || last.owner_decision) return { classes: [], escalation: false };
+  const lastReview = entries.lastIndexOf(last);
+  if (entries.slice(lastReview + 1).some((entry) => entry.kind === 'research')) return { classes: [], escalation: false };
+  const revisions = reviews.filter((entry) => entry.status === 'needs_revision').length;
+  return { classes: recurringClasses(entries), escalation: revisions === PLAN_REVIEW_AUTONOMOUS_CYCLES };
 }
 
 function summary(ledger: Ledger, gate: string) {
-  const entries = window(ledger, gate);
-  const reviews = entries.filter((entry) => entry.kind === 'review') as Extract<Entry, { kind: 'review' }>[];
+  const entries = gateEntries(ledger, gate);
+  const reviews = reviewsOf(entries);
+  const last = reviews.at(-1);
+  const revisions = reviews.filter((entry) => entry.status === 'needs_revision').length;
+  const carried = Boolean(last && entries.some((entry) => entry.kind === 'carry' && entry.review_sha256 === last.sha256));
+  const due = researchDue(entries);
+  let next = 'review';
+  if (!last) next = 'review';
+  else if (last.owner_decision) next = 'owner_decision';
+  else if (carried) next = 'freeze_with_carried_findings';
+  else if (last.status === 'ready') next = last.scope === 'full' ? 'freeze' : 'full_review';
+  else if (due.classes.length || due.escalation) next = 'research_then_rework';
+  else if (revisions > PLAN_REVIEW_AUTONOMOUS_CYCLES) next = 'revise_or_carry';
+  else next = 'revise';
   return {
     run_id: ledger.run_id,
     gate,
-    status: reviews.at(-1)?.status ?? 'none',
+    status: carried ? 'carried' : last?.status ?? 'none',
+    scope: last?.scope ?? null,
     reviews: reviews.length,
-    needs_revision: reviews.filter((entry) => entry.status === 'needs_revision').length,
-    autonomous_limit: PLAN_REVIEW_AUTONOMOUS_CYCLES,
-    class_research_due: researchDue(entries),
-    total_reviews: ledger.entries.filter((entry) => entry.gate === gate && entry.kind === 'review').length,
+    needs_revision: revisions,
+    autonomous_cycles: PLAN_REVIEW_AUTONOMOUS_CYCLES,
+    class_research_due: due.classes,
+    escalation_due: due.escalation,
+    owner_decision: Boolean(last?.owner_decision),
+    next,
   };
 }
 
@@ -119,28 +152,37 @@ export interface PlanReviewInput {
   evidencePath?: string;
   defectClasses?: string[];
   researchPath?: string;
-  ownerContinue?: string;
+  carryPath?: string;
 }
 
 export async function recordPlanReview(input: PlanReviewInput): Promise<ReturnType<typeof summary>> {
   const { runDir, runId, gate } = input;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(runId) || runId.includes('..')) throw new PlanReviewError(`PLAN_REVIEW_RUN_ID_INVALID: ${runId}`);
   if (!GATE_PATTERN.test(gate)) throw new PlanReviewError(`PLAN_REVIEW_GATE_INVALID: ${gate}`);
-  const actions = [input.evidencePath, input.researchPath, input.ownerContinue].filter((value) => value !== undefined);
-  if (actions.length !== 1) throw new PlanReviewError('plan-review needs exactly one of --evidence, --research or --owner-continue');
+  const actions = [input.evidencePath, input.researchPath, input.carryPath].filter((value) => value !== undefined);
+  if (actions.length !== 1) throw new PlanReviewError('plan-review needs exactly one of --evidence, --research or --carry');
   const ledger = await readLedger(runDir, runId);
   const at = new Date().toISOString();
+  const entries = gateEntries(ledger, gate);
+  const current = summary(ledger, gate);
 
-  if (input.ownerContinue !== undefined) {
-    if (!input.ownerContinue.trim()) throw new PlanReviewError('--owner-continue needs the owner\'s words');
-    ledger.entries.push({ kind: 'owner_continue', gate, reason: input.ownerContinue.trim(), at });
+  if (input.researchPath !== undefined) {
+    const { path, raw } = runFile(runDir, input.researchPath, 'research');
+    const due = researchDue(entries);
+    if (!due.classes.length && !due.escalation) throw new PlanReviewError(`PLAN_RESEARCH_NOT_DUE: ${gate}`);
+    ledger.entries.push({ kind: 'research', gate, path, sha256: sha256(raw), at });
     await writeLedger(runDir, ledger);
     return summary(ledger, gate);
   }
-  if (input.researchPath !== undefined) {
-    const { path, raw } = runFile(runDir, input.researchPath, 'research');
-    if (!researchDue(window(ledger, gate)).length) throw new PlanReviewError(`PLAN_CLASS_RESEARCH_NOT_DUE: ${gate}`);
-    ledger.entries.push({ kind: 'research', gate, path, sha256: sha256(raw), at });
+  if (input.carryPath !== undefined) {
+    if (current.next !== 'revise_or_carry') {
+      throw new PlanReviewError(current.owner_decision
+        ? `PLAN_OWNER_DECISION_REQUIRED: ${gate} has a finding that changes a decision or a business story; it cannot be carried`
+        : `PLAN_CARRY_NOT_ALLOWED: ${gate} next=${current.next}; findings are carried only after the escalation rework was reviewed`);
+    }
+    const { path, raw } = runFile(runDir, input.carryPath, 'carried findings');
+    const last = reviewsOf(entries).at(-1)!;
+    ledger.entries.push({ kind: 'carry', gate, path, sha256: sha256(raw), review_sha256: last.sha256, at });
     await writeLedger(runDir, ledger);
     return summary(ledger, gate);
   }
@@ -148,29 +190,20 @@ export async function recordPlanReview(input: PlanReviewInput): Promise<ReturnTy
   const { path, raw } = runFile(runDir, input.evidencePath!, 'review evidence');
   const hash = sha256(raw);
   // Recording the same verdict again is idempotent.
-  if (ledger.entries.some((entry) => entry.kind === 'review' && entry.gate === gate && entry.sha256 === hash)) return summary(ledger, gate);
-  const due = researchDue(window(ledger, gate));
-  if (due.length) {
-    throw new PlanReviewError(`PLAN_CLASS_RESEARCH_REQUIRED: ${gate} classes=${due.join(',')}; record ExternalScout research with --research before the next revision is reviewed`);
-  }
-  const before = summary(ledger, gate);
-  if (before.status === 'needs_revision' && before.needs_revision >= PLAN_REVIEW_AUTONOMOUS_CYCLES) {
-    throw new PlanReviewError(`PLAN_REVIEW_LIMIT: ${gate} had ${before.needs_revision} autonomous revisions; owner checkpoint, then --owner-continue`);
+  if (entries.some((entry) => entry.kind === 'review' && entry.sha256 === hash)) return current;
+  const due = researchDue(entries);
+  if (due.classes.length || due.escalation) {
+    const why = due.classes.length ? `classes=${due.classes.join(',')}` : `${PLAN_REVIEW_AUTONOMOUS_CYCLES} revisions did not converge`;
+    throw new PlanReviewError(`PLAN_RESEARCH_REQUIRED: ${gate} ${why}; record research with --research and have a fresh author rework the whole section before the next review`);
   }
   const verdict = parseVerdict(raw, input.defectClasses ?? []);
-  ledger.entries.push({ kind: 'review', gate, status: verdict.status, path, sha256: hash, classes: verdict.classes, at });
+  ledger.entries.push({ kind: 'review', gate, ...verdict, path, sha256: hash, at });
   await writeLedger(runDir, ledger);
-  const after = summary(ledger, gate);
-  if (after.status === 'needs_revision' && after.class_research_due.length) {
-    throw new PlanReviewError(`PLAN_CLASS_RECURRENCE: ${gate} classes=${after.class_research_due.join(',')}; run ExternalScout on the class, record it with --research, then have the author rework the whole section`);
-  }
-  if (after.status === 'needs_revision' && after.needs_revision >= PLAN_REVIEW_AUTONOMOUS_CYCLES) {
-    throw new PlanReviewError(`PLAN_REVIEW_LIMIT: ${gate} had ${after.needs_revision} autonomous revisions; summarize why it does not converge for the owner`);
-  }
-  return after;
+  return summary(ledger, gate);
 }
 
-// A manifest whose run keeps a ledger must freeze, for each reviewed gate, the ledger's last verdict: ready.
+// A manifest whose run keeps a ledger must freeze, for each reviewed gate, the ledger's last verdict:
+// a full ready review, or a later verdict whose technical findings were carried into RUN.
 export function assertPlanReviewLedger(manifest: any, manifestPath: string): void {
   const file = ledgerPath(dirname(resolve(manifestPath)));
   if (!existsSync(file)) return;
@@ -179,11 +212,19 @@ export function assertPlanReviewLedger(manifest: any, manifestPath: string): voi
   for (const gate of manifest?.planning_readiness?.required_gates ?? []) {
     const review = gates[gate]?.review;
     if (!review) continue;
-    const reviews = ledger.entries.filter((entry) => entry.gate === gate && entry.kind === 'review') as Extract<Entry, { kind: 'review' }>[];
-    const last = reviews.at(-1);
+    const state = summary(ledger, gate);
+    const last = reviewsOf(gateEntries(ledger, gate)).at(-1);
     if (!last) throw new Error(`PLAN_REVIEW_LEDGER_MISSING: ${gate} has a frozen review that was never recorded with stage-cli plan-review`);
-    if (last.status !== 'ready' || last.sha256 !== review.sha256) {
-      throw new Error(`PLAN_REVIEW_LEDGER_MISMATCH: ${gate} frozen review is not the ledger's last ready verdict`);
+    if (last.sha256 !== review.sha256) throw new Error(`PLAN_REVIEW_LEDGER_MISMATCH: ${gate} frozen review is not the ledger's last verdict`);
+    if (state.next !== 'freeze' && state.next !== 'freeze_with_carried_findings') {
+      throw new Error(`PLAN_REVIEW_NOT_FREEZABLE: ${gate} next=${state.next} (the freezing review must be a full ready review or have carried findings)`);
+    }
+    if (state.next === 'freeze_with_carried_findings') {
+      const carry = gateEntries(ledger, gate).find((entry) => entry.kind === 'carry' && entry.review_sha256 === last.sha256);
+      const listed = JSON.stringify(manifest?.planning_readiness?.carried_findings ?? []);
+      if (carry && !listed.includes((carry as any).sha256)) {
+        throw new Error(`PLAN_CARRIED_FINDINGS_NOT_FROZEN: ${gate} carried findings must be frozen in planning_readiness.carried_findings with their SHA-256`);
+      }
     }
   }
 }

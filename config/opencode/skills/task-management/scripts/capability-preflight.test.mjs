@@ -139,6 +139,6 @@ test('WebResearcher is checked only when selected, including delegation and mode
   assert.equal(assertPipelineCapabilities(input).subagents_checked, workers.length + 1);
   assert.throws(() => assertPipelineCapabilities({...input, agents: valid.agents}), /subagent:WebResearcher/);
   assert.throws(() => assertPipelineCapabilities({...input, permissions: valid.permissions}), /permission:subagent:WebResearcher:ask/);
-  const agents = input.agents.map(a => a.id === 'WebResearcher' ? {...a, model: 'opencode-go/longcat-2.5-preview-free'} : a);
+  const agents = input.agents.map(a => a.id === 'WebResearcher' ? {...a, model: 'opencode/deepseek-v4.1-flash-free'} : a);
   assert.throws(() => assertPipelineCapabilities({...input, agents, models: [{providerID: 'openai', id: 'other'}]}), /PIPELINE_MODEL_UNAVAILABLE: WebResearcher/);
 });

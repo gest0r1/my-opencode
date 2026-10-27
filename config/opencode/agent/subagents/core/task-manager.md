@@ -83,6 +83,8 @@ frozen pipeline profile + impact groups and binds them to a machine-owned per-di
 baseline. Do not write source/docs, manifest/state or Git commands. OpenStage freezes
 path+SHA-256 of every item and index.
 
+When the manifest carries `planning_readiness.carried_findings`, attach every carried finding to the work items it names as an explicit acceptance check (`carried_findings: [{id, defect_class, check}]` in the work item), so the lane's CodeReviewer verifies it. A carried finding without an affected work item goes to the delivery sink's review.
+
 Return only:
 
 ```text

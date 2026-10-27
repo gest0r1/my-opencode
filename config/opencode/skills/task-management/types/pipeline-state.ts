@@ -327,6 +327,8 @@ export interface ClassReviewRecord {
   classes: string[];
   approach: 'rework_block' | 'remove_mechanism' | 'requirements_change';
   research_artifact: string;
+  research_sha256?: string;
+  summary_sha256?: string;
   /** technical_fix_cycles when recorded; the next charged cycle is the consolidated rework of these classes. */
   after_cycle: number;
   at: string;
