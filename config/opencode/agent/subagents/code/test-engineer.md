@@ -7,6 +7,7 @@ temperature: 0.1
 permission:
   bash:
     "*": deny
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*": allow
     "npx vitest *": allow

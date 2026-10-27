@@ -10,7 +10,7 @@ import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 
 const STAGE_CLI = fileURLToPath(new URL('./stage-cli.ts', import.meta.url));
 // Same literal as the dispatch packet, so GateRunner's allowlist accepts the rerun command verbatim.
-const GATE_RUNNER = 'npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts';
+const GATE_RUNNER = '$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts';
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export class StageCompleteError extends Error {}

@@ -451,7 +451,7 @@ export function validatePlanProbes(manifest, { manifestPath, cwd = process.cwd()
     const repaired = candidates.some((probe) => probe.status === 'FAIL') && profileHasBaselineRepairItem(manifest, runDirectory, target.profile);
     if (!passed && !repaired) {
       const state = candidates.length ? `latest probe status ${candidates.map((probe) => String(probe.status)).join('/')} does not pass` : 'no current probe';
-      throw new ManifestV2PolicyError(`PLAN_PROBE_REQUIRED: ${target.pipeline_id}/${target.gate}: ${state}; run on the clean checkout: npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts --plan-probe ${manifestPath ?? `.tmp/pipelines/${manifest.run_id}/manifest.json`} ${target.pipeline_id} ${target.gate}`);
+      throw new ManifestV2PolicyError(`PLAN_PROBE_REQUIRED: ${target.pipeline_id}/${target.gate}: ${state}; run on the clean checkout: $HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts --plan-probe ${manifestPath ?? `.tmp/pipelines/${manifest.run_id}/manifest.json`} ${target.pipeline_id} ${target.gate}`);
     }
   }
 }

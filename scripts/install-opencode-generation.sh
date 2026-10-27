@@ -408,6 +408,10 @@ fi
   echo "Ошибка: @opencode/plugin dependency missing after commit." >&2
   exit 1
 }
+[[ -x "$CONFIG_HOME/node_modules/.bin/tsx" ]] || {
+  echo "Ошибка: pipeline tsx missing after commit." >&2
+  exit 1
+}
 [[ ! -e "$CONFIG_HOME/plugins/shell-strategy" ]] || {
   echo "Ошибка: legacy shell-strategy plugin path still active." >&2
   exit 1

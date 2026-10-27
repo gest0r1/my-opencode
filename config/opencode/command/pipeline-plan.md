@@ -26,8 +26,8 @@ All distribution CLI invocations use the current runtime user's `$HOME/.config/o
 0. Resolve source first. For GitHub Issue mode use only:
 
 ```text
-npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts probe <issue-number>...
-npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts show <issue-number>...
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts probe <issue-number>...
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts show <issue-number>...
 ```
 
 The GitHub Issue itself is authoritative; PLAN persists normalized semantic evidence via `pipeline-reconcile-cli.ts snapshot-source <run-id>` after writing the draft manifest and before initialization. GitHub remains authoritative; `planning/source-requirements.json` is only the planning baseline for future diff. Freeze the returned repository/source Issue metadata and semantic `requirements_sha256` as `source_requirements_sha256`. The digest covers Issue title/body and human comments while excluding pipeline-owned audit/planning comments. Immediately before design freeze, run the same `probe` again and require the digest to equal the value used for planning. Do not substitute anonymous GitHub HTML/API requests, `webfetch`, free-form `curl` or `github_handoff_probe`.
@@ -170,7 +170,7 @@ Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum`
 For GitHub Issue sourced PLANs, after all required planning gates and deterministic preflight pass and the owner explicitly approves the design freeze, publish the frozen Story/Architecture comments idempotently:
 
 ```text
-npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts publish-plan {run-id}
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts publish-plan {run-id}
 ```
 
 A document longer than one GitHub comment (65 536 characters; the CLI keeps under 65 000) is posted as numbered parts "Pipeline Architecture (i/N)", split at `##` sections, so never shorten the frozen architecture to fit. A publish failure BLOCKS initialization/handoff; it must not alter the requirements digest because pipeline-owned artifact comments are excluded.
@@ -209,7 +209,7 @@ For every `github_ci`/`github_dev` stage freeze `github_gates[stage_id]` with:
 Before freeze inspect the proposed project workflow:
 
 ```text
-npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts inspect <workflow> <terminal-job> --trigger <push|workflow_dispatch> [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode stateful --environment <env> --trusted-ref <ref> --concurrency-group <group>]
+$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts inspect <workflow> <terminal-job> --trigger <push|workflow_dispatch> [--artifact <name>] [--required-job <job>]... [--executor github_ci|github_dev] [--mode stateful --environment <env> --trusted-ref <ref> --concurrency-group <group>]
 ```
 
 TestEngineer/DevOps author the test/resource contract and transitive consumer coverage inside the approved work items; independent planning review checks it. Keep full required commands in `gate_profiles`; diagnostic filters never replace them. Missing impact coverage falls back to full tests. Do not retrofit frozen RUN manifests.
