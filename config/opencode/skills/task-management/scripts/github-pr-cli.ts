@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { linkPr, syncRun } from './pipeline-github-sync.mjs';
 
@@ -296,10 +296,65 @@ export async function publishPullRequest(
   };
 }
 
-function parseArgs(args: string[]): { runId: string; stateRoot: string } {
+// Final release tag, set once after the owner merged the PR with a merge commit: vX.Y.Z goes on the
+// exact candidate that passed every gate (it is a parent of the merge commit, so it is on main's
+// history). Nothing is rebuilt. A squash or rebase merge produced different commits than the ones
+// tested, so it is refused. The milestone is closed when none of its issues is still open.
+export async function releaseAfterMerge(runId: string, options: { stateRoot?: string; cwd?: string } = {}): Promise<Record<string, unknown>> {
+  if (!RUN_ID.test(runId)) throw new GitHubPrCliError('run-id must be path-safe');
+  const cwd = options.cwd ?? process.cwd();
+  const runDir = path.join(path.resolve(options.stateRoot ?? DEFAULT_STATE_ROOT), runId);
+  const state = await readJson(path.join(runDir, 'state.json'), 'state.json');
+  const manifest = await readJson(String(state.manifest_file ?? ''), 'manifest.json');
+  const version = String(manifest.release?.version ?? '');
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new GitHubPrCliError('RELEASE_NOT_VERSIONED: the manifest has no release.version from a milestone');
+  const repository = currentRepository(cwd);
+  if (state.repository && state.repository !== repository) throw new GitHubPrCliError(`current origin does not match frozen repository ${String(state.repository)}`);
+  const candidate = assertCandidate(await readJson(path.join(runDir, 'candidate.json'), 'candidate.json'));
+  requireGitHubAuth(cwd);
+  const recorded = (state.issue_results ?? []).map((item: any) => item?.pr_number).find((value: unknown) => Number.isInteger(value));
+  const pr = JSON.parse(gh(['pr', 'view', recorded ? String(recorded) : candidate.branch, '--repo', repository,
+    '--json', 'number,state,headRefOid,mergeCommit'], cwd));
+  if (pr.state !== 'MERGED') throw new GitHubPrCliError(`RELEASE_PR_NOT_MERGED: PR #${String(pr.number)} is ${String(pr.state)}`);
+  if (String(pr.headRefOid).toLowerCase() !== candidate.candidateSha.toLowerCase()) {
+    throw new GitHubPrCliError(`RELEASE_CANDIDATE_MISMATCH: PR #${String(pr.number)} head ${String(pr.headRefOid)} is not the tested candidate ${candidate.candidateSha}`);
+  }
+  const mergeSha = String(pr.mergeCommit?.oid ?? '');
+  command('git', ['fetch', '--quiet', '--tags', 'origin', 'main:refs/remotes/origin/main'], { cwd });
+  const parents = command('git', ['rev-list', '--parents', '-n', '1', mergeSha], { cwd }).split(/\s+/).slice(1).map((sha) => sha.toLowerCase());
+  if (mergeSha.toLowerCase() !== candidate.candidateSha.toLowerCase() && !parents.includes(candidate.candidateSha.toLowerCase())) {
+    throw new GitHubPrCliError(`RELEASE_NEEDS_MERGE_COMMIT: ${mergeSha} does not contain the tested candidate as a commit; merge PRs with a merge commit`);
+  }
+  const tag = `v${version}`;
+  const existing = spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/tags/${tag}^{commit}`], { cwd, encoding: 'utf8' });
+  if (existing.status === 0) {
+    if (existing.stdout.trim().toLowerCase() !== candidate.candidateSha.toLowerCase()) {
+      throw new GitHubPrCliError(`RELEASE_TAG_EXISTS: ${tag} points at ${existing.stdout.trim()}, not the candidate`);
+    }
+  } else {
+    command('git', ['tag', '-a', tag, candidate.candidateSha, '-m', `Release ${tag} (PR #${String(pr.number)}, run ${runId})`], { cwd });
+    command('git', ['push', 'origin', `refs/tags/${tag}`], { cwd });
+  }
+  let milestone: Record<string, unknown> | null = null;
+  const number = manifest.release?.milestone?.number;
+  if (Number.isInteger(number)) {
+    try {
+      const info = JSON.parse(gh(['api', `repos/${repository}/milestones/${String(number)}`], cwd));
+      if (info.state === 'open' && Number(info.open_issues) === 0) gh(['api', '--method', 'PATCH', `repos/${repository}/milestones/${String(number)}`, '-f', 'state=closed'], cwd);
+      milestone = { number, closed: info.state === 'closed' || Number(info.open_issues) === 0, open_issues: Number(info.open_issues) };
+    } catch (error) {
+      milestone = { number, closed: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  const result = { status: 'PASS', run_id: runId, tag, candidate_sha: candidate.candidateSha, merge_sha: mergeSha, pr_number: pr.number, milestone, released_at: new Date().toISOString() };
+  await writeFile(path.join(runDir, 'release.json'), `${JSON.stringify(result, null, 2)}\n`);
+  return result;
+}
+
+function parseArgs(args: string[]): { commandName: 'create' | 'release'; runId: string; stateRoot: string } {
   const [commandName, runId, ...rest] = args;
-  if (commandName !== 'create' || !runId) {
-    throw new GitHubPrCliError('usage: github-pr-cli.ts create <run-id> [--state-root <path>]');
+  if ((commandName !== 'create' && commandName !== 'release') || !runId) {
+    throw new GitHubPrCliError('usage: github-pr-cli.ts create|release <run-id> [--state-root <path>]');
   }
   let stateRoot = DEFAULT_STATE_ROOT;
   for (let index = 0; index < rest.length; index += 1) {
@@ -314,11 +369,15 @@ function parseArgs(args: string[]): { runId: string; stateRoot: string } {
       throw new GitHubPrCliError(`unexpected argument: ${value}`);
     }
   }
-  return { runId, stateRoot };
+  return { commandName, runId, stateRoot };
 }
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
+  if (parsed.commandName === 'release') {
+    console.log(JSON.stringify(await releaseAfterMerge(parsed.runId, { stateRoot: parsed.stateRoot }), null, 2));
+    return;
+  }
   console.log(JSON.stringify(await publishPullRequest(parsed.runId, {
     stateRoot: parsed.stateRoot,
   }), null, 2));

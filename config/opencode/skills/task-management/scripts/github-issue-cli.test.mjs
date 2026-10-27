@@ -209,3 +209,46 @@ test('publish-plan posts a long Cyrillic architecture as numbered comments under
   assert.match(postedText, /Pipeline Architecture \(2\/2\)/);
   for (const body of postedText.split(/(?=api --method POST)/).filter(Boolean)) assert.ok(body.length < 65_536);
 });
+
+test('milestone lists its open issues, takes the version from its name and blocks an unusable version', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'github-issue-milestone-'));
+  const bin = path.join(root, 'bin'); await mkdir(bin);
+  const git = (cwd, ...args) => { const r = spawnSync('git', args, { cwd, encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  const remote = path.join(root, 'remote.git'); const work = path.join(root, 'work');
+  git(root, 'init', '--bare', '-b', 'main', remote); await mkdir(work);
+  git(work, 'init', '-b', 'main'); git(work, 'config', 'user.email', 't@example.invalid'); git(work, 'config', 'user.name', 'T');
+  await writeFile(path.join(work, 'VERSION'), '0.6.4\n'); git(work, 'add', '.'); git(work, 'commit', '-m', 'base');
+  git(work, 'tag', 'v0.6.4'); git(work, 'remote', 'add', 'origin', remote); git(work, 'push', '-q', 'origin', 'main', '--tags');
+  // The CLI reads the repository from origin's github.com URL; every other git call reaches the local remote.
+  const realGit = spawnSync('which', ['git'], { encoding: 'utf8' }).stdout.trim();
+  await writeFile(path.join(bin, 'git'), `#!/bin/sh\nif [ "$*" = "remote get-url origin" ]; then echo git@github.com:o/r.git; exit 0; fi\nexec ${realGit} "$@"\n`);
+  await chmod(path.join(bin, 'git'), 0o755);
+  await writeFile(path.join(bin, 'gh'), `#!/bin/bash
+if [[ "$1" == auth ]]; then exit 0; fi
+case "$*" in
+  *milestones*) echo '[[{"number":7,"title":"v.0.6.5"},{"number":6,"title":"v.0.6.4"},{"number":5,"title":"next"}]]' ;;
+  *milestone=7*) echo '[[{"number":12,"title":"b"},{"number":11,"title":"a"},{"number":13,"title":"pr","pull_request":{}}]]' ;;
+  *milestone=6*) echo '[[{"number":20,"title":"c"}]]' ;;
+  *milestone=5*) echo '[[{"number":21,"title":"d"}]]' ;;
+  *) exit 2 ;;
+esac
+`);
+  await chmod(path.join(bin, 'gh'), 0o755);
+  const milestone = (name) => spawnSync('npx', ['--yes', 'tsx', CLI, 'milestone', name], { cwd: work, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+
+  let result = milestone('v.0.6.5');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  let out = JSON.parse(result.stdout);
+  assert.equal(out.version, '0.6.5');
+  assert.deepEqual(out.issue_numbers, [11, 12]);
+  assert.deepEqual(out.conflicts, []);
+
+  result = milestone('6');
+  assert.equal(result.status, 1);
+  out = JSON.parse(result.stdout);
+  assert.equal(out.status, 'BLOCKED');
+  assert.deepEqual(out.conflicts, ['VERSION_TAGGED: tag v0.6.4 already exists', 'VERSION_BEHIND_MAIN: main VERSION is 0.6.4, milestone asks for 0.6.4']);
+
+  out = JSON.parse(milestone('next').stdout);
+  assert.match(out.conflicts[0], /^MILESTONE_NOT_SEMVER/);
+});
