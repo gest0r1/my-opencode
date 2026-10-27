@@ -61,3 +61,24 @@ test('malformed lock and recovery guard fail closed', async () => {
     await rm(root,{recursive:true,force:true});
   }
 });
+
+test('runtime lock of a dead owner is reclaimed, a live owner keeps it', async () => {
+  const { openRuntimeLock } = await import('./runtime-locks.mjs');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'runtime-lock-'));
+  const file = path.join(root, 'target.lock');
+  try {
+    await writeFile(file, JSON.stringify({ lock: 'dev', run_id: 'old', pid: 2147483647 }));
+    const handle = await openRuntimeLock(file);
+    await handle.writeFile(JSON.stringify({ lock: 'dev', run_id: 'new', pid: process.pid }));
+    await handle.close();
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).run_id, 'new');
+
+    await assert.rejects(openRuntimeLock(file), error => error?.code === 'EEXIST');
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).pid, process.pid);
+
+    await writeFile(file, 'not json');
+    await assert.rejects(openRuntimeLock(file), error => error?.code === 'EEXIST');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -280,6 +280,41 @@ async function syncMain(manifest:Manifest,manifestPath:string,cwd:string,check:b
   try{const runtime=await freshness(manifest,manifestPath,cwd);return {...base,head_sha:runtime.merged_head_sha,run_base_sha:runtime.run_base_sha,checkpoint_sha:checkpoint};}
   catch(error){throw new GateError(`${error instanceof Error?error.message:String(error)}; checkpoint commit ${checkpoint} kept (no reset)`);}
 }
+// PLAN-time sync, before any manifest is frozen: bring local main up to origin/main and merge it
+// into the owner's PLAN branch, so a branch that fell behind main does not stop PLAN for the owner.
+// It never resets, rebases or force-updates. Once a run is initialized here, sync-main <manifest>
+// with its scope checks is the only sync.
+async function syncPlan(cwd:string,check:boolean):Promise<Record<string,unknown>>{
+  const identity=await inspect(cwd);
+  if(!identity.linked_worktree||!BRANCH.test(String(identity.branch)))throw new GateError('sync-plan requires the owner-created linked worktree on a non-default branch');
+  let runs:string[]=[];try{runs=await readdir(join(cwd,'.tmp','pipelines'));}catch{}
+  for(const run of runs)if(await lstat(join(cwd,'.tmp','pipelines',run,'state.json')).then(()=>true,()=>false))throw new GateError(`SYNC_PLAN_AFTER_FREEZE: run ${run} is initialized; use sync-main <manifest>`);
+  await git(['fetch','origin','main:refs/remotes/origin/main'],cwd);
+  const originMain=await git(['rev-parse','refs/remotes/origin/main'],cwd);
+  let localMain=String(identity.main_sha);
+  const mainBehind=localMain!==originMain&&await gitSucceeds(['merge-base','--is-ancestor',localMain,originMain],cwd);
+  const mainAhead=localMain!==originMain&&!mainBehind;
+  const branchHasMain=await gitSucceeds(['merge-base','--is-ancestor',originMain,'HEAD'],cwd);
+  const base={origin_main_sha:originMain,local_main_sha:localMain,local_main_diverged:mainAhead,head_sha:identity.head,contains_main:branchHasMain,clean:identity.clean};
+  if(check)return {...base,action:mainBehind||!branchHasMain?'sync':'none'};
+  if(mainAhead)throw new GateError(`SYNC_PLAN_LOCAL_MAIN_DIVERGED: local main ${localMain} is not an ancestor of origin/main ${originMain}`);
+  if(mainBehind){
+    const holder=(await git(['worktree','list','--porcelain'],cwd)).split('\n\n').find(block=>block.split('\n').includes('branch refs/heads/main'));
+    const holderDir=holder?.split('\n').find(line=>line.startsWith('worktree '))?.slice(9);
+    if(holderDir){
+      if(await git(['status','--porcelain','--untracked-files=no'],holderDir))throw new GateError(`SYNC_PLAN_MAIN_CHECKOUT_DIRTY: ${holderDir}`);
+      await git(['merge','--ff-only','refs/remotes/origin/main'],holderDir);
+    }else await git(['update-ref','refs/heads/main',originMain,localMain],cwd);
+    localMain=originMain;
+  }
+  if(branchHasMain)return {...base,action:mainBehind?'main_fast_forwarded':'none',local_main_sha:localMain};
+  if(!identity.clean)throw new GateError('SYNC_PLAN_DIRTY: commit or remove tracked changes before merging main');
+  if(!await gitSucceeds(['merge','--no-edit','refs/heads/main'],cwd)){
+    await gitSucceeds(['merge','--abort'],cwd);
+    throw new GateError('SYNC_PLAN_CONFLICT: merging main into the PLAN branch conflicts; the branch is unchanged');
+  }
+  return {...base,action:'merged',local_main_sha:localMain,head_sha:await git(['rev-parse','HEAD'],cwd)};
+}
 async function publish(manifest: Manifest, manifestPath: string, cwd: string): Promise<Record<string, unknown>> {
   assertSetup(manifest.git_setup);
   let changed = await verify(manifest, manifestPath, cwd);
@@ -442,12 +477,17 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await inspect(cwd) }));
     return;
   }
+  if (command === 'sync-plan') {
+    const extra=process.argv.slice(3);if(extra.some(arg=>arg!=='--check'))throw new GateError('usage: sync-plan [--check]');
+    console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await syncPlan(cwd, extra.includes('--check')) }));
+    return;
+  }
   if (command === 'baseline' && manifestPath) {
     console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await baselineSnapshot(manifestPath,cwd) }));
     return;
   }
   if (!manifestPath || !['freshness', 'adopt', 'verify', 'publish', 'sync-main'].includes(command ?? '')) {
-    throw new GateError('usage: git-worktree-cli.ts inspect | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | sync-main <manifest.json> [--check] | quarantine-strays <manifest.json> [--apply] [--include-pre-run --paths <path>...] | stage-new <manifest.json> | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
+    throw new GateError('usage: git-worktree-cli.ts inspect | sync-plan [--check] | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | sync-main <manifest.json> [--check] | quarantine-strays <manifest.json> [--apply] [--include-pre-run --paths <path>...] | stage-new <manifest.json> | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
   assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);
