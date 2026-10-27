@@ -21,6 +21,17 @@ def forbid(text: str, needle: str):
 def main():
     require(provision, 'if ! id opencode >/dev/null 2>&1; then useradd --create-home --shell /bin/bash opencode; fi')
     require(provision, 'setup-opencode-package-sudo.sh')
+    # Both installers download only the files named in their provisioning loop into a temp dir, so every
+    # helper provision-runtime-user.sh runs must be in that loop, or the install stops after the first helper.
+    import re
+    called = sorted(set(re.findall(r'/(setup-[a-z-]+\.sh)"', provision)))
+    assert called, 'provision-runtime-user.sh calls no setup helper'
+    for name, text in (('install.sh', config_installer), ('install-openchamber.sh', combined_installer)):
+        loop = re.search(r'for file in ([^;]+); do', text)
+        assert loop, f'{name} has no provisioning download loop'
+        fetched = loop.group(1).split()
+        for helper in ['provision-runtime-user.sh', *called]:
+            assert helper in fetched, f'{name} does not download {helper}'
     require(setup, 'opencode-install-packages')
 
     forbidden = (
