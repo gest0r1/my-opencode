@@ -18,7 +18,7 @@ test('PLAN uses runtime-user HOME instead of root config paths', async () => {
   assert.doesNotMatch(plan, hardCodedRootInvocation, 'pipeline-plan.md: executable command hard-codes root runtime path');
   assert.match(plan, /\$HOME\/\.config\/opencode\/skills\/task-management\/scripts\/github-issue-cli\.ts probe/);
   assert.match(plan, /\$HOME\/\.config\/opencode\/skills\/task-management\/scripts\/github-actions-gate-cli\.ts inspect/);
-  assert.match(plan, /node \$HOME\/\.config\/opencode\/skills\/task-management\/scripts\/pipeline-github-sync\.mjs sync/);
+  assert.match(await text('config/opencode/skills/task-management/scripts/stage-cli.ts'), /\['github-sync', \[script\('pipeline-github-sync\.mjs'\), 'sync', runId/);
 });
 
 test('replan stays parent-owned and uses exact allowlisted invocations', async () => {

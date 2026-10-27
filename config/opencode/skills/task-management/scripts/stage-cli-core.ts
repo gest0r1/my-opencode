@@ -65,6 +65,7 @@ interface ResolvedRules {
 
 export interface StageCommandOptions {
   json: boolean;
+  chart?: boolean;
   stateRoot: string;
   pipelineId?: string;
   message?: string;
@@ -2442,6 +2443,7 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === '--json') options.json = true;
+    else if (argument === '--chart') options.chart = true;
     else if (argument === '--state-root') options.stateRoot = args[++index] ?? DEFAULT_STATE_ROOT;
     else if (argument === '--pipeline') options.pipelineId = args[++index];
     else if (argument === '--repair-pipeline') options.repairPipelineId = args[++index];
@@ -2477,6 +2479,34 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
     else if (argument) positional.push(argument);
   }
   return { positional, options };
+}
+
+// One block the orchestrator pastes as is when the owner asks for status: progress, then one line
+// per lane with its dependencies and a marker per stage, then the repair cycles that matter.
+export function renderChart(state: PipelineState): string {
+  const pipelines = Object.values(state.pipelines);
+  const stages = pipelines.flatMap((pipeline) => pipeline.stage_order.map((stage) => pipeline.stages[stage]));
+  const done = stages.filter((runtime) => ['completed', 'skipped'].includes(String(runtime?.status))).length;
+  const width = 20;
+  const filled = stages.length ? Math.round((done / stages.length) * width) : 0;
+  const percent = stages.length ? Math.round((done / stages.length) * 100) : 0;
+  const cycles = stages.reduce((sum, runtime) => sum + (runtime?.technical_fix_cycles ?? 0), 0);
+  const marker: Record<string, string> = { completed: '✓', skipped: '–', in_progress: '▶', blocked: '■', failed: '✗' };
+  const name = Math.max(...pipelines.map((pipeline) => pipeline.id.length), 4);
+  const lines = [`${state.run_id}  ${state.status}  ${'█'.repeat(filled)}${'░'.repeat(width - filled)} ${done}/${stages.length} stages ${percent}%  fix cycles ${cycles}`];
+  for (const pipeline of pipelines) {
+    const chain = pipeline.stage_order.map((stage) => {
+      const runtime = pipeline.stages[stage];
+      const used = runtime?.technical_fix_cycles ?? 0;
+      const notes = [used && runtime ? `fix ${used}/${technicalFixLimit(runtime)}` : '', runtime?.class_review_due?.length ? `class review: ${runtime.class_review_due.join(',')}` : '',
+        runtime?.architecture_review_due ? 'architecture review' : ''].filter(Boolean);
+      return `${marker[String(runtime?.status)] ?? '·'} ${stage}${notes.length ? ` [${notes.join('; ')}]` : ''}`;
+    }).join(' → ');
+    const after = pipeline.depends_on.length ? `  (after ${pipeline.depends_on.join(', ')})` : '';
+    lines.push(`${pipeline.id.padEnd(name)}  ${pipeline.status.padEnd(14)} ${chain}${after}`);
+  }
+  lines.push('✓ done  ▶ running  ■ blocked  ✗ failed  – skipped  · pending');
+  return lines.join('\n');
 }
 
 function printState(state: PipelineState, asJson: boolean): void {
@@ -2548,12 +2578,14 @@ function usage(): string {
     '  stage-cli rules [rules-file] [--json]',
     '  stage-cli preflight <manifest> [--environment] [--json]',
     '  stage-cli plan-run-preflight <manifest> [--environment] [--json]',
+    '  stage-cli plan-check <manifest> [--state-root <path>]   (plan-run-preflight + adopt + verify)',
+    '  stage-cli plan-start <manifest> [--state-root <path>]   (plan-check + init + approve + sync + validate + next)',
     '  stage-cli artifacts <run-id> <run-relative-path>... [--state-root <path>] [--json]',
     '  stage-cli plan-review <run-id> <gate> --evidence <review> [--defect-class <a,b>] | --research <file> | --carry <carried-findings> [--json]',
     '  stage-cli policy [repo-relative-path] [--json]',
     '  stage-cli init <manifest> [--state-root <path>] [--environment]',
     '  stage-cli approve <run-id> [--state-root <path>]',
-    '  stage-cli status <run-id> [--json] [--state-root <path>]',
+    '  stage-cli status <run-id> [--json|--chart] [--state-root <path>]',
     '  stage-cli validate <run-id> [--json] [--state-root <path>]',
     '  stage-cli run-preflight <run-id> [--json] [--state-root <path>]',
     '  stage-cli next <run-id> [--json] [--state-root <path>]',
@@ -2664,7 +2696,9 @@ export async function runCli(args: string[]): Promise<void> {
   const runId = positional[1];
   if (!runId) throw new StageCliError('run-id is required');
   if (command === 'status') {
-    printState(await readState(options.stateRoot, runId), options.json);
+    const state = await readState(options.stateRoot, runId);
+    if (options.chart) console.log(renderChart(state));
+    else printState(state, options.json);
     return;
   }
   if (command === 'validate') {
