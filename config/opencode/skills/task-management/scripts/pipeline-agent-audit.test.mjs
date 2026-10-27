@@ -354,7 +354,7 @@ test('RUN authorizes bounded runtime scope before consuming technical-fix cycles
 test('parent keeps pipeline transport file-backed and orchestration-only', async () => {
   const parent = await text('config/opencode/agent/core/openstage-orchestrator.md');
   assert.match(parent, /At entry load only the active installed command/);
-  assert.match(parent, /commands\/pipeline-\{plan,run,replan,status\}/);
+  assert.match(parent, /commands\/pipeline-\{plan,run,replan,status,release,quick\}/);
   assert.match(parent, /context\/transport rules below own what crosses the parent conversation boundary/i);
   assert.match(parent, /do not read that packet in the parent/i);
   assert.match(parent, /detail_required=false/);

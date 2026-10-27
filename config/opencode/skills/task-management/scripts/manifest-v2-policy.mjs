@@ -456,6 +456,18 @@ export function validatePlanProbes(manifest, { manifestPath, cwd = process.cwd()
   }
 }
 
+// release: the version PLAN took from the milestone name (github-issue-cli milestone). rc_tags turns on
+// vX.Y.Z-rc.N tags at publication; it stays off until the project's dev installer accepts them.
+function validateRelease(manifest) {
+  if (manifest.release === undefined) return;
+  const release = manifest.release;
+  if (!release || typeof release !== 'object' || !/^\d+\.\d+\.\d+$/.test(String(release.version ?? '')) ||
+      !release.milestone || !Number.isInteger(release.milestone.number) || typeof release.milestone.title !== 'string' ||
+      (release.rc_tags !== undefined && typeof release.rc_tags !== 'boolean')) {
+    throw new ManifestV2PolicyError('release must be {version: "X.Y.Z", milestone: {number, title}, rc_tags?: boolean}');
+  }
+}
+
 function validateSourceRequirements(manifest) {
   if (manifest.source_type !== 'github_issues') return;
   if (!SHA256.test(String(manifest.source_requirements_sha256 ?? ''))) {
@@ -950,6 +962,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
   validateGithubExecutionContract(manifest);
   validateTestRework(manifest);
   validateSourceRequirements(manifest);
+  validateRelease(manifest);
   assertConflictSerialization(manifest);
   const projectPolicy = validateProjectPolicy(manifest, cwd);
   const usesOpenCodeHost = (manifest.pipelines ?? []).some((pipeline) =>

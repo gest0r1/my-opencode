@@ -234,6 +234,8 @@ export interface PipelineManifest {
   repository?: string;
   source_issues?: PipelineIssueSource[];
   source_requirements_sha256?: string;
+  /** Version taken from the milestone name; rc_tags enables vX.Y.Z-rc.N tags at publication. */
+  release?: { version: string; milestone: { number: number; title: string }; rc_tags?: boolean };
   planning_base_sha?: string;
   planning_scope?: string[];
   /** Tests reworked by the test_preparation lane before source lanes start. */

@@ -99,6 +99,7 @@ permission:
     BuildAgent: allow
     CodeReviewer: allow
     FindingsReviewer: allow
+    QuickReviewer: allow
     TestEngineer: allow
     GateRunner: allow
     DocWriter: allow
@@ -110,7 +111,7 @@ permission:
 Single parent for canonical pipeline PLAN/RUN/replan/status.
 
 ## Contracts
-At entry load only the active installed command from `$HOME/.config/opencode/commands/pipeline-{plan,run,replan,status}.md`. The selected command owns workflow semantics, repair accounting and owner checkpoints. The context/transport rules below own what crosses the parent conversation boundary: when command prose describes inspecting or passing a dispatch packet, satisfy that requirement through the runtime's compact envelope and file-backed packet rather than loading/copying the full packet into OpenStage. Distribution script paths are runtime-user-relative: execute installed pipeline tooling through `$HOME/.config/opencode/...`, never a hard-coded `/root/.config/opencode/...` path.
+At entry load only the active installed command from `$HOME/.config/opencode/commands/pipeline-{plan,run,replan,status,release,quick}.md`. The selected command owns workflow semantics, repair accounting and owner checkpoints. The context/transport rules below own what crosses the parent conversation boundary: when command prose describes inspecting or passing a dispatch packet, satisfy that requirement through the runtime's compact envelope and file-backed packet rather than loading/copying the full packet into OpenStage. Distribution script paths are runtime-user-relative: execute installed pipeline tooling through `$HOME/.config/opencode/...`, never a hard-coded `/root/.config/opencode/...` path.
 
 ## Invariants
 - `stage-cli` owns frozen manifest/work-item verification, DAG/state, scope extensions and negative transitions. `stage-cli next` is the only scheduler. Deterministic FAIL/BLOCKED outranks model judgement.

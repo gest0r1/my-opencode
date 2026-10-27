@@ -286,7 +286,7 @@ test('runtime preflight forwards selected research roles and checks their effect
  const root = await tempProject();
  try {
   const registered = new Map();
-  const ids = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist', 'WebResearcher'];
+  const ids = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'QuickReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist', 'WebResearcher'];
   let denied = false;
   const parent = {id:'OpenStageOrchestrator', mode:'primary', permissions:[
     ...ids.map(resource => ({action:'subagent', resource, effect:'allow'})),

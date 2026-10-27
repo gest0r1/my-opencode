@@ -6,6 +6,7 @@ import { lstat, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/prom
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { gitReadEnv } from './git-readonly.mjs';
+import { classifyChange, workingChange } from './quick-change.mjs';
 import {
   RUNTIME_SCOPE_CLASSES,
   type PipelineState,
@@ -25,7 +26,7 @@ type GitSetup = {
   must_absent?: string[];
 };
 type PreservedBaseline = { head_sha: string; changed_paths: string[]; diff_sha256: string; };
-type Manifest = { run_id?: string; git_setup?: GitSetup; allowed_change_paths?: string[]; freshness_sensitive_paths?: string[]; preserved_baseline?: PreservedBaseline; };
+type Manifest = { run_id?: string; release?: { version?: string; rc_tags?: boolean }; git_setup?: GitSetup; allowed_change_paths?: string[]; freshness_sensitive_paths?: string[]; preserved_baseline?: PreservedBaseline; };
 type RuntimeStateView = Pick<PipelineState, 'run_id' | 'runtime_scope_extensions'>;
 type GitRuntime = { planning_base_sha: string; run_base_sha: string; merged_head_sha: string; upstream_changed_files: string[]; refreshed_at: string; };
 class GateError extends Error {}
@@ -315,6 +316,22 @@ async function syncPlan(cwd:string,check:boolean):Promise<Record<string,unknown>
   }
   return {...base,action:'merged',local_main_sha:localMain,head_sha:await git(['rev-parse','HEAD'],cwd)};
 }
+// Each published candidate of a versioned run gets vX.Y.Z-rc.N, so the dev contour installs a named
+// candidate. The final vX.Y.Z is set only after the PR merges (github-pr-cli release). A candidate
+// that already carries an rc tag keeps it; tags are never moved or deleted.
+async function tagReleaseCandidate(manifest: Manifest, candidate: string, cwd: string): Promise<string | null> {
+  const version = manifest.release?.version;
+  if (!manifest.release?.rc_tags || !version || !/^\d+\.\d+\.\d+$/.test(version)) return null;
+  await git(['fetch', '--quiet', 'origin', `+refs/tags/v${version}-rc.*:refs/tags/v${version}-rc.*`], cwd).catch(() => '');
+  const pattern = new RegExp(`^v${version.replace(/\./g, '\\.')}-rc\\.(\\d+)$`);
+  const existing = (await git(['tag', '--list', `v${version}-rc.*`], cwd)).split('\n').filter(tag => pattern.test(tag));
+  for (const tag of existing) if ((await git(['rev-parse', `${tag}^{commit}`], cwd)).toLowerCase() === candidate.toLowerCase()) return tag;
+  const next = Math.max(0, ...existing.map(tag => Number(pattern.exec(tag)![1]))) + 1;
+  const tag = `v${version}-rc.${next}`;
+  await git(['tag', '-a', tag, candidate, '-m', `pipeline(${String(manifest.run_id ?? 'run')}): release candidate ${tag}`], cwd);
+  await git(['push', 'origin', `refs/tags/${tag}`], cwd);
+  return tag;
+}
 async function publish(manifest: Manifest, manifestPath: string, cwd: string): Promise<Record<string, unknown>> {
   assertSetup(manifest.git_setup);
   let changed = await verify(manifest, manifestPath, cwd);
@@ -335,8 +352,9 @@ async function publish(manifest: Manifest, manifestPath: string, cwd: string): P
     .split(/\s+/)[0] ?? '';
   if (candidate.toLowerCase() !== remote.toLowerCase()) throw new GateError('remote candidate SHA mismatch');
   const evidencePath = join(dirname(resolve(manifestPath)), 'candidate.json');
+  const rcTag = await tagReleaseCandidate(manifest, candidate, cwd);
   const evidence = { status: 'PASS', run_id: manifest.run_id ?? null, branch: manifest.git_setup.branch,
-    candidate_sha: candidate, remote_sha: remote, changed_files: changed,
+    candidate_sha: candidate, remote_sha: remote, changed_files: changed, rc_tag: rcTag,
     published_at: new Date().toISOString() };
   await writeJsonAtomic(evidencePath, evidence);
   return { ...evidence, evidence: evidencePath };
@@ -437,6 +455,30 @@ async function stageNew(manifestPath:string,cwd:string):Promise<Record<string,un
   if(added.length)await git(['add','--intent-to-add','--',...added],cwd);
   return {intent_to_add:added,skipped_outside_scope:outside};
 }
+// /pipeline-quick: classify the working-tree change, then commit it to the current branch only when it
+// is still the same change that was classified (and reviewed, when it touches code). Never pushes.
+async function quickChange(cwd: string, quickId: string, commit: string | undefined): Promise<Record<string, unknown>> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(quickId)) throw new GateError('quick id must be path-safe');
+  const branch = await git(['branch', '--show-current'], cwd);
+  if (!BRANCH.test(branch)) throw new GateError(`QUICK_ON_DEFAULT_BRANCH: work in a feature branch, not ${branch || 'a detached HEAD'}`);
+  let protectedPaths: string[] = [];
+  try { protectedPaths = JSON.parse(await readFile(join(cwd, '.opencode', 'pipeline-policy.json'), 'utf8')).protected_paths ?? []; } catch {}
+  const change = workingChange(cwd);
+  const result = { ...classifyChange(change.files, { protectedPaths }), diff_sha256: change.digest, branch };
+  const dir = join(cwd, '.tmp', 'pipelines', quickId);
+  await mkdir(dir, { recursive: true });
+  if (commit === undefined) { await writeJsonAtomic(join(dir, 'quick-check.json'), result); return result; }
+  if (result.status !== 'QUICK') throw new GateError(`QUICK_NEEDS_PLAN: ${result.reasons.join('; ')}`);
+  const checked = JSON.parse(await readFile(join(dir, 'quick-check.json'), 'utf8').catch(() => '{}'));
+  if (checked.diff_sha256 !== change.digest) throw new GateError('QUICK_CHANGED_AFTER_CHECK: run quick-check again');
+  if (result.code_review_required) {
+    const review = JSON.parse(await readFile(join(dir, 'review.json'), 'utf8').catch(() => '{}'));
+    if (review.status !== 'ready' || review.diff_sha256 !== change.digest) throw new GateError('QUICK_REVIEW_REQUIRED: a ready QuickReviewer verdict for this exact diff is missing');
+  }
+  await git(['add', '-A', '--', ...result.files], cwd);
+  await git(['commit', '-m', commit], cwd);
+  return { ...result, commit_sha: await git(['rev-parse', 'HEAD'], cwd) };
+}
 async function main(): Promise<void> {
   const [command, manifestPath] = process.argv.slice(2);
   const cwd = await git(['rev-parse', '--show-toplevel']);
@@ -477,6 +519,15 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await inspect(cwd) }));
     return;
   }
+  if (command === 'quick-check' || command === 'quick-commit') {
+    const rest = process.argv.slice(4);
+    const message = command === 'quick-commit' && rest[0] === '--message' && rest[1] && rest.length === 2 ? rest[1] : undefined;
+    if (!manifestPath || (command === 'quick-check' ? rest.length : !message)) throw new GateError('usage: quick-check <quick-id> | quick-commit <quick-id> --message <text>');
+    const result = await quickChange(cwd, manifestPath, message);
+    console.log(JSON.stringify({ gate: 'git_worktree', command, ...result }));
+    if (result.status !== 'QUICK') process.exitCode = 1;
+    return;
+  }
   if (command === 'sync-plan') {
     const extra=process.argv.slice(3);if(extra.some(arg=>arg!=='--check'))throw new GateError('usage: sync-plan [--check]');
     console.log(JSON.stringify({ status: 'PASS', gate: 'git_worktree', command, ...await syncPlan(cwd, extra.includes('--check')) }));
@@ -487,7 +538,7 @@ async function main(): Promise<void> {
     return;
   }
   if (!manifestPath || !['freshness', 'adopt', 'verify', 'publish', 'sync-main'].includes(command ?? '')) {
-    throw new GateError('usage: git-worktree-cli.ts inspect | sync-plan [--check] | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | sync-main <manifest.json> [--check] | quarantine-strays <manifest.json> [--apply] [--include-pre-run --paths <path>...] | stage-new <manifest.json> | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
+    throw new GateError('usage: git-worktree-cli.ts inspect | sync-plan [--check] | quick-check <quick-id> | quick-commit <quick-id> --message <text> | baseline <base-sha> | freshness|adopt|verify|publish <manifest.json> | sync-main <manifest.json> [--check] | quarantine-strays <manifest.json> [--apply] [--include-pre-run --paths <path>...] | stage-new <manifest.json> | delete|move <run-id> --pipeline --stage --work-item --role --evidence; setup is disabled');
   }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest;
   assertSetup(manifest.git_setup);assertScope(manifest.allowed_change_paths);assertScope(manifest.freshness_sensitive_paths);

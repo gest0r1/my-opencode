@@ -13,7 +13,7 @@ Before creating or starting any PLAN/RUN, call `pipeline_runtime_preflight`. Req
 
 Build a design-freeze PLAN only. Never implement source changes, create a worktree/branch/session, switch checkout, rebase, merge, clean, reset or invoke `openchamber session.create`. Owner opens an existing worktree-session and invokes this command inside that session. Other worktrees may PLAN concurrently; only one RUN executes at a time.
 
-`$ARGUMENTS` selects exactly one source mode: `--revise <run-id>` for a not-yet-implemented PLAN; same-repository Issue refs such as `#51 #47`; an existing task/plan file path; or free task text. Empty arguments are invalid. There is NO fallback to `docs/plan.md` and no OpenChamber linked-Issue source: GitHub Issues are selected explicitly with `#N`. `docs/pipeline-rules.md` remains the rules path; project rules take precedence and invalid rules BLOCK. PLAN and all delegated agents must never edit project or distribution rules.
+`$ARGUMENTS` selects exactly one source mode: `--revise <run-id>` for a not-yet-implemented PLAN; `--milestone <title|number>` for every open Issue of a milestone; same-repository Issue refs such as `#51 #47`; an existing task/plan file path; or free task text. Empty arguments are invalid. There is NO fallback to `docs/plan.md` and no OpenChamber linked-Issue source: GitHub Issues are selected explicitly with `#N`. `docs/pipeline-rules.md` remains the rules path; project rules take precedence and invalid rules BLOCK. PLAN and all delegated agents must never edit project or distribution rules.
 
 For `--revise <run-id>`, use the existing folder. Before changing manifest or gate artifacts, write a fresh independent revision review containing the current `manifest_sha256`, `owner_contract_changed: true|false`, `affected_gates[]` and `reason`, then call `pipeline-reconcile-cli.ts revise-plan <run-id> --evidence <review-path>`. It rejects revision after any source-changing agent stage actually started. Replace stories/manifest/work items in place; repeat only invalidated gates, keeping unaffected ready artifacts. Never reset state manually. If owner scope/behavior/constraints changed, obtain approval again; technical corrections reuse the previous approval when the validated revised manifest is initialized. Log a short reason/gate list, not old story versions.
 
@@ -23,7 +23,7 @@ All distribution CLI invocations use the current runtime user's `$HOME/.config/o
 
 ## Preflight: inspect only
 
-0. Resolve source first. For GitHub Issue mode use only:
+0. Resolve source first. For `--milestone`, first run `$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts milestone <title|number>`. Its `issue_numbers` are the Issue refs of this PLAN. Its `version` is the release version: freeze `release: {version, milestone: {number, title}, rc_tags}` in the manifest. Set `rc_tags` to `true` only when `.opencode/pipeline-policy.json` has `release.rc_tags: true`, which means the project's dev installer accepts `vX.Y.Z-rc.N`. Never ask the owner about the version and never choose another one. `status: BLOCKED` stops PLAN with its `conflicts[]` quoted as they are: the owner fixes the milestone (name, tag, VERSION) and PLAN starts again. For GitHub Issue mode use only:
 
 ```text
 $HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts probe <issue-number>...
