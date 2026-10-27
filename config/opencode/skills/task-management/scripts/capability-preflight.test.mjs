@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertPipelineCapabilities } from './capability-preflight.mjs';
 
-const workers = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
+const workers = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
 const advisoryPermissions = [
   {action: 'bash', resource: '*', effect: 'deny'},
   {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*', effect: 'allow'},
@@ -139,6 +139,6 @@ test('WebResearcher is checked only when selected, including delegation and mode
   assert.equal(assertPipelineCapabilities(input).subagents_checked, workers.length + 1);
   assert.throws(() => assertPipelineCapabilities({...input, agents: valid.agents}), /subagent:WebResearcher/);
   assert.throws(() => assertPipelineCapabilities({...input, permissions: valid.permissions}), /permission:subagent:WebResearcher:ask/);
-  const agents = input.agents.map(a => a.id === 'WebResearcher' ? {...a, model: 'opencode-go/longcat-2.5-preview-free'} : a);
+  const agents = input.agents.map(a => a.id === 'WebResearcher' ? {...a, model: 'opencode/deepseek-v4.1-flash-free'} : a);
   assert.throws(() => assertPipelineCapabilities({...input, agents, models: [{providerID: 'openai', id: 'other'}]}), /PIPELINE_MODEL_UNAVAILABLE: WebResearcher/);
 });
