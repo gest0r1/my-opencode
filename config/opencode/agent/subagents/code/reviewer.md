@@ -56,6 +56,8 @@ Give every blocking finding a `defect_class` key: short kebab-case, naming the m
 
 ## Review scope
 
+Work items may carry `carried_findings` from PLAN (technical findings the plan review left open). Verify each one as an acceptance check of that lane: closed, or a blocking finding with its original `defect_class`.
+
 A lane review (`review` stage of a source lane) covers that lane's diff against its work
 items. The integrated review of the delivery sink covers what lane reviews could not see:
 interaction between lanes, contracts across lanes, and changes made after lane reviews.

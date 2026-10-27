@@ -28,6 +28,7 @@ const flash41 = [
   'config/opencode/agent/subagents/core/task-manager.md',
   'config/opencode/agent/subagents/planning/story-mapper.md',
   'config/opencode/agent/subagents/system-builder/agent-generator.md',
+  'config/opencode/agent/subagents/core/externalscout.md',
 ];
 
 test('approved DeepSeek agents use V4.1 Flash', () => {
@@ -83,10 +84,12 @@ test('MiMo 2.6 Flash', () => {
   }
 });
 
+test('WebResearcher uses the free DeepSeek V4.1 Flash', () => {
+  assert.equal(value('config/opencode/agent/subagents/core/web-researcher.md', 'model'), 'opencode/deepseek-v4.1-flash-free');
+});
+
 test('LongCat for auxiliary search and analysis', () => {
   for (const path of [
-    "config/opencode/agent/subagents/core/web-researcher.md",
-    "config/opencode/agent/subagents/core/externalscout.md",
     "config/opencode/agent/subagents/core/context-retriever.md",
     "config/opencode/agent/data/data-analyst.md"
 ]) {

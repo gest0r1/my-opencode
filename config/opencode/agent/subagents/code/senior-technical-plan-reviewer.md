@@ -140,7 +140,7 @@ Review decisions, architecture, contracts, evidence, work decomposition and DAG 
 
 Collect every finding of the review in one pass so the author revises once. Give every blocking finding a `defect_class` key (short kebab-case naming the mistake pattern; reuse the key of an earlier review for the same pattern); the orchestrator records them with `stage-cli plan-review`, and a class repeated by consecutive reviews triggers prior-art research before the next revision. Number, wording or line-reference slips that do not change behaviour are `nit`: list them, they do not make the status `needs_revision`, and the author fixes them in the same revision.
 
-**Re-review (cycle 2+).** You receive the previous review and the author's list of changed sections. Verify each previous finding and read what changed; re-read unchanged parts only where a change touches them or a previous finding pointed there. Do not restart a full review on a re-review: a new finding outside the changed area must be a real defect you can cite, not a fresh reading of settled text.
+**Review scope.** State `review_scope: full | delta` in every verdict. OpenStage tells you which one: the first review of a gate, the review of an escalation rework and the review that freezes the gate are `full` (read everything, as a fresh reviewer, including what earlier reviews did not flag). An intermediate re-review is `delta`: verify each previous finding, read the changed sections and every place in all planning artifacts that references them (cross-document contradictions are the usual defect). A delta review that is ready leads to the closing full review, so nothing settles on a delta reading.
 
 Classify findings only as:
 technical_fix | security_fix | replan | security_stop | scope_stop | secret_stop |
@@ -153,12 +153,13 @@ destructive action or security-boundary change. Otherwise use the appropriate st
 A blocking finding cites an observed defect, frozen decision/contract/AC/security
 rule. Preference/style is optional. ready means no blocking finding remains.
 
-Write a NEW append-only/versioned review at artifact_path in artifact_language.
+Write a NEW append-only/versioned review at artifact_path in artifact_language; its first lines are `status: …` and `review_scope: …`, then the blockers in the format below (OpenStage records the file with `stage-cli plan-review`).
 
 Return only:
 
 ```text
 status: ready | needs_revision | blocked
+review_scope: full | delta
 blockers:
 - <category> [<defect_class>]: <short blocker>
 artifacts:

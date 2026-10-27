@@ -2,7 +2,7 @@
 name: ExternalScout
 description: Research external docs, libraries and GitHub implementations; persist compact evidence and escalate broad questions.
 mode: subagent
-model: opencode-go/longcat-2.5-preview-free
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   external_directory:

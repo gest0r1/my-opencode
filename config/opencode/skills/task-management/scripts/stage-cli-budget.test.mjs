@@ -804,7 +804,7 @@ test('the 5th charged cycle flags an architecture checkpoint; the next cycle nee
   assert.equal(JSON.parse(result.stdout).pipelines.lane.stages['code-review'].technical_fix_cycles, 6);
 });
 
-test('a defect class repeated by consecutive reviews needs a class review; a recurrence after the rework goes to the owner', async () => {
+test('a defect class repeated by consecutive reviews needs a class review; a recurrence after the rework needs new research, not the owner', async () => {
   const fx = await lanesFixture('class-recurrence');
   const again = () => { fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start'); };
   const runtime = () => fx.status().pipelines.lane.stages['code-review'];
@@ -858,16 +858,23 @@ test('a defect class repeated by consecutive reviews needs a class review; a rec
   assert.equal(result.status, 0, result.stderr);
   assert.equal(runtime().technical_fix_cycles, 2);
 
-  // The same class after its rework is no longer the coder's to patch.
+  // The same class after its rework needs a new review with new research and a changed approach; nobody waits for the owner.
   again();
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer']);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /CLASS_RECURRENCE_AFTER_REWORK: validator-laxer-than-consumer/);
-  const state = fx.status();
-  assert.equal(state.pipelines.lane.stages['code-review'].status, 'blocked');
-  assert.equal(state.pipelines.lane.stages['code-review'].technical_fix_cycles, 2);
-  assert.equal(state.pipelines.lane.status, 'blocked');
-  assert.deepEqual(fx.next(), ['other/implementation']);
+  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED: lane\/code-review classes=validator-laxer-than-consumer recurred after rework/);
+  assert.equal(runtime().status, 'in_progress');
+  assert.equal(runtime().technical_fix_cycles, 2);
+  result = await record({}); assert.match(result.stderr, /new research_artifact required/);
+  await writeFile(path.join(runDir, 'research-2.md'), '# prior art 2\nUse the producer output as the oracle.\n');
+  result = await record({ research_artifact: path.join(runDir, 'research-2.md') }); assert.match(result.stderr, /approach summary must change/);
+  result = await record({ research_artifact: path.join(runDir, 'research-2.md'), approach: 'remove_mechanism',
+    summary: 'drop the second reader; serve the built artifact as is' });
+  assert.equal(result.status, 0, result.stderr);
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(runtime().technical_fix_cycles, 3);
+  assert.deepEqual(fx.next(), ['lane/implementation', 'other/implementation']);
 });
 
 test('a class review satisfies a pending architecture checkpoint; unrelated classes keep the plain loop', async () => {
