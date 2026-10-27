@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertPipelineCapabilities } from './capability-preflight.mjs';
 
-const workers = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
+const workers = ['ContextScout', 'ExternalScout', 'StoryMapper', 'SeniorStoryReviewer', 'ArchitectureAnalyzer', 'ContractManager', 'PrioritizationEngine', 'SeniorTechnicalPlanReviewer', 'TaskManager', 'CoderAgent', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'TestEngineer', 'GateRunner', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist'];
 const advisoryPermissions = [
   {action: 'bash', resource: '*', effect: 'deny'},
   {action: 'bash', resource: 'npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts * --advisory*', effect: 'allow'},
