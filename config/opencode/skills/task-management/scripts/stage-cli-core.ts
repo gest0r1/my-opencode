@@ -22,6 +22,9 @@ const DEFAULT_TECHNICAL_FIX_LIMIT = 5;
 const MAX_TECHNICAL_FIX_LIMIT = 20;
 // Every ARCHITECTURE_REVIEW_AFTER-th charged cycle of one stage flags an architecture checkpoint.
 const ARCHITECTURE_REVIEW_AFTER = 5;
+// A defect class named by two consecutive negative results stops the patch loop: the next cycle
+// needs a recorded class review (prior-art research + block rework), not another literal fix.
+const DEFECT_CLASS_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}$/;
 const STATE_FILE = 'state.json';
 const LOCK_FILE = '.lock';
 const HUMAN_ONLY = 'human_only';
@@ -72,6 +75,9 @@ export interface StageCommandOptions {
   repairClass?: 'technical_fix' | 'security_fix';
   cycles?: number;
   repairPipelineId?: string;
+  defectClasses?: string[];
+  researchPath?: string;
+  carryPath?: string;
 }
 
 export interface RunnableStage {
@@ -522,8 +528,8 @@ function assertV2PlanningShape(manifest: PipelineManifest): void {
     if (record.review !== undefined) {
       assertFrozenArtifactShape(record.review, `planning_readiness.gates.${gate}.review`);
     }
-    if (record.cycles !== undefined && (!Number.isInteger(record.cycles) || record.cycles < 1 || record.cycles > 3)) {
-      throw new StageCliError(`planning gate cycles must be 1..3: ${gate}`);
+    if (record.cycles !== undefined && (!Number.isInteger(record.cycles) || record.cycles < 1)) {
+      throw new StageCliError(`planning gate cycles must be a positive integer: ${gate}`);
     }
     if (record.blocking_decision_ids !== undefined) {
       assertStringArray(record.blocking_decision_ids, `planning_readiness.gates.${gate}.blocking_decision_ids`);
@@ -1826,8 +1832,11 @@ export async function recordTechnicalFixCycle(
   repairClass: 'technical_fix' | 'security_fix' = 'technical_fix',
   evidencePath?: string,
   repairPipelineId?: string,
+  defectClasses: string[] = [],
 ): Promise<PipelineState> {
-  return updateState(stateRoot, runId, (state) => {
+  // A recurrence is persisted (stage flag or owner block) before the command fails, so it survives the error.
+  let refusal: StageCliError | undefined;
+  const state = await updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
@@ -1923,6 +1932,35 @@ export async function recordTechnicalFixCycle(
       );
     }
     // Checked after the limit so an exhausted budget keeps its own error; resuming an already charged attempt is free.
+    const classes = resumeChargedRepair ? [] : resultDefectClasses(result, defectClasses);
+    if (!resumeChargedRepair) {
+      if (runtime.class_review_due?.length) {
+        throw new StageCliError(
+          `CLASS_REVIEW_REQUIRED: ${pipeline.id}/${stage} classes=${runtime.class_review_due.join(',')}; run stage-cli class-review-record ${runId} ${stage} --pipeline ${pipeline.id} --evidence <class-review.json>`,
+        );
+      }
+      const cycles = runtime.technical_fix_cycles ?? 0;
+      const previous = runtime.defect_class_history?.at(-1);
+      const recurring = previous?.cycle === cycles ? classes.filter((name) => previous.classes.includes(name)) : [];
+      const reviews = runtime.class_reviews ?? [];
+      // A review recorded since the last charged cycle authorizes exactly one consolidated rework of its classes.
+      const authorized = new Set(reviews.filter((item) => item.after_cycle === cycles).flatMap((item) => item.classes));
+      const reworked = new Set(reviews.filter((item) => item.after_cycle < cycles).flatMap((item) => item.classes));
+      const due = recurring.filter((name) => !authorized.has(name));
+      if (due.length) {
+        const again = due.filter((name) => reworked.has(name));
+        runtime.class_review_due = due;
+        runtime.message = again.length
+          ? `class review due: ${again.join(',')} recurred after its rework; new research and a different approach required`
+          : `class review due: ${due.join(',')} recurred after cycle ${cycles}`;
+        addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
+        refusal = new StageCliError(
+          `CLASS_REVIEW_REQUIRED: ${pipeline.id}/${stage} classes=${due.join(',')} recurred${again.length ? ' after rework' : ''}; research prior art, rework the block, then run stage-cli class-review-record ${runId} ${stage} --pipeline ${pipeline.id} --evidence <class-review.json>`,
+        );
+        return;
+      }
+    }
+    // A due class review also covers the count-based checkpoint, so recurrence is checked first.
     if (!resumeChargedRepair && runtime.architecture_review_due) {
       throw new StageCliError(
         `ARCHITECTURE_REVIEW_REQUIRED: ${pipeline.id}/${stage}; run stage-cli architecture-review-record ${runId} ${stage} --pipeline ${pipeline.id} --evidence <architecture-review.json>`,
@@ -1932,7 +1970,11 @@ export async function recordTechnicalFixCycle(
     runtime.repair_paths = [...scopePreflight.paths];
     runtime.technical_fix_cycles = next;
     if (!resumeChargedRepair && next > 0 && next % ARCHITECTURE_REVIEW_AFTER === 0) runtime.architecture_review_due = true;
-    runtime.message = `${repairClass} cycle ${next}/${limit}`;
+    if (!resumeChargedRepair) {
+      runtime.defect_class_history ??= [];
+      runtime.defect_class_history.push({ cycle: next, classes, evidence_sha256: repairHash });
+    }
+    runtime.message = `${repairClass} cycle ${next}/${limit}${classes.length ? ` classes=${classes.join(',')}` : ''}`;
     state.scope_preflight = undefined;
     if (repairClass === 'security_fix') state.security_fix_preflight = undefined;
 
@@ -1977,6 +2019,25 @@ export async function recordTechnicalFixCycle(
       laneRuntime.current_stage = undefined;
     }
   });
+  if (refusal) throw refusal;
+  return state;
+}
+
+function normalizeDefectClass(value: unknown): string {
+  const name = String(value ?? '').trim().toLowerCase().replace(/\s+/g, '-');
+  if (!DEFECT_CLASS_PATTERN.test(name)) throw new StageCliError(`DEFECT_CLASS_INVALID: ${String(value)} (use a short kebab-case class key)`);
+  return name;
+}
+
+// Classes come from the result (`defect_classes[]` or `findings[].defect_class`) plus `--defect-class`.
+function resultDefectClasses(result: any, extra: string[]): string[] {
+  const named: unknown[] = [...extra];
+  if (Array.isArray(result?.defect_classes)) named.push(...result.defect_classes);
+  for (const list of [result?.findings, result?.blockers]) {
+    if (!Array.isArray(list)) continue;
+    for (const finding of list) if (finding && typeof finding === 'object' && finding.defect_class) named.push(finding.defect_class);
+  }
+  return [...new Set(named.map(normalizeDefectClass))].sort();
 }
 
 function pipelineDependsOn(state: PipelineState, pipelineId: string, targetId: string, seen = new Set<string>()): boolean {
@@ -2293,6 +2354,88 @@ export async function supersedeRun(
   }
 }
 
+type ClassReview = ArchitectureReview & {
+  classes?: unknown; approach?: unknown; research_artifact?: unknown; technical_review_artifact?: unknown;
+};
+
+async function runArtifact(root: string, value: unknown, field: string): Promise<string> {
+  if (typeof value !== 'string' || !value.trim()) throw new StageCliError(`CLASS_REVIEW_INVALID: ${field} is required`);
+  const absolute = resolve(value.startsWith('/') ? value : join(process.cwd(), value));
+  if (!absolute.startsWith(`${root}/`)) throw new StageCliError(`CLASS_REVIEW_INVALID: ${field} must live inside the current run directory`);
+  const content = await readFile(absolute, 'utf8').catch(() => '');
+  if (!content.trim()) throw new StageCliError(`CLASS_REVIEW_INVALID: ${field} is missing or empty: ${value}`);
+  return absolute;
+}
+
+// Records the review that a recurring defect class requires: prior-art research, an architecture decision
+// for the whole block and a fresh technical review of it. It authorizes one consolidated rework cycle and
+// also satisfies a pending architecture checkpoint, since it is the same architect + senior review pair.
+export async function recordClassReview(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  evidencePath: string,
+  pipelineId?: string,
+): Promise<PipelineState> {
+  const root = stateDir(stateRoot, runId);
+  const absoluteEvidence = resolve(evidencePath.startsWith('/') ? evidencePath : join(process.cwd(), evidencePath));
+  if (!absoluteEvidence.startsWith(`${root}/`)) throw new StageCliError('class review evidence must live inside the current run directory');
+  const content = await readFile(absoluteEvidence, 'utf8').catch(() => {
+    throw new StageCliError(`class review evidence not found: ${evidencePath}`);
+  });
+  let review: ClassReview;
+  try { review = JSON.parse(content) as ClassReview; } catch { throw new StageCliError('class review evidence is not valid JSON'); }
+  const research = await runArtifact(root, review.research_artifact, 'research_artifact');
+  await runArtifact(root, review.technical_review_artifact, 'technical_review_artifact');
+  return updateState(stateRoot, runId, (state) => {
+    const pipeline = getPipeline(state, pipelineId);
+    const runtime = pipeline.stages[stage];
+    if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
+    const due = runtime.class_review_due ?? [];
+    if (!due.length) throw new StageCliError(`CLASS_REVIEW_NOT_DUE: ${pipeline.id}/${stage}`);
+    if (review.kind !== 'class_review' || review.run_id !== runId || review.pipeline_id !== pipeline.id || review.stage !== stage) {
+      throw new StageCliError('CLASS_REVIEW_INVALID: kind=class_review with matching run_id, pipeline_id and stage required');
+    }
+    const classes = Array.isArray(review.classes) ? [...new Set(review.classes.map(normalizeDefectClass))].sort() : [];
+    const missing = due.filter((name) => !classes.includes(name));
+    if (missing.length) throw new StageCliError(`CLASS_REVIEW_INVALID: classes must cover ${missing.join(',')}`);
+    // A class that already had a rework needs new research and a changed approach, not the same review again.
+    const researchHash = sha256(readFileSync(research, 'utf8'));
+    for (const previous of (runtime.class_reviews ?? []).filter((item) => item.classes.some((name) => classes.includes(name)))) {
+      if (previous.research_sha256 === researchHash) throw new StageCliError('CLASS_REVIEW_INVALID: the class already had a rework; new research_artifact required');
+      if (previous.summary_sha256 === sha256(String(review.summary).trim())) throw new StageCliError('CLASS_REVIEW_INVALID: the class already had a rework; the approach summary must change');
+    }
+    const approach = review.approach;
+    if (approach !== 'rework_block' && approach !== 'remove_mechanism' && approach !== 'requirements_change') {
+      throw new StageCliError('CLASS_REVIEW_INVALID: approach must be rework_block, remove_mechanism or requirements_change');
+    }
+    if (typeof review.summary !== 'string' || !review.summary.trim()) throw new StageCliError('CLASS_REVIEW_INVALID: summary is required');
+    if (approach !== 'requirements_change' &&
+        [review.requirements_changed, review.acceptance_criteria_changed, review.external_contract_changed,
+          review.security_boundary_changed, review.destructive_change].some((value) => value !== false)) {
+      throw new StageCliError('CLASS_REVIEW_INVALID: rework_block/remove_mechanism need requirements_changed, acceptance_criteria_changed, external_contract_changed, security_boundary_changed and destructive_change all false');
+    }
+    runtime.class_review_due = undefined;
+    runtime.architecture_review_due = false;
+    runtime.class_reviews ??= [];
+    runtime.class_reviews.push({
+      path: absoluteEvidence, sha256: sha256(content), classes, approach, research_artifact: research,
+      research_sha256: researchHash, summary_sha256: sha256(String(review.summary).trim()),
+      after_cycle: runtime.technical_fix_cycles ?? 0, at: now(),
+    });
+    if (approach === 'requirements_change') {
+      runtime.status = 'blocked';
+      runtime.message = 'CLASS_REQUIREMENTS_CHANGE: owner decision; other lanes continue';
+      pipeline.status = 'blocked';
+      pipeline.current_stage = undefined;
+      addHistory(state, pipeline.id, stage, 'blocked', runtime.message);
+    } else {
+      runtime.message = `class review recorded: ${approach} for ${classes.join(',')}; next cycle is one consolidated rework`;
+      addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
+    }
+  });
+}
+
 function parseOptions(args: string[]): { positional: string[]; options: StageCommandOptions } {
   const positional: string[] = [];
   const options: StageCommandOptions = { json: false, stateRoot: DEFAULT_STATE_ROOT };
@@ -2304,6 +2447,11 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
     else if (argument === '--repair-pipeline') options.repairPipelineId = args[++index];
     else if (argument === '--message') options.message = args[++index];
     else if (argument === '--evidence') options.evidencePath = args[++index];
+    else if (argument === '--research') options.researchPath = args[++index];
+    else if (argument === '--carry') options.carryPath = args[++index];
+    else if (argument === '--defect-class') {
+      options.defectClasses = [...(options.defectClasses ?? []), ...String(args[++index] ?? '').split(',').filter(Boolean)];
+    }
     else if (argument === '--environment') options.environment = true;
     else if (argument === '--reason') options.reason = args[++index];
     else if (argument === '--cycles') {
@@ -2353,7 +2501,8 @@ function printState(state: PipelineState, asJson: boolean): void {
       const repair = runtime?.repair_origin_stage
         ? ` repair_from=${runtime.repair_origin_pipeline ? `${runtime.repair_origin_pipeline}/` : ''}${runtime.repair_origin_stage}` : '';
       const due = runtime?.architecture_review_due ? ' architecture_review_due=true' : '';
-      console.log(`  ${marker} ${stage}: ${status}${budget}${repair}${due}`);
+      const classDue = runtime?.class_review_due?.length ? ` class_review_due=${runtime.class_review_due.join(',')}` : '';
+      console.log(`  ${marker} ${stage}: ${status}${budget}${repair}${due}${classDue}`);
       const pendingReplan = runtime ? activeRuntimeReplan(runtime) : undefined;
       if (pendingReplan) console.log(`      runtime_replan=${pendingReplan.revision}:${pendingReplan.status}`);
     }
@@ -2400,6 +2549,7 @@ function usage(): string {
     '  stage-cli preflight <manifest> [--environment] [--json]',
     '  stage-cli plan-run-preflight <manifest> [--environment] [--json]',
     '  stage-cli artifacts <run-id> <run-relative-path>... [--state-root <path>] [--json]',
+    '  stage-cli plan-review <run-id> <gate> --evidence <review> [--defect-class <a,b>] | --research <file> | --carry <carried-findings> [--json]',
     '  stage-cli policy [repo-relative-path] [--json]',
     '  stage-cli init <manifest> [--state-root <path>] [--environment]',
     '  stage-cli approve <run-id> [--state-root <path>]',
@@ -2415,7 +2565,8 @@ function usage(): string {
     '  stage-cli scope-check <run-id> <stage> <path>... [--pipeline <id>] [--json]',
     '  stage-cli scope-extend <run-id> <stage> <path>... --class technical --evidence <run-artifact.json> [--pipeline <id>] [--json]',
     '  stage-cli security-fix-check <run-id> <stage> --pipeline <id> --evidence <review.json> [--json]',
-    '  stage-cli fix-cycle <run-id> <stage> --evidence <negative-result> [--pipeline <id>] [--repair-class technical_fix|security_fix] [--repair-pipeline <upstream-lane>] [--json]',
+    '  stage-cli fix-cycle <run-id> <stage> --evidence <negative-result> [--pipeline <id>] [--repair-class technical_fix|security_fix] [--repair-pipeline <upstream-lane>] [--defect-class <a,b>] [--json]',
+    '  stage-cli class-review-record <run-id> <stage> --pipeline <id> --evidence <class-review.json> [--json]',
     '  stage-cli architecture-review-record <run-id> <stage> --pipeline <id> --evidence <architecture-review.json> [--json]',
     '  stage-cli fix-budget-set <run-id> --cycles <1..20> [--json]',
     '  stage-cli fix-budget-add <run-id> <stage> --pipeline <id> --cycles <1..20> [--json]',
@@ -2453,6 +2604,8 @@ export async function runCli(args: string[]): Promise<void> {
     const { preflightFile } = await import('./manifest-preflight.mjs');
     const result = await preflightFile(manifestPath, { environment: options.environment, cwd: process.cwd() });
     await requirePlanProbes(manifest, manifestPath);
+    const { assertPlanReviewLedger } = await import('./plan-review.ts');
+    try { assertPlanReviewLedger(manifest, manifestPath); } catch (error) { throw new StageCliError(error instanceof Error ? error.message : String(error)); }
     const output = { status: 'PASS', run_id: manifest.run_id, schema_version: 2, checked_commands: result.checked_commands,
       environment_checked: result.environment_checked };
     if (options.json) console.log(JSON.stringify(output, null, 2));
@@ -2468,6 +2621,20 @@ export async function runCli(args: string[]): Promise<void> {
     return;
   }
 
+  if (command === 'plan-review') {
+    const [, runId, gate] = positional;
+    if (!runId || !gate) throw new StageCliError('plan-review requires <run-id> <gate> --evidence <review> | --research <file> | --carry <carried-findings>');
+    const { recordPlanReview } = await import('./plan-review.ts');
+    try {
+      const result = await recordPlanReview({ runDir: stateDir(options.stateRoot, runId), runId, gate, evidencePath: options.evidencePath,
+        defectClasses: options.defectClasses, researchPath: options.researchPath, carryPath: options.carryPath });
+      if (options.json) console.log(JSON.stringify(result, null, 2));
+      else console.log(`${result.gate}: ${result.status} reviews=${result.reviews} needs_revision=${result.needs_revision} next=${result.next}`);
+    } catch (error) {
+      throw new StageCliError(error instanceof Error ? error.message : String(error));
+    }
+    return;
+  }
   if (command === 'artifacts') {
     const runId = positional[1];
     if (!runId) throw new StageCliError('run-id is required');
@@ -2599,9 +2766,18 @@ export async function runCli(args: string[]): Promise<void> {
         options.repairClass ?? 'technical_fix',
         options.evidencePath,
         options.repairPipelineId,
+        options.defectClasses,
       ),
       options.json,
     );
+    return;
+  }
+  if (command === 'class-review-record') {
+    const stage = positional[2];
+    if (!stage || !options.pipelineId || !options.evidencePath) {
+      throw new StageCliError('class-review-record requires <stage> --pipeline <id> --evidence <class-review.json>');
+    }
+    printState(await recordClassReview(options.stateRoot, runId, stage, options.evidencePath, options.pipelineId), options.json);
     return;
   }
   if (command === 'architecture-review-record') {

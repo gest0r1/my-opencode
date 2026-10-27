@@ -38,15 +38,22 @@ migration mechanics, security implementation or code quality. Those belong to
 ArchitectureAnalyzer/SeniorTechnicalPlanReviewer and CodeReviewer.
 
 Write a NEW append-only/versioned review at the exact artifact_path, in
-artifact_language. Never overwrite or translate an existing review in place.
+artifact_language, starting with the `status:` and `review_scope:` lines. Never overwrite or translate an existing review in place.
 
 ready means the story set is complete and faithful and no product/owner decision
-blocks it. Style-only preferences are optional, not blockers.
+blocks it. Style-only preferences are optional, not blockers. Counting, numbering or
+wording slips that do not lose a requirement are `nit`: list them; they do not make the
+status `needs_revision`.
+
+State `review_scope: full | delta`. An intermediate re-review may be `delta`: verify the
+previous findings, read the changed stories and everything they affect. The first review
+and the review that freezes the stories are `full`.
 
 Return only:
 
 ```text
 status: ready | needs_revision | blocked
+review_scope: full | delta
 blockers:
 - <short blocker>
 artifacts:

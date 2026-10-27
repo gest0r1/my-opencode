@@ -246,8 +246,9 @@ function validatePlanningReadiness(manifest, root) {
     if (record.status !== 'ready') {
       throw new ManifestV2PolicyError(`PLANNING_GATE_NOT_READY: ${gate} status=${String(record.status)}`);
     }
-    if (record.cycles !== undefined && (!Number.isInteger(record.cycles) || record.cycles < 1 || record.cycles > 3)) {
-      throw new ManifestV2PolicyError(`planning gate cycles must be 1..3: ${gate}`);
+    // The review ledger (stage-cli plan-review) owns the cycle count; this number is informational.
+    if (record.cycles !== undefined && (!Number.isInteger(record.cycles) || record.cycles < 1)) {
+      throw new ManifestV2PolicyError(`planning gate cycles must be a positive integer: ${gate}`);
     }
     if (record.blocking_decision_ids !== undefined &&
         (!Array.isArray(record.blocking_decision_ids) || record.blocking_decision_ids.length > 0)) {
@@ -272,6 +273,12 @@ function validatePlanningReadiness(manifest, root) {
     if (required[key] !== undefined) {
       readFrozenArtifact(root, required[key], `planning_readiness.required_artifacts.${key}`);
     }
+  }
+
+  // Technical findings a gate carried into RUN after its escalation rework; frozen so RUN reviews them.
+  if (readiness.carried_findings !== undefined) {
+    if (!Array.isArray(readiness.carried_findings)) throw new ManifestV2PolicyError('planning_readiness.carried_findings must be an array');
+    readiness.carried_findings.forEach((artifact, index) => readFrozenArtifact(root, artifact, `planning_readiness.carried_findings[${index}]`));
   }
 
   if (!Array.isArray(manifest.open_decisions) || manifest.open_decisions.length !== 0) {

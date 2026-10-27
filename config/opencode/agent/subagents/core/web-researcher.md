@@ -4,7 +4,7 @@ description: Internet research specialist. Searches web, fetches pages, deep
   research, people/company lookup via Exa MCP, and exact public GitHub code
   patterns via gh_grep. Delegated by master agents.
 mode: subagent
-model: opencode-go/longcat-2.5-preview-free
+model: opencode/deepseek-v4.1-flash-free
 temperature: 0.1
 permission:
   exa_*: allow

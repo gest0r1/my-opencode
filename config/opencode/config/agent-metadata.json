@@ -311,6 +311,16 @@
         "context:review-ref"
       ]
     },
+    "findings-reviewer": {
+      "id": "findings-reviewer",
+      "name": "FindingsReviewer",
+      "category": "subagents/code",
+      "type": "subagent",
+      "version": "1.0.0",
+      "author": "opencode",
+      "tags": ["review", "findings", "delta"],
+      "dependencies": []
+    },
     "build-agent": {
       "id": "build-agent",
       "name": "BuildAgent",

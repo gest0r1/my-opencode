@@ -86,6 +86,7 @@ jobs:
             config/opencode/skills/task-management/scripts/stage-cli-rules.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-scope.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-budget.test.mjs \
+            config/opencode/skills/task-management/scripts/plan-review.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-dag.test.mjs \
             config/opencode/skills/task-management/scripts/stage-lock-cli.test.mjs \
             config/opencode/skills/task-management/scripts/stage-complete-cli.test.mjs \
