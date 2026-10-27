@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
@@ -8,6 +8,7 @@ import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGa
 import { createLivePostgres } from './live-postgres.mjs';
 import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
+import { openRuntimeLock } from './runtime-locks.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -130,7 +131,7 @@ async function acquireRuntimeLocks(stateRoot: string, runId: string, locks: stri
   try {
     for (const name of [...new Set(locks)].sort()) {
       const file = join(directory, `${sha256(name)}.lock`);
-      const handle = await open(file, 'wx');
+      const handle = await openRuntimeLock(file);
       await handle.writeFile(JSON.stringify({ lock: name, run_id: runId, pid: process.pid, acquired_at: new Date().toISOString() }));
       await handle.close();
       acquired.push(file);

@@ -410,3 +410,38 @@ test('sync-main conflict keeps checkpoint commit and leaves no merge in progress
   assert.equal(run(f.b, 'git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).status, 1);
   assert.equal(exec(f.b, 'git', ['status', '--porcelain']), '');
 });
+
+test('sync-plan fast-forwards main and merges it into the PLAN branch before any run is initialized', async (t) => {
+  const f = await fixture();
+  t.after(() => rm(f.root, { recursive: true, force: true }));
+  const other = path.join(f.root, 'other');
+  exec(f.root, 'git', ['clone', '-b', 'main', f.remote, other]);
+  exec(other, 'git', ['config', 'user.name', 'Other']);
+  exec(other, 'git', ['config', 'user.email', 'other@example.invalid']);
+  await writeFile(path.join(other, 'src/upstream.txt'), 'upstream\n');
+  exec(other, 'git', ['add', '.']);
+  exec(other, 'git', ['commit', '-m', 'upstream']);
+  exec(other, 'git', ['push', 'origin', 'main']);
+  const upstream = exec(other, 'git', ['rev-parse', 'HEAD']);
+  await writeFile(path.join(f.b, 'src/plan.txt'), 'plan\n');
+  exec(f.b, 'git', ['add', 'src/plan.txt']);
+  exec(f.b, 'git', ['commit', '-m', 'plan work']);
+
+  let result = gate(f.b, ['sync-plan', '--check']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).action, 'sync');
+  assert.equal(exec(f.main, 'git', ['rev-parse', 'HEAD']), f.base);
+
+  result = gate(f.b, ['sync-plan']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).action, 'merged');
+  assert.equal(exec(f.main, 'git', ['rev-parse', 'HEAD']), upstream);
+  assert.equal(run(f.b, 'git', ['merge-base', '--is-ancestor', upstream, 'HEAD']).status, 0);
+  assert.equal(await readFile(path.join(f.b, 'src/plan.txt'), 'utf8'), 'plan\n');
+  assert.equal(JSON.parse(gate(f.b, ['sync-plan']).stdout).action, 'none');
+
+  await writeFile(path.join(f.artifactRoot, 'state.json'), '{}\n');
+  result = gate(f.b, ['sync-plan']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SYNC_PLAN_AFTER_FREEZE: run run-b/);
+});
