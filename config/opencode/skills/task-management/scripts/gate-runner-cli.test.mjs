@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
 import test from 'node:test';
 
+// These tests drive in-place gates through files in the checkout's .tmp; snapshot gates have their own tests.
+process.env.PIPELINE_GATE_SNAPSHOT ??= '0';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER = path.join(HERE, 'gate-runner-cli.ts');
 
