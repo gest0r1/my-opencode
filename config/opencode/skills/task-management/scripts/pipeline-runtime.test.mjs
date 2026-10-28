@@ -481,6 +481,34 @@ test('wake decision: only an active RUN with no child, no owner checkpoint and n
   assert.equal(wakeDecision({ stateRaw: state({ runtime_replan: { status: 'awaiting_owner_approval' } }), manifest }).reason, 'owner_checkpoint');
   const accepting = JSON.stringify({ status: 'in_progress', pipelines: { p: { status: 'in_progress', stages: { accept: { status: 'in_progress' } } } } });
   assert.equal(wakeDecision({ stateRaw: accepting, manifest }).reason, 'owner_acceptance');
+  // One lane waiting for its owner decision does not put the other lanes to sleep.
+  const lanes = (q) => JSON.stringify({ status: 'in_progress', pipelines: { p: { status: 'blocked', stages: { implementation: { status: 'blocked' } } }, q } });
+  assert.equal(wakeDecision({ stateRaw: lanes({ status: 'in_progress', stages: { implementation: { status: 'pending' } } }), manifest }).wake, true);
+  assert.equal(wakeDecision({ stateRaw: lanes({ status: 'completed', stages: {} }), manifest }).reason, 'pipeline_blocked');
+});
+
+test('after a restart the session that drives the RUN CLI is woken without a new /pipeline-run prompt', async () => {
+  const previousCwd=process.cwd(), root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='10';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/wake-run'); await mkdir(runDir,{recursive:true});
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{}}));
+    const hooks={}, synthetic=[]; let push;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},
+      event:{subscribe:()=>events},
+      session:{hook:async()=>{},get:async()=>({data:{}}),wait:async()=>{},synthetic:async input=>{synthetic.push(input);}}});
+    process.chdir(root);
+    await hooks['execute.before']({tool:'shell',sessionID:'orch',id:'c1',input:{command:'$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts waves wake-run --json'}});
+    await new Promise(resolve=>setTimeout(resolve,5));
+    push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,60));
+    assert.equal(synthetic.length,1);
+    assert.match(synthetic[0].text,/wake-run/);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    process.chdir(previousCwd); await rm(root,{recursive:true,force:true});
+  }
 });
 
 test('an OpenStage turn that ends with nothing running is woken once', async () => {

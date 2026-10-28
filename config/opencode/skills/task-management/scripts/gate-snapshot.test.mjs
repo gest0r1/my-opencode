@@ -155,3 +155,46 @@ test('the lane proof leaves generated files out and a reservation leaves them fr
   assert.equal(leaseConflict([lane], self, ['src/gen.json']), null);
   assert.equal(leaseConflict([lane], self, ['src/a.ts']).path, 'src/a.ts');
 });
+
+test('a snapshot links the checkout dependency trees and permission bits do not change the source digest', async () => {
+  const fx = await snapshotFixture(`
+const fs = require('node:fs'); const path = require('node:path');
+fs.appendFileSync(path.join(process.env.PIPELINE_SCRATCH_DIR, 'seen.jsonl'), JSON.stringify({ cwd: process.cwd(),
+  link: fs.existsSync('apps/web/node_modules/@app/contracts/index.js'), dep: fs.existsSync('node_modules/dep/index.js') }) + '\\n');`);
+  try {
+    await writeFile(path.join(fx.root, '.gitignore'), '.tmp/\n.env*\n.snapshots/\n.locks/\nnode_modules/\n');
+    await mkdir(path.join(fx.root, 'packages/contracts'), { recursive: true });
+    await writeFile(path.join(fx.root, 'packages/contracts/index.js'), 'export {}\n');
+    await mkdir(path.join(fx.root, 'node_modules/dep'), { recursive: true });
+    await writeFile(path.join(fx.root, 'node_modules/dep/index.js'), 'module.exports = 1\n');
+    await mkdir(path.join(fx.root, 'apps/web/node_modules/@app'), { recursive: true });
+    spawnSync('ln', ['-s', '../../../../packages/contracts', path.join(fx.root, 'apps/web/node_modules/@app/contracts')]);
+    fx.git('add', '.'); fx.git('commit', '-m', 'workspace');
+    spawnSync('chmod', ['666', path.join(fx.root, 'src/value.txt')]);
+    const result = fx.runGate();
+    assert.equal(result.status, 0, result.stderr);
+    const evidence = await fx.evidence();
+    assert.deepEqual(evidence.snapshot.dependency_trees.sort(), ['apps/web/node_modules', 'node_modules']);
+    const seen = (await readFile(path.join(evidence.scratch_dir, 'seen.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+    for (const entry of seen) assert.deepEqual([entry.link, entry.dep], [true, true]);
+    // The digest of the checkout (mode 666) equals the snapshot's (fresh checkout, mode 644).
+    const { sourceInventory } = await import('./gate-diagnostics.mjs');
+    const invoke = (exe, argv) => { const r = spawnSync(exe, argv, { cwd: fx.root, encoding: 'utf8' }); return Promise.resolve({ exit_code: r.status, stdout: r.stdout, stderr: r.stderr, truncated: false }); };
+    assert.equal((await sourceInventory(fx.root, invoke)).digest, evidence.source_digest);
+  } finally { await rm(fx.root, { recursive: true, force: true }); }
+});
+
+test('--in-place runs the gate in the checkout without an environment prefix', async () => {
+  const fx = await snapshotFixture(`
+const fs = require('node:fs'); const path = require('node:path');
+fs.appendFileSync(path.join(process.env.PIPELINE_SCRATCH_DIR, 'seen.jsonl'), JSON.stringify({ cwd: process.cwd() }) + '\\n');`);
+  try {
+    const result = spawnSync('npx', ['--yes', 'tsx', RUNNER, fx.runId, 'app', 'build', '--state-root', fx.stateRoot, '--in-place'], {
+      cwd: fx.root, encoding: 'utf8', env: { ...process.env, PATH: `${path.join(fx.root, 'bin')}:${process.env.PATH}`, PIPELINE_HEAVY_LOCK_DIR: path.join(fx.root, '.locks') } });
+    assert.equal(result.status, 0, result.stderr);
+    const evidence = await fx.evidence();
+    assert.equal(evidence.snapshot, null);
+    const seen = (await readFile(path.join(evidence.scratch_dir, 'seen.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.equal(seen[0].cwd, fx.root);
+  } finally { await rm(fx.root, { recursive: true, force: true }); }
+});

@@ -43,6 +43,27 @@ function snapshotCommit(cwd, scratch) {
   } finally { rmSync(index, { force: true }); }
 }
 
+// The checkout's dependency trees (root and per-package node_modules), hard-linked into the snapshot.
+// A fresh install there is not the same environment: pnpm may report "Already up to date" and leave
+// workspace links out, and then a test that resolves a workspace package from another cwd fails only on
+// the snapshot. Links keep pnpm's relative symlinks, so workspace packages resolve inside the snapshot.
+function linkDependencyTrees(cwd, dir) {
+  const started = Date.now();
+  const trees = lines(git(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']))
+    .map(entry => entry.replace(/\/$/, ''))
+    .filter(entry => entry.split('/').at(-1) === 'node_modules' && !entry.split('/').slice(0, -1).includes('node_modules'));
+  for (const tree of trees) {
+    const target = join(dir, tree);
+    rmSync(target, { recursive: true, force: true });
+    mkdirSync(dirname(target), { recursive: true });
+    let copied = spawnSync('cp', ['-al', join(cwd, tree), target], { encoding: 'utf8' });
+    // Another filesystem cannot hard-link: copy instead.
+    if (copied.status !== 0) { rmSync(target, { recursive: true, force: true }); copied = spawnSync('cp', ['-a', join(cwd, tree), target], { encoding: 'utf8' }); }
+    if (copied.status !== 0) throw new Error(`SNAPSHOT_DEPENDENCIES_FAILED: ${tree}: ${(copied.stderr || '').trim().slice(0, 300)}`);
+  }
+  return { dependency_trees: trees, link_ms: Date.now() - started };
+}
+
 function copyIgnoredFiles(cwd, dir) {
   const ignored = lines(git(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']));
   for (const entry of ignored) {
@@ -85,13 +106,16 @@ export async function createGateSnapshot({ cwd, stateRoot, label, installEvidenc
         mkdirSync(dirname(join(dir, rel)), { recursive: true });
         rmSync(join(dir, rel), { recursive: true, force: true });
         symlinkSync(stateRoot, join(dir, rel));
+        const linked = linkDependencyTrees(cwd, dir);
+        if (linked.dependency_trees.length) return linked;
+        // The checkout has no installed dependencies to share: restore them from the lockfile.
         const tooling = checkProjectTooling(dir);
         const install = tooling.package_manager
           ? restoreDependencies(dir, tooling, { evidenceFile: installEvidence, extraArgs: ['--prefer-offline'] }) : null;
         return { install_ms: install?.duration_ms ?? 0 };
       },
-      // Moves the same worktree to a fresh snapshot of the current tree; installed dependencies stay
-      // and the install only catches up with lockfile changes.
+      // Moves the same worktree to a fresh snapshot of the current tree and links the checkout's current
+      // dependency trees again.
       async refresh() {
         const next = snapshotCommit(cwd, stateRoot);
         git(dir, ['checkout', '--detach', '--force', next]);

@@ -18,14 +18,20 @@ export function wakeDecision({ stateRaw, manifest, pendingChildren = 0, lastFing
   try { state = JSON.parse(stateRaw); } catch { return { wake: false, reason: 'state_unreadable' }; }
   if (state.status !== 'in_progress') return { wake: false, reason: `run_${state.status ?? 'unknown'}` };
   if (/"awaiting_owner_(?:clarification|approval)"/.test(stateRaw)) return { wake: false, reason: 'owner_checkpoint' };
+  // A blocked or failed lane waits for its owner decision; the RUN keeps every other lane going, so
+  // only a RUN where no open lane is left unblocked stays asleep.
+  let stopped = null; let open = 0;
   for (const [pipelineId, pipeline] of Object.entries(state.pipelines ?? {})) {
-    if (['blocked', 'failed'].includes(pipeline?.status)) return { wake: false, reason: `pipeline_${pipeline.status}` };
     const executors = manifest?.pipelines?.find(item => item.id === pipelineId)?.executors ?? {};
+    let blocked = ['blocked', 'failed'].includes(pipeline?.status) ? `pipeline_${pipeline.status}` : null;
     for (const [stage, runtime] of Object.entries(pipeline?.stages ?? {})) {
-      if (['blocked', 'failed'].includes(runtime?.status)) return { wake: false, reason: `stage_${runtime.status}` };
+      if (['blocked', 'failed'].includes(runtime?.status)) blocked ??= `stage_${runtime.status}`;
       if (runtime?.status === 'in_progress' && executors[stage] === 'owner_acceptance') return { wake: false, reason: 'owner_acceptance' };
     }
+    if (blocked) stopped ??= blocked;
+    else if (!['completed', 'ready', 'release_ready'].includes(pipeline?.status)) open += 1;
   }
+  if (stopped && open === 0) return { wake: false, reason: stopped };
   const fingerprint = createHash('sha256').update(stateRaw).digest('hex');
   if (fingerprint === lastFingerprint) return { wake: false, reason: 'no_progress_since_last_wake' };
   return { wake: true, reason: 'stalled', fingerprint };
