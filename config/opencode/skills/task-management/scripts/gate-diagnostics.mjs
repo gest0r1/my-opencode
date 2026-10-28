@@ -37,20 +37,25 @@ export async function sourceInventory(cwd, invoke, scopes = []) {
   ])].filter(inScope).sort();
   const entries = {};
   const digest = createHash('sha256');
+  // Identity is what git records: content plus the executable bit for a file, the target for a link.
+  // Other permission bits (umask, a file written by root) are not source and must not make two trees with
+  // the same bytes differ; a gate snapshot is a fresh checkout with the checkout's own permissions. A
+  // tracked file missing from the tree is left out, exactly as a snapshot of that tree lacks it.
   for (const file of selected) {
-    let identity = 'deleted';
+    let identity;
     try {
       const absolute = join(cwd, file);
       const stat = await lstat(absolute);
       if (stat.isFile()) {
-        identity = createHash('sha256').update(String(stat.mode)).update('\0').update(await readFile(absolute)).digest('hex');
+        identity = createHash('sha256').update(stat.mode & 0o111 ? '755' : '644').update('\0').update(await readFile(absolute)).digest('hex');
       } else if (stat.isSymbolicLink()) {
-        identity = createHash('sha256').update(`symlink:${stat.mode}`).update('\0').update(await readlink(absolute)).digest('hex');
+        identity = createHash('sha256').update('symlink').update('\0').update(await readlink(absolute)).digest('hex');
       } else {
-        identity = `non-regular:${stat.mode}`;
+        identity = 'non-regular';
       }
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
+      continue;
     }
     entries[file] = identity;
     digest.update(file).update('\0').update(identity).update('\0');
