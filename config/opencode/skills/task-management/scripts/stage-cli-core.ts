@@ -884,6 +884,7 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
       validateManifestV2Policy(manifest as PipelineManifest, {
         cwd: process.cwd(),
         manifestPath: state.manifest_file,
+        runtime: true,
       });
     } catch (error) {
       throw new StageCliError(
@@ -2590,6 +2591,7 @@ function usage(): string {
     '  stage-cli validate <run-id> [--json] [--state-root <path>]',
     '  stage-cli run-preflight <run-id> [--json] [--state-root <path>]',
     '  stage-cli next <run-id> [--json] [--state-root <path>]',
+    '  stage-cli waves <run-id> [--pipeline <id>] [--json]   (work items that can start now, running, done, waiting and why)',
     '  stage-cli start <run-id> <stage> [--pipeline <id>]',
     '  stage-cli complete <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
     '  stage-cli owner-accept <run-id> <stage> --pipeline <id> --result pass|fail [--message <text>]',
@@ -2745,7 +2747,22 @@ export async function runCli(args: string[]): Promise<void> {
   if (command === 'scope-check') {
     const stage = positional[2];
     if (!stage) throw new StageCliError('stage is required');
+    // A path another pipeline stage's live worker may change waits for that worker; the stage that
+    // asked owns the path from now on and leases it on every later dispatch.
+    const { laneReservations, leaseConflict, readLeases, recordStagePaths } = await import('./dispatch-leases.mjs');
+    const scopeRunRoot = stateDir(options.stateRoot, runId);
+    const scopeState = await readState(options.stateRoot, runId);
+    const scopePipeline = getPipeline(scopeState, options.pipelineId).id;
+    const scopeManifest = scopeState.manifest_file ? JSON.parse(await readFile(scopeState.manifest_file, 'utf8')) : { pipelines: [] };
+    const others = [
+      ...readLeases(scopeRunRoot, { state: scopeState }).filter((lease: any) => lease.pipeline_id !== scopePipeline || lease.stage !== stage),
+      ...(scopeState.manifest_file ? laneReservations(scopeState, scopeManifest, dirname(scopeState.manifest_file), scopeRunRoot) : [])
+        .filter((lane: any) => lane.pipeline_id !== scopePipeline),
+    ];
+    const busy = leaseConflict(others, { pipeline_id: scopePipeline, stage, work_item_id: '' }, positional.slice(3));
+    if (busy) throw new StageCliError(`SCOPE_BUSY: ${busy.path} is being changed by ${busy.lease.work_item_id} (${busy.lease.pipeline_id}/${busy.lease.stage}); dispatch this repair after it returns`);
     const result = await checkRuntimeScope(options.stateRoot, runId, stage, positional.slice(3), options.pipelineId);
+    recordStagePaths(scopeRunRoot, scopePipeline, stage, result.requested_paths);
     if (options.json) console.log(JSON.stringify(result, null, 2));
     else console.log(`PASS effective_scope=${result.effective_allowed_change_paths.length} requested=${result.requested_paths.length}`);
     return;

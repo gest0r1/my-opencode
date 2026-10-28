@@ -109,3 +109,35 @@ test('the heavy gate slot admits one full set at a time and narrow checks wait f
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('lane gate locks and the live slot queue a second holder instead of failing it', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'lock-queue-'));
+  const previous = process.env.PIPELINE_HEAVY_LOCK_DIR;
+  process.env.PIPELINE_HEAVY_LOCK_DIR = root;
+  try {
+    const { acquireLockFiles, acquireLiveSlot } = await import('./runtime-locks.mjs');
+    const entry = [{ file: 'lane.lock', record: { lock: 'gate:r:p:g', run_id: 'r' } }];
+    const first = await acquireLockFiles(path.join(root, 'locks'), entry, { pollMs: 10 });
+    assert.equal(JSON.parse(await readFile(path.join(root, 'locks', 'lane.lock'), 'utf8')).lock, 'gate:r:p:g');
+    let secondHeld = false;
+    const second = acquireLockFiles(path.join(root, 'locks'), entry, { pollMs: 10 }).then((held) => { secondHeld = true; return held; });
+    await new Promise((done) => setTimeout(done, 50));
+    assert.equal(secondHeld, false);
+    await first.release();
+    const held = await second;
+    assert.ok(held.waited_ms >= 40);
+    await assert.rejects(acquireLockFiles(path.join(root, 'locks'), entry, { pollMs: 10, maxWaitMs: 30 }), /LOCK_WAIT_TIMEOUT/);
+    await held.release();
+
+    const live = await acquireLiveSlot({ gate: 'a' }, { pollMs: 10 });
+    let liveSecond = false;
+    const next = acquireLiveSlot({ gate: 'b' }, { pollMs: 10 }).then((slot) => { liveSecond = true; return slot; });
+    await new Promise((done) => setTimeout(done, 50));
+    assert.equal(liveSecond, false);
+    await live.release();
+    await (await next).release();
+  } finally {
+    if (previous === undefined) delete process.env.PIPELINE_HEAVY_LOCK_DIR; else process.env.PIPELINE_HEAVY_LOCK_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});

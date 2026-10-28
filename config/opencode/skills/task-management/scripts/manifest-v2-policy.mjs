@@ -286,7 +286,7 @@ function validatePlanningReadiness(manifest, root) {
   }
 }
 
-function validateWorkItems(manifest, root) {
+function validateWorkItems(manifest, root, options = {}) {
   if (!Array.isArray(manifest.work_items) || manifest.work_items.length === 0) {
     throw new ManifestV2PolicyError('schema v2 manifest requires frozen work_items');
   }
@@ -340,6 +340,30 @@ function validateWorkItems(manifest, root) {
     for (const field of ['decision_ids', 'research_ids', 'contract_ids']) {
       if (!Array.isArray(pipeline[field])) {
         throw new ManifestV2PolicyError(`schema v2 pipeline must define ${field}: ${pipeline.id}`);
+      }
+    }
+  }
+  // A RUN frozen before this check keeps running: dispatch serializes its overlapping items.
+  if (!options.runtime) assertWorkItemOrder(manifest, records);
+}
+
+// Work items of one pipeline are dispatched together unless depends_on orders them. Two items that
+// may change the same path must be ordered, or parallel workers overwrite each other's edits.
+function assertWorkItemOrder(manifest, records) {
+  const reaches = (from, to, seen = new Set()) => {
+    if (seen.has(from)) return false;
+    seen.add(from);
+    return (records.get(from)?.depends_on ?? []).some(next => next === to || reaches(next, to, seen));
+  };
+  const scope = id => (records.get(id)?.allowed_change_paths ?? []).filter(path => typeof path === 'string');
+  for (const pipeline of manifest.pipelines ?? []) {
+    const ids = pipeline.work_items ?? [];
+    for (let i = 0; i < ids.length; i += 1) {
+      for (let j = i + 1; j < ids.length; j += 1) {
+        const overlap = scope(ids[i]).find(left => scope(ids[j]).some(right => scopesOverlap(left, right)));
+        if (overlap && !reaches(ids[i], ids[j]) && !reaches(ids[j], ids[i])) {
+          throw new ManifestV2PolicyError(`WORK_ITEM_SCOPE_OVERLAP: ${ids[i]} and ${ids[j]} of ${pipeline.id} may both change ${overlap}; order them with depends_on`);
+        }
       }
     }
   }
@@ -961,7 +985,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
   catch (error) { throw new ManifestV2PolicyError(error.message); }
   validatePlanningReadiness(manifest, root);
   validatePlanningInputs(manifest);
-  validateWorkItems(manifest, root);
+  validateWorkItems(manifest, root, options);
   assertParallelScopes(manifest, root);
   validatePreservedBaseline(manifest);
   validateLineage(manifest);

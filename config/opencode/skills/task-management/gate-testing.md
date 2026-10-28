@@ -202,6 +202,40 @@ BLOCKED means the gate could not start (fix env/resources in the gate contract).
 
 At RUN, post-publish gates (dev-install, release checks needing the candidate) are not probed in PLAN; they get `CANDIDATE_SHA` and `PIPELINE_SCRATCH_DIR` from the gate environment when they run, so OpenStage never asks the owner for an identity or install root.
 
+## Gates on a tree snapshot
+
+Authoritative gates (except runtime/deploy/release/smoke/install gates and commands with
+`{candidate_sha}`) and `--coordinator` checks run on a snapshot, not in the checkout. The runner builds
+a commit object of the working tree with a private index (tracked files plus the untracked files the
+source inventory covers; no ref, branch or main index changes), checks it out as a detached worktree
+under `~/.cache/opencode-pipeline/snapshots` (`PIPELINE_SNAPSHOT_DIR`), copies ignored local files
+outside dependency/build directories, links `.tmp/pipelines` back to the run state root, restores
+dependencies from the lockfile (`--prefer-offline`; evidence `checks/<pipeline>-<gate>-snapshot-install.json`)
+and runs the commands there. `source_digest` describes the snapshot. The worktree is removed afterwards
+(`PIPELINE_KEEP_SNAPSHOT=1` keeps it for diagnosis). If the snapshot cannot be built or prepared the
+gate runs in place and `snapshot.status` is `unavailable` with the reason; `PIPELINE_GATE_SNAPSHOT=0`
+always runs in place.
+
+On FAIL the runner compares the snapshot with the current checkout. When changed paths reach a failed
+command through the frozen impact map (unmapped and dependency changes reach every command), it moves
+the worktree to a fresh snapshot and runs again the failed and not yet run commands plus passed ones the
+changes reach; `snapshot.rerun` records the first attempt and only the second result counts. Otherwise
+the FAIL stands with `snapshot.failure_check`. Evidence carries `snapshot.lane_scope` (the lane's work
+item paths, declared exclusive/migration/fixture paths and scope-check paths of its agent stages) and
+`lane_scope_digest` over those files minus `generated_paths` (`lane_exclude`; the coordinator rewrites
+them for every lane); completion of the `local_gate` stage refuses it with `EVIDENCE_STALE_LANE_SOURCE`
+once those files differ in the checkout. From the lane's last agent stage until its ready milestone the
+same paths are reserved against other pipelines' dispatch and scope-check, so only a real violation
+reaches that check.
+
+A gate whose previous evidence is a PASS on a snapshot (same manifest and environment) repeats only the
+commands the changes between the two snapshot commits reach through the impact map; the others keep
+their PASS (`snapshot.reused_by_impact`). Unmapped and dependency changes reach every command, and
+`--no-reuse` runs the full set.
+
+A project's live harness sees the snapshot directory as its repository root. It must take the root from
+its own location (not a fixed path) and accept `.tmp/pipelines` being a link to the run state root.
+
 ## Disposable PostgreSQL
 
 The runner creates a separate container for the selected live commands, waits
@@ -211,6 +245,15 @@ loopback port, a non-root user, dropped capabilities, read-only root filesystem,
 512 MiB memory, one CPU, bounded PIDs and tmpfs storage. There are no host mounts,
 persistent volumes, host network or privileged mode. Project tests own migrations
 and fixtures; the runner does not guess SQL or migrate a working contour.
+
+Live commands run one at a time on the machine. Before the first of a run of consecutive live
+commands the runner takes the machine-wide live slot (`~/.cache/opencode-pipeline/live-gate.lock`,
+waited for, never failed; `live_slot_wait_ms` in the evidence), writes the gate's lock
+`gate:<run>:<pipeline>:<gate>` into `<state-root>/.runtime-locks/`, and starts the container; all three
+are released before the next non-live command. A project's live harness may therefore rely on
+`.runtime-locks` holding exactly one `gate:` lock while a live command runs. Runtime/release gates keep
+their locks there for the whole run. Two runs of one lane gate (two work items checking in parallel)
+queue on `<state-root>/.gate-locks/` instead of failing.
 
 Cleanup verifies the unique RUN/project ownership label before removing the
 exact container. Only a local Unix-socket Docker daemon is supported; remote
