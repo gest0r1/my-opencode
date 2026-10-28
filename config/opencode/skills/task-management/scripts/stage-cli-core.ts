@@ -2749,11 +2749,16 @@ export async function runCli(args: string[]): Promise<void> {
     if (!stage) throw new StageCliError('stage is required');
     // A path another pipeline stage's live worker may change waits for that worker; the stage that
     // asked owns the path from now on and leases it on every later dispatch.
-    const { leaseConflict, readLeases, recordStagePaths } = await import('./dispatch-leases.mjs');
+    const { laneReservations, leaseConflict, readLeases, recordStagePaths } = await import('./dispatch-leases.mjs');
     const scopeRunRoot = stateDir(options.stateRoot, runId);
     const scopeState = await readState(options.stateRoot, runId);
     const scopePipeline = getPipeline(scopeState, options.pipelineId).id;
-    const others = readLeases(scopeRunRoot, { state: scopeState }).filter((lease: any) => lease.pipeline_id !== scopePipeline || lease.stage !== stage);
+    const scopeManifest = scopeState.manifest_file ? JSON.parse(await readFile(scopeState.manifest_file, 'utf8')) : { pipelines: [] };
+    const others = [
+      ...readLeases(scopeRunRoot, { state: scopeState }).filter((lease: any) => lease.pipeline_id !== scopePipeline || lease.stage !== stage),
+      ...(scopeState.manifest_file ? laneReservations(scopeState, scopeManifest, dirname(scopeState.manifest_file), scopeRunRoot) : [])
+        .filter((lane: any) => lane.pipeline_id !== scopePipeline),
+    ];
     const busy = leaseConflict(others, { pipeline_id: scopePipeline, stage, work_item_id: '' }, positional.slice(3));
     if (busy) throw new StageCliError(`SCOPE_BUSY: ${busy.path} is being changed by ${busy.lease.work_item_id} (${busy.lease.pipeline_id}/${busy.lease.stage}); dispatch this repair after it returns`);
     const result = await checkRuntimeScope(options.stateRoot, runId, stage, positional.slice(3), options.pipelineId);

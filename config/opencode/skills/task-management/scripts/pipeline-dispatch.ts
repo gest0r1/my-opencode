@@ -9,7 +9,7 @@ import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 import { sourceInventory } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { planProbeCommandsSha256 } from './manifest-v2-policy.mjs';
-import { leaseConflict, readLeases, readStagePaths, sameDispatch } from './dispatch-leases.mjs';
+import { laneReservations, leaseConflict, readLeases, readStagePaths, sameDispatch } from './dispatch-leases.mjs';
 
 const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
 // A review stage runs a full CodeReviewer; FindingsReviewer (cheaper model) only re-checks findings a review already issued.
@@ -230,6 +230,7 @@ export async function workItemWaves(root: string, run: string, pipelineFilter?: 
   const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
   const runRoot = join(root, '.tmp/pipelines', run);
   const leases = readLeases(runRoot, { state });
+  const reservations = laneReservations(state, manifest, dirname(state.manifest_file), runRoot);
   const registry = sessionRegistry(root, run);
   const effectiveScope = [...new Set([...(manifest.allowed_change_paths ?? []), ...(state.runtime_scope_extensions ?? []).flatMap((e: any) => e.paths)])];
   const runnable = computeRunnable(state);
@@ -253,7 +254,7 @@ export async function workItemWaves(root: string, run: string, pipelineFilter?: 
         const dependency = pendingDependency(state, manifest, registry, item, leases);
         if (dependency) { entry.waiting.push({ id: unit.id, reason: `depends_on ${dependency}` }); continue; }
         const scope = writerScope(item, [], effectiveScope, readStagePaths(runRoot, pipeline.id, stage));
-        const busy = leaseConflict(leases, self, scope);
+        const busy = leaseConflict([...leases, ...reservations.filter((lane: any) => lane.pipeline_id !== pipeline.id)], self, scope);
         if (busy) { entry.waiting.push({ id: unit.id, reason: `${busy.path} is being changed by ${busy.lease.work_item_id}` }); continue; }
         const sibling = planned.find(other => leaseConflict([other], self, scope));
         if (sibling) { entry.waiting.push({ id: unit.id, reason: `shares paths with ${sibling.work_item_id} in this wave` }); continue; }
@@ -380,7 +381,8 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     const leases = readLeases(join(root, '.tmp/pipelines', run), { state });
     const dependency = pendingDependency(state, manifest, sessionRegistry(root, run), item, leases);
     if (dependency) throw Error(`DISPATCH_DEPENDENCY_PENDING: ${workItemId} waits for ${dependency}; run stage-cli waves ${run} for what can start now`);
-    const busy = leaseConflict(leases, { pipeline_id: pipelineId, stage, work_item_id: workItemId }, writeScope);
+    const reserved = laneReservations(state, manifest, dirname(state.manifest_file), join(root, '.tmp/pipelines', run)).filter((lane: any) => lane.pipeline_id !== pipelineId);
+    const busy = leaseConflict([...leases, ...reserved], { pipeline_id: pipelineId, stage, work_item_id: workItemId }, writeScope);
     if (busy) throw Error(`DISPATCH_SCOPE_BUSY: ${workItemId} waits for ${busy.lease.work_item_id} (${busy.lease.pipeline_id}/${busy.lease.stage}), both change ${busy.path}; run stage-cli waves ${run} for what can start now`);
   }
   let advisoryChecks: Array<Record<string, unknown>> = [];

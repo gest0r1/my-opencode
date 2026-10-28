@@ -45,7 +45,7 @@ async function snapshotFixture(script) {
   await writeFile(manifestFile, content);
   await writeFile(path.join(stateRoot, runId, 'state.json'), JSON.stringify({ run_id: runId, status: 'in_progress', manifest_file: manifestFile, manifest_sha256: sha256(content) }));
   const snapshots = path.join(root, '.snapshots');
-  const runGate = () => spawnSync('npx', ['--yes', 'tsx', RUNNER, runId, 'app', 'build', '--state-root', stateRoot, '--no-reuse'], {
+  const runGate = ({ reuse = false } = {}) => spawnSync('npx', ['--yes', 'tsx', RUNNER, runId, 'app', 'build', '--state-root', stateRoot, ...(reuse ? [] : ['--no-reuse'])], {
     cwd: root, encoding: 'utf8',
     env: { ...process.env, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`, PIPELINE_GATE_SNAPSHOT: '1', PIPELINE_SNAPSHOT_DIR: snapshots, ORIGINAL_ROOT: root, PIPELINE_HEAVY_LOCK_DIR: path.join(root, '.locks') },
   });
@@ -123,4 +123,35 @@ if (process.argv.includes('vitest.unit.ts')) {
     assert.equal(evidence.snapshot.rerun, undefined);
     assert.equal(fx.git('worktree', 'list').stdout.trim().split('\n').length, 1);
   } finally { await rm(fx.root, { recursive: true, force: true }); }
+});
+
+test('a gate that passed on an earlier snapshot repeats only the commands later changes reach', async () => {
+  const fx = await snapshotFixture(`
+const fs = require('node:fs'); const path = require('node:path');
+fs.mkdirSync(path.join(process.env.ORIGINAL_ROOT, '.tmp'), { recursive: true });
+fs.appendFileSync(path.join(process.env.ORIGINAL_ROOT, '.tmp/calls.log'), (process.argv.includes('vitest.unit.ts') ? 'unit' : 'web') + '\\n');`);
+  try {
+    assert.equal(fx.runGate().status, 0);
+    const first = await fx.evidence();
+    await writeFile(path.join(fx.root, 'src/other.txt'), 'moved on\n');
+    const result = fx.runGate({ reuse: true });
+    assert.equal(result.status, 0, result.stderr);
+    const evidence = await fx.evidence();
+    assert.equal(evidence.status, 'PASS');
+    assert.deepEqual(evidence.snapshot.reused_by_impact, { from_commit: first.snapshot.commit, changed_paths: ['src/other.txt'], commands: [0] });
+    assert.ok(evidence.results[0].reused_from); assert.equal(evidence.results[1].reused_from, undefined);
+    assert.deepEqual((await readFile(path.join(fx.root, '.tmp/calls.log'), 'utf8')).trim().split('\n'), ['unit', 'web', 'web']);
+  } finally { await rm(fx.root, { recursive: true, force: true }); }
+});
+
+test('the lane proof leaves generated files out and a reservation leaves them free', async () => {
+  const { laneDigest, leaseConflict } = await import('./dispatch-leases.mjs');
+  const files = { 'src/a.ts': 'a', 'src/gen.json': 'g1', 'docs/x.md': 'x' };
+  const digest = laneDigest(files, ['src/**'], ['src/gen.json']);
+  assert.equal(laneDigest({ ...files, 'src/gen.json': 'g2' }, ['src/**'], ['src/gen.json']), digest);
+  assert.notEqual(laneDigest({ ...files, 'src/a.ts': 'b' }, ['src/**'], ['src/gen.json']), digest);
+  const lane = { pipeline_id: 'p', stage: 'gate', work_item_id: 'lane p in its gate or review', scope: ['src/**'], exclude: ['src/gen.json'] };
+  const self = { pipeline_id: 'q', stage: 'implementation', work_item_id: 'q1' };
+  assert.equal(leaseConflict([lane], self, ['src/gen.json']), null);
+  assert.equal(leaseConflict([lane], self, ['src/a.ts']).path, 'src/a.ts');
 });
