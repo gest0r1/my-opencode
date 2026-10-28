@@ -313,7 +313,7 @@ async function main(): Promise<void> {
   // Absolute from here on: a gate on a tree snapshot runs in another directory.
   stateRoot = resolve(stateRoot);
   if (!runId || !pipelineId || !gate) {
-    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>] [--no-reuse] [--advisory [--affected ...|--command-index N [--test-file PATH]...|--coordinator|--base-probe]]');
+    throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>] [--no-reuse] [--in-place] [--advisory [--affected ...|--command-index N [--test-file PATH]...|--coordinator|--base-probe]]');
   }
 
   const stateFile = join(resolve(stateRoot), runId, 'state.json');
@@ -455,7 +455,9 @@ async function main(): Promise<void> {
   const laneProof = (files: Record<string, string>) => laneScopeList.length
     ? { lane_scope: laneScopeList, lane_exclude: generatedPaths, lane_scope_digest: laneDigest(files, laneScopeList, generatedPaths) } : {};
   const environmentDigest = sha256(JSON.stringify([process.version, process.env.PATH, process.env.NODE_ENV, process.env.LIVE_PG_TEST, process.env.LIVE_PG_CONTOUR, process.env.DATABASE_URL]));
-  const inputIdentity = snapshot?.digest ? sha256(JSON.stringify([snapshot.scoped_digest ?? snapshot.digest, state.manifest_sha256, baselineSha ?? null, environmentDigest])) : null;
+  // The whole tree: a rerun after a shared config or test changed outside the work item (another lane, a
+  // coordinator fix) is progress, not a repeat; only a rerun on byte-identical sources is refused.
+  const inputIdentity = snapshot?.digest ? sha256(JSON.stringify([snapshot.digest, state.manifest_sha256, baselineSha ?? null, environmentDigest])) : null;
   const fingerprint = inputIdentity ? sha256(JSON.stringify([inputIdentity, invocations])) : null;
   const ledgerFile = join(resolve(stateRoot), runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-attempts.json`);
   const gateLock = `gate:${runId}:${pipelineId}:${gate}`;
@@ -476,12 +478,13 @@ async function main(): Promise<void> {
   } catch (error) { await release(); throw error; }
 
   // Full gates and coordinator checks run on a snapshot of the tree in a separate worktree: workers keep
-  // writing meanwhile and the gate measures one fixed tree. PIPELINE_GATE_SNAPSHOT=0 runs in place.
+  // writing meanwhile and the gate measures one fixed tree. `--in-place` (or PIPELINE_GATE_SNAPSHOT=0)
+  // runs in the checkout; the orchestrator's allowlist admits the flag, not an env prefix.
   const originalCwd = process.cwd();
   let treeCopy: any;
   let copyFiles: Record<string, string> | null = null;
   let snapshotRecord: Record<string, any> | null = null;
-  if ((!advisory || coordinator) && !RUNTIME_GATE.test(gate) && !commands.some(command => command.includes('{candidate_sha}')) && process.env.PIPELINE_GATE_SNAPSHOT !== '0') {
+  if ((!advisory || coordinator) && !RUNTIME_GATE.test(gate) && !commands.some(command => command.includes('{candidate_sha}')) && process.env.PIPELINE_GATE_SNAPSHOT !== '0' && !args.includes('--in-place')) {
     const created = await createGateSnapshot({ cwd: originalCwd, stateRoot, label: `${pipelineId}-${gate}`,
       installEvidence: join(stateRoot, runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-snapshot-install.json`) });
     if (created.snapshot) {

@@ -17,6 +17,7 @@ const WORK_ITEM_MARKER_RE = /<pipeline_work_item\s+id="([A-Za-z0-9._:-]{1,128})"
 // OpenCode 2.x subagent tool: background=true returns this acknowledgement immediately.
 const BACKGROUND_ACK_RE = /working in the background \(sessionID:\s*([^)\s]+)\)/
 const CHILD_IDLE_PROBE_MS = 1500
+const ORCHESTRATOR_CLI_RE = /(?:stage-cli|stage-complete-cli)\.ts\s+(?:next|advance|waves|status|start)\s+([A-Za-z0-9._-]+)/
 // Grace period after an OpenStage turn ends before it counts as a stall.
 const wakeDelayMs = () => Number(process.env.PIPELINE_WAKE_DELAY_MS) || 90_000
 
@@ -561,6 +562,10 @@ export default Plugin.define({
     await plugin.tool.hook("execute.before", async (event) => {
       const sessionID = String(event.sessionID)
       if (event.tool !== "subagent") {
+        // The session that drives the RUN CLI is its orchestrator. After an OpenCode restart the owner's
+        // next message rarely repeats `/pipeline-run <id>`, so waking must not depend on that prompt.
+        const driven = event.tool === "shell" ? ORCHESTRATOR_CLI_RE.exec(String((event.input as any)?.command ?? ""))?.[1] : undefined
+        if (sessionID && driven && !orchestratorRun.has(sessionID) && fs.existsSync(path.join(root, ".tmp/pipelines", driven, "state.json"))) orchestratorRun.set(sessionID, driven)
         if (!sessionID || event.tool === "pipeline_runtime_prepare") return
         const stats = getStats(statsBySession, sessionID)
         stats.tool_calls += 1
