@@ -641,3 +641,45 @@ test('a gate passed on a tree snapshot completes only while the lane files still
   run(root,['complete','lane-run','fail-fast','--pipeline','p']);
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });
+
+test('a lane in its gate or review reserves its files against other pipelines until it is ready', async () => {
+ const previousCwd = process.cwd(), root = await tempProject();
+ try {
+  const git=(...args)=>spawnSync('git',args,{cwd:root,encoding:'utf8'});
+  git('init'); git('config','user.email','test@example.invalid'); git('config','user.name','Test');
+  await mkdir(path.join(root,'src'),{recursive:true});
+  await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
+  git('add','src'); git('commit','-m','base');
+  const manifest = await baseManifest(root,'reserve-run',[{id:'p',stages:['implementation','fail-fast'],ready_after_stage:'fail-fast'},{id:'q',stages:['implementation']}]);
+  manifest.allowed_change_paths=['src/**'];
+  manifest.generated_paths=['src/p/gen.json'];
+  manifest.pipelines[0].executors['fail-fast']='local_gate';
+  manifest.pipelines[0].profile='local';
+  manifest.gate_profiles={local:{'fail-fast':['npm test']}};
+  for (const [index, scope] of [[0,['src/p/**']],[1,['src/q/**']]]) {
+    const item=manifest.work_items[index];
+    const raw=JSON.stringify({id:item.id,pipeline_id:item.pipeline_id,stage:'implementation',suggested_agent:'CoderAgent',allowed_change_paths:scope});
+    await writeFile(path.join(root,item.path),raw); item.sha256=sha(raw);
+  }
+  const manifestPath=await writeManifest(root,manifest);
+  run(root,['init',manifestPath]); run(root,['approve','reserve-run']);
+  run(root,['start','reserve-run','implementation','--pipeline','q']);
+  run(root,['start','reserve-run','implementation','--pipeline','p']);
+  // While p is still implementing, q may be granted a path of p (no live worker holds it).
+  run(root,['scope-check','reserve-run','implementation','src/p/early.ts','--pipeline','q','--json']);
+  run(root,['complete','reserve-run','implementation','--pipeline','p']);
+  run(root,['start','reserve-run','fail-fast','--pipeline','p']);
+  const refused=spawnSync('npx',['--yes','tsx',STAGE_CLI,'scope-check','reserve-run','implementation','src/p/a.ts','--pipeline','q','--json'],{cwd:root,encoding:'utf8'});
+  assert.notEqual(refused.status,0); assert.match(refused.stderr,/SCOPE_BUSY: src\/p\/a\.ts is being changed by lane p in its gate or review \(p\/gate\)/);
+  run(root,['scope-check','reserve-run','implementation','src/p/gen.json','--pipeline','q','--json']);
+  process.chdir(root);
+  const { workItemWaves } = await import('./pipeline-dispatch.ts');
+  // q's stage now also owns src/p/early.ts, which p's reservation covers: its item waits.
+  const q=(await workItemWaves(root,'reserve-run','q')).stages[0];
+  assert.deepEqual(q.waiting,[{id:'wi-q',reason:'src/p/early.ts is being changed by lane p in its gate or review'}]);
+  await mkdir(path.join(root,'.tmp/pipelines/reserve-run/gates'),{recursive:true});
+  await writeFile(path.join(root,'.tmp/pipelines/reserve-run/gates/p-fail-fast.json'),JSON.stringify({status:'PASS',run_id:'reserve-run',pipeline_id:'p',gate:'fail-fast'}));
+  run(root,['complete','reserve-run','fail-fast','--pipeline','p']);
+  run(root,['scope-check','reserve-run','implementation','src/p/a.ts','--pipeline','q','--json']);
+ } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
+});

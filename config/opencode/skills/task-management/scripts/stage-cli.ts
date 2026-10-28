@@ -13,7 +13,8 @@ import { preflightFile } from './manifest-preflight.mjs';
 import { freezeGateTesting } from './gate-testing-freeze.mjs';
 import { runGenerator } from './generator-cli.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
-import { scopedInventoryDigest, sourceInventory } from './gate-diagnostics.mjs';
+import { sourceInventory } from './gate-diagnostics.mjs';
+import { laneDigest } from './dispatch-leases.mjs';
 import { validateOwnerAmendmentForApply } from './owner-amendment-policy.ts';
 import { refreshManifestHashes } from './manifest-refresh.mjs';
 
@@ -261,7 +262,7 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
         const result = spawnSync(exe, argv, { cwd: process.cwd(), env: gitReadEnv(), encoding: 'utf8', shell: false, maxBuffer: 64 * 1024 * 1024 });
         return Promise.resolve({ exit_code: result.status ?? 1, stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? ''), truncated: false });
       });
-      if (scopedInventoryDigest(inventory.files, lane) !== evidence.snapshot.lane_scope_digest) {
+      if (laneDigest(inventory.files, lane, evidence.snapshot.lane_exclude ?? []) !== evidence.snapshot.lane_scope_digest) {
         throw new Error(`EVIDENCE_STALE_LANE_SOURCE: local_gate ${pipeline.id}/${stage}: this lane's files changed after the gate snapshot ${evidence.snapshot.commit}; rerun the gate`);
       }
     }

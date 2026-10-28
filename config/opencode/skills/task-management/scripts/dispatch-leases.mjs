@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { scopedInventoryDigest } from './gate-diagnostics.mjs';
 import process from 'node:process';
 
 // A writing worker holds a lease on the paths it may change from the moment the runtime starts it
@@ -90,10 +91,52 @@ export function extendLeases(runRoot, pipelineId, stage, paths) {
 export function leaseConflict(leases, self, paths) {
   for (const lease of leases) {
     if (sameDispatch(lease, self)) continue;
-    const path = firstOverlap(paths, lease.scope ?? []);
+    // A reservation leaves generated files free: the coordinator regenerates them for every lane.
+    const own = paths.filter(path => !(lease.exclude ?? []).some(excluded => scopeMatches(path, excluded)));
+    const path = firstOverlap(own, lease.scope ?? []);
     if (path) return { lease, path };
   }
   return null;
+}
+
+// Paths a lane's gate proves: its work items, its declared exclusive/migration/fixture paths and the
+// paths scope-check granted its agent stages. Generated files are left out of the proof (see laneDigest).
+export function laneScope(manifest, manifestDir, runRoot, pipelineId) {
+  const pipeline = (manifest.pipelines ?? []).find(item => item.id === pipelineId);
+  if (!pipeline) return [];
+  const items = (manifest.work_items ?? []).filter(item => item.pipeline_id === pipelineId).flatMap(item => {
+    try {
+      const record = JSON.parse(readFileSync(resolve(manifestDir, item.path), 'utf8'));
+      return Array.isArray(record?.allowed_change_paths) ? record.allowed_change_paths.filter(path => typeof path === 'string') : [];
+    } catch { return []; }
+  });
+  const stagePaths = Object.entries(pipeline.executors ?? {}).filter(([, executor]) => executor === 'agent')
+    .flatMap(([stage]) => readStagePaths(runRoot, pipelineId, stage));
+  return [...new Set([...items, ...['exclusive_paths', 'migration_paths', 'fixture_paths'].flatMap(key => pipeline[key] ?? []), ...stagePaths])].sort();
+}
+
+// Digest of the lane's files without the generated ones, which the coordinator rewrites for all lanes.
+export function laneDigest(files, scope, generated = []) {
+  if (!files || !scope.length) return null;
+  const kept = Object.fromEntries(Object.entries(files).filter(([file]) => !generated.some(path => scopeMatches(file, path))));
+  return scopedInventoryDigest(kept, scope);
+}
+
+// From its last agent stage until its ready milestone (gate, review) a lane's files are reserved like a
+// running worker's: no other pipeline's dispatch or scope-check may change them, so its gate evidence
+// stays valid until the lane is ready. Its own repair reopens the agent stage and ends the reservation.
+export function laneReservations(state, manifest, manifestDir, runRoot) {
+  const reservations = [];
+  for (const pipeline of manifest.pipelines ?? []) {
+    const runtime = state?.pipelines?.[pipeline.id];
+    const agentStages = Object.entries(pipeline.executors ?? {}).filter(([, executor]) => executor === 'agent').map(([stage]) => stage);
+    if (!runtime || !agentStages.length || !agentStages.every(stage => runtime.stages?.[stage]?.status === 'completed')) continue;
+    const milestone = runtime.ready_after_stage ?? pipeline.ready_after_stage;
+    if (milestone ? runtime.stages?.[milestone]?.status === 'completed' : runtime.status === 'completed') continue;
+    const scope = laneScope(manifest, manifestDir, runRoot, pipeline.id);
+    if (scope.length) reservations.push({ pipeline_id: pipeline.id, stage: 'gate', work_item_id: `lane ${pipeline.id} in its gate or review`, scope, exclude: manifest.generated_paths ?? [] });
+  }
+  return reservations;
 }
 
 // Paths a scope check authorized for a pipeline stage. They are written by every worker of that stage

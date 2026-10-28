@@ -2,15 +2,14 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import process from 'node:process';
 import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
 import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGateTestingFile, isPrePublishGate } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
-import { sourceSnapshot, sourceInventory, scopedInventoryDigest, changedFromInventory, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports, retryTimeouts } from './gate-diagnostics.mjs';
+import { sourceSnapshot, sourceInventory, changedFromInventory, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports, retryTimeouts } from './gate-diagnostics.mjs';
 import { createGateSnapshot } from './gate-snapshot.mjs';
-import { readStagePaths } from './dispatch-leases.mjs';
+import { laneDigest, laneScope } from './dispatch-leases.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { acquireHeavySlot, acquireLiveSlot, acquireLockFiles, waitForHeavySlot } from './runtime-locks.mjs';
 
@@ -143,15 +142,6 @@ async function acquireGateLocks(stateRoot: string, runId: string, gateLock: stri
     if (runtimeLocks.length) visible = await acquireLockFiles(join(resolve(stateRoot), '.runtime-locks'), runtimeLocks.map(name => lockEntry(name, runId)));
   } catch (error) { await lane.release(); throw new GateRunnerError(`runtime target is locked: ${String((error as Error)?.message ?? error)}`); }
   return async () => { await visible?.release(); await lane.release(); };
-}
-
-function manifestWorkItemScopes(manifest: { work_items?: Array<{ pipeline_id: string; path: string }> }, manifestFile: string, pipelineId: string): string[] {
-  return (manifest.work_items ?? []).filter(item => item.pipeline_id === pipelineId).flatMap(item => {
-    try {
-      const record = JSON.parse(readFileSync(resolve(dirname(manifestFile), item.path), 'utf8'));
-      return Array.isArray(record?.allowed_change_paths) ? record.allowed_change_paths.filter((path: unknown) => typeof path === 'string') : [];
-    } catch { return []; }
-  });
 }
 
 type ReuseQuery = {
@@ -459,14 +449,11 @@ async function main(): Promise<void> {
   const hypothesisIndex = args.indexOf('--hypothesis');
   if (hypothesisIndex >= 0 && (!advisory || !args[hypothesisIndex + 1])) throw new GateRunnerError('hypothesis requires an advisory check and an evidence path');
   const hypothesis = hypothesisIndex < 0 ? null : await readDiagnosticHypothesis(args[hypothesisIndex + 1], join(resolve(stateRoot), runId));
-  // Paths this lane owns: its work items, its declared exclusive/migration/fixture paths and paths
-  // scope-check granted its agent stages. Completion requires them unchanged since the gate's snapshot.
-  const laneScope = [...new Set([
-    ...manifestWorkItemScopes(manifest as any, state.manifest_file, pipelineId),
-    ...['exclusive_paths', 'migration_paths', 'fixture_paths'].flatMap(key => (pipeline as any)[key] ?? []),
-    ...Object.entries((pipeline as any).executors ?? {}).filter(([, executor]) => executor === 'agent').flatMap(([stage]) => readStagePaths(join(stateRoot, runId), pipelineId, stage)),
-  ])].sort();
-  const laneDigest = (files: Record<string, string>) => laneScope.length ? { lane_scope: laneScope, lane_scope_digest: scopedInventoryDigest(files, laneScope) } : {};
+  // Completion requires the lane's own files (generated ones aside) unchanged since the gate's snapshot.
+  const laneScopeList = laneScope(manifest, dirname(state.manifest_file), join(stateRoot, runId), pipelineId);
+  const generatedPaths: string[] = (manifest as any).generated_paths ?? [];
+  const laneProof = (files: Record<string, string>) => laneScopeList.length
+    ? { lane_scope: laneScopeList, lane_exclude: generatedPaths, lane_scope_digest: laneDigest(files, laneScopeList, generatedPaths) } : {};
   const environmentDigest = sha256(JSON.stringify([process.version, process.env.PATH, process.env.NODE_ENV, process.env.LIVE_PG_TEST, process.env.LIVE_PG_CONTOUR, process.env.DATABASE_URL]));
   const inputIdentity = snapshot?.digest ? sha256(JSON.stringify([snapshot.scoped_digest ?? snapshot.digest, state.manifest_sha256, baselineSha ?? null, environmentDigest])) : null;
   const fingerprint = inputIdentity ? sha256(JSON.stringify([inputIdentity, invocations])) : null;
@@ -522,6 +509,26 @@ async function main(): Promise<void> {
   const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest ? new Map()
     : await findReusableResults({ runDirectory: join(resolve(stateRoot), runId), pipelineId, gate, manifestSha: state.manifest_sha256,
       sourceDigest: snapshot.digest, environmentDigest, selected: invocations.map(item => ({ index: item.index, test_files: item.test_files })) });
+  // A gate that passed on an earlier snapshot and runs again (its lane files moved after it, or a plain
+  // rerun) repeats only the commands that the changes between the two snapshots reach through the frozen
+  // impact map; the others keep their PASS. Unmapped and dependency changes reach every command.
+  if (treeCopy && !args.includes('--no-reuse') && !hypothesis && previous?.status === 'PASS' && previous.snapshot?.status === 'used' &&
+      SHA.test(previous.snapshot.commit ?? '') && previous.manifest_sha256 === state.manifest_sha256 && previous.environment_digest === environmentDigest) {
+    const diff = await runInvocation('git', ['diff', '--name-only', '-z', '--no-renames', previous.snapshot.commit, treeCopy.commit, '--'], originalCwd, gitReadEnv({}), 30);
+    if (diff.exit_code === 0 && !diff.truncated) {
+      const changed = diff.stdout.split('\0').filter(Boolean);
+      const touched = changed.length ? selectAffectedCommands(commands, config, changed, []) : { selected: [], deferred: [] };
+      const reached = new Set<number>([...touched.selected.map((item: any) => item.index), ...touched.deferred]);
+      for (const item of invocations) {
+        const prior = (previous.results ?? []).find((result: any) => result.command_index === item.index);
+        if (reusable.has(item.index) || reached.has(item.index) || prior?.exit_code !== 0 ||
+            JSON.stringify(prior.test_files ?? []) !== JSON.stringify(item.test_files)) continue;
+        reusable.set(item.index, { path: evidenceFile, result: prior });
+      }
+      snapshotRecord!.reused_by_impact = { from_commit: previous.snapshot.commit, changed_paths: changed.slice(0, 200),
+        commands: [...reusable.keys()].sort((a, b) => a - b) };
+    }
+  }
   const pending = invocations.filter(item => !reusable.has(item.index));
   // Whole-run reuse keeps the old evidence shape (`reused_from` set, zero commands run).
   const reuse = invocations.length > 0 && pending.length === 0 ? { path: [...reusable.values()][0].path } : null;
@@ -651,7 +658,7 @@ async function main(): Promise<void> {
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
         live_postgres: liveEvidence ?? resource?.evidence ?? null, cleanup_complete: cleanupComplete, heavy_slot: heavy, heavy_slot_wait_ms: slotWaitMs, live_slot_wait_ms: liveWaitMs,
-        snapshot: snapshotRecord && treeCopy && copyFiles ? { ...snapshotRecord, ...laneDigest(copyFiles) } : snapshotRecord,
+        snapshot: snapshotRecord && treeCopy && copyFiles ? { ...snapshotRecord, ...laneProof(copyFiles) } : snapshotRecord,
         test_reports: reuse ? [] : JSON.parse(redact(JSON.stringify(await readTestReports(config?.report_files, join(resolve(stateRoot), runId), startedAt)))),
         error: failure ? redact(String(failure)) : null, results: [...results].sort((a: any, b: any) => a.command_index - b.command_index) }, null, 2)}\n`, 'utf8');
       // Append-only gate timeline for the RUN report: the main wall-clock cost is gate time.
