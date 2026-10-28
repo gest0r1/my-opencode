@@ -605,3 +605,39 @@ test('waves start independent work items together and hold back dependents and p
   assert.deepEqual(current.running,[]);
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });
+
+test('a gate passed on a tree snapshot completes only while the lane files still match that snapshot', async () => {
+ const previousCwd = process.cwd(), root = await tempProject();
+ try {
+  const git=(...args)=>spawnSync('git',args,{cwd:root,encoding:'utf8'});
+  git('init'); git('config','user.email','test@example.invalid'); git('config','user.name','Test');
+  await mkdir(path.join(root,'src'),{recursive:true});
+  await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
+  await writeFile(path.join(root,'src','b.ts'),'export const b = 1;\n');
+  git('add','src'); git('commit','-m','base');
+  const manifest = await baseManifest(root,'lane-run',[{id:'p',stages:['implementation','fail-fast']}]);
+  manifest.allowed_change_paths=['src/**'];
+  manifest.pipelines[0].executors['fail-fast']='local_gate';
+  manifest.pipelines[0].profile='local';
+  manifest.gate_profiles={local:{'fail-fast':['npm test']}};
+  const raw=JSON.stringify({id:'wi-p',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent',allowed_change_paths:['src/a.ts']});
+  await writeFile(path.join(root,manifest.work_items[0].path),raw); manifest.work_items[0].sha256=sha(raw);
+  const manifestPath=await writeManifest(root,manifest);
+  run(root,['init',manifestPath]); run(root,['approve','lane-run']);
+  run(root,['start','lane-run','implementation','--pipeline','p']); run(root,['complete','lane-run','implementation','--pipeline','p']);
+  run(root,['start','lane-run','fail-fast','--pipeline','p']);
+  const { sourceInventory, scopedInventoryDigest } = await import('./gate-diagnostics.mjs');
+  const invoke=(exe,argv)=>{ const r=spawnSync(exe,argv,{cwd:root,encoding:'utf8'}); return Promise.resolve({exit_code:r.status,stdout:r.stdout,stderr:r.stderr,truncated:false}); };
+  const files=(await sourceInventory(root,invoke)).files;
+  const gates=path.join(root,'.tmp/pipelines/lane-run/gates'); await mkdir(gates,{recursive:true});
+  await writeFile(path.join(gates,'p-fail-fast.json'),JSON.stringify({status:'PASS',run_id:'lane-run',pipeline_id:'p',gate:'fail-fast',
+    snapshot:{status:'used',commit:'c'.repeat(40),lane_scope:['src/a.ts'],lane_scope_digest:scopedInventoryDigest(files,['src/a.ts'])}}));
+  // Another lane's file moving on does not matter; this lane's file does.
+  await writeFile(path.join(root,'src','b.ts'),'export const b = 2;\n');
+  await writeFile(path.join(root,'src','a.ts'),'export const a = 2;\n');
+  const stale=spawnSync('npx',['--yes','tsx',STAGE_CLI,'complete','lane-run','fail-fast','--pipeline','p'],{cwd:root,encoding:'utf8'});
+  assert.notEqual(stale.status,0); assert.match(stale.stderr,/EVIDENCE_STALE_LANE_SOURCE: local_gate p\/fail-fast/);
+  await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
+  run(root,['complete','lane-run','fail-fast','--pipeline','p']);
+ } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
+});

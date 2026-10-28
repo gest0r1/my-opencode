@@ -202,6 +202,32 @@ BLOCKED means the gate could not start (fix env/resources in the gate contract).
 
 At RUN, post-publish gates (dev-install, release checks needing the candidate) are not probed in PLAN; they get `CANDIDATE_SHA` and `PIPELINE_SCRATCH_DIR` from the gate environment when they run, so OpenStage never asks the owner for an identity or install root.
 
+## Gates on a tree snapshot
+
+Authoritative gates (except runtime/deploy/release/smoke/install gates and commands with
+`{candidate_sha}`) and `--coordinator` checks run on a snapshot, not in the checkout. The runner builds
+a commit object of the working tree with a private index (tracked files plus the untracked files the
+source inventory covers; no ref, branch or main index changes), checks it out as a detached worktree
+under `~/.cache/opencode-pipeline/snapshots` (`PIPELINE_SNAPSHOT_DIR`), copies ignored local files
+outside dependency/build directories, links `.tmp/pipelines` back to the run state root, restores
+dependencies from the lockfile (`--prefer-offline`; evidence `checks/<pipeline>-<gate>-snapshot-install.json`)
+and runs the commands there. `source_digest` describes the snapshot. The worktree is removed afterwards
+(`PIPELINE_KEEP_SNAPSHOT=1` keeps it for diagnosis). If the snapshot cannot be built or prepared the
+gate runs in place and `snapshot.status` is `unavailable` with the reason; `PIPELINE_GATE_SNAPSHOT=0`
+always runs in place.
+
+On FAIL the runner compares the snapshot with the current checkout. When changed paths reach a failed
+command through the frozen impact map (unmapped and dependency changes reach every command), it moves
+the worktree to a fresh snapshot and runs again the failed and not yet run commands plus passed ones the
+changes reach; `snapshot.rerun` records the first attempt and only the second result counts. Otherwise
+the FAIL stands with `snapshot.failure_check`. Evidence carries `snapshot.lane_scope` (the lane's work
+item paths, declared exclusive/migration/fixture paths and scope-check paths of its agent stages) and
+`lane_scope_digest`; completion of the `local_gate` stage refuses it with `EVIDENCE_STALE_LANE_SOURCE`
+once those files differ in the checkout.
+
+A project's live harness sees the snapshot directory as its repository root. It must take the root from
+its own location (not a fixed path) and accept `.tmp/pipelines` being a link to the run state root.
+
 ## Disposable PostgreSQL
 
 The runner creates a separate container for the selected live commands, waits
