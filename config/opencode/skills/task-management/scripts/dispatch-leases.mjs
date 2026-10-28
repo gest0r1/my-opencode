@@ -101,7 +101,7 @@ export function leaseConflict(leases, self, paths) {
 
 // Paths a lane's gate proves: its work items, its declared exclusive/migration/fixture paths and the
 // paths scope-check granted its agent stages. Generated files are left out of the proof (see laneDigest).
-export function laneScope(manifest, manifestDir, runRoot, pipelineId) {
+export function laneScope(manifest, manifestDir, runRoot, pipelineId, { granted = true } = {}) {
   const pipeline = (manifest.pipelines ?? []).find(item => item.id === pipelineId);
   if (!pipeline) return [];
   const items = (manifest.work_items ?? []).filter(item => item.pipeline_id === pipelineId).flatMap(item => {
@@ -110,8 +110,8 @@ export function laneScope(manifest, manifestDir, runRoot, pipelineId) {
       return Array.isArray(record?.allowed_change_paths) ? record.allowed_change_paths.filter(path => typeof path === 'string') : [];
     } catch { return []; }
   });
-  const stagePaths = Object.entries(pipeline.executors ?? {}).filter(([, executor]) => executor === 'agent')
-    .flatMap(([stage]) => readStagePaths(runRoot, pipelineId, stage));
+  const stagePaths = granted ? Object.entries(pipeline.executors ?? {}).filter(([, executor]) => executor === 'agent')
+    .flatMap(([stage]) => readStagePaths(runRoot, pipelineId, stage)) : [];
   return [...new Set([...items, ...['exclusive_paths', 'migration_paths', 'fixture_paths'].flatMap(key => pipeline[key] ?? []), ...stagePaths])].sort();
 }
 
@@ -122,9 +122,11 @@ export function laneDigest(files, scope, generated = []) {
   return scopedInventoryDigest(kept, scope);
 }
 
-// From its last agent stage until its ready milestone (gate, review) a lane's files are reserved like a
-// running worker's: no other pipeline's dispatch or scope-check may change them, so its gate evidence
-// stays valid until the lane is ready. Its own repair reopens the agent stage and ends the reservation.
+// From its last agent stage until its ready milestone (gate, review) a lane's own planned files are
+// reserved like a running worker's: no other pipeline's dispatch or scope-check may change them. By plan
+// no parallel lane writes them, so this holds no one back. Shared paths scope-check granted at runtime
+// stay free: another lane may change them at once, and the gate repeats only the commands that change
+// reaches when its proof turns stale. Its own repair reopens the agent stage and ends the reservation.
 export function laneReservations(state, manifest, manifestDir, runRoot) {
   const reservations = [];
   for (const pipeline of manifest.pipelines ?? []) {
@@ -133,7 +135,7 @@ export function laneReservations(state, manifest, manifestDir, runRoot) {
     if (!runtime || !agentStages.length || !agentStages.every(stage => runtime.stages?.[stage]?.status === 'completed')) continue;
     const milestone = runtime.ready_after_stage ?? pipeline.ready_after_stage;
     if (milestone ? runtime.stages?.[milestone]?.status === 'completed' : runtime.status === 'completed') continue;
-    const scope = laneScope(manifest, manifestDir, runRoot, pipeline.id);
+    const scope = laneScope(manifest, manifestDir, runRoot, pipeline.id, { granted: false });
     if (scope.length) reservations.push({ pipeline_id: pipeline.id, stage: 'gate', work_item_id: `lane ${pipeline.id} in its gate or review`, scope, exclude: manifest.generated_paths ?? [] });
   }
   return reservations;
