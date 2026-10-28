@@ -642,7 +642,7 @@ test('a gate passed on a tree snapshot completes only while the lane files still
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });
 
-test('a lane in its gate or review reserves its files against other pipelines until it is ready', async () => {
+test('a lane in its gate or review reserves its planned files, not shared runtime paths, until it is ready', async () => {
  const previousCwd = process.cwd(), root = await tempProject();
  try {
   const git=(...args)=>spawnSync('git',args,{cwd:root,encoding:'utf8'});
@@ -665,6 +665,7 @@ test('a lane in its gate or review reserves its files against other pipelines un
   run(root,['init',manifestPath]); run(root,['approve','reserve-run']);
   run(root,['start','reserve-run','implementation','--pipeline','q']);
   run(root,['start','reserve-run','implementation','--pipeline','p']);
+  run(root,['scope-check','reserve-run','implementation','src/shared/registry.ts','--pipeline','p','--json']);
   // While p is still implementing, q may be granted a path of p (no live worker holds it).
   run(root,['scope-check','reserve-run','implementation','src/p/early.ts','--pipeline','q','--json']);
   run(root,['complete','reserve-run','implementation','--pipeline','p']);
@@ -672,6 +673,8 @@ test('a lane in its gate or review reserves its files against other pipelines un
   const refused=spawnSync('npx',['--yes','tsx',STAGE_CLI,'scope-check','reserve-run','implementation','src/p/a.ts','--pipeline','q','--json'],{cwd:root,encoding:'utf8'});
   assert.notEqual(refused.status,0); assert.match(refused.stderr,/SCOPE_BUSY: src\/p\/a\.ts is being changed by lane p in its gate or review \(p\/gate\)/);
   run(root,['scope-check','reserve-run','implementation','src/p/gen.json','--pipeline','q','--json']);
+  // A shared path scope-check granted p at runtime is not reserved: q changes it at once.
+  run(root,['scope-check','reserve-run','implementation','src/shared/registry.ts','--pipeline','q','--json']);
   process.chdir(root);
   const { workItemWaves } = await import('./pipeline-dispatch.ts');
   // q's stage now also owns src/p/early.ts, which p's reservation covers: its item waits.
