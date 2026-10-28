@@ -224,9 +224,10 @@ the FAIL stands with `snapshot.failure_check`. Evidence carries `snapshot.lane_s
 item paths, declared exclusive/migration/fixture paths and scope-check paths of its agent stages) and
 `lane_scope_digest` over those files minus `generated_paths` (`lane_exclude`; the coordinator rewrites
 them for every lane); completion of the `local_gate` stage refuses it with `EVIDENCE_STALE_LANE_SOURCE`
-once those files differ in the checkout. From the lane's last agent stage until its ready milestone the
-same paths are reserved against other pipelines' dispatch and scope-check, so only a real violation
-reaches that check.
+once those files differ in the checkout. From the lane's last agent stage until its ready milestone its
+planned paths (work items, declared exclusive/migration/fixture paths) are reserved against other
+pipelines' dispatch and scope-check; shared paths scope-check granted at runtime stay free, and a change
+to them reaches that check and a partial rerun instead of a wait.
 
 A gate whose previous evidence is a PASS on a snapshot (same manifest and environment) repeats only the
 commands the changes between the two snapshot commits reach through the impact map; the others keep
