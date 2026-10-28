@@ -209,12 +209,16 @@ Authoritative gates (except runtime/deploy/release/smoke/install gates and comma
 a commit object of the working tree with a private index (tracked files plus the untracked files the
 source inventory covers; no ref, branch or main index changes), checks it out as a detached worktree
 under `~/.cache/opencode-pipeline/snapshots` (`PIPELINE_SNAPSHOT_DIR`), copies ignored local files
-outside dependency/build directories, links `.tmp/pipelines` back to the run state root, restores
-dependencies from the lockfile (`--prefer-offline`; evidence `checks/<pipeline>-<gate>-snapshot-install.json`)
-and runs the commands there. `source_digest` describes the snapshot. The worktree is removed afterwards
+outside dependency/build directories, links `.tmp/pipelines` back to the run state root, hard-links the
+checkout's dependency trees (root and per-package `node_modules`, `snapshot.dependency_trees`; a copy
+across filesystems) so the snapshot resolves exactly what the checkout resolves, and runs the commands
+there. Only a checkout without installed dependencies gets a lockfile restore (`--prefer-offline`;
+evidence `checks/<pipeline>-<gate>-snapshot-install.json`). The source inventory hashes content plus
+the executable bit, so a checkout and its snapshot with the same bytes have the same digest whatever
+their other permission bits. `source_digest` describes the snapshot. The worktree is removed afterwards
 (`PIPELINE_KEEP_SNAPSHOT=1` keeps it for diagnosis). If the snapshot cannot be built or prepared the
-gate runs in place and `snapshot.status` is `unavailable` with the reason; `PIPELINE_GATE_SNAPSHOT=0`
-always runs in place.
+gate runs in place and `snapshot.status` is `unavailable` with the reason; `--in-place` (or
+`PIPELINE_GATE_SNAPSHOT=0`) always runs in place.
 
 On FAIL the runner compares the snapshot with the current checkout. When changed paths reach a failed
 command through the frozen impact map (unmapped and dependency changes reach every command), it moves
