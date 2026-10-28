@@ -161,6 +161,10 @@ rm -rf -- "$STAGE_SKILLS/bitrix24"
 # Remove known retired managed artifacts from the candidate tree.
 rm -f -- "$STAGE_CONFIG/env.example"
 rm -rf -- "$STAGE_CONFIG/skills/bitrix24"
+# The old curl-based telegram-send skill conflicts with OpenChamber's built-in
+# openchamber_notify Telegram action. Purge even a previously installed copy
+# from both runtime skill roots; do not touch unrelated user skills.
+rm -rf -- "$STAGE_CONFIG/skills/telegram-send" "$STAGE_SKILLS/telegram-send"
 
 # Merge user plugins before validation/atomic commit; parsing errors preserve active config.
 node "$SRC/scripts/merge-user-plugins.mjs" "$CONFIG_HOME" "$STAGE_CONFIG" "$SRC/config/opencode/plugin-policy.json"
