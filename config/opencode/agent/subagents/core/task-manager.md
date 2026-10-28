@@ -65,7 +65,7 @@ Each atomic item contains:
 - stable id, pipeline_id, sequence/title;
 - `stage`: exact target agent stage ID;
 - status: pending;
-- depends_on work-item IDs;
+- depends_on work-item IDs; two items of one pipeline whose `allowed_change_paths` overlap must be ordered by it (`WORK_ITEM_SCOPE_OVERLAP`), otherwise RUN dispatches them in parallel;
 - suggested_agent;
 - exact context/reference files;
 - binary acceptance criteria;
