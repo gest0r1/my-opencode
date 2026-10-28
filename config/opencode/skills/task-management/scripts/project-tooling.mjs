@@ -181,14 +181,15 @@ function redact(text) {
 
 // Frozen dependency restore with the prepared manager. The install must not change package.json or the lockfile;
 // evidence is written for PASS and FAIL alike, and failures throw a stable DEPENDENCY_* code.
-export function restoreDependencies(cwd, tooling, {env = process.env, evidenceFile, timeout = 15 * 60 * 1000} = {}) {
+export function restoreDependencies(cwd, tooling, {env = process.env, evidenceFile, timeout = 15 * 60 * 1000, extraArgs = []} = {}) {
   const manager = tooling?.package_manager;
   if (!manager) throw new Error('DEPENDENCY_MANAGER_REQUIRED: package.json packageManager is not pinned');
   const lockfile = LOCKFILES[manager].find(name => existsSync(join(cwd, name)));
   if (!lockfile) throw new Error(`DEPENDENCY_LOCK_MISSING: ${LOCKFILES[manager].join(' or ')} is required for ${manager}`);
   const files = ['package.json', lockfile];
   const before = Object.fromEntries(files.map(name => [name, fileSha256(join(cwd, name))]));
-  const args = FROZEN_INSTALL[manager];
+  // `--prefer-offline` (gate snapshots) is understood by pnpm and npm only.
+  const args = [...FROZEN_INSTALL[manager], ...(['pnpm', 'npm'].includes(manager) ? extraArgs : [])];
   const started = Date.now();
   const result = spawnSync(tooling.executable ?? executablePath(manager, env), args, {cwd, env, encoding: 'utf8', shell: false, timeout, maxBuffer: 16 * 1024 * 1024});
   const changed = files.filter(name => fileSha256(join(cwd, name)) !== before[name]);

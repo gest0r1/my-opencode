@@ -1,4 +1,4 @@
-import { dispatchPacket } from './pipeline-dispatch.ts';
+import { dispatchPacket, workItemWaves } from './pipeline-dispatch.ts';
 import { candidateEvidenceMatches } from './github-actions-gate-core.mjs';
 // Stable CLI entry point. Keep core stage/DAG/state implementation untouched and
 // reject non-executable machine gates BEFORE init creates any state or approve mutates it.
@@ -13,6 +13,8 @@ import { preflightFile } from './manifest-preflight.mjs';
 import { freezeGateTesting } from './gate-testing-freeze.mjs';
 import { runGenerator } from './generator-cli.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
+import { sourceInventory } from './gate-diagnostics.mjs';
+import { laneDigest } from './dispatch-leases.mjs';
 import { validateOwnerAmendmentForApply } from './owner-amendment-policy.ts';
 import { refreshManifestHashes } from './manifest-refresh.mjs';
 
@@ -253,6 +255,17 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
         throw new Error(`EVIDENCE_STALE_SHA: local_gate ${pipeline.id}/${stage}`);
       }
     }
+    // A gate on a tree snapshot proves this lane's files as they were then; other lanes may have moved on.
+    const lane = evidence.snapshot?.lane_scope;
+    if (Array.isArray(lane) && lane.length) {
+      const inventory = await sourceInventory(process.cwd(), (exe: string, argv: string[]) => {
+        const result = spawnSync(exe, argv, { cwd: process.cwd(), env: gitReadEnv(), encoding: 'utf8', shell: false, maxBuffer: 64 * 1024 * 1024 });
+        return Promise.resolve({ exit_code: result.status ?? 1, stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? ''), truncated: false });
+      });
+      if (laneDigest(inventory.files, lane, evidence.snapshot.lane_exclude ?? []) !== evidence.snapshot.lane_scope_digest) {
+        throw new Error(`EVIDENCE_STALE_LANE_SOURCE: local_gate ${pipeline.id}/${stage}: this lane's files changed after the gate snapshot ${evidence.snapshot.commit}; rerun the gate`);
+      }
+    }
   } else if (executor === 'github_ci' || executor === 'github_dev') {
     evidencePath = join(artifactRoot, 'github', `${pipeline.id}-${stage}.json`);
     const evidence = await readJsonEvidence(evidencePath, `${pipeline.id}/${stage}`);
@@ -398,6 +411,16 @@ async function main(args: string[]): Promise<void> {
     }
     const packet = await dispatchPacket(process.cwd(), identifier, optionFromArgs(args, '--pipeline') ?? '', optionFromArgs(args, '--stage') ?? '', optionFromArgs(args, '--work-item') ?? '', optionFromArgs(args, '--role') ?? '');
     console.log(JSON.stringify(packet));
+    return;
+  }
+  if (command === 'waves') {
+    if (!identifier) throw new Error('run-id is required');
+    for (let i = 2; i < args.length; i++) {
+      if (args[i] === '--json') continue;
+      if (args[i] !== '--pipeline' || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error('Invalid waves arguments');
+      i++;
+    }
+    console.log(JSON.stringify(await workItemWaves(process.cwd(), identifier, optionFromArgs(args, '--pipeline')), null, 2));
     return;
   }
   if (command === 'owner-accept') {

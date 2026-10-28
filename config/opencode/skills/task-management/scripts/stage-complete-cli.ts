@@ -249,6 +249,12 @@ async function advance(args: string[]): Promise<void> {
     if (start.status !== 0) waiting.push({ ...item, executor, start_error: start.stderr.trim() });
     else started.push({ ...item, executor });
   }
+  // Work items that can start now in every agent stage: the orchestrator dispatches exactly these.
+  const waves = stageCli(['waves', runId, '--json']);
+  const dispatchNow = waves.status === 0
+    ? (JSON.parse(waves.stdout).stages ?? []).filter((entry: any) => entry.dispatchable.length)
+      .map((entry: any) => ({ pipeline_id: entry.pipeline_id, stage: entry.stage, work_items: entry.dispatchable }))
+    : [];
   let github: Record<string, unknown>;
   try {
     const { syncRun } = await import('./pipeline-github-sync.mjs');
@@ -258,7 +264,7 @@ async function advance(args: string[]): Promise<void> {
   }
   const run = JSON.parse(await readFile(join(stateRoot, runId, 'state.json'), 'utf8'));
   console.log(JSON.stringify({ status: 'PASS', run_id: runId, run_status: run.status,
-    completed: { pipeline_id: option(args, '--pipeline'), stage: args[2] }, started, waiting, github_sync: github }, null, 2));
+    completed: { pipeline_id: option(args, '--pipeline'), stage: args[2] }, started, waiting, dispatch_now: dispatchNow, github_sync: github }, null, 2));
 }
 
 async function main(args: string[]): Promise<void> {

@@ -1497,6 +1497,25 @@ test('schema v2 rejects parallel pipelines whose work items may change the same 
   assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
 });
 
+test('PLAN rejects two work items of one pipeline that may change the same path unless depends_on orders them', async () => {
+  const fx = await fixture('v2-item-scope');
+  const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', allowed_change_paths: ['scripts/testing/**', 'src/a.ts'] }));
+  fx.manifest.work_items[0] = { id: 'wi-1', pipeline_id: 'app', ...first };
+  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
+  fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'app', ...second });
+  fx.manifest.pipelines[0].work_items.push('wi-2');
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /WORK_ITEM_SCOPE_OVERLAP: wi-1 and wi-2 of app may both change scripts\/testing\/\*\*/,
+  );
+  const ordered = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', depends_on: ['wi-1'], allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
+  fx.manifest.work_items[1] = { id: 'wi-2', pipeline_id: 'app', ...ordered };
+  assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
+  const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/b.ts'] }));
+  fx.manifest.work_items[1] = { id: 'wi-2', pipeline_id: 'app', ...disjoint };
+  assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
+});
+
 async function planProbeFixture(runId) {
   const fx = await fixture(runId);
   fx.manifest.pipelines[0].stages.push('fast-tests');

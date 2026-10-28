@@ -7,9 +7,11 @@ import process from 'node:process';
 import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
 import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGateTestingFile, isPrePublishGate } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
-import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports, retryTimeouts } from './gate-diagnostics.mjs';
+import { sourceSnapshot, sourceInventory, changedFromInventory, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports, retryTimeouts } from './gate-diagnostics.mjs';
+import { createGateSnapshot } from './gate-snapshot.mjs';
+import { laneDigest, laneScope } from './dispatch-leases.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
-import { acquireHeavySlot, openRuntimeLock, waitForHeavySlot } from './runtime-locks.mjs';
+import { acquireHeavySlot, acquireLiveSlot, acquireLockFiles, waitForHeavySlot } from './runtime-locks.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -124,26 +126,22 @@ async function loadCandidate(manifestFile: string): Promise<string | undefined> 
   }
 }
 
-async function acquireRuntimeLocks(stateRoot: string, runId: string, locks: string[]): Promise<() => Promise<void>> {
-  if (locks.length === 0) return async () => undefined;
-  const directory = join(resolve(stateRoot), '.runtime-locks');
-  await mkdir(directory, { recursive: true });
-  const acquired: string[] = [];
+// Lock files are named by the hash of the lock name; the record carries the name for its readers.
+function lockEntry(name: string, runId: string) {
+  return { file: `${sha256(name)}.lock`, record: { lock: name, run_id: runId } };
+}
+
+// Two runs of one lane gate (two work items checking in parallel) queue on the lane lock instead of
+// failing. The lane lock lives in .gate-locks: `.runtime-locks` is what a project's live harness reads,
+// and it must see exactly one gate while a live command runs (see the live slot below).
+async function acquireGateLocks(stateRoot: string, runId: string, gateLock: string, runtimeLocks: string[]): Promise<() => Promise<void>> {
+  const lane = await acquireLockFiles(join(resolve(stateRoot), '.gate-locks'), [lockEntry(gateLock, runId)]);
+  // A runtime/release gate keeps its project-visible locks for its whole run, as release tooling checks them.
+  let visible: { release: () => Promise<unknown> } | undefined;
   try {
-    for (const name of [...new Set(locks)].sort()) {
-      const file = join(directory, `${sha256(name)}.lock`);
-      const handle = await openRuntimeLock(file);
-      await handle.writeFile(JSON.stringify({ lock: name, run_id: runId, pid: process.pid, acquired_at: new Date().toISOString() }));
-      await handle.close();
-      acquired.push(file);
-    }
-  } catch (error) {
-    await Promise.all(acquired.map((file) => rm(file, { force: true })));
-    throw new GateRunnerError(`runtime target is locked: ${String((error as Error)?.message ?? error)}`);
-  }
-  return async () => {
-    await Promise.all(acquired.map((file) => rm(file, { force: true })));
-  };
+    if (runtimeLocks.length) visible = await acquireLockFiles(join(resolve(stateRoot), '.runtime-locks'), runtimeLocks.map(name => lockEntry(name, runId)));
+  } catch (error) { await lane.release(); throw new GateRunnerError(`runtime target is locked: ${String((error as Error)?.message ?? error)}`); }
+  return async () => { await visible?.release(); await lane.release(); };
 }
 
 type ReuseQuery = {
@@ -263,8 +261,10 @@ async function planProbe(args: string[]): Promise<void> {
   let failure: unknown; let status = 'PASS';
   const startedAt = new Date().toISOString();
   const heavySlot = await acquireHeavySlot({ run_id: manifest.run_id, pipeline_id: pipelineId, gate, plan_probe: true });
+  let liveSlot: { release: () => Promise<void> } | undefined;
   try {
     if (config?.live_postgres && invocations.some(item => config.live_postgres.command_indexes.includes(item.index))) {
+      liveSlot = await acquireLiveSlot({ run_id: manifest.run_id, pipeline_id: pipelineId, gate, plan_probe: true });
       resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${manifest.run_id}:${pipelineId}:${gate}`, (exe: string, argv: string[], liveEnv?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), liveEnv, 60, ['inspect', 'rm'].includes(argv[0])));
     }
     for (const batch of parallelBatches(invocations, config, liveIndexes(config))) {
@@ -292,6 +292,7 @@ async function planProbe(args: string[]): Promise<void> {
       results: [...results].sort((a, b) => a.command_index - b.command_index),
       started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
       error: failure ? redact(String(failure)) : null }, null, 2)}\n`, 'utf8');
+    await liveSlot?.release();
     await heavySlot.release();
   }
   if (failure) throw failure;
@@ -309,6 +310,8 @@ async function main(): Promise<void> {
   let stateRoot = DEFAULT_STATE_ROOT;
   const stateRootIndex = args.indexOf('--state-root');
   if (stateRootIndex >= 0) stateRoot = args[stateRootIndex + 1] ?? DEFAULT_STATE_ROOT;
+  // Absolute from here on: a gate on a tree snapshot runs in another directory.
+  stateRoot = resolve(stateRoot);
   if (!runId || !pipelineId || !gate) {
     throw new GateRunnerError('usage: gate-runner-cli.ts <run-id> <pipeline-id> <gate> [--state-root <path>] [--no-reuse] [--advisory [--affected ...|--command-index N [--test-file PATH]...|--coordinator|--base-probe]]');
   }
@@ -422,8 +425,9 @@ async function main(): Promise<void> {
   let previous: any;
   try { previous = JSON.parse(await readFile(evidenceFile, 'utf8')); } catch {}
   const attempt = (Number.isInteger(previous?.attempt) ? previous.attempt : 0) + 1;
+  const gitIn = (dir: string) => (exe: string, argv: string[]) => runInvocation(exe, argv, dir, gitReadEnv({}), 30);
   // Read-only inventory: never take .git/index.lock while a worker or publish may be writing.
-  const snapshot = await sourceSnapshot(process.cwd(), manifest, (exe: string, argv: string[]) => runInvocation(exe, argv, process.cwd(), gitReadEnv({}), 30), advisory ? baseline : null);
+  let snapshot = await sourceSnapshot(process.cwd(), manifest, gitIn(process.cwd()), advisory ? baseline : null);
   let deferred: number[] = [];
   let selectionReason = baseProbe ? 'base probe: full frozen set' : coordinator ? 'coordinator-only commands' : testFiles.length ? 'focused test files' : 'full frozen set';
   if (affected) {
@@ -445,12 +449,19 @@ async function main(): Promise<void> {
   const hypothesisIndex = args.indexOf('--hypothesis');
   if (hypothesisIndex >= 0 && (!advisory || !args[hypothesisIndex + 1])) throw new GateRunnerError('hypothesis requires an advisory check and an evidence path');
   const hypothesis = hypothesisIndex < 0 ? null : await readDiagnosticHypothesis(args[hypothesisIndex + 1], join(resolve(stateRoot), runId));
+  // Completion requires the lane's own files (generated ones aside) unchanged since the gate's snapshot.
+  const laneScopeList = laneScope(manifest, dirname(state.manifest_file), join(stateRoot, runId), pipelineId);
+  const generatedPaths: string[] = (manifest as any).generated_paths ?? [];
+  const laneProof = (files: Record<string, string>) => laneScopeList.length
+    ? { lane_scope: laneScopeList, lane_exclude: generatedPaths, lane_scope_digest: laneDigest(files, laneScopeList, generatedPaths) } : {};
   const environmentDigest = sha256(JSON.stringify([process.version, process.env.PATH, process.env.NODE_ENV, process.env.LIVE_PG_TEST, process.env.LIVE_PG_CONTOUR, process.env.DATABASE_URL]));
   const inputIdentity = snapshot?.digest ? sha256(JSON.stringify([snapshot.scoped_digest ?? snapshot.digest, state.manifest_sha256, baselineSha ?? null, environmentDigest])) : null;
   const fingerprint = inputIdentity ? sha256(JSON.stringify([inputIdentity, invocations])) : null;
   const ledgerFile = join(resolve(stateRoot), runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-attempts.json`);
-  const releaseLocks = [...(RUNTIME_GATE.test(gate) ? pipeline.runtime_locks ?? [] : []), `gate:${runId}:${pipelineId}:${gate}`];
-  const release = await acquireRuntimeLocks(stateRoot, runId, releaseLocks);
+  const gateLock = `gate:${runId}:${pipelineId}:${gate}`;
+  const runtimeGate = RUNTIME_GATE.test(gate);
+  const releaseLocks = [...(runtimeGate ? pipeline.runtime_locks ?? [] : []), gateLock];
+  const release = await acquireGateLocks(stateRoot, runId, gateLock, runtimeGate ? releaseLocks : []);
   let ledger: any = { input_identity: inputIdentity, attempts: {} };
   let previousHypotheses: string[] = [];
   try {
@@ -463,7 +474,32 @@ async function main(): Promise<void> {
       }
     }
   } catch (error) { await release(); throw error; }
-  const results: Array<Record<string, unknown>> = [];
+
+  // Full gates and coordinator checks run on a snapshot of the tree in a separate worktree: workers keep
+  // writing meanwhile and the gate measures one fixed tree. PIPELINE_GATE_SNAPSHOT=0 runs in place.
+  const originalCwd = process.cwd();
+  let treeCopy: any;
+  let copyFiles: Record<string, string> | null = null;
+  let snapshotRecord: Record<string, any> | null = null;
+  if ((!advisory || coordinator) && !RUNTIME_GATE.test(gate) && !commands.some(command => command.includes('{candidate_sha}')) && process.env.PIPELINE_GATE_SNAPSHOT !== '0') {
+    const created = await createGateSnapshot({ cwd: originalCwd, stateRoot, label: `${pipelineId}-${gate}`,
+      installEvidence: join(stateRoot, runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-snapshot-install.json`) });
+    if (created.snapshot) {
+      treeCopy = created.snapshot;
+      process.chdir(treeCopy.dir);
+      snapshotRecord = { status: 'used', commit: treeCopy.commit, setup_ms: created.setup_ms };
+      const inventory = await sourceInventory(process.cwd(), gitIn(process.cwd()));
+      copyFiles = inventory.files;
+      snapshot = { ...snapshot, digest: inventory.digest };
+    } else snapshotRecord = { status: 'unavailable', reason: created.unavailable };
+  }
+  const dropCopy = async () => {
+    if (!treeCopy) return;
+    process.chdir(originalCwd);
+    await treeCopy.remove();
+    treeCopy = undefined;
+  };
+  const results: Array<Record<string, any>> = [];
   let resource: Awaited<ReturnType<typeof createLivePostgres>> | undefined;
   let failure: unknown;
   let cleanupComplete: boolean | null = null;
@@ -473,6 +509,26 @@ async function main(): Promise<void> {
   const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest ? new Map()
     : await findReusableResults({ runDirectory: join(resolve(stateRoot), runId), pipelineId, gate, manifestSha: state.manifest_sha256,
       sourceDigest: snapshot.digest, environmentDigest, selected: invocations.map(item => ({ index: item.index, test_files: item.test_files })) });
+  // A gate that passed on an earlier snapshot and runs again (its lane files moved after it, or a plain
+  // rerun) repeats only the commands that the changes between the two snapshots reach through the frozen
+  // impact map; the others keep their PASS. Unmapped and dependency changes reach every command.
+  if (treeCopy && !args.includes('--no-reuse') && !hypothesis && previous?.status === 'PASS' && previous.snapshot?.status === 'used' &&
+      SHA.test(previous.snapshot.commit ?? '') && previous.manifest_sha256 === state.manifest_sha256 && previous.environment_digest === environmentDigest) {
+    const diff = await runInvocation('git', ['diff', '--name-only', '-z', '--no-renames', previous.snapshot.commit, treeCopy.commit, '--'], originalCwd, gitReadEnv({}), 30);
+    if (diff.exit_code === 0 && !diff.truncated) {
+      const changed = diff.stdout.split('\0').filter(Boolean);
+      const touched = changed.length ? selectAffectedCommands(commands, config, changed, []) : { selected: [], deferred: [] };
+      const reached = new Set<number>([...touched.selected.map((item: any) => item.index), ...touched.deferred]);
+      for (const item of invocations) {
+        const prior = (previous.results ?? []).find((result: any) => result.command_index === item.index);
+        if (reusable.has(item.index) || reached.has(item.index) || prior?.exit_code !== 0 ||
+            JSON.stringify(prior.test_files ?? []) !== JSON.stringify(item.test_files)) continue;
+        reusable.set(item.index, { path: evidenceFile, result: prior });
+      }
+      snapshotRecord!.reused_by_impact = { from_commit: previous.snapshot.commit, changed_paths: changed.slice(0, 200),
+        commands: [...reusable.keys()].sort((a, b) => a - b) };
+    }
+  }
   const pending = invocations.filter(item => !reusable.has(item.index));
   // Whole-run reuse keeps the old evidence shape (`reused_from` set, zero commands run).
   const reuse = invocations.length > 0 && pending.length === 0 ? { path: [...reusable.values()][0].path } : null;
@@ -483,18 +539,32 @@ async function main(): Promise<void> {
   const heavy = pending.length > 0 && !affected && selection < 0;
   let heavySlot: { waited_ms: number; release: () => Promise<void> } | undefined;
   let slotWaitMs = 0;
-  try {
-    if (scratchDir) await mkdir(scratchDir, { recursive: true });
-    for (const [, item] of reusable) results.push({ ...item.result, reused_from: item.path });
-    if (heavy) { heavySlot = await acquireHeavySlot({ run_id: runId, pipeline_id: pipelineId, gate }); slotWaitMs = heavySlot.waited_ms; }
-    else if (pending.length) slotWaitMs = await waitForHeavySlot();
-    {
-    if (config?.live_postgres && pending.some(item => config.live_postgres.command_indexes.includes(item.index))) {
-      resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${runId}:${pipelineId}:${gate}`, (exe: string, argv: string[], env?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), env, 60, ['inspect', 'rm'].includes(argv[0])));
-    }
+  let liveHold: { waited_ms: number; release: () => Promise<void> } | undefined;
+  let liveVisible: { release: () => Promise<unknown> } | undefined;
+  let liveWaitMs = 0;
+  let liveEvidence: unknown = null;
+  const releaseLive = async () => { await liveVisible?.release(); liveVisible = undefined; await liveHold?.release(); liveHold = undefined; };
+  const finishLive = async () => {
+    liveEvidence = resource!.evidence;
+    await resource!.cleanup();
+    cleanupComplete = true;
+    resource = undefined;
+    await releaseLive();
+  };
+  const runPending = async (list: Invocation[]) => {
     // Frozen parallel groups run together (bounded); every other command keeps frozen order.
     // A failing batch stops the gate after all of its members settle, so evidence stays complete.
-    for (const batch of parallelBatches(pending, config, liveIndexes(config))) {
+    const isLive = (batch: Invocation[]) => Boolean(config?.live_postgres) && batch.some(item => config.live_postgres.command_indexes.includes(item.index));
+    const batches = parallelBatches(list, config, liveIndexes(config));
+    for (const [batchIndex, batch] of batches.entries()) {
+      // Live batches run alone on the machine: they take the live slot, show the project exactly this
+      // gate in .runtime-locks and share one disposable database, all released before the next non-live batch.
+      if (!resource && isLive(batch)) {
+        liveHold = await acquireLiveSlot({ run_id: runId, pipeline_id: pipelineId, gate });
+        liveWaitMs += liveHold.waited_ms;
+        if (!runtimeGate) liveVisible = await acquireLockFiles(join(resolve(stateRoot), '.runtime-locks'), [lockEntry(gateLock, runId)]);
+        resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${runId}:${pipelineId}:${gate}`, (exe: string, argv: string[], env?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), env, 60, ['inspect', 'rm'].includes(argv[0])));
+      }
       // Every member settles to a recorded result (a start failure is exit 127), so one failing to
       // start never leaves its siblings running unrecorded.
       const settled = await Promise.all(batch.map(async invocation => {
@@ -512,7 +582,59 @@ async function main(): Promise<void> {
         status = 'FAIL';
         throw new GateRunnerError(`gate command failed (${failed.result.exit_code}): ${failed.invocation.command}; evidence=${evidenceFile}`);
       }
+      if (resource && !(batches[batchIndex + 1] && isLive(batches[batchIndex + 1]))) await finishLive();
     }
+  };
+  // A FAIL on a snapshot while other work kept changing the tree: when files changed since the snapshot
+  // reach the failed commands (frozen impact map, unmapped changes count), the failure may already be
+  // fixed or caused by a half-merged change. The failed and not yet run commands, plus passed ones those
+  // changes reach, run again once on a fresh snapshot; only that result counts, so no repair cycle is
+  // charged for a tree that no longer exists. Otherwise the failure stands.
+  const rerunAfterChanges = async (): Promise<boolean> => {
+    const live = await sourceInventory(originalCwd, gitIn(originalCwd));
+    const changed = changedFromInventory(live.files, copyFiles) ?? [];
+    const failedIndexes = results.filter(result => result.exit_code !== 0).map(result => result.command_index as number);
+    if (!changed.length) { snapshotRecord!.failure_check = 'tree unchanged since the snapshot'; return false; }
+    const touched = selectAffectedCommands(commands, config, changed, []);
+    const reached = new Set<number>([...touched.selected.map((item: any) => item.index), ...touched.deferred]);
+    if (!failedIndexes.some(index => reached.has(index))) {
+      snapshotRecord!.failure_check = 'changes since the snapshot do not reach the failed commands';
+      snapshotRecord!.changed_since = changed.slice(0, 200);
+      return false;
+    }
+    if (resource) await finishLive();
+    const first = { commit: treeCopy.commit, failed_commands: failedIndexes, changed_paths: changed.slice(0, 200) };
+    Object.assign(snapshotRecord!, await treeCopy.refresh());
+    snapshotRecord!.commit = treeCopy.commit;
+    const inventory = await sourceInventory(process.cwd(), gitIn(process.cwd()));
+    copyFiles = inventory.files;
+    snapshot = { ...snapshot, digest: inventory.digest };
+    const keep = results.filter(result => result.exit_code === 0 && !reached.has(result.command_index));
+    const again = invocations.filter(item => !keep.some(result => result.command_index === item.index));
+    results.length = 0;
+    results.push(...keep.map(result => ({ ...result, snapshot_commit: first.commit })));
+    status = 'PASS';
+    snapshotRecord!.rerun = { first_attempt: first, commands: again.map(item => item.index) };
+    await runPending(again);
+    return true;
+  };
+  try {
+    if (scratchDir) await mkdir(scratchDir, { recursive: true });
+    for (const [, item] of reusable) results.push({ ...item.result, reused_from: item.path });
+    // Dependencies are restored before the heavy slot is taken, so the slot is held only for the tests.
+    if (treeCopy && pending.length) {
+      try { Object.assign(snapshotRecord!, await treeCopy.prepare()); }
+      catch (error) {
+        // A snapshot that cannot be prepared (dependency restore) must not stop the gate: run in place.
+        await dropCopy();
+        snapshotRecord = { status: 'unavailable', reason: redact(String((error as Error)?.message ?? error)) };
+      }
+    }
+    if (heavy) { heavySlot = await acquireHeavySlot({ run_id: runId, pipeline_id: pipelineId, gate }); slotWaitMs = heavySlot.waited_ms; }
+    else if (pending.length) slotWaitMs = await waitForHeavySlot();
+    try { await runPending(pending); }
+    catch (error) {
+      if (!(status === 'FAIL' && treeCopy && !interrupted && await rerunAfterChanges())) throw error;
     }
   } catch (error) {
     failure = error; if (status !== 'FAIL') status = 'BLOCKED';
@@ -522,11 +644,10 @@ async function main(): Promise<void> {
   }
   finally {
     if (resource) {
-      try {
-        await resource.cleanup();
-        cleanupComplete = true;
-      } catch (error) { cleanupComplete = false; status = 'BLOCKED'; failure = new GateRunnerError(`${failure ? String(failure) + '; ' : ''}${String(error)}`); }
+      try { await finishLive(); }
+      catch (error) { cleanupComplete = false; status = 'BLOCKED'; failure = new GateRunnerError(`${failure ? String(failure) + '; ' : ''}${String(error)}`); }
     }
+    await releaseLive();
     try {
       await writeFile(evidenceFile, `${JSON.stringify({ status, purpose: advisory ? 'advisory' : 'authoritative', run_id: runId, pipeline_id: pipelineId, gate,
         work_item_id: workItemId ?? null, dispatch_stage: baseline?.stage ?? null, baseline_path: baselinePath ?? null, baseline_sha256: baselineSha ?? null,
@@ -536,7 +657,8 @@ async function main(): Promise<void> {
         selection_reason: selectionReason, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
-        live_postgres: resource?.evidence ?? null, cleanup_complete: cleanupComplete, heavy_slot: heavy, heavy_slot_wait_ms: slotWaitMs,
+        live_postgres: liveEvidence ?? resource?.evidence ?? null, cleanup_complete: cleanupComplete, heavy_slot: heavy, heavy_slot_wait_ms: slotWaitMs, live_slot_wait_ms: liveWaitMs,
+        snapshot: snapshotRecord && treeCopy && copyFiles ? { ...snapshotRecord, ...laneProof(copyFiles) } : snapshotRecord,
         test_reports: reuse ? [] : JSON.parse(redact(JSON.stringify(await readTestReports(config?.report_files, join(resolve(stateRoot), runId), startedAt)))),
         error: failure ? redact(String(failure)) : null, results: [...results].sort((a: any, b: any) => a.command_index - b.command_index) }, null, 2)}\n`, 'utf8');
       // Append-only gate timeline for the RUN report: the main wall-clock cost is gate time.
@@ -549,7 +671,7 @@ async function main(): Promise<void> {
         ledger.attempts[fingerprint] = { status, hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])] };
         await writeFile(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8');
       }
-    } finally { await heavySlot?.release(); await release(); }
+    } finally { await heavySlot?.release(); await release(); await dropCopy(); }
   }
   if (failure) throw failure;
   console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: workItemId ?? null, candidate_sha: candidateSha ?? null, evidence: evidenceFile,

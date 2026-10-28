@@ -6,6 +6,7 @@ import crypto from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { assertPipelineCapabilities } from "../skills/task-management/scripts/capability-preflight.mjs"
 import { RUN_PROMPT, WAKE_MARKER, wakeDecision, wakeText } from "../skills/task-management/scripts/orchestrator-wake.mjs"
+import { removeLease, updateLease, writeLease } from "../skills/task-management/scripts/dispatch-leases.mjs"
 
 const ELIGIBLE_ROLES = new Set([
   "CoderAgent", "TestEngineer", "BuildAgent",
@@ -127,6 +128,15 @@ function byteLength(value: unknown) {
 }
 function runtimeContextPath(root: string, parentSessionID: string, workItemID: string) {
   return path.join(root, ".tmp", "pipeline-runtime", sha256(parentSessionID).slice(0, 24), `${sha256(workItemID).slice(0, 24)}.json`)
+}
+function runRoot(root: string, runID: string) {
+  return path.join(root, ".tmp", "pipelines", runID)
+}
+let dispatchLock: Promise<unknown> = Promise.resolve()
+function withDispatchLock<T>(work: () => Promise<T>): Promise<T> {
+  const next = dispatchLock.then(work, work)
+  dispatchLock = next.catch(() => undefined)
+  return next
 }
 function registryPath(root: string, runID: string) {
   return path.join(root, ".tmp", "pipelines", runID, "session-registry.json")
@@ -398,6 +408,7 @@ export default Plugin.define({
       const registry = loadRegistry(root, runID)
       const entry = registry.find((item) => identity(item as RuntimeContext) === key && item.session_id === childID)
       if (!entry || entry.status !== "background") return
+      removeLease(runRoot(root, runID), entry)
       entry.status = idle ? "healthy" : "error"; entry.updated_at = new Date().toISOString()
       saveRegistry(root, runID, registry)
       let info: any
@@ -596,10 +607,17 @@ export default Plugin.define({
           no_session_reuse: reuseDisabled(sessionID) }
       }
       if (!ctx) return
-      const current = await dispatchPacket(root, ctx.run_id, ctx.pipeline_id, ctx.stage, ctx.work_item_id, role)
+      // Check and lease under one lock: two workers of a wave started in one message must not both
+      // pass the overlap check before either holds its lease.
+      const current = await withDispatchLock(async () => {
+        const packet = await dispatchPacket(root, ctx!.run_id, ctx!.pipeline_id, ctx!.stage, ctx!.work_item_id, role)
+        if (packet.state_revision !== ctx!.state_revision) throw new Error("STALE_DISPATCH_STATE")
+        if (continuityKey(packet) !== ctx!.continuity_key) throw new Error("STALE_DISPATCH_CONTRACT")
+        if (packet.executor === "agent") writeLease(runRoot(root, packet.run_id), { run_id: packet.run_id, pipeline_id: packet.pipeline_id,
+          stage: packet.stage, work_item_id: packet.work_item_id, role, scope: packet.write_scope, parent_session_id: sessionID })
+        return packet
+      })
       runBySession.set(sessionID, ctx.run_id)
-      if (current.state_revision !== ctx.state_revision) throw new Error("STALE_DISPATCH_STATE")
-      if (continuityKey(current) !== ctx.continuity_key) throw new Error("STALE_DISPATCH_CONTRACT")
       const dispatchPath = writeJsonHandoff(
         root,
         ctx.run_id,
@@ -741,6 +759,10 @@ export default Plugin.define({
         },
       )
 
+      // The worker stopped writing unless it continues in the background; then its lease is released
+      // when the child settles.
+      if (background && childID) updateLease(runRoot(root, ctx.run_id), ctx, { child_session_id: childID })
+      else removeLease(runRoot(root, ctx.run_id), ctx)
       if (event.status === "completed" && childID) {
         const next: RegistryEntry = {
           run_id: ctx.run_id, pipeline_id: ctx.pipeline_id, stage: ctx.stage, role,
