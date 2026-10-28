@@ -124,7 +124,7 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   const workItemRaw=JSON.stringify({id:'wi-p',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent',allowed_change_paths:['src/**']});
   await writeFile(workItemPath,workItemRaw);
   manifest.work_items[0].sha256=sha(workItemRaw);
-  const otherItem=await frozen(root,'work-items/wi-other.json',JSON.stringify({id:'wi-other',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent',allowed_change_paths:['src/**']}));
+  const otherItem=await frozen(root,'work-items/wi-other.json',JSON.stringify({id:'wi-other',pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent',depends_on:['wi-p'],allowed_change_paths:['src/**']}));
   manifest.work_items.push({id:'wi-other',pipeline_id:'p',...otherItem});
   manifest.pipelines[0].work_items.push('wi-other');
 
@@ -222,6 +222,7 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   await hooks['execute.after']({...e,status:'cancelled',error:{message:'interrupted'}});
   const recovery={tool:'subagent',sessionID:'parent',id:'recovery',input:input()}; await hooks['execute.before'](recovery);
   assert.equal(recovery.input.sessionID,undefined);
+  await hooks['execute.after']({...recovery,status:'completed',result:{metadata:{sessionID:'worker'},content:'status: ready'}});
   await writeFile(registryPath,healthyRegistry);
 
   const other={tool:'subagent',sessionID:'parent',id:'other-work-item',input:{agent:'CoderAgent',sessionID:'worker',prompt:'<pipeline_work_item id="wi-other"/><pipeline_dispatch run="runtime-test" pipeline="p" stage="implementation"/>'}};
@@ -542,5 +543,65 @@ test('a plan probe at the clean HEAD replaces the base probe; a stale PASS does 
   const packet=await dispatchPacket(root,'plan-probe-run','p','implementation','wi-p','CoderAgent');
   const baseline=JSON.parse(await readFile(path.join(root,'.tmp/pipelines/plan-probe-run',packet.advisory_checks[0].baseline_path),'utf8'));
   assert.deepEqual(baseline.base_probe,{'local-test':'PASS'});
+ } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
+});
+
+test('waves start independent work items together and hold back dependents and paths a live worker may change', async () => {
+ const previousCwd = process.cwd(), root = await tempProject();
+ try {
+  const git=(...args)=>spawnSync('git',args,{cwd:root,encoding:'utf8'});
+  git('init'); git('config','user.email','test@example.invalid'); git('config','user.name','Test');
+  await mkdir(path.join(root,'src'),{recursive:true});
+  await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
+  git('add','src'); git('commit','-m','base');
+  const manifest = await baseManifest(root,'waves-run',[{id:'p',stages:['implementation']}]);
+  manifest.allowed_change_paths=['src/**'];
+  const item = async (id, extra) => {
+    const raw=JSON.stringify({id,pipeline_id:'p',stage:'implementation',suggested_agent:'CoderAgent',...extra});
+    return {id,pipeline_id:'p',...await frozen(root,`work-items/${id}.json`,raw)};
+  };
+  manifest.work_items=[await item('a',{allowed_change_paths:['src/a/**']}), await item('b',{depends_on:['a'],allowed_change_paths:['src/a/x.ts']}), await item('c',{allowed_change_paths:['src/c/**']})];
+  manifest.pipelines[0].work_items=['a','b','c'];
+  const manifestPath=await writeManifest(root,manifest);
+  run(root,['init',manifestPath]); run(root,['approve','waves-run']); run(root,['start','waves-run','implementation','--pipeline','p']);
+  process.chdir(root);
+  const { workItemWaves } = await import('./pipeline-dispatch.ts');
+  const { writeLease, removeLease, recordStagePaths } = await import('./dispatch-leases.mjs');
+  const runRoot=path.join(root,'.tmp/pipelines/waves-run');
+  const wave = async () => (await workItemWaves(root,'waves-run')).stages[0];
+
+  let current = await wave();
+  assert.deepEqual(current.dispatchable,['a','c']);
+  assert.deepEqual(current.waiting,[{id:'b',reason:'depends_on a'}]);
+
+  const leaseA={run_id:'waves-run',pipeline_id:'p',stage:'implementation',work_item_id:'a',role:'CoderAgent',scope:['src/a/**']};
+  writeLease(runRoot,leaseA);
+  current = await wave();
+  assert.deepEqual(current.running,['a']);
+  assert.deepEqual(current.dispatchable,['c']);
+  await assert.rejects(dispatchPacket(root,'waves-run','p','implementation','b','CoderAgent'),/DISPATCH_DEPENDENCY_PENDING: b waits for a/);
+
+  // A path authorized at runtime for this stage joins the live lease: c may not start on it.
+  recordStagePaths(runRoot,'p','implementation',['src/c/z.ts']);
+  await assert.rejects(dispatchPacket(root,'waves-run','p','implementation','c','CoderAgent'),/DISPATCH_SCOPE_BUSY: c waits for a \(p\/implementation\), both change src\/c\/\*\*/);
+  const busy = run(root,['scope-check','waves-run','implementation','src/a/q.ts','--pipeline','p','--json']);
+  assert.match(busy.stdout,/"status": "PASS"/);
+
+  // The worker returned: its lease is gone and the registry records it done.
+  removeLease(runRoot,leaseA);
+  await writeFile(path.join(runRoot,'session-registry.json'),JSON.stringify([{run_id:'waves-run',pipeline_id:'p',stage:'implementation',role:'CoderAgent',work_item_id:'a',session_id:'s-a',status:'healthy',updated_at:new Date().toISOString()}]));
+  current = await wave();
+  assert.deepEqual(current.done,['a']);
+  assert.deepEqual(current.dispatchable,['b']);
+  assert.deepEqual(current.waiting,[{id:'c',reason:'shares paths with b in this wave'}]);
+  const packet = await dispatchPacket(root,'waves-run','p','implementation','b','CoderAgent');
+  assert.ok(packet.write_scope.includes('src/a/x.ts') && packet.write_scope.includes('src/c/z.ts'));
+
+  // A lease left by a dead OpenCode process says nothing about a running worker.
+  writeLease(runRoot,{...leaseA,work_item_id:'b',scope:['src/a/x.ts','src/c/z.ts']});
+  const file=path.join(runRoot,'checks/active-dispatches',(await import('node:fs')).readdirSync(path.join(runRoot,'checks/active-dispatches'))[0]);
+  await writeFile(file,JSON.stringify({...JSON.parse(await readFile(file,'utf8')),owner_pid:2147483646}));
+  current = await wave();
+  assert.deepEqual(current.running,[]);
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });

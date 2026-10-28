@@ -1,4 +1,5 @@
 import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -8,6 +9,7 @@ import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 import { sourceInventory } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { planProbeCommandsSha256 } from './manifest-v2-policy.mjs';
+import { leaseConflict, readLeases, readStagePaths, sameDispatch } from './dispatch-leases.mjs';
 
 const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
 // A review stage runs a full CodeReviewer; FindingsReviewer (cheaper model) only re-checks findings a review already issued.
@@ -174,6 +176,96 @@ function implementationStarted(root: string, manifest: any, effectiveScope: stri
   return /^[0-9a-f]{40}$/i.test(base ?? '') && head.status === 0 && String(head.stdout).trim().toLowerCase() !== base.toLowerCase();
 }
 
+// Paths a writing worker may change: its bound scope, else the item's declared paths, else the whole
+// effective scope. The lease and the overlap checks use exactly this set.
+function writerScope(item: any, boundScope: string[], effectiveScope: string[], stagePaths: string[] = []): string[] {
+  let own = boundScope;
+  if (!own.length) { try { own = coderScope(item, effectiveScope); } catch { own = []; } }
+  if (!own.length) return effectiveScope;
+  return [...new Set([...own, ...stagePaths])];
+}
+
+function sessionRegistry(root: string, run: string): any[] {
+  try {
+    const value = JSON.parse(readFileSync(join(root, '.tmp/pipelines', run, 'session-registry.json'), 'utf8'));
+    return Array.isArray(value) ? value : [];
+  } catch { return []; }
+}
+
+// A work item is done once a worker on it returned (its registry entry settled) or its stage is completed.
+function workItemDone(state: any, registry: any[], pipelineId: string, workItemId: string, stage?: string): boolean {
+  if (registry.some(entry => entry.pipeline_id === pipelineId && entry.work_item_id === workItemId && ['healthy', 'stale'].includes(entry.status))) return true;
+  const stages = state.pipelines[pipelineId]?.stages ?? {};
+  return stage ? stages[stage]?.status === 'completed' : false;
+}
+
+function pendingDependency(state: any, manifest: any, registry: any[], item: any, leases: any[]): string | null {
+  for (const dependency of Array.isArray(item?.depends_on) ? item.depends_on : []) {
+    const unit = manifest.work_items.find((w: any) => w.id === dependency);
+    if (!unit) continue;
+    const stage = workItemStage(manifest, unit);
+    if (leases.some((lease: any) => lease.pipeline_id === unit.pipeline_id && lease.work_item_id === dependency)) return dependency;
+    if (!workItemDone(state, registry, unit.pipeline_id, dependency, stage)) return dependency;
+  }
+  return null;
+}
+
+function workItemRecord(manifest: any, manifestFile: string, unit: any): any {
+  try { return JSON.parse(readFileSync(resolve(dirname(manifestFile), unit.path), 'utf8')); } catch { return {}; }
+}
+
+function workItemStage(manifest: any, unit: any): string | undefined {
+  const pipeline = manifest.pipelines.find((p: any) => p.id === unit.pipeline_id);
+  const agentStages = Object.entries(pipeline?.executors ?? {}).filter(([, executor]) => executor === 'agent').map(([stage]) => stage);
+  return agentStages.length === 1 ? agentStages[0] : undefined;
+}
+
+// Machine plan of the next wave: for every agent stage that is runnable or in progress, the work items
+// that can start now (dependencies done, no overlap with a running worker or with each other), the
+// running ones, the done ones and the waiting ones with their reason.
+export async function workItemWaves(root: string, run: string, pipelineFilter?: string) {
+  if (!/^[A-Za-z0-9._-]+$/.test(run)) throw Error('INVALID_RUN_ID');
+  const state = await validateState(join(root, '.tmp/pipelines'), run);
+  if (!state.manifest_file) throw Error('RUN_NOT_DISPATCHABLE');
+  const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+  const runRoot = join(root, '.tmp/pipelines', run);
+  const leases = readLeases(runRoot, { state });
+  const registry = sessionRegistry(root, run);
+  const effectiveScope = [...new Set([...(manifest.allowed_change_paths ?? []), ...(state.runtime_scope_extensions ?? []).flatMap((e: any) => e.paths)])];
+  const runnable = computeRunnable(state);
+  const stages: any[] = [];
+  const planned: Array<{ pipeline_id: string; stage: string; work_item_id: string; scope: string[] }> = [];
+  for (const pipeline of manifest.pipelines) {
+    if (pipelineFilter && pipeline.id !== pipelineFilter) continue;
+    for (const [stage, executor] of Object.entries(pipeline.executors ?? {})) {
+      if (executor !== 'agent') continue;
+      const runtime = state.pipelines[pipeline.id]?.stages?.[stage];
+      if (runtime?.status !== 'in_progress' && !runnable.some(r => r.pipeline_id === pipeline.id && r.stage === stage)) continue;
+      const amendmentItems = (state.owner_amendments ?? []).filter((a: any) => a.pipeline_id === pipeline.id).flatMap((a: any) => a.work_items ?? []);
+      const units = [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems];
+      const entry: any = { pipeline_id: pipeline.id, stage, status: runtime?.status ?? 'pending', dispatchable: [], running: [], done: [], waiting: [] };
+      for (const unit of units) {
+        const item = workItemRecord(manifest, state.manifest_file, unit);
+        if (item.stage !== undefined && item.stage !== stage) continue;
+        const self = { pipeline_id: pipeline.id, stage, work_item_id: unit.id };
+        if (leases.some((lease: any) => sameDispatch(lease, self))) { entry.running.push(unit.id); continue; }
+        if (workItemDone(state, registry, pipeline.id, unit.id, stage)) { entry.done.push(unit.id); continue; }
+        const dependency = pendingDependency(state, manifest, registry, item, leases);
+        if (dependency) { entry.waiting.push({ id: unit.id, reason: `depends_on ${dependency}` }); continue; }
+        const scope = writerScope(item, [], effectiveScope, readStagePaths(runRoot, pipeline.id, stage));
+        const busy = leaseConflict(leases, self, scope);
+        if (busy) { entry.waiting.push({ id: unit.id, reason: `${busy.path} is being changed by ${busy.lease.work_item_id}` }); continue; }
+        const sibling = planned.find(other => leaseConflict([other], self, scope));
+        if (sibling) { entry.waiting.push({ id: unit.id, reason: `shares paths with ${sibling.work_item_id} in this wave` }); continue; }
+        planned.push({ ...self, scope });
+        entry.dispatchable.push(unit.id);
+      }
+      stages.push(entry);
+    }
+  }
+  return { run_id: run, stages };
+}
+
 // The last reviewer dispatched on a review stage; completion requires it to be a full CodeReviewer.
 export function reviewDispatchPath(root: string, run: string, pipelineId: string, stage: string): string {
   return join(root, '.tmp/pipelines', run, 'checks', 'review-dispatch', `${pipelineId}--${stage}.json`);
@@ -282,6 +374,15 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   const repairPaths = [...new Set([...(repairRuntime?.repair_paths ?? []), ...amendmentPaths])];
   const boundScope = role === 'CoderAgent' && itemScope.length > 0
     ? [...new Set([...itemScope, ...checkedScope(repairPaths, effectiveScope)])] : itemScope;
+  // Writers never start on paths another live worker may change, nor before their dependencies return.
+  const writeScope = executor === 'agent' ? writerScope(item, boundScope, effectiveScope, readStagePaths(join(root, '.tmp/pipelines', run), pipelineId, stage)) : [];
+  if (executor === 'agent' && !stageReview) {
+    const leases = readLeases(join(root, '.tmp/pipelines', run), { state });
+    const dependency = pendingDependency(state, manifest, sessionRegistry(root, run), item, leases);
+    if (dependency) throw Error(`DISPATCH_DEPENDENCY_PENDING: ${workItemId} waits for ${dependency}; run stage-cli waves ${run} for what can start now`);
+    const busy = leaseConflict(leases, { pipeline_id: pipelineId, stage, work_item_id: workItemId }, writeScope);
+    if (busy) throw Error(`DISPATCH_SCOPE_BUSY: ${workItemId} waits for ${busy.lease.work_item_id} (${busy.lease.pipeline_id}/${busy.lease.stage}), both change ${busy.path}; run stage-cli waves ${run} for what can start now`);
+  }
   let advisoryChecks: Array<Record<string, unknown>> = [];
   if (baseChecks.length) {
     const baseProbe = await requireBaseProbe(root, run, state.manifest_file, manifest, pipeline, baseChecks.map(check => check.gate), item, effectiveScope);
@@ -323,7 +424,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     review_work_items: stageReview ? [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems].map((w: any) => ({ id: w.id, path: resolve(dirname(state.manifest_file), w.path), sha256: w.sha256 })) : undefined,
     context_paths: (item.context_files ?? []).map((p: string) => resolve(root, p)), reference_paths: (item.reference_files ?? []).map((p: string) => resolve(root, p)),
     decision_ids: item.decision_ids ?? pipeline.decision_ids ?? [], research_ids: item.research_ids ?? pipeline.research_ids ?? [], contract_ids: item.contract_ids ?? pipeline.contract_ids ?? [],
-    effective_scope: effectiveScope, work_item_scope: itemScope, repair_paths: repairPaths, state_revision: revision, loop: repairRuntime?.technical_fix_cycles ?? 0,
+    effective_scope: effectiveScope, work_item_scope: itemScope, write_scope: writeScope, repair_paths: repairPaths, state_revision: revision, loop: repairRuntime?.technical_fix_cycles ?? 0,
     repair_origin_stage: runtime?.repair_origin_stage,
     repair_origin_pipeline: runtime?.repair_origin_stage ? (runtime.repair_origin_pipeline ?? pipelineId) : undefined,
     evidence_paths: [...new Set(evidencePaths)],

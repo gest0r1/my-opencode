@@ -212,6 +212,15 @@ loopback port, a non-root user, dropped capabilities, read-only root filesystem,
 persistent volumes, host network or privileged mode. Project tests own migrations
 and fixtures; the runner does not guess SQL or migrate a working contour.
 
+Live commands run one at a time on the machine. Before the first of a run of consecutive live
+commands the runner takes the machine-wide live slot (`~/.cache/opencode-pipeline/live-gate.lock`,
+waited for, never failed; `live_slot_wait_ms` in the evidence), writes the gate's lock
+`gate:<run>:<pipeline>:<gate>` into `<state-root>/.runtime-locks/`, and starts the container; all three
+are released before the next non-live command. A project's live harness may therefore rely on
+`.runtime-locks` holding exactly one `gate:` lock while a live command runs. Runtime/release gates keep
+their locks there for the whole run. Two runs of one lane gate (two work items checking in parallel)
+queue on `<state-root>/.gate-locks/` instead of failing.
+
 Cleanup verifies the unique RUN/project ownership label before removing the
 exact container. Only a local Unix-socket Docker daemon is supported; remote
 contexts cannot supply the runner's loopback database. Success, test failure,

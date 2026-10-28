@@ -316,6 +316,37 @@ test('runner provisions env and owned cleanup for both passing and failed live g
   }
 });
 
+test('a live command sees exactly its own gate lock, and two runs of one lane gate queue instead of failing', async () => {
+  const fx = await diagnosticFixture(); await attachPostgres(fx);
+  await writeFile(path.join(fx.bin, 'pnpm'), `#!/usr/bin/env node
+const fs = require('node:fs'); const path = require('node:path');
+const dir = '.tmp/pipelines/.runtime-locks';
+const locks = fs.existsSync(dir) ? fs.readdirSync(dir).map(name => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')).lock) : [];
+fs.appendFileSync('.tmp/locks-seen.log', JSON.stringify({ live: Boolean(process.env.LIVE_PG_TEST), locks, at: Date.now() }) + '\\n');
+const until = Date.now() + 400; while (Date.now() < until) {}
+`, { mode: 0o755 });
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+  manifest.gate_testing.default.build.live_postgres.command_indexes = [1];
+  const content = JSON.stringify(manifest); state.manifest_sha256 = sha256(content);
+  await writeFile(state.manifest_file, content); await writeFile(statePath, JSON.stringify(state));
+  const start = () => {
+    const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), RUNNER, ...fx.args, '--no-reuse'], { cwd: fx.root, env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}` }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let errors = ''; child.stderr.on('data', chunk => { errors += chunk; }); child.stdout.resume();
+    return new Promise((resolve, reject) => { child.on('error', reject); child.on('close', code => resolve({ code, errors })); });
+  };
+  const [first, second] = await Promise.all([start(), start()]);
+  assert.equal(first.code, 0, first.errors); assert.equal(second.code, 0, second.errors);
+  const seen = (await readFile(path.join(fx.root, '.tmp/locks-seen.log'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(seen.length, 4);
+  for (const entry of seen) assert.deepEqual(entry.locks, entry.live ? [`gate:${fx.runId}:app:build`] : []);
+  // The second run started its commands only after the first one finished all of its own.
+  assert.ok(seen[2].at >= seen[1].at + 400);
+  await assert.rejects(access(path.join(fx.stateRoot, '.runtime-locks', `${sha256(`gate:${fx.runId}:app:build`)}.lock`)));
+  await assert.rejects(access(path.join(fx.stateRoot, '.gate-locks', `${sha256(`gate:${fx.runId}:app:build`)}.lock`)));
+});
+
 test('SIGTERM stops the test tree, cleans its container and preserves failed evidence', async () => {
   const fx = await diagnosticFixture(); await attachPostgres(fx);
   await writeFile(path.join(fx.root, '.tmp/sleep'), 'yes');

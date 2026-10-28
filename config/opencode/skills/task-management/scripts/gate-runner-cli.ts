@@ -9,7 +9,7 @@ import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGa
 import { createLivePostgres } from './live-postgres.mjs';
 import { sourceSnapshot, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports, retryTimeouts } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
-import { acquireHeavySlot, openRuntimeLock, waitForHeavySlot } from './runtime-locks.mjs';
+import { acquireHeavySlot, acquireLiveSlot, acquireLockFiles, waitForHeavySlot } from './runtime-locks.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -124,26 +124,22 @@ async function loadCandidate(manifestFile: string): Promise<string | undefined> 
   }
 }
 
-async function acquireRuntimeLocks(stateRoot: string, runId: string, locks: string[]): Promise<() => Promise<void>> {
-  if (locks.length === 0) return async () => undefined;
-  const directory = join(resolve(stateRoot), '.runtime-locks');
-  await mkdir(directory, { recursive: true });
-  const acquired: string[] = [];
+// Lock files are named by the hash of the lock name; the record carries the name for its readers.
+function lockEntry(name: string, runId: string) {
+  return { file: `${sha256(name)}.lock`, record: { lock: name, run_id: runId } };
+}
+
+// Two runs of one lane gate (two work items checking in parallel) queue on the lane lock instead of
+// failing. The lane lock lives in .gate-locks: `.runtime-locks` is what a project's live harness reads,
+// and it must see exactly one gate while a live command runs (see the live slot below).
+async function acquireGateLocks(stateRoot: string, runId: string, gateLock: string, runtimeLocks: string[]): Promise<() => Promise<void>> {
+  const lane = await acquireLockFiles(join(resolve(stateRoot), '.gate-locks'), [lockEntry(gateLock, runId)]);
+  // A runtime/release gate keeps its project-visible locks for its whole run, as release tooling checks them.
+  let visible: { release: () => Promise<unknown> } | undefined;
   try {
-    for (const name of [...new Set(locks)].sort()) {
-      const file = join(directory, `${sha256(name)}.lock`);
-      const handle = await openRuntimeLock(file);
-      await handle.writeFile(JSON.stringify({ lock: name, run_id: runId, pid: process.pid, acquired_at: new Date().toISOString() }));
-      await handle.close();
-      acquired.push(file);
-    }
-  } catch (error) {
-    await Promise.all(acquired.map((file) => rm(file, { force: true })));
-    throw new GateRunnerError(`runtime target is locked: ${String((error as Error)?.message ?? error)}`);
-  }
-  return async () => {
-    await Promise.all(acquired.map((file) => rm(file, { force: true })));
-  };
+    if (runtimeLocks.length) visible = await acquireLockFiles(join(resolve(stateRoot), '.runtime-locks'), runtimeLocks.map(name => lockEntry(name, runId)));
+  } catch (error) { await lane.release(); throw new GateRunnerError(`runtime target is locked: ${String((error as Error)?.message ?? error)}`); }
+  return async () => { await visible?.release(); await lane.release(); };
 }
 
 type ReuseQuery = {
@@ -263,8 +259,10 @@ async function planProbe(args: string[]): Promise<void> {
   let failure: unknown; let status = 'PASS';
   const startedAt = new Date().toISOString();
   const heavySlot = await acquireHeavySlot({ run_id: manifest.run_id, pipeline_id: pipelineId, gate, plan_probe: true });
+  let liveSlot: { release: () => Promise<void> } | undefined;
   try {
     if (config?.live_postgres && invocations.some(item => config.live_postgres.command_indexes.includes(item.index))) {
+      liveSlot = await acquireLiveSlot({ run_id: manifest.run_id, pipeline_id: pipelineId, gate, plan_probe: true });
       resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${manifest.run_id}:${pipelineId}:${gate}`, (exe: string, argv: string[], liveEnv?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), liveEnv, 60, ['inspect', 'rm'].includes(argv[0])));
     }
     for (const batch of parallelBatches(invocations, config, liveIndexes(config))) {
@@ -292,6 +290,7 @@ async function planProbe(args: string[]): Promise<void> {
       results: [...results].sort((a, b) => a.command_index - b.command_index),
       started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
       error: failure ? redact(String(failure)) : null }, null, 2)}\n`, 'utf8');
+    await liveSlot?.release();
     await heavySlot.release();
   }
   if (failure) throw failure;
@@ -449,8 +448,10 @@ async function main(): Promise<void> {
   const inputIdentity = snapshot?.digest ? sha256(JSON.stringify([snapshot.scoped_digest ?? snapshot.digest, state.manifest_sha256, baselineSha ?? null, environmentDigest])) : null;
   const fingerprint = inputIdentity ? sha256(JSON.stringify([inputIdentity, invocations])) : null;
   const ledgerFile = join(resolve(stateRoot), runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-attempts.json`);
-  const releaseLocks = [...(RUNTIME_GATE.test(gate) ? pipeline.runtime_locks ?? [] : []), `gate:${runId}:${pipelineId}:${gate}`];
-  const release = await acquireRuntimeLocks(stateRoot, runId, releaseLocks);
+  const gateLock = `gate:${runId}:${pipelineId}:${gate}`;
+  const runtimeGate = RUNTIME_GATE.test(gate);
+  const releaseLocks = [...(runtimeGate ? pipeline.runtime_locks ?? [] : []), gateLock];
+  const release = await acquireGateLocks(stateRoot, runId, gateLock, runtimeGate ? releaseLocks : []);
   let ledger: any = { input_identity: inputIdentity, attempts: {} };
   let previousHypotheses: string[] = [];
   try {
@@ -483,18 +484,37 @@ async function main(): Promise<void> {
   const heavy = pending.length > 0 && !affected && selection < 0;
   let heavySlot: { waited_ms: number; release: () => Promise<void> } | undefined;
   let slotWaitMs = 0;
+  let liveHold: { waited_ms: number; release: () => Promise<void> } | undefined;
+  let liveVisible: { release: () => Promise<unknown> } | undefined;
+  let liveWaitMs = 0;
+  let liveEvidence: unknown = null;
+  const releaseLive = async () => { await liveVisible?.release(); liveVisible = undefined; await liveHold?.release(); liveHold = undefined; };
+  const finishLive = async () => {
+    liveEvidence = resource!.evidence;
+    await resource!.cleanup();
+    cleanupComplete = true;
+    resource = undefined;
+    await releaseLive();
+  };
   try {
     if (scratchDir) await mkdir(scratchDir, { recursive: true });
     for (const [, item] of reusable) results.push({ ...item.result, reused_from: item.path });
     if (heavy) { heavySlot = await acquireHeavySlot({ run_id: runId, pipeline_id: pipelineId, gate }); slotWaitMs = heavySlot.waited_ms; }
     else if (pending.length) slotWaitMs = await waitForHeavySlot();
     {
-    if (config?.live_postgres && pending.some(item => config.live_postgres.command_indexes.includes(item.index))) {
-      resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${runId}:${pipelineId}:${gate}`, (exe: string, argv: string[], env?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), env, 60, ['inspect', 'rm'].includes(argv[0])));
-    }
     // Frozen parallel groups run together (bounded); every other command keeps frozen order.
     // A failing batch stops the gate after all of its members settle, so evidence stays complete.
-    for (const batch of parallelBatches(pending, config, liveIndexes(config))) {
+    const isLive = (batch: Invocation[]) => Boolean(config?.live_postgres) && batch.some(item => config.live_postgres.command_indexes.includes(item.index));
+    const batches = parallelBatches(pending, config, liveIndexes(config));
+    for (const [batchIndex, batch] of batches.entries()) {
+      // Live batches run alone on the machine: they take the live slot, show the project exactly this
+      // gate in .runtime-locks and share one disposable database, all released before the next non-live batch.
+      if (!resource && isLive(batch)) {
+        liveHold = await acquireLiveSlot({ run_id: runId, pipeline_id: pipelineId, gate });
+        liveWaitMs += liveHold.waited_ms;
+        if (!runtimeGate) liveVisible = await acquireLockFiles(join(resolve(stateRoot), '.runtime-locks'), [lockEntry(gateLock, runId)]);
+        resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${runId}:${pipelineId}:${gate}`, (exe: string, argv: string[], env?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), env, 60, ['inspect', 'rm'].includes(argv[0])));
+      }
       // Every member settles to a recorded result (a start failure is exit 127), so one failing to
       // start never leaves its siblings running unrecorded.
       const settled = await Promise.all(batch.map(async invocation => {
@@ -512,6 +532,7 @@ async function main(): Promise<void> {
         status = 'FAIL';
         throw new GateRunnerError(`gate command failed (${failed.result.exit_code}): ${failed.invocation.command}; evidence=${evidenceFile}`);
       }
+      if (resource && !(batches[batchIndex + 1] && isLive(batches[batchIndex + 1]))) await finishLive();
     }
     }
   } catch (error) {
@@ -522,11 +543,10 @@ async function main(): Promise<void> {
   }
   finally {
     if (resource) {
-      try {
-        await resource.cleanup();
-        cleanupComplete = true;
-      } catch (error) { cleanupComplete = false; status = 'BLOCKED'; failure = new GateRunnerError(`${failure ? String(failure) + '; ' : ''}${String(error)}`); }
+      try { await finishLive(); }
+      catch (error) { cleanupComplete = false; status = 'BLOCKED'; failure = new GateRunnerError(`${failure ? String(failure) + '; ' : ''}${String(error)}`); }
     }
+    await releaseLive();
     try {
       await writeFile(evidenceFile, `${JSON.stringify({ status, purpose: advisory ? 'advisory' : 'authoritative', run_id: runId, pipeline_id: pipelineId, gate,
         work_item_id: workItemId ?? null, dispatch_stage: baseline?.stage ?? null, baseline_path: baselinePath ?? null, baseline_sha256: baselineSha ?? null,
@@ -536,7 +556,7 @@ async function main(): Promise<void> {
         selection_reason: selectionReason, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
-        live_postgres: resource?.evidence ?? null, cleanup_complete: cleanupComplete, heavy_slot: heavy, heavy_slot_wait_ms: slotWaitMs,
+        live_postgres: liveEvidence ?? resource?.evidence ?? null, cleanup_complete: cleanupComplete, heavy_slot: heavy, heavy_slot_wait_ms: slotWaitMs, live_slot_wait_ms: liveWaitMs,
         test_reports: reuse ? [] : JSON.parse(redact(JSON.stringify(await readTestReports(config?.report_files, join(resolve(stateRoot), runId), startedAt)))),
         error: failure ? redact(String(failure)) : null, results: [...results].sort((a: any, b: any) => a.command_index - b.command_index) }, null, 2)}\n`, 'utf8');
       // Append-only gate timeline for the RUN report: the main wall-clock cost is gate time.
