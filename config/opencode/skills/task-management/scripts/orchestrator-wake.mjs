@@ -3,16 +3,22 @@
 // announced a next step and stopped. One wake per state fingerprint: if the woken turn changes
 // nothing, the session stays idle until the state or the owner moves.
 import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import process from 'node:process';
 
 export const WAKE_MARKER = '<pipeline_wake/>';
 export const RUN_PROMPT = /\/pip(?:e)?line-run\s+([A-Za-z0-9._-]+)/;
 
 export function wakeText(runId) {
-  return `${WAKE_MARKER} Automatic pipeline wake: your last turn ended while RUN \`${runId}\` is active, no child or check is running and no owner checkpoint is open. Run \`stage-cli next ${runId} --json\` and continue under pipeline-run rules. If you are genuinely waiting for the owner, say so in one line and stop.`;
+  return `${WAKE_MARKER} Automatic pipeline wake: your last turn ended while RUN \`${runId}\` is active, no child, worker lease or gate is running and no owner checkpoint is open. Run \`stage-cli next ${runId} --json\` and continue under pipeline-run rules. If you are genuinely waiting for the owner, say so in one line and stop.`;
 }
 
-export function wakeDecision({ stateRaw, manifest, pendingChildren = 0, lastFingerprint = null }) {
+export function wakeDecision({ stateRaw, manifest, pendingChildren = 0, runningWork = 0, lastFingerprint = null }) {
   if (pendingChildren > 0) return { wake: false, reason: 'child_running' };
+  // Leases and gate locks are files with a live owner: they survive an OpenCode restart and a child the
+  // runtime did not see start, and they are what `stage-cli waves` reports as running.
+  if (runningWork > 0) return { wake: false, reason: 'work_running' };
   if (!stateRaw) return { wake: false, reason: 'no_state' };
   let state;
   try { state = JSON.parse(stateRaw); } catch { return { wake: false, reason: 'state_unreadable' }; }
@@ -35,4 +41,19 @@ export function wakeDecision({ stateRaw, manifest, pendingChildren = 0, lastFing
   const fingerprint = createHash('sha256').update(stateRaw).digest('hex');
   if (fingerprint === lastFingerprint) return { wake: false, reason: 'no_progress_since_last_wake' };
   return { wake: true, reason: 'stalled', fingerprint };
+}
+
+// Gate runs of this RUN still alive: each holds its lane lock in <state-root>/.gate-locks with its pid.
+export function runningGates(stateRoot, runId) {
+  let names = [];
+  try { names = readdirSync(join(stateRoot, '.gate-locks')).filter(name => name.endsWith('.lock')); } catch { return 0; }
+  let count = 0;
+  for (const name of names) {
+    try {
+      const lock = JSON.parse(readFileSync(join(stateRoot, '.gate-locks', name), 'utf8'));
+      if (lock.run_id !== runId || !Number.isSafeInteger(lock.pid)) continue;
+      try { process.kill(lock.pid, 0); count += 1; } catch (error) { if (error?.code === 'EPERM') count += 1; }
+    } catch {}
+  }
+  return count;
 }
