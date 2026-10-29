@@ -82,7 +82,7 @@ export function readLeases(runRoot, { alive = ownerAlive, state } = {}) {
 // the worker that asked will change them, and no other worker may start on them meanwhile.
 export function extendLeases(runRoot, pipelineId, stage, paths) {
   for (const lease of readLeases(runRoot)) {
-    if (lease.pipeline_id !== pipelineId || lease.stage !== stage) continue;
+    if (lease.pipeline_id !== pipelineId || lease.stage !== stage || lease.writes === false) continue;
     const scope = [...new Set([...(lease.scope ?? []), ...paths])];
     if (scope.length !== (lease.scope ?? []).length) updateLease(runRoot, lease, { scope });
   }
@@ -90,7 +90,7 @@ export function extendLeases(runRoot, pipelineId, stage, paths) {
 
 export function leaseConflict(leases, self, paths) {
   for (const lease of leases) {
-    if (sameDispatch(lease, self)) continue;
+    if (sameDispatch(lease, self) || lease.writes === false) continue;
     // A reservation leaves generated files free: the coordinator regenerates them for every lane.
     const own = paths.filter(path => !(lease.exclude ?? []).some(excluded => scopeMatches(path, excluded)));
     const path = firstOverlap(own, lease.scope ?? []);
