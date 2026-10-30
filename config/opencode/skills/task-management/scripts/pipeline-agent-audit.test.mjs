@@ -162,11 +162,11 @@ test('deployment mode is owner-selected, local-first, and OpenStage has no raw d
   const run = await text('config/opencode/command/pipeline-run.md');
   const yaml = frontmatter(await text('config/opencode/agent/core/openstage-orchestrator.md'));
   assert.match(plan, /must not choose it/i);
-  assert.match(plan, /github.*opencode_host.*hybrid/s);
-  assert.match(plan, /git_verify[\s\S]*local fail-fast[\s\S]*git_publish[\s\S]*GitHub CI/i);
-  assert.match(plan, /hybrid[\s\S]*post-CI[\s\S]*local_gate/i);
+  assert.match(plan, /git_verify[\s\S]*local fail-fast[\s\S]*git_publish[\s\S]*candidate gate[\s\S]*dev_deploy[\s\S]*owner_acceptance/i);
+  assert.match(plan, /mode: "hybrid"/);
   assert.match(run, /stage-cli owner-accept/);
-  assert.match(run, /hybrid[\s\S]*post-CI[\s\S]*local_gate/i);
+  assert.match(run, /`dev_deploy`[\s\S]*sudo -n \/usr\/local\/sbin\/opencode-deploy-target <deploy_target> <candidate_sha>/);
+  assert.match(run, /Never install another way/);
   assert.doesNotMatch(yaml, /["']ssh\s+\*["']:\s*allow/i);
   assert.doesNotMatch(yaml, /["']gh\s+\*["']:\s*allow/i);
 });
@@ -254,8 +254,9 @@ test('pipeline contracts require source-ready scheduling, local fail-fast, and a
   const orchestrator = await text('config/opencode/agent/core/openstage-orchestrator.md');
 
   assert.match(plan, /ready_after_stage.*source-ready boundary/is);
-  assert.match(plan, /terminal DAG sink[\s\S]*local fail-fast[\s\S]*final GitHub CI/i);
-  assert.match(plan, /artifactless.*MUST NOT use `actions\/upload-artifact`/is);
+  assert.match(plan, /terminal DAG sink[\s\S]*local fail-fast[\s\S]*git_publish[\s\S]*dev_deploy/i);
+  assert.match(plan, /GitHub Actions are not used/);
+  assert.match(plan, /DELIVERY_TAIL_REQUIRED/);
   assert.match(run, /dependency is satisfied.*ready_after_stage/is);
   assert.match(run, /late CI\/CD\/infrastructure blocker.*does not freeze downstream source work/is);
   assert.match(run, /artifactless.*candidate_sha.*required-job evidence/is);
