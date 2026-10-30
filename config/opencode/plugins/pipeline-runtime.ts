@@ -405,6 +405,17 @@ export default Plugin.define({
       if (timeoutMs === undefined) return done
       return Promise.race([done, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))])
     }
+    // idle: wait resolved; running: still pending at the timeout; gone: wait rejected or the session is missing.
+    const probeChild = async (sessionID: string): Promise<"idle" | "running" | "gone" | "unknown"> => {
+      const wait = (plugin.session as any).wait
+      if (typeof wait !== "function") return "unknown"
+      try { await plugin.session.get({ sessionID: sessionID as any }) } catch { return "gone" }
+      const outcome = Promise.resolve(wait({ sessionID })).then(() => "idle" as const, () => "gone" as const)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const result = await Promise.race([outcome, new Promise<"running">((resolve) => { timer = setTimeout(() => resolve("running"), CHILD_IDLE_PROBE_MS) })])
+      clearTimeout(timer)
+      return result
+    }
     const settleBackground = async (runID: string, key: string, childID: string, idle: boolean) => {
       const registry = loadRegistry(root, runID)
       const entry = registry.find((item) => identity(item as RuntimeContext) === key && item.session_id === childID)
@@ -439,6 +450,16 @@ export default Plugin.define({
       try { manifest = JSON.parse(fs.readFileSync(String(JSON.parse(stateRaw).manifest_file), "utf8")) } catch {}
       let state: any = null
       try { state = JSON.parse(stateRaw) } catch {}
+      // The orchestrator's turn ended: its foreground children are done, and a force-stopped background
+      // worker must not hold its lease forever.
+      for (const lease of readLeases(runRoot(root, runID), { state })) {
+        if (lease.parent_session_id !== sessionID) continue
+        let health: "idle" | "running" | "gone" | "unknown" = "gone"
+        if (lease.child_session_id) health = await probeChild(String(lease.child_session_id))
+        if (health === "running" || health === "unknown") continue
+        if (lease.child_session_id) await settleBackground(runID, identity(lease as RuntimeContext), String(lease.child_session_id), health === "idle")
+        removeLease(runRoot(root, runID), lease)
+      }
       const runningWork = readLeases(runRoot(root, runID), { state }).length + runningGates(path.join(root, ".tmp/pipelines"), runID)
       const decision = wakeDecision({ stateRaw, manifest, pendingChildren: pendingChildren.get(sessionID)?.size ?? 0, runningWork, lastFingerprint: lastWake.get(sessionID) ?? null })
       if (!decision.wake) return

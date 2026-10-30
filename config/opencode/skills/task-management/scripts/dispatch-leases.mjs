@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync
 import { join, resolve } from 'node:path';
 import { scopedInventoryDigest } from './gate-diagnostics.mjs';
 import process from 'node:process';
+import { processAlive, processStartTime } from './runtime-locks.mjs';
 
 // A writing worker holds a lease on the paths it may change from the moment the runtime starts it
 // until it returns (a background child: until it goes idle). dispatch refuses a work item whose
@@ -32,10 +33,7 @@ export function firstOverlap(left = [], right = []) {
   return null;
 }
 
-function ownerAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-  try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
-}
+const ownerAlive = (pid, start) => Number.isSafeInteger(pid) && pid > 0 && processAlive(pid, start);
 
 export function sameDispatch(a, b) {
   return a.pipeline_id === b.pipeline_id && a.stage === b.stage && a.work_item_id === b.work_item_id;
@@ -46,7 +44,7 @@ export function writeLease(runRoot, lease) {
   mkdirSync(dir, { recursive: true });
   const target = join(dir, leaseName(lease));
   const temporary = `${target}.tmp-${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify({ owner_pid: process.pid, created_at: new Date().toISOString(), ...lease }, null, 2)}\n`, 'utf8');
+  writeFileSync(temporary, `${JSON.stringify({ owner_pid: process.pid, owner_pid_start: processStartTime(process.pid), created_at: new Date().toISOString(), ...lease }, null, 2)}\n`, 'utf8');
   renameSync(temporary, target);
 }
 
@@ -72,7 +70,7 @@ export function readLeases(runRoot, { alive = ownerAlive, state } = {}) {
     let lease;
     try { lease = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }
     const finished = state?.pipelines?.[lease.pipeline_id]?.stages?.[lease.stage]?.status === 'completed';
-    if (!alive(lease.owner_pid) || finished) { rmSync(file, { force: true }); continue; }
+    if (!alive(lease.owner_pid, lease.owner_pid_start) || finished) { rmSync(file, { force: true }); continue; }
     leases.push(lease);
   }
   return leases;
