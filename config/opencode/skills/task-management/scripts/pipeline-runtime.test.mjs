@@ -716,6 +716,42 @@ test('a lane in its gate or review reserves its planned files, not shared runtim
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });
 
+test('wake prunes stale leases of its parent: gone child, foreground lease; a running child keeps the session asleep', async () => {
+  const previousCwd=process.cwd(), root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='10';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/prune-run'); await mkdir(runDir,{recursive:true});
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{p:{status:'in_progress',stages:{implementation:{status:'in_progress'}}}}}));
+    const hooks={}, synthetic=[], waits={}; let push;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},
+      event:{subscribe:()=>events},
+      session:{hook:async()=>{},get:async()=>({data:{}}),wait:({sessionID})=>waits[sessionID](),synthetic:async input=>{synthetic.push(input);}}});
+    process.chdir(root);
+    await hooks['execute.before']({tool:'subagent',sessionID:'orch',id:'g1',input:{agent:'GateRunner',prompt:'Run: $HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts prune-run p fail-fast'}});
+    const { writeLease, readLeases } = await import('./dispatch-leases.mjs');
+    const base={run_id:'prune-run',pipeline_id:'p',stage:'implementation',role:'CoderAgent',scope:['src/**'],parent_session_id:'orch'};
+    const idle=async()=>{ await new Promise(resolve=>setTimeout(resolve,5)); push({type:'session.execution.succeeded',data:{sessionID:'orch'}}); await new Promise(resolve=>setTimeout(resolve,1800)); };
+    waits.c1=()=>new Promise(()=>{});
+    writeLease(runDir,{...base,work_item_id:'wi-1',child_session_id:'c1'});
+    await idle();
+    assert.equal(synthetic.length,0,'running child keeps the lease');
+    assert.equal(readLeases(runDir).length,1);
+    waits.c1=()=>Promise.reject(new Error('gone'));
+    await idle();
+    assert.equal(synthetic.length,1,'gone child: lease removed, one wake');
+    assert.equal(readLeases(runDir).length,0);
+    writeLease(runDir,{...base,work_item_id:'wi-2'});
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{p:{status:'in_progress',stages:{implementation:{status:'in_progress'},review:{status:'pending'}}}}}));
+    await idle();
+    assert.equal(readLeases(runDir).length,0,'foreground lease removed');
+    assert.equal(synthetic.length,2);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    process.chdir(previousCwd); await rm(root,{recursive:true,force:true});
+  }
+});
+
 test('no wake while a background worker holds its lease or a gate runs; one wake once both are gone', async () => {
   const previousCwd=process.cwd(), root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
   process.env.PIPELINE_WAKE_DELAY_MS='10';

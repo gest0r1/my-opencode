@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import process from 'node:process';
+import { processAlive } from './runtime-locks.mjs';
 
 export const WAKE_MARKER = '<pipeline_wake/>';
 export const RUN_PROMPT = /\/pip(?:e)?line-run\s+([A-Za-z0-9._-]+)/;
@@ -52,7 +52,7 @@ export function runningGates(stateRoot, runId) {
     try {
       const lock = JSON.parse(readFileSync(join(stateRoot, '.gate-locks', name), 'utf8'));
       if (lock.run_id !== runId || !Number.isSafeInteger(lock.pid)) continue;
-      try { process.kill(lock.pid, 0); count += 1; } catch (error) { if (error?.code === 'EPERM') count += 1; }
+      if (processAlive(lock.pid, lock.pid_start)) count += 1;
     } catch {}
   }
   return count;
