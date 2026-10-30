@@ -5,8 +5,8 @@ import path from "node:path"
 import crypto from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { assertPipelineCapabilities } from "../skills/task-management/scripts/capability-preflight.mjs"
-import { RUN_PROMPT, WAKE_MARKER, wakeDecision, wakeText } from "../skills/task-management/scripts/orchestrator-wake.mjs"
-import { removeLease, updateLease, writeLease } from "../skills/task-management/scripts/dispatch-leases.mjs"
+import { RUN_PROMPT, WAKE_MARKER, runningGates, wakeDecision, wakeText } from "../skills/task-management/scripts/orchestrator-wake.mjs"
+import { readLeases, removeLease, updateLease, writeLease } from "../skills/task-management/scripts/dispatch-leases.mjs"
 
 const ELIGIBLE_ROLES = new Set([
   "CoderAgent", "TestEngineer", "BuildAgent",
@@ -405,6 +405,17 @@ export default Plugin.define({
       if (timeoutMs === undefined) return done
       return Promise.race([done, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))])
     }
+    // idle: wait resolved; running: still pending at the timeout; gone: wait rejected or the session is missing.
+    const probeChild = async (sessionID: string): Promise<"idle" | "running" | "gone" | "unknown"> => {
+      const wait = (plugin.session as any).wait
+      if (typeof wait !== "function") return "unknown"
+      try { await plugin.session.get({ sessionID: sessionID as any }) } catch { return "gone" }
+      const outcome = Promise.resolve(wait({ sessionID })).then(() => "idle" as const, () => "gone" as const)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const result = await Promise.race([outcome, new Promise<"running">((resolve) => { timer = setTimeout(() => resolve("running"), CHILD_IDLE_PROBE_MS) })])
+      clearTimeout(timer)
+      return result
+    }
     const settleBackground = async (runID: string, key: string, childID: string, idle: boolean) => {
       const registry = loadRegistry(root, runID)
       const entry = registry.find((item) => identity(item as RuntimeContext) === key && item.session_id === childID)
@@ -437,7 +448,20 @@ export default Plugin.define({
       try { stateRaw = fs.readFileSync(statePath, "utf8") } catch {}
       let manifest: any = null
       try { manifest = JSON.parse(fs.readFileSync(String(JSON.parse(stateRaw).manifest_file), "utf8")) } catch {}
-      const decision = wakeDecision({ stateRaw, manifest, pendingChildren: pendingChildren.get(sessionID)?.size ?? 0, lastFingerprint: lastWake.get(sessionID) ?? null })
+      let state: any = null
+      try { state = JSON.parse(stateRaw) } catch {}
+      // The orchestrator's turn ended: its foreground children are done, and a force-stopped background
+      // worker must not hold its lease forever.
+      for (const lease of readLeases(runRoot(root, runID), { state })) {
+        if (lease.parent_session_id !== sessionID) continue
+        let health: "idle" | "running" | "gone" | "unknown" = "gone"
+        if (lease.child_session_id) health = await probeChild(String(lease.child_session_id))
+        if (health === "running" || health === "unknown") continue
+        if (lease.child_session_id) await settleBackground(runID, identity(lease as RuntimeContext), String(lease.child_session_id), health === "idle")
+        removeLease(runRoot(root, runID), lease)
+      }
+      const runningWork = readLeases(runRoot(root, runID), { state }).length + runningGates(path.join(root, ".tmp/pipelines"), runID)
+      const decision = wakeDecision({ stateRaw, manifest, pendingChildren: pendingChildren.get(sessionID)?.size ?? 0, runningWork, lastFingerprint: lastWake.get(sessionID) ?? null })
       if (!decision.wake) return
       lastWake.set(sessionID, decision.fingerprint)
       appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake", run_id: runID, session_id: sessionID })
@@ -591,6 +615,10 @@ export default Plugin.define({
       }
 
       const input = (event.input && typeof event.input === "object" ? event.input : {}) as Record<string, any>
+      // A session that dispatches pipeline work or a gate run is that RUN's orchestrator: register it before
+      // the child starts, so a background child is tracked even without a /pipeline-run prompt.
+      const dispatchedRun = /<pipeline_dispatch run="([A-Za-z0-9._-]+)"/.exec(String(input.prompt ?? ""))?.[1] ?? /gate-runner-cli\.ts\s+([A-Za-z0-9._-]+)/.exec(String(input.prompt ?? ""))?.[1]
+      if (sessionID && dispatchedRun && !orchestratorRun.has(sessionID) && fs.existsSync(path.join(root, ".tmp/pipelines", dispatchedRun, "state.json"))) orchestratorRun.set(sessionID, dispatchedRun)
       const role = String(input.agent ?? "")
       const workItemID = extractWorkItemID(input.prompt)
 
@@ -618,8 +646,9 @@ export default Plugin.define({
         const packet = await dispatchPacket(root, ctx!.run_id, ctx!.pipeline_id, ctx!.stage, ctx!.work_item_id, role)
         if (packet.state_revision !== ctx!.state_revision) throw new Error("STALE_DISPATCH_STATE")
         if (continuityKey(packet) !== ctx!.continuity_key) throw new Error("STALE_DISPATCH_CONTRACT")
-        if (packet.executor === "agent") writeLease(runRoot(root, packet.run_id), { run_id: packet.run_id, pipeline_id: packet.pipeline_id,
-          stage: packet.stage, work_item_id: packet.work_item_id, role, scope: packet.write_scope, parent_session_id: sessionID })
+        // A reviewer writes nothing: its lease holds no paths and only marks a child at work (waking, waves).
+        if (["agent", "review"].includes(packet.executor)) writeLease(runRoot(root, packet.run_id), { run_id: packet.run_id, pipeline_id: packet.pipeline_id,
+          stage: packet.stage, work_item_id: packet.work_item_id, role, writes: packet.executor === "agent", scope: packet.executor === "agent" ? packet.write_scope : [], parent_session_id: sessionID })
         return packet
       })
       runBySession.set(sessionID, ctx.run_id)

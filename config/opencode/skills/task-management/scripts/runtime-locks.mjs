@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { link, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
@@ -15,7 +16,7 @@ export async function openRuntimeLock(file) {
     let owner;
     try { raw = await readFile(file, 'utf8'); owner = JSON.parse(raw); } catch { throw error; }
     const pid = owner?.pid;
-    if (!Number.isSafeInteger(pid) || pid <= 0 || runtimeLockOwnerAlive(pid)) throw error;
+    if (!Number.isSafeInteger(pid) || pid <= 0 || processAlive(pid, owner.pid_start)) throw error;
     const stale = `${file}.stale-${pid}-${process.pid}`;
     try { await rename(file, stale); } catch (renameError) {
       if (renameError?.code !== 'ENOENT') throw renameError;
@@ -32,13 +33,21 @@ export async function openRuntimeLock(file) {
   }
 }
 
-function runtimeLockOwnerAlive(pid) {
+// Field 22 of /proc/<pid>/stat. Parsed after the last ")" because the comm field may hold spaces and parens.
+export function processStartTime(pid) {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code !== 'ESRCH';
-  }
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+    return /^\d+$/.test(start ?? '') ? start : null;
+  } catch { return null; }
+}
+
+// A dead process whose pid the OS reused has a different start time; a record without one keeps the pid-only check.
+export function processAlive(pid, start) {
+  try { process.kill(pid, 0); } catch (error) { if (error?.code !== 'EPERM') return false; }
+  if (start === null || start === undefined) return true;
+  const current = processStartTime(pid);
+  return current === null || current === String(start);
 }
 
 // Heavy test sets (final gates, coordinator checks, base and plan probes) share one machine-wide
@@ -79,7 +88,7 @@ export async function acquireLockFiles(directory, entries, { pollMs = HEAVY_POLL
       for (;;) {
         try {
           const handle = await openRuntimeLock(target);
-          await handle.writeFile(JSON.stringify({ ...record, pid: process.pid, acquired_at: new Date().toISOString() }));
+          await handle.writeFile(JSON.stringify({ ...record, pid: process.pid, pid_start: processStartTime(process.pid), acquired_at: new Date().toISOString() }));
           await handle.close();
           acquired.push(target);
           break;
@@ -103,7 +112,7 @@ async function acquireSlot(file, owner, { pollMs = HEAVY_POLL_MS, maxWaitMs = HE
   for (;;) {
     try {
       const handle = await openRuntimeLock(file);
-      await handle.writeFile(JSON.stringify({ ...owner, pid: process.pid, acquired_at: new Date().toISOString() }));
+      await handle.writeFile(JSON.stringify({ ...owner, pid: process.pid, pid_start: processStartTime(process.pid), acquired_at: new Date().toISOString() }));
       await handle.close();
       return { waited_ms: Date.now() - started, release: () => rm(file, { force: true }) };
     } catch (error) {
@@ -121,7 +130,7 @@ export async function waitForHeavySlot({ pollMs = HEAVY_POLL_MS, maxWaitMs = HEA
   for (let waited = false; ; waited = true) {
     let owner;
     try { owner = JSON.parse(await readFile(file, 'utf8')); } catch { return waited ? Date.now() - started : 0; }
-    if (!Number.isSafeInteger(owner?.pid) || !runtimeLockOwnerAlive(owner.pid)) return waited ? Date.now() - started : 0;
+    if (!Number.isSafeInteger(owner?.pid) || !processAlive(owner.pid, owner.pid_start)) return waited ? Date.now() - started : 0;
     if (Date.now() - started > maxWaitMs) throw new Error(`HEAVY_GATE_SLOT_TIMEOUT: ${file} held longer than ${Math.round(maxWaitMs / 60000)} min`);
     await sleep(pollMs);
   }
