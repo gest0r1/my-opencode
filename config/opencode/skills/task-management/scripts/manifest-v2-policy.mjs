@@ -18,7 +18,7 @@ const SUPERSEDE_REASONS = new Set([
 ]);
 const JS_MANAGERS = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun', 'corepack']);
 const JS_DIRECT_TOOLS = new Set(['tsc', 'vitest', 'jest']);
-const STAGE_EXECUTORS = new Set(['agent', 'review', 'local_gate', 'git_verify', 'git_publish', 'github_ci', 'github_dev', 'owner_acceptance']);
+const STAGE_EXECUTORS = new Set(['agent', 'review', 'local_gate', 'git_verify', 'git_publish', 'github_ci', 'github_dev', 'dev_deploy', 'owner_acceptance']);
 const GITHUB_JOB_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 function sha256(content) {
@@ -198,6 +198,29 @@ function assertParallelScopes(manifest, root) {
         throw new ManifestV2PolicyError(`PARALLEL_SCOPE_OVERLAP: ${a.id} and ${b.id} run in parallel and both may change ${overlap}; move the shared path to one pipeline or serialize them with depends_on`);
       }
     }
+  }
+}
+
+// A versioned run (release from the milestone) ends on the owner's dev contour: exactly one deployable
+// pipeline publishes the candidate, validates that exact commit locally, installs it with dev_deploy and
+// stops at owner acceptance. Without this tail a RUN ends with code nobody can accept (RUN v064).
+function validateDeliveryTail(manifest) {
+  if (manifest.release === undefined) return;
+  const fail = (what) => { throw new ManifestV2PolicyError(`DELIVERY_TAIL_REQUIRED: ${what}`); };
+  const deployable = (manifest.pipelines ?? []).filter(pipeline => pipeline.deployable === true);
+  if (deployable.length !== 1) fail(`a versioned run needs exactly one deployable pipeline, found ${deployable.length}`);
+  if (!manifest.deploy_target) fail('deploy_target (the dev contour key, svd1 by default) is missing');
+  const sink = deployable[0];
+  const stages = sink.stages ?? [];
+  const at = (executor) => stages.findIndex(stage => sink.executors?.[stage] === executor);
+  const publish = at('git_publish'); const deploy = at('dev_deploy'); const accept = at('owner_acceptance');
+  if (at('git_verify') < 0 || publish < 0) fail(`${sink.id} needs git_verify and git_publish`);
+  if ((sink.github_ci_mode ?? 'required') !== 'off') fail(`${sink.id} needs github_ci_mode "off": the candidate is validated by a local gate`);
+  if (deploy < publish) fail(`${sink.id} needs a dev_deploy stage after git_publish`);
+  if (accept < deploy) fail(`${sink.id} needs an owner_acceptance stage after dev_deploy`);
+  const strategy = sink.testing_strategy ?? {};
+  if (strategy.mode !== 'hybrid' || strategy.opencode_host_stage !== stages[deploy] || strategy.owner_acceptance_stage !== stages[accept]) {
+    fail(`${sink.id} testing_strategy must be hybrid with opencode_host_stage "${stages[deploy]}" and owner_acceptance_stage "${stages[accept]}"`);
   }
 }
 
@@ -480,15 +503,15 @@ export function validatePlanProbes(manifest, { manifestPath, cwd = process.cwd()
   }
 }
 
-// release: the version PLAN took from the milestone name (github-issue-cli milestone). rc_tags turns on
-// vX.Y.Z-rc.N tags at publication; it stays off until the project's dev installer accepts them.
+// release: the version PLAN took from the milestone name (github-issue-cli milestone). Candidates are
+// identified by SHA and carry no tag; vX.Y.Z is set on the accepted candidate after the PR merges.
 function validateRelease(manifest) {
   if (manifest.release === undefined) return;
   const release = manifest.release;
   if (!release || typeof release !== 'object' || !/^\d+\.\d+\.\d+$/.test(String(release.version ?? '')) ||
       !release.milestone || !Number.isInteger(release.milestone.number) || typeof release.milestone.title !== 'string' ||
-      (release.rc_tags !== undefined && typeof release.rc_tags !== 'boolean')) {
-    throw new ManifestV2PolicyError('release must be {version: "X.Y.Z", milestone: {number, title}, rc_tags?: boolean}');
+      Object.keys(release).some(key => !['version', 'milestone'].includes(key))) {
+    throw new ManifestV2PolicyError('release must be {version: "X.Y.Z", milestone: {number, title}}');
   }
 }
 
@@ -725,6 +748,15 @@ function validateGithubExecutionContract(manifest) {
       if (executor === 'owner_acceptance' && pipeline.deployable !== true) {
         throw new ManifestV2PolicyError(`OWNER_ACCEPTANCE_REQUIRES_DEPLOYABLE_PIPELINE: ${pipeline.id}/${stage}`);
       }
+      // dev_deploy installs the published candidate on the owner's dev contour through the root helper.
+      if (executor === 'dev_deploy') {
+        if (pipeline.deployable !== true || !manifest.deploy_target) {
+          throw new ManifestV2PolicyError(`DEV_DEPLOY_REQUIRES_DEPLOYABLE_TARGET: ${pipeline.id}/${stage} needs deployable=true and deploy_target`);
+        }
+        if (!stages.slice(0, stages.indexOf(stage)).some((name) => pipeline.executors[name] === 'git_publish')) {
+          throw new ManifestV2PolicyError(`DEV_DEPLOY_REQUIRES_PUBLISHED_CANDIDATE: ${pipeline.id}/${stage}`);
+        }
+      }
 
       const gate = pipeline.github_gates?.[stage];
       if (executor === 'github_ci' || executor === 'github_dev') {
@@ -899,7 +931,7 @@ function validateGithubExecutionContract(manifest) {
       if (strategy.mode === 'hybrid') {
         const localStage = strategy.opencode_host_stage;
         if (typeof localStage !== 'string' ||
-            pipeline.executors[localStage] !== 'local_gate' ||
+            !['local_gate', 'dev_deploy'].includes(pipeline.executors[localStage]) ||
             !['automated', 'user', 'automated_then_user'].includes(strategy.post_deploy_test) ||
             stageIndex(validation.stage) >= stageIndex(localStage)) {
           throw new ManifestV2PolicyError(`HYBRID_TEST_STRATEGY_INVALID: ${pipeline.id}`);
@@ -994,6 +1026,7 @@ export function validateManifestV2Policy(manifest, options = {}) {
   validateSourceRequirements(manifest);
   validateRelease(manifest);
   validateDeployTarget(manifest);
+  if (!options.runtime) validateDeliveryTail(manifest);
   assertConflictSerialization(manifest);
   const projectPolicy = validateProjectPolicy(manifest, cwd);
   const usesOpenCodeHost = (manifest.pipelines ?? []).some((pipeline) =>

@@ -32,6 +32,9 @@ permission:
     "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/gate-runner-cli.ts*": allow
+    "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/dev-deploy-cli.ts*": allow
+    "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/dev-deploy-cli.ts*": allow
+    "npx tsx $HOME/.config/opencode/skills/task-management/scripts/dev-deploy-cli.ts*": allow
     "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/github-actions-gate-cli.ts*": allow
@@ -74,6 +77,7 @@ permission:
     ".tmp/pipelines/**/github/**": deny
     ".tmp/pipelines/**/gates/**": deny
     ".tmp/pipelines/**/owner/**": deny
+    ".tmp/pipelines/**/deploy/**": deny
     ".tmp/pipelines/**/sources/github-issues.json": deny
     ".tmp/pipelines/**/planning/deployment-target.json": deny
     ".tmp/pipelines/**/refresh-impact.json": deny
