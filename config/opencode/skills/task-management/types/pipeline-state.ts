@@ -234,8 +234,8 @@ export interface PipelineManifest {
   repository?: string;
   source_issues?: PipelineIssueSource[];
   source_requirements_sha256?: string;
-  /** Version taken from the milestone name; rc_tags enables vX.Y.Z-rc.N tags at publication. */
-  release?: { version: string; milestone: { number: number; title: string }; rc_tags?: boolean };
+  /** Version taken from the milestone name once; candidates carry no tag, vX.Y.Z is set after acceptance. */
+  release?: { version: string; milestone: { number: number; title: string } };
   /** Owner's dev contour key for /usr/local/sbin/opencode-deploy-target; svd1 by default. */
   deploy_target?: string;
   planning_base_sha?: string;

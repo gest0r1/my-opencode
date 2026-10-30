@@ -10,7 +10,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(HERE, 'github-pr-cli.ts');
 const SHA = '1111111111111111111111111111111111111111';
 
-async function fixture({ existing = false, status = 'completed', deployable = false, validationSha = SHA } = {}) {
+async function fixture({ existing = false, status = 'completed', deployable = false, validationSha = SHA, sourceType = 'github_issues' } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'github-pr-cli-'));
   const bin = path.join(root, 'bin');
   const runDir = path.join(root, '.tmp', 'pipelines', 'run-1');
@@ -43,7 +43,7 @@ async function fixture({ existing = false, status = 'completed', deployable = fa
   await writeFile(path.join(runDir, 'state.json'), JSON.stringify({
     schema_version: 1,
     run_id: 'run-1',
-    source_type: 'github_issues',
+    source_type: sourceType,
     repository: 'gest0r1/sevami',
     manifest_file: manifestFile,
     source_issues: [
@@ -177,6 +177,17 @@ test('creates one PR to main with closing keywords from frozen completed issue m
   const event = state.github_outbox.find((item) => item.kind === 'pr_link');
   assert.equal(event.pr_number, 42);
   assert.deepEqual(event.delivered_issue_numbers.sort((a, b) => a - b), [5, 6]);
+});
+
+test('a RUN planned from an issue list opens its PR too and closes its listed issues', async () => {
+  const f = await fixture({ sourceType: 'issues' });
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout).issue_numbers, [5, 6]);
+  const body = await readFile(f.prBody, 'utf8');
+  assert.match(body, /Closes #5/);
+  assert.match(body, /Closes #6/);
+  assert.doesNotMatch(await readFile(f.ghLog, 'utf8'), /api --method POST/);
 });
 
 test('updates the managed block on an existing branch PR without overwriting human body text', async () => {

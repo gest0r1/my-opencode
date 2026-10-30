@@ -26,7 +26,7 @@ type GitSetup = {
   must_absent?: string[];
 };
 type PreservedBaseline = { head_sha: string; changed_paths: string[]; diff_sha256: string; };
-type Manifest = { run_id?: string; release?: { version?: string; rc_tags?: boolean }; git_setup?: GitSetup; allowed_change_paths?: string[]; freshness_sensitive_paths?: string[]; preserved_baseline?: PreservedBaseline; };
+type Manifest = { run_id?: string; release?: { version?: string }; git_setup?: GitSetup; allowed_change_paths?: string[]; freshness_sensitive_paths?: string[]; preserved_baseline?: PreservedBaseline; };
 type RuntimeStateView = Pick<PipelineState, 'run_id' | 'runtime_scope_extensions'>;
 type GitRuntime = { planning_base_sha: string; run_base_sha: string; merged_head_sha: string; upstream_changed_files: string[]; refreshed_at: string; };
 class GateError extends Error {}
@@ -316,22 +316,6 @@ async function syncPlan(cwd:string,check:boolean):Promise<Record<string,unknown>
   }
   return {...base,action:'merged',local_main_sha:localMain,head_sha:await git(['rev-parse','HEAD'],cwd)};
 }
-// Each published candidate of a versioned run gets vX.Y.Z-rc.N, so the dev contour installs a named
-// candidate. The final vX.Y.Z is set only after the PR merges (github-pr-cli release). A candidate
-// that already carries an rc tag keeps it; tags are never moved or deleted.
-async function tagReleaseCandidate(manifest: Manifest, candidate: string, cwd: string): Promise<string | null> {
-  const version = manifest.release?.version;
-  if (!manifest.release?.rc_tags || !version || !/^\d+\.\d+\.\d+$/.test(version)) return null;
-  await git(['fetch', '--quiet', 'origin', `+refs/tags/v${version}-rc.*:refs/tags/v${version}-rc.*`], cwd).catch(() => '');
-  const pattern = new RegExp(`^v${version.replace(/\./g, '\\.')}-rc\\.(\\d+)$`);
-  const existing = (await git(['tag', '--list', `v${version}-rc.*`], cwd)).split('\n').filter(tag => pattern.test(tag));
-  for (const tag of existing) if ((await git(['rev-parse', `${tag}^{commit}`], cwd)).toLowerCase() === candidate.toLowerCase()) return tag;
-  const next = Math.max(0, ...existing.map(tag => Number(pattern.exec(tag)![1]))) + 1;
-  const tag = `v${version}-rc.${next}`;
-  await git(['tag', '-a', tag, candidate, '-m', `pipeline(${String(manifest.run_id ?? 'run')}): release candidate ${tag}`], cwd);
-  await git(['push', 'origin', `refs/tags/${tag}`], cwd);
-  return tag;
-}
 async function publish(manifest: Manifest, manifestPath: string, cwd: string): Promise<Record<string, unknown>> {
   assertSetup(manifest.git_setup);
   let changed = await verify(manifest, manifestPath, cwd);
@@ -352,9 +336,9 @@ async function publish(manifest: Manifest, manifestPath: string, cwd: string): P
     .split(/\s+/)[0] ?? '';
   if (candidate.toLowerCase() !== remote.toLowerCase()) throw new GateError('remote candidate SHA mismatch');
   const evidencePath = join(dirname(resolve(manifestPath)), 'candidate.json');
-  const rcTag = await tagReleaseCandidate(manifest, candidate, cwd);
+  // A candidate is identified by its SHA; the version tag is set only after acceptance (github-pr-cli release).
   const evidence = { status: 'PASS', run_id: manifest.run_id ?? null, branch: manifest.git_setup.branch,
-    candidate_sha: candidate, remote_sha: remote, changed_files: changed, rc_tag: rcTag,
+    candidate_sha: candidate, remote_sha: remote, changed_files: changed,
     published_at: new Date().toISOString() };
   await writeJsonAtomic(evidencePath, evidence);
   return { ...evidence, evidence: evidencePath };
