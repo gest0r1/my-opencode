@@ -83,6 +83,34 @@ test('runtime lock of a dead owner is reclaimed, a live owner keeps it', async (
   }
 });
 
+test('a lock record with the right pid but another start time is a reused pid; the matching start time is alive', async () => {
+  const { acquireLockFiles, processAlive, processStartTime } = await import('./runtime-locks.mjs');
+  const { runningGates } = await import('./orchestrator-wake.mjs');
+  const start = processStartTime(process.pid);
+  if (process.platform === 'linux') assert.match(start, /^\d+$/);
+  else return;
+  assert.equal(processAlive(process.pid, start), true);
+  assert.equal(processAlive(process.pid, undefined), true);
+  assert.equal(processAlive(process.pid, `${start}1`), false);
+  const root = await mkdtemp(path.join(os.tmpdir(), 'pid-reuse-'));
+  const locks = path.join(root, '.gate-locks');
+  try {
+    await mkdir(locks, { recursive: true });
+    await writeFile(path.join(locks, 'a.lock'), JSON.stringify({ run_id: 'r', pid: process.pid, pid_start: start }));
+    await writeFile(path.join(locks, 'b.lock'), JSON.stringify({ run_id: 'r', pid: process.pid, pid_start: `${start}1` }));
+    await writeFile(path.join(locks, 'c.lock'), JSON.stringify({ run_id: 'r', pid: process.pid }));
+    assert.equal(runningGates(root, 'r'), 2);
+    const lane = await acquireLockFiles(locks, [{ file: 'b.lock', record: { run_id: 'new' } }], { pollMs: 5, maxWaitMs: 200 });
+    const record = JSON.parse(await readFile(path.join(locks, 'b.lock'), 'utf8'));
+    assert.equal(record.run_id, 'new');
+    assert.equal(record.pid_start, start);
+    await lane.release();
+    await assert.rejects(acquireLockFiles(locks, [{ file: 'a.lock', record: { run_id: 'new' } }], { pollMs: 5, maxWaitMs: 50 }), /LOCK_WAIT_TIMEOUT/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('the heavy gate slot admits one full set at a time and narrow checks wait for it', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'heavy-slot-'));
   const previous = process.env.PIPELINE_HEAVY_LOCK_DIR;
