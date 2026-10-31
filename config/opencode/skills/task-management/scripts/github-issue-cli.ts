@@ -268,7 +268,11 @@ export async function verifyOwnerApprovals(manifestPath: string, options: { cwd?
     if (!Number.isFinite(decisionTime)) fail('owner approval has invalid GitHub timestamp');
     if (row.kind === 'baseline' && decisionTime < Date.parse(reviewed.at))
       fail('owner approval predates the full Story review');
+    // An architecture gate may have an authored artifact but no separate review evidence.
+    // Require chronology only when that independent review actually exists; the SHA-linked
+    // architecture artifact and mandatory technical delta review are always checked above.
     if (row.kind === 'delta' && row.decision === 'approve' &&
+        ready.gates.architecture?.review &&
         (!architectureReview || !Number.isFinite(Date.parse(String(architectureReview.at))) ||
          decisionTime < Date.parse(String(architectureReview.at))))
       fail('owner delta approval predates the reviewed architecture');
