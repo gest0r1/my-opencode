@@ -43,55 +43,57 @@ The GitHub Issue itself is authoritative; PLAN persists normalized semantic evid
 
 5. `git_setup` contains `base_sha` and `branch`, optional `must_absent`, but no `source_sha` or `checkout_paths`.
 
-## Owner Story approvals (GitHub Issue mode)
+## Story and behavior-delta approval (OpenChamber, all source modes)
 
-The design-freeze owner approval at the end of PLAN remains unchanged. For each
-baseline user-behavior Story **before** architecture, and for each
-architect-proposed behavior delta **after** architecture, obtain a separate
-verifiable decision tied to the exact artifact SHA-256. An agent-written decision
-register entry, the review agent's verdict or a bot comment is never owner consent.
+The owner makes product decisions **in OpenChamber**, not in GitHub Issue
+comments. For every user-facing baseline Story, after a fresh full
+SeniorStoryReviewer verdict and **before** architecture, show a compact
+`Как сейчас | Как будет | Как проверить` table and the material exceptions.
+Obtain an explicit separate owner response: «Утвердить» / «Есть замечания» /
+«Свой вариант». Use the existing `openchamber_render` with `awaitAnswer`
+when available; otherwise ask in the current interactive session. Never treat
+the agent's summary, an unanswered question, an independent reviewer or
+`--unattended` as owner approval.
 
-Currently require a directly authored GitHub Issue comment by the
-**repository owner with GitHub OWNER association and admin permission**.
-Write access of an ordinary collaborator is not sufficient for product approval;
-for organization repositories without a verifiable OWNER actor, fail closed
-until an independently authenticated owner identity is supported. Do not assume an
-OpenChamber message-history API exists. If an independently readable user-role
-API is later available, it must be implemented and verified before it can replace
-this conservative GitHub route. Present the exact comment format for the owner to
-post on the corresponding source Issue:
+Before the review, obtain the Story's **actual SHA-256 from the existing
+deterministic artifacts command**; the review must bind the path and SHA.
+After the owner's answer, record in the existing `decision-register.md`
+the `run_id`, artifact path, exact Story SHA, full reviewer verdict path/SHA,
+decision (`approved` / `rejected`), and the explicit owner's response,
+without inventing a GitHub comment ID or a second approval index.
+A rejected or corrected baseline returns to StoryMapper and a **fresh full**
+SeniorStoryReviewer; only the freshly approved SHA can move to architecture.
+The approval record is a workflow audit record, **not an independently
+authenticated transcript**: no native OpenChamber user-message read-back
+API has been verified. Do not claim independent proof of authorship.
 
-```text
-<!-- pipeline-owner-approval:v1
-{"run_id":"my-run","entries":[{"issue_number":12,"artifact_path":"stories/issue-12.md","sha256":"<64 hex characters>","decision":"approve"}]}
--->
-```
+If architecture proposes changed user behavior, StoryMapper writes a
+versioned `planning/story-deltas/**` artifact linked to the approved baseline.
+The existing SeniorTechnicalPlanReviewer reviews that delta (not a second
+SeniorStoryReviewer); show only changes in behavior to the owner and obtain
+explicit approval/rejection in OpenChamber. Record delta path/SHA,
+architect's decision ID, review reference, owner response and the ordered
+accepted/rejected disposition in `decision-register.md`. **Effective Story**
+= approved baseline + only accepted deltas in order. Rejected deltas must not
+reach the work items, contracts, tests or owner acceptance. A changed SHA,
+missing approval, or conflict between deltas returns to the affected gate;
+never silently reuse approval from an older version.
 
-Before Story Review, OpenStage must supply to SeniorStoryReviewer the **actual
-SHA-256 computed by a deterministic tool** for each Story, not an LLM-generated
-digest. The reviewer binds those exact paths/SHA in the full verdict.
-Recompute after changes; any mismatch requires another full review.
+GitHub Issue / milestone / text / file / revise inputs remain supported:
+do not block Story approval solely because the PLAN is not sourced from
+GitHub Issues. Technical-only Issues bypass the intermediate Story checkpoint.
+The existing final design-freeze owner approval remains a **separate**
+OpenChamber answer.
 
-The comment must contain **only** this structured block, not requirement text;
-ordinary GitHub comments remain part of source requirements and trigger reconcile.
-A batch comment can include up to 50 entries. Delta paths use
-`planning/story-deltas/issue-N-<version>.md` and can be approved or rejected.
-Owner corrections produce a new artifact SHA and require a new review/approval.
-Never claim that a historical approval applies to a changed Story.
-The canonical index is `planning/owner-approvals.json`:
-`{"schema_version":1,"run_id":"...","entries":[{"kind":"baseline","issue_number":12,"artifact_path":"stories/issue-12.md","sha256":"...","comment_id":123456,"decision":"approve"}]}`.
-Include `"comment_id": <GitHub numeric ID>` in each approval-index entry,
-obtained from the live GitHub API after the owner posts the comment.
-The verifier requires the indexed comment ID to be the **latest**
-valid owner decision for this run/artifact: deleting/editing/rejecting
-a comment must not resurrect an older approval.
-For delta entries add `"kind":"delta"` and `"architecture_sha256":"..."`.
-Freeze its path/SHA as `planning_readiness.required_artifacts.owner_approvals`
-under **schema v2**. The existing `stage-cli plan-check/plan-start`
-and direct `init/approve` validate live GitHub identity, comment, artifact SHA,
-full Story reviewer proof and triggered technical review for deltas.
-No new gate/stage or RUN executor. If the user has no authenticated access,
-return a blocker and do not accept an agent assertion as a substitute.
+**GitHub comments are automatic publication, not approval.** For
+`github_issues` sourced PLANs the existing `publish-plan` posts frozen
+Stories/Architecture to source Issues after final approval, and
+`pipeline-github-sync` posts lifecycle/PR audit events. Keep both mechanisms
+and exclude only pipeline-owned comments from semantic requirements SHA;
+normal human comments still change requirements. Version artifact comments
+by exact artifact SHA: same version is idempotent, changed versions append
+comments without rewriting the past. Never ask the owner to post JSON into
+GitHub as a condition of proceeding.
 
 A **technical-only Issue** does not invoke StoryMapper, SeniorStoryReviewer or
 the intermediate owner checkpoint. If it unexpectedly needs new behavior,
@@ -219,13 +221,13 @@ stage-cli.ts artifacts {run-id} <run-relative-path>... --json
 Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum` or model-computed hashes. After any work item, required artifact or carried-findings file changes, run `stage-cli.ts manifest-refresh .tmp/pipelines/{run-id}/manifest.json` instead of editing hashes: it rewrites those SHA-256 values from disk and refuses (`GATE_ARTIFACT_CHANGED_AFTER_REVIEW`) when a reviewed gate artifact changed, which needs `plan-review` again. `plan-check` fails on a stale hash, so run `manifest-refresh --check` first when unsure.
 
 
-For GitHub Issue sourced PLANs, after all required planning gates and deterministic preflight pass and the owner explicitly approves the design freeze, publish the frozen Story/Architecture comments idempotently:
+For GitHub Issue sourced PLANs, after all required planning gates and deterministic preflight pass and the owner explicitly approves the design freeze **in OpenChamber**, publish the frozen Story/Architecture comments automatically. Only triggered artifacts are published (Story-only, architecture-only, or both); a PLAN without either is a valid no-op:
 
 ```text
 $HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts publish-plan {run-id}
 ```
 
-A document longer than one GitHub comment (65 536 characters; the CLI keeps under 65 000) is posted as numbered parts "Pipeline Architecture (i/N)", split at `##` sections, so never shorten the frozen architecture to fit. A publish failure BLOCKS initialization/handoff; it must not alter the requirements digest because pipeline-owned artifact comments are excluded.
+A document longer than one GitHub comment (65 536 characters; the CLI keeps under 65 000) is posted as numbered parts "Pipeline Architecture (i/N)", split at `##` sections, so never shorten the frozen architecture to fit. Versioned markers bind **run ID + Issue + artifact type + SHA** (and part number when split): repeat calls do not duplicate a version, while a changed SHA gets a new comment. Existing older comments stay visible. A publish failure BLOCKS initialization/handoff; it must not alter the requirements digest because pipeline-owned artifact comments are excluded.
 
 ## Manifest schema v2
 
