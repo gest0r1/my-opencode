@@ -278,6 +278,33 @@ test('publish-plan supports Story-only and technical-only plans', async () => {
   assert.equal(JSON.parse(r.stdout).published, 1);
 });
 
+test('publish-plan refuses a Story version absent from the frozen full reviewer verdict', async () => {
+  const { root, bin } = await fixture();
+  const probe = run(root, bin, ['probe', '5']);
+  assert.equal(probe.status, 0, probe.stderr);
+  const runRoot = path.join(root, '.tmp', 'pipelines', 'run-1');
+  await mkdir(path.join(runRoot, 'stories'), { recursive: true });
+  await mkdir(path.join(runRoot, 'planning'), { recursive: true });
+  const story = '# Approved Story\nAC original\n';
+  const review = 'status: ready\nreview_scope: full\nstories/issue-5.md ' + sha(story) + '\n';
+  await writeFile(path.join(runRoot, 'stories', 'issue-5.md'), story);
+  await writeFile(path.join(runRoot, 'planning', 'story-review.md'), review);
+  await writeFile(path.join(runRoot, 'manifest.json'), JSON.stringify({
+    schema_version: 2, run_id: 'run-1', source_type: 'github_issues', repository: 'gest0r1/sevami',
+    source_issues: [{ number: 5 }], source_requirements_sha256: JSON.parse(probe.stdout).requirements_sha256,
+    planning_readiness: { required_gates: ['stories'], gates: { stories: {
+      review: { path: 'planning/story-review.md', sha256: sha(review) },
+    } } },
+  }));
+  let r = run(root, bin, ['publish-plan', 'run-1']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 1);
+  await writeFile(path.join(runRoot, 'stories', 'issue-5.md'), '# Unreviewed Story\nAC changed\n');
+  r = run(root, bin, ['publish-plan', 'run-1']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /STORY_REVIEW_SHA_MISMATCH/);
+});
+
 test('milestone lists its open issues, takes the version from its name and blocks an unusable version', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'github-issue-milestone-'));
   const bin = path.join(root, 'bin'); await mkdir(bin);
