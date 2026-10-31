@@ -122,6 +122,9 @@ test('verified owner approvals do not mutate requirements SHA; invalid/edited co
   r = run(root, bin, ['probe', '5'], { ...env, APPROVAL_BODY: approval + '\nnew requirement' });
   assert.equal(r.status, 0, r.stderr);
   assert.notEqual(JSON.parse(r.stdout).requirements_sha256, base);
+  r = run(root, bin, ['probe', '5'], { ...env, APPROVAL_EDITED: '1' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.notEqual(JSON.parse(r.stdout).requirements_sha256, base);
 });
 
 test('show reads live authoritative body and human comments', async () => {
