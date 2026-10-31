@@ -395,8 +395,8 @@ export async function publishPlanningArtifacts(
   const storyReview = storyGateKey
     ? await readFrozenArtifact(runRoot, readiness.gates?.[storyGateKey]?.review, 'full Story review')
     : undefined;
-  if (storyReview && (!/status:\\s*ready/i.test(storyReview.content) ||
-      !/review_scope:\\s*full/i.test(storyReview.content))) {
+  if (storyReview && (!/status:\s*ready/i.test(storyReview.content) ||
+      !/review_scope:\s*full/i.test(storyReview.content))) {
     throw new GitHubIssueCliError('STORY_REVIEW_NOT_FULL_READY: cannot publish unreviewed Story');
   }
   let published = 0;
