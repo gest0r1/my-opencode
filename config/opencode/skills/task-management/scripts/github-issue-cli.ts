@@ -132,7 +132,7 @@ export async function readIssues(
   const permissionCache = new Map<string, boolean>();
   function isAuthorizedApprover(comment: Record<string, unknown>): boolean {
     if (!parseOwnerApprovalComment(comment.body) ||
-        !['OWNER', 'COLLABORATOR', 'MEMBER'].includes(String(comment.author_association ?? ''))) return false;
+        String(comment.author_association ?? '') !== 'OWNER') return false;
     const login = String(comment.user ?? '');
     if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) return false;
     if (permissionCache.has(login)) return permissionCache.get(login)!;
@@ -141,7 +141,7 @@ export async function readIssues(
       const response = parseJson<Record<string, any>>(
         gh(['api', 'repos/' + repository + '/collaborators/' + login + '/permission',
           '-H', 'X-GitHub-Api-Version: 2022-11-28'], cwd), 'owner permissions');
-      trusted = ['write', 'maintain', 'admin'].includes(String(response.permission));
+      trusted = String(response.permission) === 'admin';
     } catch { /* Fail closed if GitHub cannot verify the actor's rights. */ }
     permissionCache.set(login, trusted);
     return trusted;
@@ -231,6 +231,7 @@ export async function verifyOwnerApprovals(manifestPath: string, options: { cwd?
   for (const row of index.entries) {
     if (!row || !issues.includes(row.issue_number) ||
         !['baseline', 'delta'].includes(row.kind) ||
+        !Number.isSafeInteger(row.comment_id) || row.comment_id < 1 ||
         !['approve', 'reject'].includes(row.decision) ||
         !/^[a-f0-9]{64}$/i.test(String(row.sha256 ?? '')) ||
         typeof row.artifact_path !== 'string') fail('malformed decision entry');
@@ -256,7 +257,8 @@ export async function verifyOwnerApprovals(manifestPath: string, options: { cwd?
           !techText.includes(row.sha256)) fail('independent technical review did not check delta SHA');
     }
     const actual = latestApprovalEntry(live.issues, manifest.run_id, row.issue_number, row.artifact_path);
-    if (!actual || actual.sha256.toLowerCase() !== row.sha256.toLowerCase() ||
+    if (!actual || Number(actual.comment.id) !== row.comment_id ||
+        actual.sha256.toLowerCase() !== row.sha256.toLowerCase() ||
         actual.decision !== row.decision) fail('owner decision absent, revoked or stale');
     if (row.kind === 'baseline' && Date.parse(actual.comment.created_at) < Date.parse(reviewed.at))
       fail('owner approval predates the full Story review');

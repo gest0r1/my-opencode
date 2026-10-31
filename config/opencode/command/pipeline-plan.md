@@ -51,8 +51,11 @@ architect-proposed behavior delta **after** architecture, obtain a separate
 verifiable decision tied to the exact artifact SHA-256. An agent-written decision
 register entry, the review agent's verdict or a bot comment is never owner consent.
 
-Currently require a directly authored GitHub Issue comment by the repository
-owner or collaborator with write/maintain/admin permission. Do not assume an
+Currently require a directly authored GitHub Issue comment by the
+**repository owner with GitHub OWNER association and admin permission**.
+Write access of an ordinary collaborator is not sufficient for product approval;
+for organization repositories without a verifiable OWNER actor, fail closed
+until an independently authenticated owner identity is supported. Do not assume an
 OpenChamber message-history API exists. If an independently readable user-role
 API is later available, it must be implemented and verified before it can replace
 this conservative GitHub route. Present the exact comment format for the owner to
@@ -76,7 +79,12 @@ A batch comment can include up to 50 entries. Delta paths use
 Owner corrections produce a new artifact SHA and require a new review/approval.
 Never claim that a historical approval applies to a changed Story.
 The canonical index is `planning/owner-approvals.json`:
-`{"schema_version":1,"run_id":"...","entries":[{"kind":"baseline","issue_number":12,"artifact_path":"stories/issue-12.md","sha256":"...","decision":"approve"}]}`.
+`{"schema_version":1,"run_id":"...","entries":[{"kind":"baseline","issue_number":12,"artifact_path":"stories/issue-12.md","sha256":"...","comment_id":123456,"decision":"approve"}]}`.
+Include `"comment_id": <GitHub numeric ID>` in each approval-index entry,
+obtained from the live GitHub API after the owner posts the comment.
+The verifier requires the indexed comment ID to be the **latest**
+valid owner decision for this run/artifact: deleting/editing/rejecting
+a comment must not resurrect an older approval.
 For delta entries add `"kind":"delta"` and `"architecture_sha256":"..."`.
 Freeze its path/SHA as `planning_readiness.required_artifacts.owner_approvals`
 under **schema v2**. The existing `stage-cli plan-check/plan-start`
