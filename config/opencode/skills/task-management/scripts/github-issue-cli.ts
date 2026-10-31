@@ -225,7 +225,11 @@ export async function verifyOwnerApprovals(manifestPath: string, options: { cwd?
     .then(JSON.parse).catch(() => fail('review ledger missing'));
   const reviewed = (ledger.entries ?? []).filter((entry: any) =>
     entry.kind === 'review' && entry.gate === storyGate && entry.sha256 === storyReviewRef.sha256).at(-1);
-  if (!reviewed || reviewed.status !== 'ready' || reviewed.scope !== 'full') fail('review not recorded in ledger');
+  if (!reviewed || reviewed.status !== 'ready' || reviewed.scope !== 'full' ||
+      !Number.isFinite(Date.parse(String(reviewed.at)))) fail('full ready review not recorded with valid timestamp');
+  const architectureReview = (ledger.entries ?? []).filter((entry: any) =>
+    entry.kind === 'review' && entry.gate === 'architecture' && entry.status === 'ready' &&
+    entry.scope === 'full').at(-1);
   const records = new Map<string, any>();
   const technicalGate = Object.keys(ready.gates ?? {}).find(key => /technical/i.test(key));
   for (const row of index.entries) {
@@ -260,8 +264,14 @@ export async function verifyOwnerApprovals(manifestPath: string, options: { cwd?
     if (!actual || Number(actual.comment.id) !== row.comment_id ||
         actual.sha256.toLowerCase() !== row.sha256.toLowerCase() ||
         actual.decision !== row.decision) fail('owner decision absent, revoked or stale');
-    if (row.kind === 'baseline' && Date.parse(actual.comment.created_at) < Date.parse(reviewed.at))
+    const decisionTime = Date.parse(String(actual.comment.created_at));
+    if (!Number.isFinite(decisionTime)) fail('owner approval has invalid GitHub timestamp');
+    if (row.kind === 'baseline' && decisionTime < Date.parse(reviewed.at))
       fail('owner approval predates the full Story review');
+    if (row.kind === 'delta' && row.decision === 'approve' &&
+        (!architectureReview || !Number.isFinite(Date.parse(String(architectureReview.at))) ||
+         decisionTime < Date.parse(String(architectureReview.at))))
+      fail('owner delta approval predates the reviewed architecture');
     records.set(row.artifact_path, row);
   }
   const storyFiles = await readdir(path.join(root, 'stories')).catch(() => fail('Stories directory missing'));
