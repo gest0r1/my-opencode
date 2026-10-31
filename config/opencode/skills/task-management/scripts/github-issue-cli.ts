@@ -79,7 +79,6 @@ function normalizeComment(value: unknown): Record<string, unknown> {
     id: comment.id,
     url: comment.html_url ?? comment.url ?? null,
     user: comment.user?.login ?? null,
-    author_association: comment.author_association ?? null,
     body: typeof comment.body === 'string' ? comment.body : '',
     created_at: comment.created_at ?? null,
     updated_at: comment.updated_at ?? null,
@@ -128,6 +127,7 @@ export async function readIssues(
   const repository = currentRepository(cwd);
   requireGitHubAuth(cwd);
   const issues: Record<string, unknown>[] = [];
+
   for (const number of numbers) {
     const endpoint = `repos/${repository}/issues/${number}`;
     const issue = parseJson<Record<string, any>>(
@@ -159,7 +159,6 @@ export async function readIssues(
     requirements_sha256: requirementsSha256ForSnapshot(snapshot),
   };
 }
-
 
 export async function probeRequirements(
   issueNumbers: number[],
