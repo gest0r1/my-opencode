@@ -42,11 +42,28 @@ When the caller supplies an exact `artifact_path` matching
 directly to that path. The packet is the handoff contract; do not duplicate its contents
 in the parent chat response.
 
+For a triggered architecture/cross-module PLAN, the caller may invoke ContextScout
+**again with the same authorized packet path** after baseline Stories/technical AC are
+settled. Do not rescan the entire repo; preserve the initial verified paths and
+append a concise **concept map** grouped by the relevant concepts across all Issues:
+- concept and current canonical owner candidates;
+- exact paths/symbols for implementations, composition points, consumers and tests;
+- intended differences, conflicting semantics and supporting evidence;
+- targeted search terms/scope and any gaps or uncertainty.
+Search relevant distant packages by symbols/references rather than stopping at the
+immediate parent directory. Do not invent a second index or planning artifact.
+For local changes without an architecture trigger, skip this second pass.
+
 The packet contains only concise entries:
 
 ```text
 priority | verified path | why it matters
 ```
+
+For a triggered concept map, add entries in the same packet using:
+
+```text
+concept | owner candidate | implementations/consumers/tests (verified paths) | difference/evidence | unknowns
 
 When the caller already provides a context packet, inspect only the stated gap.
 Do not rescan the full context tree merely because a new child session started. If the

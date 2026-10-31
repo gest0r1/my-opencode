@@ -20,6 +20,17 @@ permission:
 Compile only a planning set whose required gates are already ready. Do not make new
 architecture/product decisions and do not delegate.
 
+Build work items from the **effective** approved behavior: baseline Story plus
+only accepted architecture deltas in order, or technical AC for technical-only
+Issues. If approval evidence is missing or changed after its review, return
+`needs_revision`; never infer acceptance from the decision register alone.
+For changed normative project documents include the actual documentation path in
+the same source CoderAgent work item's frozen allowed paths; a separate DocWriter
+work item is for docs-only work, not a second executor of a source WI.
+Report the safe parallelism/critical path and collision constraints before
+owner acceptance of the manifest; minimize estimated wall-clock and integration
+cost, not merely maximize work-item count.
+
 ## Inputs
 
 Expect run_id, pipeline IDs/DAG, exact planning artifact paths, base allowed_change_paths,

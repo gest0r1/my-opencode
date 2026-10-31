@@ -37,6 +37,12 @@ Do **not** review architecture, technology choice, module boundaries, deployment
 migration mechanics, security implementation or code quality. Those belong to
 ArchitectureAnalyzer/SeniorTechnicalPlanReviewer and CodeReviewer.
 
+In the full review that freezes the baseline, explicitly list the exact
+`stories/issue-N.md` path and the **SHA-256 of its reviewed bytes** for every
+Story in scope. This binds the reviewer verdict to the immutable baseline;
+a changed SHA requires a new full review. Architecture deltas are not reviewed
+by this role; the triggered SeniorTechnicalPlanReviewer checks them instead.
+
 Write a NEW append-only/versioned review at the exact artifact_path, in
 artifact_language, starting with the `status:` and `review_scope:` lines. Never overwrite or translate an existing review in place.
 
