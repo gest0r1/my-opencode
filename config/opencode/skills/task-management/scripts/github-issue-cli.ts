@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { parseOwnerApprovalComment, isAuthenticatedApprovalComment, latestApprovalEntry } from './owner-approval-policy.mjs';
 
 const ISSUE_NUMBER = /^[1-9][0-9]*$/;
 
@@ -105,7 +104,7 @@ export function canonicalRequirements(snapshot: Record<string, any>): Record<str
       title: typeof issue.title === 'string' ? issue.title : '',
       body: typeof issue.body === 'string' ? issue.body : '',
       comments: (Array.isArray(issue.comments) ? issue.comments : [])
-        .filter((comment: Record<string, unknown>) => !isPipelineOwnedComment(comment) && !isAuthenticatedApprovalComment(comment))
+        .filter((comment: Record<string, unknown>) => !isPipelineOwnedComment(comment))
         .map((comment: Record<string, unknown>) => ({
           id: comment.id ?? null,
           user: comment.user ?? null,
@@ -129,24 +128,6 @@ export async function readIssues(
   const repository = currentRepository(cwd);
   requireGitHubAuth(cwd);
   const issues: Record<string, unknown>[] = [];
-  const permissionCache = new Map<string, boolean>();
-  function isAuthorizedApprover(comment: Record<string, unknown>): boolean {
-    if (!parseOwnerApprovalComment(comment.body) ||
-        String(comment.author_association ?? '') !== 'OWNER') return false;
-    const login = String(comment.user ?? '');
-    if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) return false;
-    if (permissionCache.has(login)) return permissionCache.get(login)!;
-    let trusted = false;
-    try {
-      const response = parseJson<Record<string, any>>(
-        gh(['api', 'repos/' + repository + '/collaborators/' + login + '/permission',
-          '-H', 'X-GitHub-Api-Version: 2022-11-28'], cwd), 'owner permissions');
-      trusted = String(response.permission) === 'admin';
-    } catch { /* Fail closed if GitHub cannot verify the actor's rights. */ }
-    permissionCache.set(login, trusted);
-    return trusted;
-  }
-
   for (const number of numbers) {
     const endpoint = `repos/${repository}/issues/${number}`;
     const issue = parseJson<Record<string, any>>(
@@ -167,10 +148,7 @@ export async function readIssues(
       body: typeof issue.body === 'string' ? issue.body : '',
       state: issue.state,
       updated_at: issue.updated_at ?? null,
-      comments: flattenPages(pages).map(normalizeComment).map(comment => ({
-        ...comment,
-        owner_approval_authorized: isAuthorizedApprover(comment),
-      })),
+      comments: flattenPages(pages).map(normalizeComment),
     });
   }
 
@@ -183,7 +161,6 @@ export async function readIssues(
 }
 
 
-/** PLAN-only, fail-closed verification. The index is not proof of an owner's consent. */
 export async function verifyOwnerApprovals(manifestPath: string, options: { cwd?: string } = {}): Promise<Record<string, unknown>> {
   const absolute = path.resolve(manifestPath);
   const root = path.dirname(absolute);
@@ -364,9 +341,9 @@ async function readFrozenArtifact(
   return { content, sha256: actual, path: ref.path };
 }
 
-function artifactMarker(kind: 'story' | 'architecture', runId: string, issueNumber: number, part?: { index: number; total: number }): string {
+function artifactMarker(kind: 'story' | 'architecture', runId: string, issueNumber: number, artifactSha: string, part?: { index: number; total: number }): string {
   const suffix = part ? `:part-${part.index}-of-${part.total}` : '';
-  return `<!-- pipeline-artifact:${kind}:${runId}:issue-${issueNumber}${suffix} -->`;
+  return `<!-- pipeline-artifact:${kind}:${runId}:issue-${issueNumber}:sha-${artifactSha}${suffix} -->`;
 }
 
 // GitHub rejects a comment body above 65 536 characters (characters, not UTF-8 bytes, so
@@ -426,16 +403,16 @@ function renderArtifactComments(
     '',
   ].join('\n');
   const content = artifact.content.trim();
-  const single = artifactMarker(kind, runId, issueNumber);
+  const single = artifactMarker(kind, runId, issueNumber, artifact.sha256);
   const singleBody = `${header(single, title)}\n${content}`;
   if (singleBody.length <= MAX_COMMENT_CHARS) return [{ marker: single, body: singleBody }];
 
   // Reserve room for the longest header (part numbers up to 999) and the fence repair.
-  const reserve = header(artifactMarker(kind, runId, issueNumber, { index: 999, total: 999 }), `${title} (999/999)`).length + 16;
+  const reserve = header(artifactMarker(kind, runId, issueNumber, artifact.sha256, { index: 999, total: 999 }), `${title} (999/999)`).length + 16;
   const parts = splitMarkdown(content, MAX_COMMENT_CHARS - reserve);
   return parts.map((part, offset) => {
     const position = { index: offset + 1, total: parts.length };
-    const marker = artifactMarker(kind, runId, issueNumber, position);
+    const marker = artifactMarker(kind, runId, issueNumber, artifact.sha256, position);
     const body = `${header(marker, `${title} (${position.index}/${position.total})`)}\n${part}`;
     if (body.length > MAX_COMMENT_CHARS) {
       throw new GitHubIssueCliError(`${kind} comment part ${position.index} for issue #${issueNumber} exceeds GitHub comment size`);
@@ -516,7 +493,8 @@ export async function publishPlanningArtifacts(
   }
 
   const architectureRef = manifest.planning_readiness?.gates?.architecture?.artifact;
-  const architecture = await readFrozenArtifact(runRoot, architectureRef, 'architecture');
+  // A technical-only or Story-only PLAN may not need an architecture gate.
+  const architecture = architectureRef ? await readFrozenArtifact(runRoot, architectureRef, 'architecture') : undefined;
   let published = 0;
   let existing = 0;
 
@@ -529,12 +507,13 @@ export async function publishPlanningArtifacts(
     if (storyContent !== undefined) {
       artifacts.push({ kind: 'story', content: storyContent, sha256: sha256(storyContent) });
     }
-    artifacts.push({ kind: 'architecture', content: architecture.content, sha256: architecture.sha256 });
+    if (architecture) artifacts.push({ kind: 'architecture', content: architecture.content, sha256: architecture.sha256 });
 
     const hasMarker = (marker: string) => comments.some((comment: any) => typeof comment.body === 'string' && comment.body.includes(marker));
     for (const artifact of artifacts) {
-      // A document published earlier as one comment stays as it is.
-      if (hasMarker(artifactMarker(artifact.kind, runId, number))) {
+      // Exact version marker: reuse same SHA, append a new comment for a changed SHA.
+      // Historical unversioned comments remain visible but do not suppress a new version.
+      if (hasMarker(artifactMarker(artifact.kind, runId, number, artifact.sha256))) {
         existing += 1;
         continue;
       }
