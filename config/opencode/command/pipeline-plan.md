@@ -69,11 +69,13 @@ API has been verified. Do not claim independent proof of authorship.
 
 If architecture proposes changed user behavior, StoryMapper writes a
 versioned `planning/story-deltas/**` artifact linked to the approved baseline.
-The existing SeniorTechnicalPlanReviewer reviews that delta (not a second
-SeniorStoryReviewer); show only changes in behavior to the owner and obtain
-explicit approval/rejection in OpenChamber. Record delta path/SHA,
-architect's decision ID, review reference, owner response and the ordered
-accepted/rejected disposition in `decision-register.md`. **Effective Story**
+Show only the architect-proposed changed behavior to the owner and obtain
+explicit approval/rejection in OpenChamber **before** the technical review.
+Run the existing SeniorTechnicalPlanReviewer (not SeniorStoryReviewer) for
+approved deltas to independently check the proposal, exact SHA and consent.
+Record delta path/SHA, architect's decision ID, review reference (for approved
+deltas), owner response and the ordered accepted/rejected disposition in
+`decision-register.md`. **Effective Story**
 = approved baseline + only accepted deltas in order. Rejected deltas must not
 reach the work items, contracts, tests or owner acceptance. A changed SHA,
 missing approval, or conflict between deltas returns to the affected gate;
