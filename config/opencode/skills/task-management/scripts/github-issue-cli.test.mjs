@@ -41,7 +41,16 @@ fi
 case "$*" in
   *"repos/gest0r1/sevami/issues/5/comments"*)
     body='requirement note'
-    if [[ "\${PIPELINE_COMMENT:-0}" == 1 ]]; then
+    if [[ "\${MOCK_ARTIFACT_COMMENTS:-}" != '' ]]; then
+      node -e '
+        const extra = JSON.parse(process.env.MOCK_ARTIFACT_COMMENTS);
+        const req = { id: 501, body: "requirement note", user: { login: "owner" },
+          created_at: "2026-09-26T10:00:00Z", updated_at: "2026-09-26T10:00:00Z" };
+        process.stdout.write(JSON.stringify([[req, ...extra.map((body, n) => ({
+          id: 600 + n, body, user: { login: "bot" },
+        }))]]));
+      '
+    elif [[ "\${PIPELINE_COMMENT:-0}" == 1 ]]; then
       printf '%s\\n' '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":502,"body":"<!-- pipeline-event:test:issue-5 -->\\nPipeline audit","user":{"login":"bot"}},{"id":503,"body":"<!-- pipeline-artifact:story:run-1:issue-5 -->\\nPipeline Story","user":{"login":"bot"}}]]'
     else
       printf '%s\\n' '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"}]]'
@@ -162,8 +171,8 @@ test('check rejects changed requirements and publish-plan posts frozen Story/Arc
   const output = JSON.parse(result.stdout);
   assert.equal(output.published, 2);
   const postedText = await readFile(posted, 'utf8');
-  assert.match(postedText, /pipeline-artifact:story:run-1:issue-5/);
-  assert.match(postedText, /pipeline-artifact:architecture:run-1:issue-5/);
+  assert.ok(postedText.includes('pipeline-artifact:story:run-1:issue-5:sha-' + sha(story)));
+  assert.ok(postedText.includes('pipeline-artifact:architecture:run-1:issue-5:sha-' + sha(architecture)));
 });
 
 test('a long Markdown document splits on sections into balanced pieces that fit one comment', async () => {
@@ -204,10 +213,96 @@ test('publish-plan posts a long Cyrillic architecture as numbered comments under
   const output = JSON.parse(result.stdout);
   assert.equal(output.published, 2);
   const postedText = await readFile(posted, 'utf8');
-  assert.match(postedText, /pipeline-artifact:architecture:run-1:issue-5:part-1-of-2/);
-  assert.match(postedText, /pipeline-artifact:architecture:run-1:issue-5:part-2-of-2/);
+  assert.ok(postedText.includes('pipeline-artifact:architecture:run-1:issue-5:sha-' + sha(architecture) + ':part-1-of-2'));
+  assert.ok(postedText.includes('pipeline-artifact:architecture:run-1:issue-5:sha-' + sha(architecture) + ':part-2-of-2'));
   assert.match(postedText, /Pipeline Architecture \(2\/2\)/);
   for (const body of postedText.split(/(?=api --method POST)/).filter(Boolean)) assert.ok(body.length < 65_536);
+});
+
+
+test('publish-plan SHA idempotence, version replacement and old comments', async () => {
+  const { root, bin } = await fixture();
+  const probe = run(root, bin, ['probe', '5']);
+  assert.equal(probe.status, 0, probe.stderr);
+  const runRoot = path.join(root, '.tmp', 'pipelines', 'run-1');
+  await mkdir(path.join(runRoot, 'stories'), { recursive: true });
+  await mkdir(path.join(runRoot, 'planning'), { recursive: true });
+  const story = '# Original Story\nAC 1\n', architecture = '# Architecture\nData model\n';
+  await writeFile(path.join(runRoot, 'stories', 'issue-5.md'), story);
+  await writeFile(path.join(runRoot, 'planning', 'architecture.md'), architecture);
+  await writeFile(path.join(runRoot, 'manifest.json'), JSON.stringify({
+    schema_version: 2, run_id: 'run-1', source_type: 'github_issues', repository: 'gest0r1/sevami',
+    source_issues: [{ number: 5 }], source_requirements_sha256: JSON.parse(probe.stdout).requirements_sha256,
+    planning_readiness: { gates: { architecture: { artifact: { path: 'planning/architecture.md',
+      sha256: sha(architecture) } } } },
+  }));
+  const marker = (kind, digest) => '<!-- pipeline-artifact:' + kind + ':run-1:issue-5:sha-' + digest + ' -->';
+  const current = [marker('story', sha(story)), marker('architecture', sha(architecture))];
+  let r = run(root, bin, ['publish-plan', 'run-1'], { MOCK_ARTIFACT_COMMENTS: JSON.stringify(current) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 0);
+  assert.equal(JSON.parse(r.stdout).existing, 2);
+  await writeFile(path.join(runRoot, 'stories', 'issue-5.md'), '# Updated Story\nAC 2\n');
+  r = run(root, bin, ['publish-plan', 'run-1'], { MOCK_ARTIFACT_COMMENTS: JSON.stringify(current) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 1);
+  assert.equal(JSON.parse(r.stdout).existing, 1);
+  const legacy = ['<!-- pipeline-artifact:story:run-1:issue-5 -->',
+    '<!-- pipeline-artifact:architecture:run-1:issue-5 -->'];
+  r = run(root, bin, ['publish-plan', 'run-1'], { MOCK_ARTIFACT_COMMENTS: JSON.stringify(legacy) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 2);
+  const source = run(root, bin, ['probe', '5'], { MOCK_ARTIFACT_COMMENTS: JSON.stringify(current) });
+  assert.equal(source.status, 0, source.stderr);
+  assert.equal(JSON.parse(source.stdout).requirements_sha256, JSON.parse(probe.stdout).requirements_sha256);
+});
+
+test('publish-plan supports Story-only and technical-only plans', async () => {
+  const { root, bin } = await fixture();
+  const probe = run(root, bin, ['probe', '5']);
+  assert.equal(probe.status, 0, probe.stderr);
+  const runRoot = path.join(root, '.tmp', 'pipelines', 'run-1');
+  await mkdir(runRoot, { recursive: true });
+  await writeFile(path.join(runRoot, 'manifest.json'), JSON.stringify({
+    schema_version: 2, run_id: 'run-1', source_type: 'github_issues', repository: 'gest0r1/sevami',
+    source_issues: [{ number: 5 }], source_requirements_sha256: JSON.parse(probe.stdout).requirements_sha256,
+    planning_readiness: { gates: {} },
+  }));
+  let r = run(root, bin, ['publish-plan', 'run-1']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 0);
+  await mkdir(path.join(runRoot, 'stories'), { recursive: true });
+  await writeFile(path.join(runRoot, 'stories', 'issue-5.md'), '# Story\nAC\n');
+  r = run(root, bin, ['publish-plan', 'run-1']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 1);
+});
+
+test('publish-plan refuses a Story version absent from the frozen full reviewer verdict', async () => {
+  const { root, bin } = await fixture();
+  const probe = run(root, bin, ['probe', '5']);
+  assert.equal(probe.status, 0, probe.stderr);
+  const runRoot = path.join(root, '.tmp', 'pipelines', 'run-1');
+  await mkdir(path.join(runRoot, 'stories'), { recursive: true });
+  await mkdir(path.join(runRoot, 'planning'), { recursive: true });
+  const story = '# Approved Story\nAC original\n';
+  const review = 'status: ready\nreview_scope: full\nstories/issue-5.md ' + sha(story) + '\n';
+  await writeFile(path.join(runRoot, 'stories', 'issue-5.md'), story);
+  await writeFile(path.join(runRoot, 'planning', 'story-review.md'), review);
+  await writeFile(path.join(runRoot, 'manifest.json'), JSON.stringify({
+    schema_version: 2, run_id: 'run-1', source_type: 'github_issues', repository: 'gest0r1/sevami',
+    source_issues: [{ number: 5 }], source_requirements_sha256: JSON.parse(probe.stdout).requirements_sha256,
+    planning_readiness: { required_gates: ['stories'], gates: { stories: {
+      review: { path: 'planning/story-review.md', sha256: sha(review) },
+    } } },
+  }));
+  let r = run(root, bin, ['publish-plan', 'run-1']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 1);
+  await writeFile(path.join(runRoot, 'stories', 'issue-5.md'), '# Unreviewed Story\nAC changed\n');
+  r = run(root, bin, ['publish-plan', 'run-1']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /STORY_REVIEW_SHA_MISMATCH/);
 });
 
 test('milestone lists its open issues, takes the version from its name and blocks an unusable version', async () => {

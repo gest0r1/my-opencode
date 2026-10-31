@@ -43,6 +43,73 @@ The GitHub Issue itself is authoritative; PLAN persists normalized semantic evid
 
 5. `git_setup` contains `base_sha` and `branch`, optional `must_absent`, but no `source_sha` or `checkout_paths`.
 
+## Story and behavior-delta approval (OpenChamber, all source modes)
+
+The owner makes product decisions **in OpenChamber**, not in GitHub Issue
+comments. For every user-facing baseline Story, after a fresh full
+SeniorStoryReviewer verdict and **before** architecture, show a compact
+`Как сейчас | Как будет | Как проверить` table and the material exceptions.
+Obtain an explicit separate owner response: «Утвердить» / «Есть замечания» /
+«Свой вариант». Use the existing `openchamber_render` with `awaitAnswer`
+when available; otherwise ask in the current interactive session. Never treat
+the agent's summary, an unanswered question, an independent reviewer or
+`--unattended` as owner approval.
+
+Before the review, obtain the Story's **actual SHA-256 from the existing
+deterministic artifacts command**; the review must bind the path and SHA.
+After the owner's answer, record in the existing `decision-register.md`
+the `run_id`, artifact path, exact Story SHA, full reviewer verdict path/SHA,
+decision (`approved` / `rejected`), and the explicit owner's response,
+without inventing a GitHub comment ID or a second approval index.
+A rejected or corrected baseline returns to StoryMapper and a **fresh full**
+SeniorStoryReviewer; only the freshly approved SHA can move to architecture.
+The approval record is a workflow audit record, **not an independently
+authenticated transcript**: no native OpenChamber user-message read-back
+API has been verified. Do not claim independent proof of authorship.
+
+If architecture proposes changed user behavior, StoryMapper writes a
+versioned `planning/story-deltas/**` artifact linked to the approved baseline.
+Show only the architect-proposed changed behavior to the owner and obtain
+explicit approval/rejection in OpenChamber **before** the technical review.
+Run the existing SeniorTechnicalPlanReviewer (not SeniorStoryReviewer) for
+approved deltas to independently check the proposal, exact SHA and consent.
+Record delta path/SHA, architect's decision ID, review reference (for approved
+deltas), owner response and the ordered accepted/rejected disposition in
+`decision-register.md`. **Effective Story**
+= approved baseline + only accepted deltas in order. Rejected deltas must not
+reach the work items, contracts, tests or owner acceptance. A changed SHA,
+missing approval, or conflict between deltas returns to the affected gate;
+never silently reuse approval from an older version.
+
+GitHub Issue / milestone / text / file / revise inputs remain supported:
+do not block Story approval solely because the PLAN is not sourced from
+GitHub Issues. Technical-only Issues bypass the intermediate Story checkpoint.
+The existing final design-freeze owner approval remains a **separate**
+OpenChamber answer.
+
+**GitHub comments are automatic publication, not approval.** For
+`github_issues` sourced PLANs the existing `publish-plan` posts frozen
+Stories/Architecture to source Issues after final approval, and
+`pipeline-github-sync` posts lifecycle/PR audit events. Keep both mechanisms
+and exclude only pipeline-owned comments from semantic requirements SHA;
+normal human comments still change requirements. Version artifact comments
+by exact artifact SHA: same version is idempotent, changed versions append
+comments without rewriting the past. Never ask the owner to post JSON into
+GitHub as a condition of proceeding.
+
+A **technical-only Issue** does not invoke StoryMapper, SeniorStoryReviewer or
+the intermediate owner checkpoint. If it unexpectedly needs new behavior,
+ask the owner to authorize that product scope first; if rejected, omit the
+behavior or stop with a concrete blocker. Do not start architect/StoryMapper
+on unapproved new requirements.
+
+When ArchitectureAnalyzer changes user-visible behavior, **always** trigger
+the existing SeniorTechnicalPlanReviewer (not SeniorStoryReviewer) to
+independently check the exact delta SHA against the architect proposal,
+baseline, owner approval, testable AC and reuse/drift. ContractManager stays
+conditional on interface changes. Keep technical-only and no-architecture
+runs on existing lightweight triggers.
+
 ## Planning gate protocol
 
 Planning gates are sequential. A gate advances only on literal `status: ready`. A later gate never makes an earlier `needs_revision` gate pass.
@@ -101,12 +168,12 @@ Planning/review sessions are always fresh. Subagents do not delegate further age
 
 0. **Owner decisions before design.** Right after reading the source (and the context packet), collect in ONE plain-language message, each with a recommendation and a "свой вариант" option, every decision that changes the architecture: how the owner accepts the delivery (`post_deploy_test` of step 7) and the dev contour key; the release version (and the milestone it belongs to); which issues are in scope; target contours of any install/deploy; the default behaviour of every command or installer the change alters (what happens with no flags, what happens when something is missing or broken); and any user-visible behaviour the issue leaves open. Record the answers in `decision-register.md`. ArchitectureAnalyzer does not start while any of these, or any story question, is open. A late owner change to one of them is a revision with its affected gates, not another review round.
 
-1. Collect project context once through ContextScout into a compact packet of exact relevant paths. Fetch again only on a documented gap. ContextScout also looks one level up from each touched module for other implementations of the same concept (integration-level drift) and lists them in the packet.
+1. Collect project context once through ContextScout into a compact packet of exact relevant paths. When an architecture/cross-module gate is triggered, after required baseline approvals ask the same ContextScout to **extend that existing packet** with a short map of shared concepts, candidate owners, distant consumers, tests and uncertainty. Do not create a second context artifact or run a broad rescan. Fetch again otherwise only on a documented gap. ContextScout also looks one level up from each touched module for other implementations of the same concept (integration-level drift) and lists them in the packet.
    Record the union of actual repository paths consumed by planning in `planning_scope[]`. Existing `planning_inputs` is read for legacy RUNs; new PLANs do not need per-gate read-sets. Use exact paths or `directory/**` only. These paths are the deterministic read-set used by `/pipeline-replan`; do not substitute broad writable scope when a narrower read-set is known.
 2. Select only triggered planning gates: StoryMapper/SeniorStoryReviewer for user-facing behavior; ArchitectureAnalyzer for architecture/cross-module; ContractManager for interfaces; ExternalScout for current external technology/security/migration facts; SeniorTechnicalPlanReviewer for material risks. PrioritizationEngine only on explicit owner prioritization.
    **Own mechanisms are researched before design.** Whenever the change would make the project write a mechanism itself (format/archive/image handling, a parser or validator of a standard format, a protocol or API client, integrity/crypto, an installer/update flow, a scheduler, a cache, retry/backoff, a check that re-reads what the project's own code produces), ExternalScout runs its own-mechanism check after the stories and before ArchitectureAnalyzer, one row per mechanism with sources and supported versions. This is not optional for such changes: it is the cheapest gate and the one that prevents whole repair loops later. ArchitectureAnalyzer's `own_mechanisms` section and SeniorTechnicalPlanReviewer's `missing_prior_art` check build on it.
    Within the existing ExternalScout technology-evidence gate, research applicable libraries/GitHub approaches before the architect chooses a solution when a material external technical choice is involved. Reuse valid evidence; simple known-pattern edits need no new research. Apply ExternalScout's escalation criteria: OpenStage calls WebResearcher with question, comparison criteria, existing evidence and a versioned `planning/research/**` artifact_path, then provides that artifact to ExternalScout/ArchitectureAnalyzer. The child writes its own artifact. Have ExternalScout consolidate material findings and source provenance from supporting research into the final technology-evidence artifact; freeze that file as the existing `required_artifacts.technology_evidence` and map its research IDs/reference path to affected work items. Supporting raw reports alone are not frozen authority; no new stage or unconditional gate. Before selected research or direct clarification, call `pipeline_runtime_preflight` with `research_agents` containing the actual roles; verify returned capabilities and actual source fetch results. No-source success is not research PASS.
-3. Maintain stable Issue story files `stories/issue-N.md`; owner corrections rewrite the same story. Reviews are append-only/versioned.
+3. Maintain stable Issue baseline story files `stories/issue-N.md` only for user-behavior Issues; technical-only Issues retain technical AC without invented Stories. Reviews are append-only/versioned; the final full baseline review lists every reviewed Story's path and SHA. Owner changes to a baseline require a fresh Story review and human approval, not silent in-place reuse. Architecture-induced behavior changes are immutable versioned delta files, and require fresh human confirmation and SeniorTechnicalPlanReviewer (not a repeated SeniorStoryReviewer).
 4. Collect ALL unresolved owner decisions in `decision-register.md`. Each decision records its owning planning gate and status. Never omit a decision to make validation pass or self-authorize it.
 5. Compile prerequisites and conflicts into a DAG. Freeze `exclusive_paths`, `migration_paths`, `fixture_paths` and/or `conflict_group` where relevant. Pipelines sharing such conflict metadata must be serialized by dependencies. A pipeline referenced by another pipeline's `depends_on` MUST define `ready_after_stage` at the source-ready boundary: all source-mutating `agent` work and its required CodeReviewer/review must be complete by that stage, and no source-mutating `agent` stage may appear after it. Runtime dependency satisfaction uses this milestone, not full CI/CD completion. Runtime locks are only for genuinely shared external mutable targets.
 
@@ -156,13 +223,13 @@ stage-cli.ts artifacts {run-id} <run-relative-path>... --json
 Freeze exactly the returned path+SHA-256 pairs. Do not use free-form `sha256sum` or model-computed hashes. After any work item, required artifact or carried-findings file changes, run `stage-cli.ts manifest-refresh .tmp/pipelines/{run-id}/manifest.json` instead of editing hashes: it rewrites those SHA-256 values from disk and refuses (`GATE_ARTIFACT_CHANGED_AFTER_REVIEW`) when a reviewed gate artifact changed, which needs `plan-review` again. `plan-check` fails on a stale hash, so run `manifest-refresh --check` first when unsure.
 
 
-For GitHub Issue sourced PLANs, after all required planning gates and deterministic preflight pass and the owner explicitly approves the design freeze, publish the frozen Story/Architecture comments idempotently:
+For GitHub Issue sourced PLANs, after all required planning gates and deterministic preflight pass and the owner explicitly approves the design freeze **in OpenChamber**, publish the frozen Story/Architecture comments automatically. Only triggered artifacts are published (Story-only, architecture-only, or both); a PLAN without either is a valid no-op:
 
 ```text
 $HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts publish-plan {run-id}
 ```
 
-A document longer than one GitHub comment (65 536 characters; the CLI keeps under 65 000) is posted as numbered parts "Pipeline Architecture (i/N)", split at `##` sections, so never shorten the frozen architecture to fit. A publish failure BLOCKS initialization/handoff; it must not alter the requirements digest because pipeline-owned artifact comments are excluded.
+A document longer than one GitHub comment (65 536 characters; the CLI keeps under 65 000) is posted as numbered parts "Pipeline Architecture (i/N)", split at `##` sections, so never shorten the frozen architecture to fit. Versioned markers bind **run ID + Issue + artifact type + SHA** (and part number when split): repeat calls do not duplicate a version, while a changed SHA gets a new comment. Existing older comments stay visible. A publish failure BLOCKS initialization/handoff; it must not alter the requirements digest because pipeline-owned artifact comments are excluded.
 
 ## Manifest schema v2
 

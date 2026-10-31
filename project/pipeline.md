@@ -12,41 +12,36 @@ OpenCode и OpenChamber являются средой запуска pipeline. �
 
 `/pipeline-plan #51 #47`, файл, текст или пустая команда с linked GitHub Issue refs из OpenChamber. Fallback на `docs/plan.md` отсутствует. `#N` относится только к repository текущего worktree. OpenChamber передаёт refs; PLAN заново читает Issue из GitHub.
 
-## Cost-aware CI/CD
+## Cost-aware проверки и публикация (новые PLAN)
 
-Schema v2 фиксирует явный executor каждой стадии. Для одного продукта upstream work-blocks доводятся до source-ready, а terminal deployable sink выполняет одну интегрированную цепочку:
+Канонический контракт — [`config/opencode/command/pipeline-plan.md`](../config/opencode/command/pipeline-plan.md)
+и [`pipeline-run.md`](../config/opencode/command/pipeline-run.md). Этот
+документ — **обзор**, не источник нового executor/DAG.
+
+Новый PLAN использует `github_ci_mode: "off"` и `testing_strategy.mode: "hybrid"` для
+deployable sink. Проверки должны по возможности выполняться локально,
+чтобы не расходовать минуты GitHub Actions:
 
 ```text
-implementation/review
-  -> git_verify
-  -> local_gate: test/lint/typecheck/build/install/smoke
-  -> git_publish exact candidate SHA
-  -> one lean artifactless github_ci
-  -> optional local or remote CD
-  -> optional owner acceptance
+source implementation + affected tests + independent review
+  -> git_verify -> local fail-fast -> git_publish exact SHA
+  -> candidate local_gate (точный опубликованный SHA)
+  -> dev_deploy -> owner_acceptance -> PR
 ```
 
-Локальные machine gates выполняет уже существующий `gate-runner-cli`; новые executor/CLI для этого не нужны. Локальный fail-fast ставится после `git_verify` и до `git_publish`: при ошибке candidate не пушится и GitHub Actions minutes не расходуются. После публикации deployable sink всё равно проходит один независимый final `github_ci` на exact SHA.
-
-Режим выбирает владелец:
-
-- `github` — local fail-fast + final GitHub CI, без OpenCode-host CD;
-- `opencode_host` — local fail-fast + final GitHub CI + специальный trusted GitHub-driven `github_dev` CD; только этот режим требует deployment-target probe;
-- `hybrid` — local fail-fast + final GitHub CI + post-CI `local_gate`, который устанавливает/обновляет exact `candidate_sha` на OpenCode/dev host и выполняет smoke.
-
-`deployment_validation.stage` всегда указывает на final `github_ci`. Старые `fresh_job`/`upgrade_job` допускаются как legacy metadata, но больше не являются обязательными GitHub jobs. Fresh/repeat-install и тяжёлые runtime/E2E проверки предпочтительно выполняются локально, если проект предоставляет детерминированные команды.
-
-Canonical candidate CI artifactless: без `actions/upload-artifact`/`actions/download-artifact`; evidence связывает exact candidate SHA, workflow run/attempt и required jobs. GitHub CI следует держать коротким и независимым, а не повторять дорогостоящую локальную установку без причины.
-
-GitHub Actions на бесплатном тарифе: minutes ограничены, платное хранилище artifacts не используется. Поэтому финальный CI запускается один раз на кандидата и должен проходить с первого раза: перед `git_publish` стоит локальный `ci-parity` gate, который повторяет required jobs финального workflow (сборка образа/дистрибутива, fresh/upgrade install, secret scan). Ранних «пробных» прогонов CI нет.
-
-Release packaging отделён от candidate CI. Если проект реально выпускает package/container/binary, используется его существующий release/tag workflow, а результат публикуется в GitHub Release или registry. Actions artifacts не используются как долговременное хранилище релизов.
-
-Если final CI отсутствует, PLAN замораживает обычный bootstrap/adaptation work item. Новый privileged stateful CD workflow нужен только для выбранного `opencode_host` режима и по-прежнему становится runnable только после merge в trusted ref.
+Для source-only не добавлять dev deploy или owner_acceptance; валидировать
+затронутые технические и пользовательские сценарии штатными gates.
+`github_ci`/`github_dev` сохраняются **только как legacy executors**
+в уже замороженных RUN, но не предлагаются для новых PLAN.
+Версии, детали локальных checks, post-publish validation, ранние advisory
+tests и fail/repair по SHA определяются командными контрактами. Публикация
+кандидата и PR не означает merge: это отдельное решение владельца.
+Release packaging использует существующие механизмы продукта, не хранилище
+GitHub Actions artifacts.
 
 ## Stories
 
-Один стабильный `.tmp/pipelines/<run-id>/stories/issue-N.md` на Issue; корректировки переписывают его. Reviews append-only.
+Для Issue с изменением поведения — одна baseline Story на Issue, полный независимый SeniorStoryReviewer и явное SHA-привязанное согласие владельца. Для чисто технической Issue Story не создаётся. Архитектурная дельта — отдельная версия с одобрением владельца и SeniorTechnicalPlanReviewer; детали и проверяемые GitHub-комментарии — в [команде PLAN](../config/opencode/command/pipeline-plan.md).
 
 ## Existing implementation / V1 → V2
 

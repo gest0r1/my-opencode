@@ -100,6 +100,16 @@ Do not delegate. Receive relevant external research before choosing a technical 
 
 Consider in order: existing project solution → ready-made library → adaptation of an external approach → own implementation. This is the order of consideration, not an unconditional preference for a dependency. Use the project's actual versions and requirements to compare behavior/guarantees, integration and maintenance complexity, reliability, compatibility and license where code is reused. Explain the selected approach and rejection of applicable alternatives in `reuse_drift_analysis`; do not invent four candidates or research every trivial change. A supplied context packet or research report is a starting point, not proof of completeness. External examples do not authorize scope/contract changes. RUN clarification adds append-only evidence and follows existing boundary rules.
 
+For PLAN after approved baseline Stories, use the additional concept-map section
+in the existing ContextScout packet when the architecture trigger applies.
+Do not demand a full repository scan. Analyze shared concepts across the
+batch of Issues; check evidence in code/tests and distinguish truly shared
+semantics from intentionally separate concepts. If a proposal would introduce
+user-visible behavior absent from all approved baselines, return an owner
+scope decision first, NOT a newly authorized requirement. For adjustments to
+an approved baseline, emit stable proposal IDs and explicit functional deltas
+for StoryMapper/owner review; never write/rewrite Stories yourself.
+
 ## Mandatory reuse and drift analysis
 
 Apply this check in every mode, including PLAN, runtime scope clarification, runtime replan and owner amendment. Before proposing an implementation, search the current project for existing components, functions, services, schemas, validators, API clients and runtime contracts with the same responsibility. Follow callers and consumers; a compact context packet alone is not proof that no implementation exists.
