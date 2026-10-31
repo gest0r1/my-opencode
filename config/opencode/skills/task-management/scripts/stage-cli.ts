@@ -511,9 +511,6 @@ async function main(args: string[]): Promise<void> {
     // have passed validation. Python dependencies are never installed implicitly.
     await preflightFile(resolve(identifier), { environment: true });
   }
-  if (command === 'plan-run-preflight') {
-    if (!identifier) throw new Error('manifest path is required');
-  }
   if (command === 'approve') {
     if (!identifier) throw new Error('run-id is required');
     const state = JSON.parse(await readFile(join(resolve(stateRootFromArgs(args)), identifier, 'state.json'), 'utf8'));
