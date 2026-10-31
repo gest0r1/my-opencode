@@ -390,6 +390,15 @@ export async function publishPlanningArtifacts(
   const architectureRef = manifest.planning_readiness?.gates?.architecture?.artifact;
   // A technical-only or Story-only PLAN may not need an architecture gate.
   const architecture = architectureRef ? await readFrozenArtifact(runRoot, architectureRef, 'architecture') : undefined;
+  const readiness = manifest.planning_readiness ?? {};
+  const storyGateKey = (readiness.required_gates ?? []).find((name: string) => /stor/i.test(name));
+  const storyReview = storyGateKey
+    ? await readFrozenArtifact(runRoot, readiness.gates?.[storyGateKey]?.review, 'full Story review')
+    : undefined;
+  if (storyReview && (!/status:\\s*ready/i.test(storyReview.content) ||
+      !/review_scope:\\s*full/i.test(storyReview.content))) {
+    throw new GitHubIssueCliError('STORY_REVIEW_NOT_FULL_READY: cannot publish unreviewed Story');
+  }
   let published = 0;
   let existing = 0;
 
@@ -400,7 +409,12 @@ export async function publishPlanningArtifacts(
     const storyContent = await readFile(storyPath, 'utf8').catch(() => undefined);
     const artifacts: Array<{ kind: 'story' | 'architecture'; content: string; sha256: string }> = [];
     if (storyContent !== undefined) {
-      artifacts.push({ kind: 'story', content: storyContent, sha256: sha256(storyContent) });
+      const storySha = sha256(storyContent);
+      if (storyReview && (!storyReview.content.includes(`stories/issue-${number}.md`) ||
+          !storyReview.content.toLowerCase().includes(storySha))) {
+        throw new GitHubIssueCliError(`STORY_REVIEW_SHA_MISMATCH: issue #${number} has no full review of current Story bytes`);
+      }
+      artifacts.push({ kind: 'story', content: storyContent, sha256: storySha });
     }
     if (architecture) artifacts.push({ kind: 'architecture', content: architecture.content, sha256: architecture.sha256 });
 
