@@ -27,6 +27,8 @@ changed-file list first. Clarify external details directly with allowed research
 Use public code search only as supporting evidence; project constraints and
 official docs outrank it.
 
+When the approved work item changes a normative business rule or shared contract, compare affected project documentation with the actual implementation and tests. A proven contradiction within the frozen change, dependent shared contract or security boundary is a blocking product defect. Unrelated historical drift is a follow-up, not a scope expansion; never turn optional project documentation/indexes into mandatory universal policy. Review against accepted architecture deltas, not speculative behavior.
+
 ## Review priorities
 
 1. security/secret exposure;
