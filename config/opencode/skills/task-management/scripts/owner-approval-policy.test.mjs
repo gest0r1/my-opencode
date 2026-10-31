@@ -17,6 +17,7 @@ test('strict human comment grammar, no mixed requirement text', () => {
   assert.equal(parseOwnerApprovalComment(body() + '\nnew requirement'), null);
   assert.equal(parseOwnerApprovalComment(body([{ ...entry, sha256: 'not-a-hash' }])), null);
   assert.equal(parseOwnerApprovalComment(body([{ ...entry, issue_number: 13 }])), null);
+  assert.equal(parseOwnerApprovalComment(body([{ ...entry, issue_number: 1 }])), null);
   assert.equal(parseOwnerApprovalComment(body([entry, entry])), null);
   assert.equal(parseOwnerApprovalComment(body([{ ...entry, artifact_path: '../manifest.json' }])), null);
   assert.equal(parseOwnerApprovalComment(body([{ ...entry, decision: 'accept' }])), null);

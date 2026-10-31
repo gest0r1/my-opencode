@@ -41,7 +41,7 @@ by the owner before triggered architecture. An architectural behavior delta requ
 its own owner decision and a SeniorTechnicalPlanReviewer review. Pure technical
 Issues skip these intermediate interactions. Owner approval comes from the
 verified human GitHub comment (not from a decision-register assertion), whose
-exact story/delta SHA is checked by the existing PLAN preflight; an optional
+exact story/delta SHA is checked by the existing PLAN preflight; a mandatory-for-Story-PLAN
 `planning_readiness.required_artifacts.owner_approvals` reference freezes the
 index. Structured approval comments are not treated as requirement changes,
 but ordinary human comments remain requirements. Follow

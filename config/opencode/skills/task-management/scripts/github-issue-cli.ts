@@ -188,12 +188,20 @@ export async function verifyOwnerApprovals(manifestPath: string, options: { cwd?
   const absolute = path.resolve(manifestPath);
   const root = path.dirname(absolute);
   const manifest = parseJson<Record<string, any>>(await readFile(absolute, 'utf8'), 'manifest');
-  if (manifest.schema_version !== 2 || manifest.source_type !== 'github_issues')
-    return { status: 'PASS', checked: false, reason: 'legacy or non-GitHub source' };
+  if (manifest.schema_version !== 2)
+    return { status: 'PASS', checked: false, reason: 'legacy PLAN' };
   const ready = manifest.planning_readiness ?? {};
-  const storyGate = Object.keys(ready.gates ?? {}).find(name => /stor/i.test(name) && ready.required_gates?.includes(name));
-  if (!storyGate) return { status: 'PASS', checked: false, reason: 'no user-facing Stories' };
   const fail = (message: string): never => { throw new GitHubIssueCliError('OWNER_APPROVAL_INVALID: ' + message); };
+  const storyGate = Object.keys(ready.gates ?? {}).find(name => /stor/i.test(name) && ready.required_gates?.includes(name));
+  if (!storyGate) {
+    const storyNames = await readdir(path.join(root, 'stories')).catch(() => []);
+    const deltaNames = await readdir(path.join(root, 'planning/story-deltas')).catch(() => []);
+    if (storyNames.some(name => /^issue-[0-9]+\.md$/.test(name)) ||
+        deltaNames.some(name => /^issue-[0-9]+-[^.]+\.md$/.test(name))) fail('behavior artifacts exist without Story gate');
+    return { status: 'PASS', checked: false, reason: 'technical-only PLAN' };
+  }
+  if (manifest.source_type !== 'github_issues')
+    fail('non-GitHub Story approvals require an independently verifiable user-message source, which is not configured');
   const ref = ready.required_artifacts?.owner_approvals;
   if (ref?.path !== 'planning/owner-approvals.json' || !/^[a-f0-9]{64}$/i.test(String(ref?.sha256 ?? '')))
     fail('missing frozen approval index');
@@ -236,7 +244,7 @@ export async function verifyOwnerApprovals(manifestPath: string, options: { cwd?
     if (row.kind === 'baseline') {
       if (!storyReview.includes(row.artifact_path) || !storyReview.includes(row.sha256))
         fail('Story not bound to reviewed baseline');
-    } else {
+    } else if (row.decision === 'approve') {
       const architecture = ready.gates.architecture?.artifact;
       const technical = ready.gates[technicalGate ?? ''];
       if (!architecture?.sha256 || row.architecture_sha256 !== architecture.sha256)

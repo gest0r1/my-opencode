@@ -21,7 +21,7 @@ export function parseOwnerApprovalComment(body) {
         Object.keys(item).sort().join(',') !== 'artifact_path,decision,issue_number,sha256' ||
         !Number.isSafeInteger(item.issue_number) || item.issue_number < 1 ||
         typeof item.artifact_path !== 'string' || !PATH.test(item.artifact_path) ||
-        !item.artifact_path.includes('issue-' + item.issue_number) ||
+        Number(item.artifact_path.match(/issue-(\d+)(?:\.md|-)/)?.[1]) !== item.issue_number ||
         !HEX.test(item.sha256) || !['approve', 'reject'].includes(item.decision)) return null;
     const key = item.issue_number + ':' + item.artifact_path;
     if (seen.has(key)) return null;

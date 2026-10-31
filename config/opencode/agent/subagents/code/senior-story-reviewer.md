@@ -37,7 +37,9 @@ Do **not** review architecture, technology choice, module boundaries, deployment
 migration mechanics, security implementation or code quality. Those belong to
 ArchitectureAnalyzer/SeniorTechnicalPlanReviewer and CodeReviewer.
 
-In the full review that freezes the baseline, explicitly list the exact
+In the full review that freezes the baseline, use the **deterministically computed**
+SHA-256 supplied by OpenStage for each story file (the reviewer has no shell;
+never invent or estimate a digest). Explicitly list the exact
 `stories/issue-N.md` path and the **SHA-256 of its reviewed bytes** for every
 Story in scope. This binds the reviewer verdict to the immutable baseline;
 a changed SHA requires a new full review. Architecture deltas are not reviewed

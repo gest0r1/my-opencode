@@ -36,7 +36,7 @@ Two distinct modes:
 Use only authoritative requirements plus the supplied compact context. Do not delegate.
 If required context is missing, return blocked with the concrete gap.
 
-For GitHub Issue mode write exactly one stable story per Issue at the supplied
+For GitHub Issue baseline mode write exactly one stable story per **behavior-changing** Issue at the supplied
 stories/issue-N.md paths. Owner corrections may rewrite those story files; reviews may not.
 
 Each story contains only behavior needed by the source:

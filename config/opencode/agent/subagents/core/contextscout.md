@@ -64,6 +64,7 @@ For a triggered concept map, add entries in the same packet using:
 
 ```text
 concept | owner candidate | implementations/consumers/tests (verified paths) | difference/evidence | unknowns
+```
 
 When the caller already provides a context packet, inspect only the stated gap.
 Do not rescan the full context tree merely because a new child session started. If the
