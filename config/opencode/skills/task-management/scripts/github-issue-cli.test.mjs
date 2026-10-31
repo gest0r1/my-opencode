@@ -171,8 +171,8 @@ test('check rejects changed requirements and publish-plan posts frozen Story/Arc
   const output = JSON.parse(result.stdout);
   assert.equal(output.published, 2);
   const postedText = await readFile(posted, 'utf8');
-  assert.match(postedText, /pipeline-artifact:story:run-1:issue-5/);
-  assert.match(postedText, /pipeline-artifact:architecture:run-1:issue-5/);
+  assert.ok(postedText.includes('pipeline-artifact:story:run-1:issue-5:sha-' + sha(story)));
+  assert.ok(postedText.includes('pipeline-artifact:architecture:run-1:issue-5:sha-' + sha(architecture)));
 });
 
 test('a long Markdown document splits on sections into balanced pieces that fit one comment', async () => {
@@ -213,8 +213,8 @@ test('publish-plan posts a long Cyrillic architecture as numbered comments under
   const output = JSON.parse(result.stdout);
   assert.equal(output.published, 2);
   const postedText = await readFile(posted, 'utf8');
-  assert.match(postedText, /pipeline-artifact:architecture:run-1:issue-5:part-1-of-2/);
-  assert.match(postedText, /pipeline-artifact:architecture:run-1:issue-5:part-2-of-2/);
+  assert.ok(postedText.includes('pipeline-artifact:architecture:run-1:issue-5:sha-' + sha(architecture) + ':part-1-of-2'));
+  assert.ok(postedText.includes('pipeline-artifact:architecture:run-1:issue-5:sha-' + sha(architecture) + ':part-2-of-2'));
   assert.match(postedText, /Pipeline Architecture \(2\/2\)/);
   for (const body of postedText.split(/(?=api --method POST)/).filter(Boolean)) assert.ok(body.length < 65_536);
 });
