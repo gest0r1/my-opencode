@@ -64,6 +64,11 @@ post on the corresponding source Issue:
 -->
 ```
 
+Before Story Review, OpenStage must supply to SeniorStoryReviewer the **actual
+SHA-256 computed by a deterministic tool** for each Story, not an LLM-generated
+digest. The reviewer binds those exact paths/SHA in the full verdict.
+Recompute after changes; any mismatch requires another full review.
+
 The comment must contain **only** this structured block, not requirement text;
 ordinary GitHub comments remain part of source requirements and trigger reconcile.
 A batch comment can include up to 50 entries. Delta paths use
