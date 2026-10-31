@@ -46,3 +46,23 @@ test('versioned delta format and multiple entries', () => {
     sha256: 'b'.repeat(64), decision: 'approve' };
   assert.deepEqual(parseOwnerApprovalComment(body([entry, delta])).entries, [entry, delta]);
 });
+
+test('an untrusted later comment cannot override an authenticated owner decision', () => {
+  const fake = comment({ id: 1002, owner_approval_authorized: false,
+    body: body([{ ...entry, decision: 'reject' }]) });
+  assert.equal(latestApprovalEntry([{ number: 12, comments: [comment(), fake] }],
+    'run-12', 12, entry.artifact_path).decision, 'approve');
+});
+
+test('the latest owner rejection wins even for equal timestamps', () => {
+  const refusal = comment({ id: 102, body: body([{ ...entry, decision: 'reject' }]) });
+  assert.equal(latestApprovalEntry([{ number: 12, comments: [refusal, comment()] }],
+    'run-12', 12, entry.artifact_path).comment.id, 102);
+});
+
+test('rejects extra metadata and same-prefix path tricks', () => {
+  assert.equal(parseOwnerApprovalComment(body([{ ...entry, extra: true }])), null);
+  assert.equal(parseOwnerApprovalComment(body([{ ...entry, artifact_path: 'stories/issue-123.md' }])), null);
+  assert.equal(parseOwnerApprovalComment(body([{ ...entry, artifact_path: 'planning/story-deltas/issue-12-../bad.md' }])), null);
+  assert.equal(parseOwnerApprovalComment(body([], '../escape')), null);
+});
