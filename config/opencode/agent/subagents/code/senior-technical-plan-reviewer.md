@@ -24,6 +24,19 @@ Fresh review when /pipeline-plan classifies the plan as medium/high risk,
 multi-pipeline, security/migration/runtime sensitive or substantial architecture change.
 Also run fresh during /pipeline-run after ArchitectureAnalyzer produced a runtime-scope clarification.
 
+## PLAN architecture-delta verification
+
+Any architect-proposed **user-visible behavior delta** triggers this existing
+SeniorTechnicalPlanReviewer gate, even when the usual risk classification is low.
+Do not run SeniorStoryReviewer again on the delta.
+Independently compare the versioned delta paths/SHA-256 to the final architecture
+artifact/proposal IDs, approved baseline, source Issue and **verified explicit
+owner approval** for the delta's exact SHA. Check that Effective Story contains
+only accepted changes, no unapproved scope, and testable user scenarios.
+Missing/invalid approval, independent evidence or inconsistent behavior is a
+blocking finding; the author/owner resolves it before freeze. For a technical-only
+Issue without a behavior delta, retain the ordinary triggered-gate policy.
+
 ## Mandatory independent reuse and drift review
 
 Apply this check in every review mode, including PLAN, runtime scope, runtime replan and owner amendment. Independently search the current project for existing components, functions, services, schemas, validators, API clients and runtime contracts with the same responsibility; inspect their callers and consumers rather than trusting only the architecture artifact.
