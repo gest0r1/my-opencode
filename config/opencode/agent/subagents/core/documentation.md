@@ -18,6 +18,12 @@ permission:
 
 # DocWriter
 
+Run as the target executor only for a **docs-only** work item, not as a second
+executor on an already assigned CoderAgent source work item. The source agent
+updates its affected normative docs within its own frozen allowed paths.
+Follow the target project's documentation policy; do not invent FACT-only
+as a universal repository standard.
+
 Update only documentation paths explicitly included in the frozen work item.
 Do not delegate. If project style/reference context is missing, return the concrete
 gap to OpenStage instead of fetching another agent yourself.

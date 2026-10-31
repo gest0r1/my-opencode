@@ -59,6 +59,13 @@ Implement exactly one work item supplied by the parent orchestrator.
 - Change source only inside the work item's frozen `allowed_change_paths`; the parent also
   performs deterministic changed-file scope verification after you return.
 
+When this source work item changes an existing documented business rule,
+shared contract or invariant, update the affected normative project document
+**inside this same work item** only if its path is in the frozen allowed change
+scope; use the project's own documentation policy. Never document approved
+but unimplemented deltas as shipped behavior, and never expand scope silently.
+If the required document is out of scope, report a concrete planning gap.
+
 ## Context
 
 Use the exact `context_files` and `reference_files` supplied by the parent/task.

@@ -1,365 +1,112 @@
-# Pipeline: GitHub Issue → RUN → PR → main
+# Pipeline: краткий навигатор (PLAN → RUN → PR)
 
-This document describes the canonical GitHub-backed pipeline lifecycle used by
-`OpenStageOrchestrator`.
+> **Нормативный источник, а не этот обзор:** [`command/pipeline-plan.md`](command/pipeline-plan.md)
+> и [`command/pipeline-run.md`](command/pipeline-run.md).
+> Детерминированные ограничения, formats и проверки реализованы в
+> [`skills/task-management/scripts/`](skills/task-management/scripts/).
+> При противоречии обзора команде или валидатору использовать действующий контракт,
+> исправить обзор отдельно. Не копировать здесь подробную спецификацию.
 
-## Owner workflow
-
-The owner-facing flow is intentionally short:
-
-```text
-/pipeline-plan #5 #6 #7
-# review and approve the exact frozen PLAN
-
-Recommended:
-/pipeline-run <run-id> --unattended
-
-Available RUN options:
-/pipeline-run <run-id> [--unattended] [--fix-cycles <5..20>] [--no-session-reuse]
-
-# example for a longer unattended window:
-/pipeline-run <run-id> --unattended --fix-cycles 10
-```
-
-A successful RUN creates or updates the delivery PR automatically. There is no
-separate owner command to create the PR. The owner reviews the resulting PR and
-merges it to `main` manually.
-
-When a second worktree was planned while another RUN was executing and `main`
-moves before that second RUN starts, use:
+## Workflow владельца
 
 ```text
-/pipeline-replan [run-id]
+/pipeline-plan #12 #34
+/pipeline-plan "7"                 # веха по номеру или названию в кавычках
+/pipeline-plan --milestone 7
+# после явного утверждения предложенного manifest/run-id:
+/pipeline-run <run-id> [--unattended] [--fix-cycles 5..20]
 ```
 
-Replan uses the same reconciliation as RUN. Trusted `worktree-refresh.sh` preserves a verified snapshot while syncing main. `pipeline-reconcile-cli` returns only COMPATIBLE or PLAN_INVALID; a changed hash first requests semantic review, never automatic replan. Before implementation begins, revise the same folder and only affected gates. After source implementation starts, compatible amendments may include new runtime work units; incompatible PLAN requires a new folder with reusable context under planning/inherited, keeping the old folder intact. Owner feedback is accepted at any checkpoint. Technical corrections preserve approval; changed owner scope/behavior/constraints require approval again.
+Владелец сам выбирает worktree/сессию, даёт **отдельное явное разрешение**
+на freeze/старт и самостоятельно решает merge. Команды не создают и
+не переключают его worktree. `--unattended` не выдаёт разрешений на
+новые требования, security/destructive scope или merge.
 
-## Manifest v2 and planning gates
+## PLAN
 
-The canonical pipeline supports manifest schema v2 only. PLAN runs
-`stage-cli plan-run-preflight`, `git-worktree-cli adopt` and `git-worktree-cli verify`
-before owner approval, and RUN begins with `stage-cli run-preflight`. A manifest
-whose `schema_version` is not exactly `2` fails current-schema validation; there is
-no manifest migration or historical-manifest compatibility path in the runtime.
+Источник GitHub Issue — `#N`, веха или явный текст/файл; GitHub Issue
+и человеческие комментарии с требованиями — исходные требования.
+`ContextScout` адресно читает применимые правила, реализацию и тесты
+(не весь репозиторий); при архитектурном триггере дополняет тот же
+`planning/context-packet.md` картой reuse/owners/удалённых потребителей.
 
-Before owner approval, every triggered planning gate must be recorded literally
-as `ready` with frozen artifact path + SHA-256. `needs_revision` cannot be
-reinterpreted by OpenStage as a pass. A gate may revise/rerun itself up to three
-times when no owner judgement is required; otherwise only the current gate's
-blocking questions are presented to the owner.
+Для **изменяющегося пользовательского поведения**:
+1. `StoryMapper` — `Как сейчас | Как будет | Как проверить`; полный
+   `SeniorStoryReviewer` сверяет исходные требования. Владелец утверждает
+   точную версию baseline Story/SHA **до** архитектуры.
+2. При архитектурном триггере `ArchitectureAnalyzer` совместно оценивает
+   затронутые Issue, существующие owners и reuse. Новое поведение,
+   не предусмотренное source Issue, требует решения владельца о scope.
+3. Изменение утверждённого поведения оформляется версионированной
+   дельтой `StoryMapper`, утверждается владельцем; независимый
+   **`SeniorTechnicalPlanReviewer` обязателен при такой дельте**.
+   Второй `SeniorStoryReviewer` на дельту не запускается.
+4. `ContractManager`, внешний research и обычное техническое review
+   запускаются только по существующим триггерам.
 
-The v2 manifest also freezes:
+Для **технической Issue без изменений поведения** не создавать
+искусственных Stories и первого owner checkpoint; итоговое утверждение
+PLAN сохраняется. `TaskManager` показывает WI, независимые линии,
+DAG/зависимости и критический путь до финального согласования.
 
-- semantic GitHub Issue requirements SHA-256 over human-controlled requirement content;
-- `planning_scope` read-set used for compatibility checks (legacy `planning_inputs` remains readable);
-- required planning artifacts and reviews;
-- atomic TaskManager work items by ID/path/SHA-256;
-- per-pipeline decision/research/contract IDs;
-- source/migration/fixture conflict metadata;
-- explicit stage executors and GitHub gate contracts;
-- optional repository policy SHA-256;
-- optional `preserved_baseline` exact HEAD/path/diff identity for existing implementation;
-- optional reason-coded `lineage` for supersede/replan history.
+### Согласование владельца в OpenChamber
 
-Runtime effective scope is deliberately separate from the frozen manifest. PLAN freezes
-requirements, owner decisions, acceptance criteria and a minimal base implementation scope.
-RUN may add exact machine-owned test/support paths inside an already-approved app/package
-component. Additional production/config paths require fresh architecture + senior review proving
-a decision-free bounded clarification. Protected/security/trust-boundary paths still require
-owner/replan. Scope authorization happens before a new automatic repair cycle is counted. The
-shared automatic budget covers both `technical_fix` and bounded `security_fix`. Test paths named in `test_rework[]` and sibling test/support files of an in-scope test are authorized by `scope-check` without owner amendment; the `test_preparation` lane (reworked tests) runs first and every source lane depends on it.
+Бизнес-Stories утверждаются владельцем в OpenChamber после полного
+SeniorStoryReviewer и до архитектуры. Архитектурные изменения поведения
+согласуются отдельно; техническая Issue обходится без промежуточного
+checkpoint. Точные SHA Story/дельт, review и решение фиксируются в
+существующем `decision-register.md`. При изменении SHA требуется новое
+согласование; запись агента не является независимым доказательством
+авторства ответа. Итоговый approval PLAN остаётся отдельным.
 
-A defect class (`defect_class` key in the review verdict, or `--defect-class`) repeated by two consecutive negative results stops the patch loop: `fix-cycle` charges nothing and returns `CLASS_REVIEW_REQUIRED` until ExternalScout class research, an ArchitectureAnalyzer class review (`rework_block` | `remove_mechanism` | `requirements_change`) and a SeniorTechnicalPlanReviewer review are recorded with `stage-cli class-review-record`; the next cycle is one consolidated rework; the same class after it needs another class review with new research and a changed approach, and only `requirements_change` stops for the owner. In PLAN, `stage-cli plan-review` keeps the review ledger: research and a fresh whole-section rework after a repeated class or 3 revisions, technical findings still open after that are carried into RUN as work-item checks, and a gate freezes only on a full fresh review. As a backstop, after every 5 charged repair cycles of one stage RUN must record an architecture review (`architecture_review_due`, then `ARCHITECTURE_REVIEW_REQUIRED` on the next charged cycle): ArchitectureAnalyzer in repair-checkpoint mode, SeniorTechnicalPlanReviewer on its artifact, `stage-cli architecture-review-record`. `apply_within_requirements` continues with one `⚠` line; `requirements_change` blocks only that lane (other lanes continue) and goes to the owner through the runtime-replan path. A defect found by a sink gate in an upstream lane is repaired with `stage-cli fix-cycle ... --repair-pipeline <lane>`, which reopens that lane. Owner-facing RUN messages are always Russian; the owner pre-grants `gh issue create --body-file .tmp/pipelines/<run>/...` for follow-up issues.
+Для GitHub Issues действующие `github-issue-cli publish-plan` и
+`pipeline-github-sync` **автоматически** публикуют артефакты, статусы и
+ссылки на PR в комментариях. Владелец не обязан писать JSON-комментарии.
+Маркер публикации артефактов привязан к SHA версии; повтор не дублирует,
+новая версия добавляет комментарий. Pipeline-owned комментарии не меняют
+хеш требований; обычные комментарии — меняют. PLAN из текста/файла не
+блокируется отсутствием GitHub Issue.
 
-Planning/review evidence is append-only. Stable Issue story files are the
-exception: owner corrections update the same `stories/issue-N.md` file.
+## RUN и доставка
 
-## Optional repository policy
+**Новых исполнителей/stages/scheduler нет.** Текущий `pipeline-run.md`
+определяет work-item dispatch, scope/secret guards, fix budget,
+root-cause review, main freshness, bounded owner amendments/replans
+и доказательства прохождения tests/gates.
 
-Universal procedure belongs to the distribution rules, commands and deterministic
-tools. Repository-specific invariants may live in:
+Для новых deployable PLAN целевой путь:
 
 ```text
-.opencode/pipeline-policy.json
+source lanes: implementation + affected tests + independent review
+    → git_verify → local fail-fast → git_publish exact candidate SHA
+    → candidate local_gate (по опубликованному SHA)
+    → dev_deploy → owner_acceptance → PR
 ```
 
-A schema example is distributed at
-`skills/task-management/pipeline-policy.example.json`.
-
-Current schema supports:
-
-- `protected_paths[]`: scopes that may not enter `allowed_change_paths`;
-- `required_gates[]`: a gate stage plus `when_paths[]`; if frozen change scope intersects those paths, the manifest must include that stage;
-- optional `github_actions.ci/dev` defaults for workflow path, terminal/required jobs, trigger, artifact, DEV environment/mode/trusted ref/concurrency;
-- optional `deployment_target.kind=opencode_host`: GitHub-driven CD target describing either `github_ssh` or `self_hosted_runner`, protected Environment, trusted ref, deterministic probe workflow/job, required Environment secret names and optional runner labels. PLAN validates the GitHub→OpenCode-host path without exposing secret values.
-
-When the policy exists, PLAN freezes its path+SHA-256. Preflight and later state
-validation fail if it changes.
-
-## Rules freeze
-
-Project rules and distribution rules have different lifetimes:
-
-- repository `docs/pipeline-rules.md` and OpenCode distribution `pipeline-rules.default.md` use the same live-rules model;
-- pipeline commands and their agents never edit either rules source;
-- owner/distribution changes made while the pipeline is stopped are valid: the next `stage-cli validate` reads current rules and updates rules version/SHA audit metadata without blocking on the old hash;
-- missing, unreadable, malformed rules or invalid `edit_policy` still block.
-
-Never solve rules drift by editing `state.json` or granting the model write permission to machine state.
-
-## Executor and package-manager integrity
-
-Every schema-v2 pipeline explicitly declares `deployable: true|false`, and every stage has an explicit executor. Repository test/build/typecheck/lint/install/runtime checks may use `local_gate`; for a deployable sink PLAN freezes the cost-aware order `git_verify -> local fail-fast -> git_publish -> final github_ci`. `deployment_validation.stage` points to that final exact-SHA GitHub CI. Fresh/upgrade job metadata is optional. Local JS gates use the package manager declared by `package.json#packageManager` or the repository lockfile. A pnpm repository does not fall back to npm or dependency-installing `npx --yes`; missing pnpm is an environment blocker for that local gate.
-
-## 1. PLAN reads authoritative Issues
-
-GitHub Issue references are identifiers, not requirement content. PLAN resolves
-the current worktree repository from `origin` and reads every requested Issue
-through the authenticated deterministic reader:
-
-```text
-$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts \
-  fetch <run-id> <issue-number>...
-```
-
-The reader:
-
-- requires authenticated `gh` access;
-- accepts only numeric Issues from the current `github.com/owner/repo` origin;
-- reads title, body, state, `updated_at`, and comments;
-- rejects pull requests, closed Issues, missing/inaccessible Issues, and unsafe
-  run identifiers;
-- deduplicates Issue numbers;
-- writes the fetched source material atomically to
-  `.tmp/pipelines/<run-id>/sources/github-issues.json` for PLAN consumption;
-- treats that file as create-once for a run-id: a repeated `fetch` for the same
-  repository/Issue set returns the existing file and never refetches or overwrites
-  planning source evidence; a different Issue set requires a new run-id;
-- returns both a file SHA-256 and semantic requirements SHA-256. The file digest
-  protects the saved planning input; the semantic digest is the canonical manifest
-  requirement identity and excludes `fetched_at`, Issue `updated_at` bookkeeping,
-  and pipeline-generated `pipeline-event` audit comments while retaining human
-  title/body/comment changes.
-
-Read full bodies/comments without modifying the saved source material via:
-
-```text
-$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-issue-cli.ts \\
-  show <run-id> [issue-number...]
-```
-
-Anonymous GitHub HTML/API requests, `webfetch`, `curl`, and
-`github_handoff_probe` are not Issue-reading substitutes. Git transport
-visibility does not prove REST Issue access.
-
-The approved manifest freezes `source_requirements_sha256`, `source_issues[]` and
-each `pipelines[].issue_numbers[]`. Every source Issue must be mapped to at least
-one pipeline. The semantic requirements digest is rechecked against live human
-Issue content before freeze/RUN; the saved source file is not a compatibility or
-migration fallback for an older manifest.
-
-## 2. Issue status comments
-
-`stage-cli` queues lifecycle transitions for the Issue numbers mapped to each
-pipeline. `pipeline-github-sync.mjs` delivers those events as idempotent Issue
-comments.
-
-Typical transitions include:
-
-```text
-created -> planned
-planned -> approved
-approved -> in_progress
-in_progress -> completed
-```
-
-Taking a pipeline into work therefore produces the
-`approved -> in_progress` audit comment. Comments are append-only per distinct
-pipeline lifecycle event: sync does not update a single sticky status comment or
-coalesce later transitions. Re-running sync does not duplicate the **same** event
-because each comment carries a stable hidden marker, but a new transition has a
-new event ID and therefore creates a new comment. If one Issue is mapped to
-several pipelines, each pipeline may emit its own audit comment for the same run.
-
-Before and after pipeline stages, and before PR handoff, synchronization must
-finish with `pending=0`.
-
-## Deployment testing strategy
-
-Every deployable pipeline freezes an explicit owner decision:
-
-- `github`: local fail-fast gates run first, then one final artifactless GitHub CI; no OpenCode-host CD.
-- `opencode_host`: local fail-fast + final GitHub CI + the existing trusted GitHub-driven stateful `github_dev` CD. This is the only mode that requires the deployment-target probe.
-- `hybrid`: local fail-fast + final GitHub CI + a post-CI `local_gate` that installs/updates the exact `candidate_sha` on the OpenCode/dev host and runs smoke. Owner acceptance is optional.
-
-PLAN builds a capability matrix and may recommend one option, but the owner chooses it. The model must not choose a strategy on the owner's behalf. The GitHub→OpenCode-host probe, protected Environment, trusted ref and Environment secret-name checks are retained only for `opencode_host`. Ordinary `hybrid` uses no trusted GitHub CD workflow and grants no raw SSH/Docker/deployment shell permissions to agents.
-
-## 3. Candidate publication, GitHub CI and DEV
-
-RUN follows the frozen DAG and executor contract. Dependencies between work blocks unlock at the upstream `ready_after_stage` source-ready boundary; a later external CI/CD blocker does not freeze downstream implementation. For several blocks that compose one product, the canonical path is:
-
-```text
-block A implementation/review -> source-ready
-  -> block B implementation/review -> source-ready
-  -> ... all approved blocks source-ready
-  -> Git scope verify
-  -> deterministic local fail-fast gates
-  -> publish ONE cumulative candidate SHA
-  -> one lean artifactless GitHub Actions CI for that exact SHA
-  -> optional local or trusted remote CD/runtime validation
-  -> optional acceptance/handoff
-```
-
-`git-worktree-cli publish` **owns the complete candidate publication operation**: it stages approved changes, creates the candidate commit when needed, performs a non-force push of the selected worktree branch, verifies the remote SHA, and writes. OpenStage must not ask the owner to manually add/commit/push during RUN:
-
-```text
-.tmp/pipelines/<run-id>/candidate.json
-```
-
-For `github_ci`/`github_dev`, `github-actions-gate-cli` structurally validates the frozen project workflow and accepts only a GitHub run tied to the exact `candidate_sha`, candidate branch/trusted ref and frozen event/workflow. Candidate CI must be read-only, secret-free, path-filter-free and artifactless; every frozen required job plus the terminal job must complete successfully. DEV receives the exact candidate SHA plus source-CI run ID, and for OpenCode-host CD repeats the frozen logical `target_id`. Artifactless workflow success is canonical evidence only when frozen job steps consume that candidate/source identity. PASS, terminal FAIL, and pre-terminal BLOCKED evidence are written under:
-
-```text
-.tmp/pipelines/<run-id>/github/<pipeline>-<stage>.json
-```
-
-Terminal FAIL retains exact run/attempt and job/failed-step identity. `diagnose` writes compact diagnostics plus one bounded redacted multiline `github/*-job-<id>.log` per failed job; `log --job|--job-id` refreshes/prints one exact-run job. Pre-terminal failures write `status=BLOCKED` with deterministic `failure_phase` and available identity. OpenStage never needs raw `gh` or owner-side log conversion.
-
-`stage-cli complete` re-validates canonical machine evidence before allowing a `local_gate`, `git_verify`, `git_publish`, `github_ci` or `github_dev` stage to complete. A model statement that a check passed is insufficient.
-
-If a target project has no compatible final GitHub CI workflow, PLAN freezes the existing bootstrap/adaptation work item and workflow scope. RUN implements and validates that candidate-safe workflow before publication, publishes the candidate branch and waits for the exact-SHA GitHub run. The final CI is deliberately lean: expensive fresh/repeat-install/runtime checks belong in deterministic local gates unless the project has a concrete GitHub-only reason. `github_dev` and `future_github_gates` remain only for the special `opencode_host` remote-CD path.
-
-Any source-changing fix after publication creates a new candidate SHA. `stage-cli fix-cycle` invalidates the completed chain from the preceding `git_verify`, so the repaired source must pass verify → local fail-fast gates → publish → final GitHub CI → affected CD/runtime/acceptance again. Evidence belonging to the previous SHA cannot satisfy final delivery.
-
-Release packaging is outside candidate validation. If the target project has a real package/container/binary release, keep its existing tag/release workflow and publish deliverables directly to GitHub Releases or the package registry. Do not use Actions artifacts as durable release storage and do not create a universal release workflow for projects that do not ship one.
-
-## 4. Automatic PR handoff
-
-After the GitHub-backed run is fully completed, OpenStage invokes only:
-
-```text
-$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/github-pr-cli.ts \
-  create <run-id>
-```
-
-The PR helper:
-
-1. requires `state.status == completed` and every mapped pipeline completed;
-2. verifies that the current origin equals the repository frozen in state;
-3. verifies the published non-default candidate branch and SHA, plus PASS deployment-validation evidence for that same final cumulative SHA on every deployable pipeline;
-4. flushes pending Issue status comments;
-5. takes Issue numbers only from the frozen source/mapping;
-6. creates or updates exactly one open PR from the candidate branch to `main`;
-7. preserves human-written PR body text outside the pipeline-managed block;
-8. places one closing keyword per completed mapped Issue, for example:
-
-   ```text
-   Closes #5
-   Closes #6
-   ```
-
-9. records the exact PR number in run state and posts an idempotent PR-link
-   comment to each mapped Issue;
-10. returns the ready PR and stops with `merged: false`.
-
-The helper has no merge operation.
-
-## 5. Merge and Issue closure
-
-The owner merges the ready PR to `main` through GitHub. Because the PR targets
-the default branch and contains `Closes #N`, GitHub closes those mapped Issues
-when the PR is merged.
-
-The intended audit chain is:
-
-```text
-Issue
-  -> authenticated PLAN source
-  -> semantic requirements digest + frozen run mapping
-  -> status comments
-  -> tested/published candidate SHA
-  -> PR link comment
-  -> owner merge to main
-  -> GitHub closes mapped Issue
-```
-
-The pipeline tools never close an Issue directly through `PATCH /issues/N`.
-
-## Required repository permissions
-
-The GitHub identity used by the installed `gh` CLI needs access only to the
-selected repositories with these capabilities:
-
-| Capability | Required level | Used for |
-| --- | --- | --- |
-| Metadata | Read | repository identity |
-| Contents | Read/write | branch/candidate publication |
-| Issues | Read/write | requirement reads and audit comments |
-| Pull requests | Read/write | create/update delivery PR |
-| Actions | Read/write | inspect candidate workflow runs and dispatch trusted `workflow_dispatch` gates when frozen by the project contract |
-| Environments | Read | validate DEV/OpenCode-host Environment, deployment branch policy and configured secret names without reading secret values |
-
-`Issues: write` is needed because GitHub does not provide a separate
-comment-only write permission. The deterministic tools therefore enforce the
-narrower policy in code: they read Issues and post comments, but do not expose an
-Issue state-change/close command.
-
-The pipeline engine has no generic secrets-management or PR-merge operation. Stateful DEV deployment credentials remain inside the target repository's protected GitHub Environment/workflow. When the selected target is the machine where OpenCode runs, PLAN uses `deployment-target-cli inspect` to dispatch the trusted GitHub probe workflow and prove GitHub→host reachability/authentication; RUN repeats that probe immediately before CD. The CLI inspects only required Environment secret **names**, never secret values, and OpenStage/subagents never receive raw `gh` or SSH capability.
-
-## Automatic security repair
-
-RUN distinguishes a bounded implementation defect from a real owner security decision.
-
-- `security_fix`: frozen AC/contracts/security rules already determine the remediation, and deterministic `stage-cli security-fix-check` proves no owner decision, no requirements/AC/external-contract/security-boundary change, no privilege expansion, no secret exposure and no destructive action. It uses the same automatic-repair budget as `technical_fix`.
-- `security_stop`: owner must decide security policy, trust or role/access semantics, or the remediation cannot satisfy the bounded security-fix contract.
-- `secret_stop`: actual credential/secret exposure or rotation/revocation action is required.
-- `destructive_stop`: remediation is irreversible/destructive.
-- `scope_stop`: protected/sensitive scope cannot be machine-authorized.
-
-Critical/High severity does not by itself force an owner stop. True stop categories are recorded as resumable `BLOCKED` checkpoints rather than terminal `failed` solely because the finding is security-related.
-
-## Failure behavior
-
-The lifecycle fails closed when any of these is true:
-
-- `gh` is missing or unauthenticated;
-- an explicit Issue is inaccessible, missing, closed, or is actually a PR;
-- the current origin differs from the frozen repository;
-- the run or any mapped pipeline is not completed;
-- GitHub comment outbox delivery remains pending;
-- candidate evidence is missing or its remote SHA does not match;
-- a required project workflow is missing without an approved bootstrap/adaptation work item;
-- GitHub Actions evidence references a different SHA, branch, workflow, required/terminal job, artifact ID/digest or source CI run;
-- stateful DEV Environment/trusted-ref/concurrency validation fails;
-- an external CD target loses deterministic reachability/authentication;
-- more than one open PR exists for the same candidate branch and `main`;
-- the existing PR contains a malformed pipeline-managed body block.
-
-Retrying after a transient GitHub failure is safe: status and PR-link comments
-are idempotent, and PR creation reuses the existing branch PR instead of opening
-a duplicate.
-
-## Run lineage and supersede
-
-Use different mechanisms for different changes:
-
-- planning revision before init → same run-id;
-- technical/security fix during RUN → same run-id with an initial five-cycle budget and an architecture checkpoint after every 5 charged cycles (no owner step unless requirements change); owner may pre-authorize a higher run-wide ceiling with `--fix-cycles N` (max 20), grant `+N` to one active stage later, or approve a block-local runtime replan; all remain in the same run and are audited without rewriting the manifest;
-- frozen V2 manifest correction after init → `stage-cli supersede <old> <new> --reason <code>`;
-- architecture/scope/structural main-drift replan → new run with reason-coded `lineage.change_class=replan`;
-- main/source drift → same-run reconciliation; pre-implementation revision stays in the same folder;
-- no-impact main drift → same approved run with machine-owned effective base adoption.
-
-Supersede copies only planning/source/work-item artifacts. Runtime state, locks, candidate and machine evidence are never reused. The old state records `superseded_by` and `supersede_reason`, so every run-id has a deterministic ancestry instead of unexplained v2b/v2c/v2d generations.
-
-### Explicit PR CI context
-
-PR CI uses `trigger: pull_request`, `pr_number: <existing PR number>`. The gate uses authenticated `gh api` and binds PR repository, head branch/head SHA, base SHA and Actions association to the exact frozen candidate. Both direct head SHA and that PR's current merge SHA are accepted. A foreign/stale/unassociated run fails closed. Push and DEV contracts keep their existing SHA/trust rules; workflow bootstrap still requires push.
-
-
-## External research within existing gates
-
-ExternalScout on the existing inexpensive model checks docs, libraries and GitHub implementations before material external design choices. It requests broad WebResearcher research through OpenStage only for incomplete/conflicting docs, requirements-based comparison, nontrivial guarantees or remaining decision-relevant uncertainty. No separate stage is added. Both persist versioned evidence; WebResearcher writes below `planning/research/`.
-
-ArchitectureAnalyzer receives research before selecting an approach and may directly clarify missing details. Consider project reuse, ready-made library, external approach adaptation, then custom implementation; justify the choice and rejected applicable alternatives. Coder and technical reviewers have the same targeted documentation/code access. Review independence and scope rules remain unchanged.
-
-`pipeline_runtime_preflight` accepts optional `research_agents` to check selected live tools, delegation, models and role permissions. It checks catalog/permission availability; real source retrieval still determines whether research succeeded. Unselected research does not block trivial work. RUN adds evidence without rewriting frozen artifacts.
+Новые PLAN используют `github_ci_mode: "off"`: обязательного финального
+GitHub Actions CI **нет**. `github_ci`/`github_dev` и GitHub-driven CD
+остаются **legacy-контрактами** ранее замороженных запусков, их
+не переносить в новые PLAN. Source-only RUN не получает
+`dev_deploy`/`owner_acceptance`. Технические тесты не заменяют
+обязательные сценарные проверки поведения; вся приёмка по
+реальному prod-entry на доступном тестовом контуре, где применимо.
+
+Обновление нормативной документации целевого проекта:
+`CoderAgent` обновляет затронутый документ **в своём WI** в пределах
+замороженного `allowed_change_paths`; `DocWriter` — для самостоятельной
+docs-only задачи. Документационный стандарт определяется **проектом**,
+конвейер не навязывает всем FACT-only.
+
+## Диагностика и ограничения
+
+- Переход gate допускается только по `ready` и проверяемым path/SHA;
+  full review на freeze, bounded fix/repair, без модели «PASS по словам агента».
+- Scope, destructive/security stop, Git и secrets — правила текущих
+  [PLAN](command/pipeline-plan.md) / [RUN](command/pipeline-run.md).
+- GitHub audit и PR handoff имеют идемпотентные события, исходные
+  требования проверяются заново; PR создаётся без автоматического merge.
+- Токены/время и качество сравнивать на сопоставимых задачах по
+  фактическим логам. Не заявлять экономию на основании предположений.
+- Детали runtime-scope, replan, тестовых профилей, machine evidence,
+  release packaging, permissions и legacy GitHub workflows **не
+  дублировать здесь**: читать нормативную команду затронутого этапа.

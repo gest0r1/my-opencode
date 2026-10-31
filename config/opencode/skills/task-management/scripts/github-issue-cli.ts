@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const ISSUE_NUMBER = /^[1-9][0-9]*$/;
@@ -235,9 +235,9 @@ async function readFrozenArtifact(
   return { content, sha256: actual, path: ref.path };
 }
 
-function artifactMarker(kind: 'story' | 'architecture', runId: string, issueNumber: number, part?: { index: number; total: number }): string {
+function artifactMarker(kind: 'story' | 'architecture', runId: string, issueNumber: number, artifactSha: string, part?: { index: number; total: number }): string {
   const suffix = part ? `:part-${part.index}-of-${part.total}` : '';
-  return `<!-- pipeline-artifact:${kind}:${runId}:issue-${issueNumber}${suffix} -->`;
+  return `<!-- pipeline-artifact:${kind}:${runId}:issue-${issueNumber}:sha-${artifactSha}${suffix} -->`;
 }
 
 // GitHub rejects a comment body above 65 536 characters (characters, not UTF-8 bytes, so
@@ -297,16 +297,16 @@ function renderArtifactComments(
     '',
   ].join('\n');
   const content = artifact.content.trim();
-  const single = artifactMarker(kind, runId, issueNumber);
+  const single = artifactMarker(kind, runId, issueNumber, artifact.sha256);
   const singleBody = `${header(single, title)}\n${content}`;
   if (singleBody.length <= MAX_COMMENT_CHARS) return [{ marker: single, body: singleBody }];
 
   // Reserve room for the longest header (part numbers up to 999) and the fence repair.
-  const reserve = header(artifactMarker(kind, runId, issueNumber, { index: 999, total: 999 }), `${title} (999/999)`).length + 16;
+  const reserve = header(artifactMarker(kind, runId, issueNumber, artifact.sha256, { index: 999, total: 999 }), `${title} (999/999)`).length + 16;
   const parts = splitMarkdown(content, MAX_COMMENT_CHARS - reserve);
   return parts.map((part, offset) => {
     const position = { index: offset + 1, total: parts.length };
-    const marker = artifactMarker(kind, runId, issueNumber, position);
+    const marker = artifactMarker(kind, runId, issueNumber, artifact.sha256, position);
     const body = `${header(marker, `${title} (${position.index}/${position.total})`)}\n${part}`;
     if (body.length > MAX_COMMENT_CHARS) {
       throw new GitHubIssueCliError(`${kind} comment part ${position.index} for issue #${issueNumber} exceeds GitHub comment size`);
@@ -387,7 +387,17 @@ export async function publishPlanningArtifacts(
   }
 
   const architectureRef = manifest.planning_readiness?.gates?.architecture?.artifact;
-  const architecture = await readFrozenArtifact(runRoot, architectureRef, 'architecture');
+  // A technical-only or Story-only PLAN may not need an architecture gate.
+  const architecture = architectureRef ? await readFrozenArtifact(runRoot, architectureRef, 'architecture') : undefined;
+  const readiness = manifest.planning_readiness ?? {};
+  const storyGateKey = (readiness.required_gates ?? []).find((name: string) => /stor/i.test(name));
+  const storyReview = storyGateKey
+    ? await readFrozenArtifact(runRoot, readiness.gates?.[storyGateKey]?.review, 'full Story review')
+    : undefined;
+  if (storyReview && (!/status:\s*ready/i.test(storyReview.content) ||
+      !/review_scope:\s*full/i.test(storyReview.content))) {
+    throw new GitHubIssueCliError('STORY_REVIEW_NOT_FULL_READY: cannot publish unreviewed Story');
+  }
   let published = 0;
   let existing = 0;
 
@@ -398,14 +408,20 @@ export async function publishPlanningArtifacts(
     const storyContent = await readFile(storyPath, 'utf8').catch(() => undefined);
     const artifacts: Array<{ kind: 'story' | 'architecture'; content: string; sha256: string }> = [];
     if (storyContent !== undefined) {
-      artifacts.push({ kind: 'story', content: storyContent, sha256: sha256(storyContent) });
+      const storySha = sha256(storyContent);
+      if (storyReview && (!storyReview.content.includes(`stories/issue-${number}.md`) ||
+          !storyReview.content.toLowerCase().includes(storySha))) {
+        throw new GitHubIssueCliError(`STORY_REVIEW_SHA_MISMATCH: issue #${number} has no full review of current Story bytes`);
+      }
+      artifacts.push({ kind: 'story', content: storyContent, sha256: storySha });
     }
-    artifacts.push({ kind: 'architecture', content: architecture.content, sha256: architecture.sha256 });
+    if (architecture) artifacts.push({ kind: 'architecture', content: architecture.content, sha256: architecture.sha256 });
 
     const hasMarker = (marker: string) => comments.some((comment: any) => typeof comment.body === 'string' && comment.body.includes(marker));
     for (const artifact of artifacts) {
-      // A document published earlier as one comment stays as it is.
-      if (hasMarker(artifactMarker(artifact.kind, runId, number))) {
+      // Exact version marker: reuse same SHA, append a new comment for a changed SHA.
+      // Historical unversioned comments remain visible but do not suppress a new version.
+      if (hasMarker(artifactMarker(artifact.kind, runId, number, artifact.sha256))) {
         existing += 1;
         continue;
       }
