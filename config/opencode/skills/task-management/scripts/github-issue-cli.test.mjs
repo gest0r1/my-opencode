@@ -39,13 +39,14 @@ if [[ "$*" == *"--method POST"* ]]; then
   exit 0
 fi
 case "$*" in
-  *"repos/gest0r1/sevami/collaborators/owner/permission"*) printf '{"permission":"%s"}\\n' "${APPROVER_PERMISSION:-admin}" ;;
+  *"repos/gest0r1/sevami/collaborators/owner/permission"*) printf '{"permission":"%s"}\\n' "\${APPROVER_PERMISSION:-admin}" ;;
   *"repos/gest0r1/sevami/issues/5/comments"*)
     body='requirement note'
-    if [[ "${OWNER_APPROVAL_COMMENT:-0}" == 1 ]]; then
+    if [[ "\${OWNER_APPROVAL_COMMENT:-0}" == 1 ]]; then
       encoded="$(node -e 'process.stdout.write(JSON.stringify(process.env.APPROVAL_BODY || ""))')"
-      printf '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":504,"body":%s,"user":{"login":"owner"},"author_association":"OWNER","created_at":"2026-10-31T12:00:00Z","updated_at":"%s"}]]\\n' "$encoded" "${APPROVAL_EDITED:+2026-10-31T12:01:00Z}"
-    elif [[ "${PIPELINE_COMMENT:-0}" == 1 ]]; then
+      if [[ "\${APPROVAL_EDITED:-0}" == 1 ]]; then stamp='2026-10-31T12:01:00Z'; else stamp='2026-10-31T12:00:00Z'; fi
+      printf '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":504,"body":%s,"user":{"login":"owner"},"author_association":"OWNER","created_at":"2026-10-31T12:00:00Z","updated_at":"%s"}]]\\n' "$encoded" "$stamp"
+    elif [[ "\${PIPELINE_COMMENT:-0}" == 1 ]]; then
       printf '%s\\n' '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":502,"body":"<!-- pipeline-event:test:issue-5 -->\\nPipeline audit","user":{"login":"bot"}},{"id":503,"body":"<!-- pipeline-artifact:story:run-1:issue-5 -->\\nPipeline Story","user":{"login":"bot"}}]]'
     else
       printf '%s\\n' '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"}]]'
