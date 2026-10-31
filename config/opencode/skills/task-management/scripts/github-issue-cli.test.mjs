@@ -39,9 +39,13 @@ if [[ "$*" == *"--method POST"* ]]; then
   exit 0
 fi
 case "$*" in
+  *"repos/gest0r1/sevami/collaborators/owner/permission"*) printf '{"permission":"%s"}\\n' "${APPROVER_PERMISSION:-admin}" ;;
   *"repos/gest0r1/sevami/issues/5/comments"*)
     body='requirement note'
-    if [[ "\${PIPELINE_COMMENT:-0}" == 1 ]]; then
+    if [[ "${OWNER_APPROVAL_COMMENT:-0}" == 1 ]]; then
+      encoded="$(node -e 'process.stdout.write(JSON.stringify(process.env.APPROVAL_BODY || ""))')"
+      printf '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":504,"body":%s,"user":{"login":"owner"},"author_association":"OWNER","created_at":"2026-10-31T12:00:00Z","updated_at":"%s"}]]\\n' "$encoded" "${APPROVAL_EDITED:+2026-10-31T12:01:00Z}"
+    elif [[ "${PIPELINE_COMMENT:-0}" == 1 ]]; then
       printf '%s\\n' '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":502,"body":"<!-- pipeline-event:test:issue-5 -->\\nPipeline audit","user":{"login":"bot"}},{"id":503,"body":"<!-- pipeline-artifact:story:run-1:issue-5 -->\\nPipeline Story","user":{"login":"bot"}}]]'
     else
       printf '%s\\n' '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"}]]'
@@ -96,6 +100,27 @@ test('semantic digest ignores pipeline audit/planning comments but detects human
   result = run(root, bin, ['probe', '5'], { PIPELINE_COMMENT: '1', ISSUE_BODY: 'human changed requirement' });
   assert.equal(result.status, 0, result.stderr);
   assert.notEqual(JSON.parse(result.stdout).requirements_sha256, base);
+});
+
+test('verified owner approvals do not mutate requirements SHA; invalid/edited comments do', async () => {
+  const { root, bin } = await fixture();
+  const baseResponse = run(root, bin, ['probe', '5']);
+  assert.equal(baseResponse.status, 0, baseResponse.stderr);
+  const base = JSON.parse(baseResponse.stdout).requirements_sha256;
+  const approval = '<!-- pipeline-owner-approval:v1\n' +
+    JSON.stringify({ run_id: 'run-56', entries: [{
+      issue_number: 5, artifact_path: 'stories/issue-5.md', sha256: 'a'.repeat(64), decision: 'approve',
+    }] }) + '\n-->';
+  const env = { OWNER_APPROVAL_COMMENT: '1', APPROVAL_BODY: approval };
+  let r = run(root, bin, ['probe', '5'], env);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).requirements_sha256, base);
+  r = run(root, bin, ['probe', '5'], { ...env, APPROVER_PERMISSION: 'write' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.notEqual(JSON.parse(r.stdout).requirements_sha256, base);
+  r = run(root, bin, ['probe', '5'], { ...env, APPROVAL_BODY: approval + '\nnew requirement' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.notEqual(JSON.parse(r.stdout).requirements_sha256, base);
 });
 
 test('show reads live authoritative body and human comments', async () => {
