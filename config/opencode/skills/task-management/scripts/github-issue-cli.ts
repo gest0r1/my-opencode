@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { parseOwnerApprovalComment, isAuthenticatedApprovalComment, latestApprovalEntry } from './owner-approval-policy.mjs';
 
 const ISSUE_NUMBER = /^[1-9][0-9]*$/;
 
@@ -79,6 +80,7 @@ function normalizeComment(value: unknown): Record<string, unknown> {
     id: comment.id,
     url: comment.html_url ?? comment.url ?? null,
     user: comment.user?.login ?? null,
+    author_association: comment.author_association ?? null,
     body: typeof comment.body === 'string' ? comment.body : '',
     created_at: comment.created_at ?? null,
     updated_at: comment.updated_at ?? null,
@@ -103,7 +105,7 @@ export function canonicalRequirements(snapshot: Record<string, any>): Record<str
       title: typeof issue.title === 'string' ? issue.title : '',
       body: typeof issue.body === 'string' ? issue.body : '',
       comments: (Array.isArray(issue.comments) ? issue.comments : [])
-        .filter((comment: Record<string, unknown>) => !isPipelineOwnedComment(comment))
+        .filter((comment: Record<string, unknown>) => !isPipelineOwnedComment(comment) && !isAuthenticatedApprovalComment(comment))
         .map((comment: Record<string, unknown>) => ({
           id: comment.id ?? null,
           user: comment.user ?? null,
@@ -127,6 +129,23 @@ export async function readIssues(
   const repository = currentRepository(cwd);
   requireGitHubAuth(cwd);
   const issues: Record<string, unknown>[] = [];
+  const permissionCache = new Map<string, boolean>();
+  function isAuthorizedApprover(comment: Record<string, unknown>): boolean {
+    if (!parseOwnerApprovalComment(comment.body) ||
+        !['OWNER', 'COLLABORATOR', 'MEMBER'].includes(String(comment.author_association ?? ''))) return false;
+    const login = String(comment.user ?? '');
+    if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) return false;
+    if (permissionCache.has(login)) return permissionCache.get(login)!;
+    let trusted = false;
+    try {
+      const response = parseJson<Record<string, any>>(
+        gh(['api', 'repos/' + repository + '/collaborators/' + login + '/permission',
+          '-H', 'X-GitHub-Api-Version: 2022-11-28'], cwd), 'owner permissions');
+      trusted = ['write', 'maintain', 'admin'].includes(String(response.permission));
+    } catch { /* Fail closed if GitHub cannot verify the actor's rights. */ }
+    permissionCache.set(login, trusted);
+    return trusted;
+  }
 
   for (const number of numbers) {
     const endpoint = `repos/${repository}/issues/${number}`;
@@ -148,7 +167,10 @@ export async function readIssues(
       body: typeof issue.body === 'string' ? issue.body : '',
       state: issue.state,
       updated_at: issue.updated_at ?? null,
-      comments: flattenPages(pages).map(normalizeComment),
+      comments: flattenPages(pages).map(normalizeComment).map(comment => ({
+        ...comment,
+        owner_approval_authorized: isAuthorizedApprover(comment),
+      })),
     });
   }
 
@@ -158,6 +180,89 @@ export async function readIssues(
     issue_numbers: numbers,
     requirements_sha256: requirementsSha256ForSnapshot(snapshot),
   };
+}
+
+
+/** PLAN-only, fail-closed verification. The index is not proof of an owner's consent. */
+export async function verifyOwnerApprovals(manifestPath: string, options: { cwd?: string } = {}): Promise<Record<string, unknown>> {
+  const absolute = path.resolve(manifestPath);
+  const root = path.dirname(absolute);
+  const manifest = parseJson<Record<string, any>>(await readFile(absolute, 'utf8'), 'manifest');
+  if (manifest.schema_version !== 2 || manifest.source_type !== 'github_issues')
+    return { status: 'PASS', checked: false, reason: 'legacy or non-GitHub source' };
+  const ready = manifest.planning_readiness ?? {};
+  const storyGate = Object.keys(ready.gates ?? {}).find(name => /stor/i.test(name) && ready.required_gates?.includes(name));
+  if (!storyGate) return { status: 'PASS', checked: false, reason: 'no user-facing Stories' };
+  const fail = (message: string): never => { throw new GitHubIssueCliError('OWNER_APPROVAL_INVALID: ' + message); };
+  const ref = ready.required_artifacts?.owner_approvals;
+  if (ref?.path !== 'planning/owner-approvals.json' || !/^[a-f0-9]{64}$/i.test(String(ref?.sha256 ?? '')))
+    fail('missing frozen approval index');
+  const raw = await readFile(path.join(root, ref.path), 'utf8').catch(() => fail('approval index missing'));
+  if (sha256(raw) !== String(ref.sha256).toLowerCase()) fail('approval index SHA mismatch');
+  const index = parseJson<Record<string, any>>(raw, 'approval index');
+  if (index.schema_version !== 1 || index.run_id !== manifest.run_id ||
+      !Array.isArray(index.entries) || !index.entries.length) fail('invalid index shape/run');
+  const issues = (manifest.source_issues ?? []).map((item: any) => Number(item.number));
+  if (!issues.length) fail('no frozen issues');
+  const live = await readIssues(issues, options);
+  if (live.repository !== manifest.repository ||
+      live.requirements_sha256 !== manifest.source_requirements_sha256) fail('requirements/source changed');
+  const storyReviewRef = ready.gates[storyGate]?.review;
+  if (!storyReviewRef?.path || !storyReviewRef.sha256) fail('full baseline Story review missing');
+  const storyReview = await readFile(path.join(root, storyReviewRef.path), 'utf8').catch(() => fail('Story review missing'));
+  if (sha256(storyReview) !== String(storyReviewRef.sha256).toLowerCase() ||
+      !/status:\s*ready/i.test(storyReview) || !/review_scope:\s*full/i.test(storyReview))
+    fail('baseline review not full and ready');
+  const ledger = await readFile(path.join(root, 'planning/review-ledger.json'), 'utf8')
+    .then(JSON.parse).catch(() => fail('review ledger missing'));
+  const reviewed = (ledger.entries ?? []).filter((entry: any) =>
+    entry.kind === 'review' && entry.gate === storyGate && entry.sha256 === storyReviewRef.sha256).at(-1);
+  if (!reviewed || reviewed.status !== 'ready' || reviewed.scope !== 'full') fail('review not recorded in ledger');
+  const records = new Map<string, any>();
+  const technicalGate = Object.keys(ready.gates ?? {}).find(key => /technical/i.test(key));
+  for (const row of index.entries) {
+    if (!row || !issues.includes(row.issue_number) ||
+        !['baseline', 'delta'].includes(row.kind) ||
+        !['approve', 'reject'].includes(row.decision) ||
+        !/^[a-f0-9]{64}$/i.test(String(row.sha256 ?? '')) ||
+        typeof row.artifact_path !== 'string') fail('malformed decision entry');
+    const expectedBaseline = 'stories/issue-' + row.issue_number + '.md';
+    const deltaPattern = new RegExp('^planning/story-deltas/issue-' + row.issue_number + '-[A-Za-z0-9_.-]+\\.md$');
+    if ((row.kind === 'baseline' && (row.artifact_path !== expectedBaseline || row.decision !== 'approve')) ||
+        (row.kind === 'delta' && !deltaPattern.test(row.artifact_path))) fail('unsafe story/delta path');
+    if (records.has(row.artifact_path)) fail('duplicate decision entry');
+    const content = await readFile(path.join(root, row.artifact_path), 'utf8').catch(() => fail('missing artifact'));
+    if (sha256(content) !== row.sha256.toLowerCase()) fail('artifact SHA changed');
+    if (row.kind === 'baseline') {
+      if (!storyReview.includes(row.artifact_path) || !storyReview.includes(row.sha256))
+        fail('Story not bound to reviewed baseline');
+    } else {
+      const architecture = ready.gates.architecture?.artifact;
+      const technical = ready.gates[technicalGate ?? ''];
+      if (!architecture?.sha256 || row.architecture_sha256 !== architecture.sha256)
+        fail('delta not bound to frozen architecture');
+      if (!technical?.review?.path || technical.status !== 'ready') fail('required technical review missing');
+      const techText = await readFile(path.join(root, technical.review.path), 'utf8')
+        .catch(() => fail('technical review unavailable'));
+      if (sha256(techText) !== String(technical.review.sha256).toLowerCase() ||
+          !techText.includes(row.sha256)) fail('independent technical review did not check delta SHA');
+    }
+    const actual = latestApprovalEntry(live.issues, manifest.run_id, row.issue_number, row.artifact_path);
+    if (!actual || actual.sha256.toLowerCase() !== row.sha256.toLowerCase() ||
+        actual.decision !== row.decision) fail('owner decision absent, revoked or stale');
+    if (row.kind === 'baseline' && Date.parse(actual.comment.created_at) < Date.parse(reviewed.at))
+      fail('owner approval predates the full Story review');
+    records.set(row.artifact_path, row);
+  }
+  const storyFiles = await readdir(path.join(root, 'stories')).catch(() => fail('Stories directory missing'));
+  for (const name of storyFiles)
+    if (/^issue-[1-9][0-9]*\.md$/.test(name) && !records.has('stories/' + name))
+      fail('unapproved baseline Story ' + name);
+  const deltaFiles = await readdir(path.join(root, 'planning/story-deltas')).catch(() => []);
+  for (const name of deltaFiles)
+    if (/^issue-[1-9][0-9]*-[A-Za-z0-9_.-]+\.md$/.test(name) &&
+        !records.has('planning/story-deltas/' + name)) fail('unapproved delta ' + name);
+  return { status: 'PASS', checked: true, verified_entries: records.size };
 }
 
 export async function probeRequirements(
