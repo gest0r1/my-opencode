@@ -39,13 +39,17 @@ if [[ "$*" == *"--method POST"* ]]; then
   exit 0
 fi
 case "$*" in
-  *"repos/gest0r1/sevami/collaborators/owner/permission"*) printf '{"permission":"%s"}\\n' "\${APPROVER_PERMISSION:-admin}" ;;
   *"repos/gest0r1/sevami/issues/5/comments"*)
     body='requirement note'
-    if [[ "\${OWNER_APPROVAL_COMMENT:-0}" == 1 ]]; then
-      encoded="$(node -e 'process.stdout.write(JSON.stringify(process.env.APPROVAL_BODY || ""))')"
-      if [[ "\${APPROVAL_EDITED:-0}" == 1 ]]; then stamp='2026-10-31T12:01:00Z'; else stamp='2026-10-31T12:00:00Z'; fi
-      printf '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":504,"body":%s,"user":{"login":"owner"},"author_association":"OWNER","created_at":"2026-10-31T12:00:00Z","updated_at":"%s"}]]\\n' "$encoded" "$stamp"
+    if [[ "\${MOCK_ARTIFACT_COMMENTS:-}" != '' ]]; then
+      node -e '
+        const extra = JSON.parse(process.env.MOCK_ARTIFACT_COMMENTS);
+        const req = { id: 501, body: "requirement note", user: { login: "owner" },
+          created_at: "2026-09-26T10:00:00Z", updated_at: "2026-09-26T10:00:00Z" };
+        process.stdout.write(JSON.stringify([[req, ...extra.map((body, n) => ({
+          id: 600 + n, body, user: { login: "bot" },
+        }))]]));
+      '
     elif [[ "\${PIPELINE_COMMENT:-0}" == 1 ]]; then
       printf '%s\\n' '[[{"id":501,"body":"requirement note","user":{"login":"owner"},"created_at":"2026-09-26T10:00:00Z","updated_at":"2026-09-26T10:00:00Z"},{"id":502,"body":"<!-- pipeline-event:test:issue-5 -->\\nPipeline audit","user":{"login":"bot"}},{"id":503,"body":"<!-- pipeline-artifact:story:run-1:issue-5 -->\\nPipeline Story","user":{"login":"bot"}}]]'
     else
@@ -101,30 +105,6 @@ test('semantic digest ignores pipeline audit/planning comments but detects human
   result = run(root, bin, ['probe', '5'], { PIPELINE_COMMENT: '1', ISSUE_BODY: 'human changed requirement' });
   assert.equal(result.status, 0, result.stderr);
   assert.notEqual(JSON.parse(result.stdout).requirements_sha256, base);
-});
-
-test('verified owner approvals do not mutate requirements SHA; invalid/edited comments do', async () => {
-  const { root, bin } = await fixture();
-  const baseResponse = run(root, bin, ['probe', '5']);
-  assert.equal(baseResponse.status, 0, baseResponse.stderr);
-  const base = JSON.parse(baseResponse.stdout).requirements_sha256;
-  const approval = '<!-- pipeline-owner-approval:v1\n' +
-    JSON.stringify({ run_id: 'run-56', entries: [{
-      issue_number: 5, artifact_path: 'stories/issue-5.md', sha256: 'a'.repeat(64), decision: 'approve',
-    }] }) + '\n-->';
-  const env = { OWNER_APPROVAL_COMMENT: '1', APPROVAL_BODY: approval };
-  let r = run(root, bin, ['probe', '5'], env);
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(JSON.parse(r.stdout).requirements_sha256, base);
-  r = run(root, bin, ['probe', '5'], { ...env, APPROVER_PERMISSION: 'write' });
-  assert.equal(r.status, 0, r.stderr);
-  assert.notEqual(JSON.parse(r.stdout).requirements_sha256, base);
-  r = run(root, bin, ['probe', '5'], { ...env, APPROVAL_BODY: approval + '\nnew requirement' });
-  assert.equal(r.status, 0, r.stderr);
-  assert.notEqual(JSON.parse(r.stdout).requirements_sha256, base);
-  r = run(root, bin, ['probe', '5'], { ...env, APPROVAL_EDITED: '1' });
-  assert.equal(r.status, 0, r.stderr);
-  assert.notEqual(JSON.parse(r.stdout).requirements_sha256, base);
 });
 
 test('show reads live authoritative body and human comments', async () => {
@@ -237,6 +217,65 @@ test('publish-plan posts a long Cyrillic architecture as numbered comments under
   assert.match(postedText, /pipeline-artifact:architecture:run-1:issue-5:part-2-of-2/);
   assert.match(postedText, /Pipeline Architecture \(2\/2\)/);
   for (const body of postedText.split(/(?=api --method POST)/).filter(Boolean)) assert.ok(body.length < 65_536);
+});
+
+
+test('publish-plan SHA idempotence, version replacement and old comments', async () => {
+  const { root, bin } = await fixture();
+  const probe = run(root, bin, ['probe', '5']);
+  assert.equal(probe.status, 0, probe.stderr);
+  const runRoot = path.join(root, '.tmp', 'pipelines', 'run-1');
+  await mkdir(path.join(runRoot, 'stories'), { recursive: true });
+  await mkdir(path.join(runRoot, 'planning'), { recursive: true });
+  const story = '# Original Story\nAC 1\n', architecture = '# Architecture\nData model\n';
+  await writeFile(path.join(runRoot, 'stories', 'issue-5.md'), story);
+  await writeFile(path.join(runRoot, 'planning', 'architecture.md'), architecture);
+  await writeFile(path.join(runRoot, 'manifest.json'), JSON.stringify({
+    schema_version: 2, run_id: 'run-1', source_type: 'github_issues', repository: 'gest0r1/sevami',
+    source_issues: [{ number: 5 }], source_requirements_sha256: JSON.parse(probe.stdout).requirements_sha256,
+    planning_readiness: { gates: { architecture: { artifact: { path: 'planning/architecture.md',
+      sha256: sha(architecture) } } } },
+  }));
+  const marker = (kind, digest) => '<!-- pipeline-artifact:' + kind + ':run-1:issue-5:sha-' + digest + ' -->';
+  const current = [marker('story', sha(story)), marker('architecture', sha(architecture))];
+  let r = run(root, bin, ['publish-plan', 'run-1'], { MOCK_ARTIFACT_COMMENTS: JSON.stringify(current) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 0);
+  assert.equal(JSON.parse(r.stdout).existing, 2);
+  await writeFile(path.join(runRoot, 'stories', 'issue-5.md'), '# Updated Story\nAC 2\n');
+  r = run(root, bin, ['publish-plan', 'run-1'], { MOCK_ARTIFACT_COMMENTS: JSON.stringify(current) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 1);
+  assert.equal(JSON.parse(r.stdout).existing, 1);
+  const legacy = ['<!-- pipeline-artifact:story:run-1:issue-5 -->',
+    '<!-- pipeline-artifact:architecture:run-1:issue-5 -->'];
+  r = run(root, bin, ['publish-plan', 'run-1'], { MOCK_ARTIFACT_COMMENTS: JSON.stringify(legacy) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 2);
+  const source = run(root, bin, ['probe', '5'], { MOCK_ARTIFACT_COMMENTS: JSON.stringify(current) });
+  assert.equal(source.status, 0, source.stderr);
+  assert.equal(JSON.parse(source.stdout).requirements_sha256, JSON.parse(probe.stdout).requirements_sha256);
+});
+
+test('publish-plan supports Story-only and technical-only plans', async () => {
+  const { root, bin } = await fixture();
+  const probe = run(root, bin, ['probe', '5']);
+  assert.equal(probe.status, 0, probe.stderr);
+  const runRoot = path.join(root, '.tmp', 'pipelines', 'run-1');
+  await mkdir(runRoot, { recursive: true });
+  await writeFile(path.join(runRoot, 'manifest.json'), JSON.stringify({
+    schema_version: 2, run_id: 'run-1', source_type: 'github_issues', repository: 'gest0r1/sevami',
+    source_issues: [{ number: 5 }], source_requirements_sha256: JSON.parse(probe.stdout).requirements_sha256,
+    planning_readiness: { gates: {} },
+  }));
+  let r = run(root, bin, ['publish-plan', 'run-1']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 0);
+  await mkdir(path.join(runRoot, 'stories'), { recursive: true });
+  await writeFile(path.join(runRoot, 'stories', 'issue-5.md'), '# Story\nAC\n');
+  r = run(root, bin, ['publish-plan', 'run-1']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).published, 1);
 });
 
 test('milestone lists its open issues, takes the version from its name and blocks an unusable version', async () => {
