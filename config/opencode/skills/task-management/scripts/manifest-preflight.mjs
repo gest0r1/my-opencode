@@ -1,3 +1,4 @@
+import process from 'node:process';
 import { executablePath, checkProjectTooling } from './project-tooling.mjs';
 import { readFileSync, accessSync, constants, existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -8,6 +9,15 @@ import { validateManifestV2Policy, validatePackageManagerContract } from './mani
 import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 
 export class ManifestPreflightError extends Error {}
+
+// The dev contour must already be described by root, or the RUN would stop only at its delivery tail.
+export function checkDeployTargetConfigured(manifest) {
+  if (!manifest.deploy_target) return;
+  const conf = join(process.env.OPENCODE_DEPLOY_TARGETS_DIR || '/etc/opencode/deploy-targets', `${manifest.deploy_target}.conf`);
+  if (!existsSync(conf)) {
+    throw new ManifestPreflightError(`DEPLOY_TARGET_NOT_CONFIGURED: ${conf} is missing; the owner describes the contour once as root (see scripts/setup-opencode-deploy-sudo.sh)`);
+  }
+}
 
 const RUNTIME_GATE = /(runtime|deploy|release|smoke|install)/i;
 const SAFE_SHA = /^[0-9a-f]{40}$/i;
@@ -192,6 +202,7 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
     throw new ManifestPreflightError(error instanceof Error ? error.message : String(error));
   }
   if (environment) {
+    checkDeployTargetConfigured(manifest);
     const usesLive = Object.entries((manifestPath ? resolveGateTestingFile(manifest, manifestPath) : manifest).gate_testing ?? {}).some(([profile, gates]) => used.has(profile) && Object.values(gates).some(config => config.live_postgres));
     if (usesLive && !executableOnPath('docker')) throw new ManifestPreflightError('EXECUTABLE_NOT_FOUND: docker is required by frozen live_postgres');
     if (usedInvocations.some(({tokens}) => ['pnpm', 'npm', 'npx', 'yarn', 'bun', 'corepack'].includes(tokens[0]))) checkProjectTooling(cwd);

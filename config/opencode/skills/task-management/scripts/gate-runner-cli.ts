@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import os from 'node:os';
 import process from 'node:process';
@@ -145,35 +145,43 @@ async function acquireGateLocks(stateRoot: string, runId: string, gateLock: stri
 }
 
 type ReuseQuery = {
-  runDirectory: string; pipelineId: string; gate: string; manifestSha: string; sourceDigest: string;
-  environmentDigest: string; selected: Array<{ index: number; test_files: string[] }>; };
+  stateRoot: string; runId: string; gate: string; sourceDigest: string; environmentDigest: string;
+  selected: Array<{ index: number; command: string; test_files: string[] }>; };
 
-// A command that already passed on the identical source tree, frozen manifest, gate and environment
-// proves the same result; running it again on the same bytes adds wall-clock time, not evidence.
-// Reuse is per command: a worker's bound check covering commands 3..11 spares those commands in a
-// later complete run, which then executes only 0..2. A result reused once can be reused again,
-// because it still describes the same bytes. Evidence written before these identity fields
-// existed, base probes and interrupted/blocked runs are never reused.
+// A command that already passed on the identical source tree, with the same command text, gate and
+// environment proves the same result; running it again on the same bytes adds wall-clock time, not
+// evidence. The match is by command text, not by manifest or pipeline, so a later RUN over the same
+// commit (a delivery-only RUN, a replan) and another lane on the same tree reuse it too. Reuse is per
+// command: a worker's bound check covering commands 3..11 spares those commands in a later complete run.
+// A result reused once can be reused again, because it still describes the same bytes. Evidence written
+// before these identity fields existed, base probes and interrupted/blocked runs are never reused.
+const REUSE_OTHER_RUNS = 20;
 async function findReusableResults(query: ReuseQuery): Promise<Map<number, { path: string; result: any }>> {
   const found = new Map<number, { path: string; result: any }>();
-  const wanted = new Map(query.selected.map(item => [item.index, item.test_files]));
-  for (const directory of ['gates', 'checks']) {
-    let names: string[] = [];
-    try { names = await readdir(join(query.runDirectory, directory)); } catch { continue; }
-    for (const name of names.sort()) {
-      if (found.size === wanted.size) return found;
-      if (!name.endsWith('.json') || name.endsWith('-attempts.json')) continue;
-      const path = join(query.runDirectory, directory, name);
-      let evidence: any;
-      try { evidence = JSON.parse(await readFile(path, 'utf8')); } catch { continue; }
-      if (!['PASS', 'FAIL'].includes(evidence?.status) || evidence.pipeline_id !== query.pipelineId || evidence.gate !== query.gate ||
-          evidence.manifest_sha256 !== query.manifestSha || evidence.source_digest !== query.sourceDigest ||
-          evidence.environment_digest !== query.environmentDigest || evidence.base_probe || !Array.isArray(evidence.results)) continue;
-      for (const [index, files] of wanted) {
-        if (found.has(index)) continue;
-        const result = evidence.results.find((item: any) => item.command_index === index && item.exit_code === 0 && Array.isArray(item.test_files) &&
-          (item.test_files.length === 0 || (files.length > 0 && files.every(file => item.test_files.includes(file)))));
-        if (result) found.set(index, { path: result.reused_from ?? path, result });
+  let others: string[] = [];
+  try {
+    const names = (await readdir(query.stateRoot, { withFileTypes: true })).filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== query.runId);
+    const dated = await Promise.all(names.map(async entry => ({ name: entry.name, mtime: (await stat(join(query.stateRoot, entry.name))).mtimeMs })));
+    others = dated.sort((a, b) => b.mtime - a.mtime).slice(0, REUSE_OTHER_RUNS).map(entry => entry.name);
+  } catch {}
+  for (const run of [query.runId, ...others]) {
+    for (const directory of ['gates', 'checks']) {
+      let names: string[] = [];
+      try { names = await readdir(join(query.stateRoot, run, directory)); } catch { continue; }
+      for (const name of names.sort()) {
+        if (found.size === query.selected.length) return found;
+        if (!name.endsWith('.json') || name.endsWith('-attempts.json')) continue;
+        const path = join(query.stateRoot, run, directory, name);
+        let evidence: any;
+        try { evidence = JSON.parse(await readFile(path, 'utf8')); } catch { continue; }
+        if (!['PASS', 'FAIL'].includes(evidence?.status) || evidence.gate !== query.gate || evidence.source_digest !== query.sourceDigest ||
+            evidence.environment_digest !== query.environmentDigest || evidence.base_probe || !Array.isArray(evidence.results)) continue;
+        for (const { index, command, test_files: files } of query.selected) {
+          if (found.has(index)) continue;
+          const result = evidence.results.find((item: any) => item.command === command && item.exit_code === 0 && Array.isArray(item.test_files) &&
+            (item.test_files.length === 0 || (files.length > 0 && files.every(file => item.test_files.includes(file)))));
+          if (result) found.set(index, { path: result.reused_from ?? path, result: { ...result, command_index: index } });
+        }
       }
     }
   }
@@ -510,8 +518,8 @@ async function main(): Promise<void> {
   const startedAt = new Date().toISOString();
   const usesCandidate = commands.some(command => command.includes('{candidate_sha}'));
   const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest ? new Map()
-    : await findReusableResults({ runDirectory: join(resolve(stateRoot), runId), pipelineId, gate, manifestSha: state.manifest_sha256,
-      sourceDigest: snapshot.digest, environmentDigest, selected: invocations.map(item => ({ index: item.index, test_files: item.test_files })) });
+    : await findReusableResults({ stateRoot: resolve(stateRoot), runId, gate, sourceDigest: snapshot.digest, environmentDigest,
+      selected: invocations.map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
   // A gate that passed on an earlier snapshot and runs again (its lane files moved after it, or a plain
   // rerun) repeats only the commands that the changes between the two snapshots reach through the frozen
   // impact map; the others keep their PASS. Unmapped and dependency changes reach every command.
