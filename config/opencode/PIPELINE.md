@@ -34,6 +34,19 @@ moves before that second RUN starts, use:
 
 Replan uses the same reconciliation as RUN. Trusted `worktree-refresh.sh` preserves a verified snapshot while syncing main. `pipeline-reconcile-cli` returns only COMPATIBLE or PLAN_INVALID; a changed hash first requests semantic review, never automatic replan. Before implementation begins, revise the same folder and only affected gates. After source implementation starts, compatible amendments may include new runtime work units; incompatible PLAN requires a new folder with reusable context under planning/inherited, keeping the old folder intact. Owner feedback is accepted at any checkpoint. Technical corrections preserve approval; changed owner scope/behavior/constraints require approval again.
 
+## Human approval of user-facing Stories
+
+For GitHub Issue PLAN, the baseline Stories are reviewed and explicitly approved
+by the owner before triggered architecture. An architectural behavior delta requires
+its own owner decision and a SeniorTechnicalPlanReviewer review. Pure technical
+Issues skip these intermediate interactions. Owner approval comes from the
+verified human GitHub comment (not from a decision-register assertion), whose
+exact story/delta SHA is checked by the existing PLAN preflight; an optional
+`planning_readiness.required_artifacts.owner_approvals` reference freezes the
+index. Structured approval comments are not treated as requirement changes,
+but ordinary human comments remain requirements. Follow
+`command/pipeline-plan.md` for the exact strict GitHub comment protocol.
+
 ## Manifest v2 and planning gates
 
 The canonical pipeline supports manifest schema v2 only. PLAN runs
