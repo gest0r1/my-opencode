@@ -446,23 +446,20 @@ test('sync-plan fast-forwards main and merges it into the PLAN branch before any
   assert.match(result.stderr, /SYNC_PLAN_AFTER_FREEZE: run run-b/);
 });
 
-test('a versioned run tags each new candidate as rc.N and tags the release on the candidate after a merge-commit merge', async (t) => {
+test('a candidate is identified by its SHA, gets no tag, and the release tag lands on it after a merge-commit merge', async (t) => {
   const f = await fixture();
   t.after(() => rm(f.root, { recursive: true, force: true }));
-  const manifest = { ...f.manifest, release: { version: '0.6.5', milestone: { number: 7, title: 'v.0.6.5' }, rc_tags: true } };
+  const manifest = { ...f.manifest, release: { version: '0.6.5', milestone: { number: 7, title: 'v.0.6.5' } } };
   await writeFile(f.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   assert.equal(gate(f.b, ['adopt', f.manifestPath]).status, 0);
   await writeFile(path.join(f.b, 'src/allowed.txt'), 'one\n');
   let result = gate(f.b, ['publish', f.manifestPath]);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).rc_tag, 'v0.6.5-rc.1');
-  result = gate(f.b, ['publish', f.manifestPath]);
-  assert.equal(JSON.parse(result.stdout).rc_tag, 'v0.6.5-rc.1');
+  assert.equal(JSON.parse(result.stdout).rc_tag, undefined);
   await writeFile(path.join(f.b, 'src/allowed.txt'), 'two\n');
   result = gate(f.b, ['publish', f.manifestPath]);
   const candidate = JSON.parse(result.stdout).candidate_sha;
-  assert.equal(JSON.parse(result.stdout).rc_tag, 'v0.6.5-rc.2');
-  assert.equal(exec(f.root, 'git', ['--git-dir', f.remote, 'rev-parse', 'v0.6.5-rc.2^{commit}']), candidate);
+  assert.equal(exec(f.root, 'git', ['--git-dir', f.remote, 'tag', '--list']), '');
 
   // The owner merges the PR with a merge commit; release tags the tested candidate.
   exec(f.main, 'git', ['merge', '--no-ff', '-m', 'Merge PR', 'feature/B']);

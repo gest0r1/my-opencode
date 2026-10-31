@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -711,6 +711,53 @@ test('hybrid uses local post-CI deployment without GitHub-to-host probe', async 
   );
 });
 
+test('a versioned run must end with publish, local candidate gate, dev_deploy and owner acceptance', async () => {
+  const fx = await fixture('v2-delivery-tail');
+  const pipeline = fx.manifest.pipelines[0];
+  fx.manifest.release = { version: '0.6.5', milestone: { number: 14, title: 'v.0.6.5' } };
+  const check = () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath });
+  assert.throws(check, /DELIVERY_TAIL_REQUIRED: a versioned run needs exactly one deployable pipeline, found 0/);
+
+  pipeline.stages = ['implementation', 'git-verify', 'publish', 'candidate', 'dev', 'accept'];
+  pipeline.executors = { implementation: 'agent', 'git-verify': 'git_verify', publish: 'git_publish', candidate: 'local_gate', dev: 'dev_deploy', accept: 'owner_acceptance' };
+  pipeline.profile = 'default';
+  fx.manifest.gate_profiles = { default: { candidate: ['pnpm test'] } };
+  pipeline.deployable = true;
+  pipeline.github_ci_mode = 'off';
+  pipeline.decision_ids.push('decision-testing-strategy');
+  pipeline.deployment_validation = { stage: 'candidate' };
+  pipeline.testing_strategy = { mode: 'hybrid', owner_decision_id: 'decision-testing-strategy', github_validation_stage: 'candidate',
+    opencode_host_stage: 'dev', post_deploy_test: 'user', owner_acceptance_stage: 'accept' };
+  assert.throws(check, /DEV_DEPLOY_REQUIRES_DEPLOYABLE_TARGET: v2-delivery-tail-app\/dev|DEV_DEPLOY_REQUIRES_DEPLOYABLE_TARGET/);
+  fx.manifest.deploy_target = 'svd1';
+  assert.equal(check().status, 'PASS');
+
+  // The order is fixed: no dev install before the candidate is published, no acceptance before the install.
+  pipeline.stages = ['implementation', 'git-verify', 'dev', 'publish', 'candidate', 'accept'];
+  assert.throws(check, /DEV_DEPLOY_REQUIRES_PUBLISHED_CANDIDATE/);
+  pipeline.stages = ['implementation', 'git-verify', 'publish', 'candidate', 'dev', 'accept'];
+  pipeline.github_ci_mode = 'required';
+  assert.throws(check, /DEPLOYMENT_VALIDATION_REQUIRES_FINAL_GITHUB_CI|DELIVERY_TAIL_REQUIRED/);
+  pipeline.github_ci_mode = 'off';
+  fx.manifest.release.rc_tags = true;
+  assert.throws(check, /release must be \{version: "X\.Y\.Z", milestone: \{number, title\}\}/);
+  delete fx.manifest.release.rc_tags;
+
+  // The dev contour must already be described by root when the environment is checked.
+  const targets = await mkdtemp(path.join(os.tmpdir(), 'deploy-targets-'));
+  const previous = process.env.OPENCODE_DEPLOY_TARGETS_DIR;
+  process.env.OPENCODE_DEPLOY_TARGETS_DIR = targets;
+  try {
+    const { checkDeployTargetConfigured } = await import('./manifest-preflight.mjs');
+    assert.throws(() => checkDeployTargetConfigured(fx.manifest), /DEPLOY_TARGET_NOT_CONFIGURED: .*svd1\.conf is missing/);
+    await writeFile(path.join(targets, 'svd1.conf'), 'REPO_DIR=/srv/sevami\n');
+    assert.doesNotThrow(() => checkDeployTargetConfigured(fx.manifest));
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_DEPLOY_TARGETS_DIR; else process.env.OPENCODE_DEPLOY_TARGETS_DIR = previous;
+    await rm(targets, { recursive: true, force: true });
+  }
+});
+
 test('schema v2 freezes optional project policy and enforces protected paths', async () => {
   const fx = await fixture('v2-policy');
   await mkdir(path.join(fx.root, '.opencode'), { recursive: true });
@@ -1250,6 +1297,22 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
   result = invoke(['fail', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app']);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT/);
+
+  // Owner findings on a copy of the run: the recorded FAIL is the evidence of a fix cycle that reopens
+  // the whole chain, so the repair is gated, published as a new SHA and deployed again before acceptance.
+  const findingsRoot = path.join(fx.root, '.tmp', 'owner-findings-state');
+  await cp(stateRoot, findingsRoot, { recursive: true });
+  const findings = (args) => run(fx.root, [...args, '--state-root', findingsRoot]);
+  result = findings(['owner-accept', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app', '--result', 'fail', '--message', 'кнопка не сохраняет']);
+  assert.equal(result.status, 0, result.stderr);
+  result = findings(['scope-check', fx.manifest.run_id, 'owner-acceptance', 'src/app.ts', '--pipeline', 'app', '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  result = findings(['fix-cycle', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app', '--json',
+    '--evidence', path.join(fx.runRoot, 'owner', 'app-owner-acceptance.json')]);
+  assert.equal(result.status, 0, result.stderr);
+  const reopened = JSON.parse(result.stdout).pipelines.app.stages;
+  for (const name of ['implementation', 'git-verify', 'publish', 'tests', 'dev', 'owner-acceptance']) assert.equal(reopened[name].status, 'pending', name);
+  assert.equal(reopened.implementation.repair_origin_stage, 'owner-acceptance');
 
   result = invoke([
     'owner-accept', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app',

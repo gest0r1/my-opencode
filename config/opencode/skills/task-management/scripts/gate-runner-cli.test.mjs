@@ -609,3 +609,24 @@ test('plan probe refuses candidate-sha and deployment gates and unknown pipeline
   result = run(runtime.root, ['--plan-probe', path.join(runtime.root, 'manifest.json'), 'app']);
   assert.notEqual(result.status, 0); assert.match(result.stderr, /usage/);
 });
+
+test('a later RUN over the same tree reuses the gate commands an earlier RUN passed', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const first = JSON.parse(result.stdout);
+    assert.equal(first.commands_run, 2);
+    // A delivery-only RUN: another run id, another pipeline id, the same frozen commands and tree.
+    const state = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'state.json'), 'utf8'));
+    const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+    const runDir = path.join(fx.stateRoot, 'delivery-run'); await mkdir(runDir, { recursive: true });
+    const content = JSON.stringify({ ...manifest, run_id: 'delivery-run', pipelines: manifest.pipelines.map(item => ({ ...item, id: 'sink' })) });
+    await writeFile(path.join(runDir, 'manifest.json'), content);
+    await writeFile(path.join(runDir, 'state.json'), JSON.stringify({ ...state, run_id: 'delivery-run', manifest_file: path.join(runDir, 'manifest.json'), manifest_sha256: sha256(content) }));
+    result = run(fx.root, ['delivery-run', 'sink', 'build', '--state-root', fx.stateRoot]); assert.equal(result.status, 0, result.stderr);
+    const second = JSON.parse(result.stdout);
+    assert.equal(second.commands_run, 0); assert.equal(second.commands_reused, 2);
+    assert.equal(second.reused_from, first.evidence);
+  } finally { process.env.PATH = oldPath; }
+});

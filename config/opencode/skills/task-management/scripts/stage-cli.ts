@@ -1,4 +1,5 @@
 import { dispatchPacket, workItemWaves } from './pipeline-dispatch.ts';
+import { deployEvidencePath } from './dev-deploy-cli.ts';
 import { candidateEvidenceMatches } from './github-actions-gate-core.mjs';
 // Stable CLI entry point. Keep core stage/DAG/state implementation untouched and
 // reject non-executable machine gates BEFORE init creates any state or approve mutates it.
@@ -60,7 +61,7 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
   if (manifest.schema_version !== 2) return;
   const targetPipeline = manifest.pipelines?.find((item: any) => item.id === pipelineId);
   const targetExecutor = targetPipeline?.executors?.[stage];
-  if (targetExecutor !== 'github_ci' && targetExecutor !== 'github_dev' && targetExecutor !== 'owner_acceptance') {
+  if (!['github_ci', 'github_dev', 'dev_deploy', 'owner_acceptance'].includes(targetExecutor)) {
     return;
   }
 
@@ -265,6 +266,16 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
       if (laneDigest(inventory.files, lane, evidence.snapshot.lane_exclude ?? []) !== evidence.snapshot.lane_scope_digest) {
         throw new Error(`EVIDENCE_STALE_LANE_SOURCE: local_gate ${pipeline.id}/${stage}: this lane's files changed after the gate snapshot ${evidence.snapshot.commit}; rerun the gate`);
       }
+    }
+  } else if (executor === 'dev_deploy') {
+    evidencePath = deployEvidencePath(artifactRoot, pipeline.id, stage);
+    const evidence = await readJsonEvidence(evidencePath, `${pipeline.id}/${stage}`);
+    const candidate = await readJsonEvidence(join(artifactRoot, 'candidate.json'), 'candidate');
+    const runtime = state.pipelines?.[pipeline.id]?.stages?.[stage];
+    if (evidence.status !== 'PASS' || evidence.run_id !== runId || evidence.pipeline_id !== pipeline.id || evidence.stage !== stage ||
+        String(evidence.candidate_sha).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
+        !runtime?.started_at || Date.parse(evidence.recorded_at) < Date.parse(runtime.started_at)) {
+      throw new Error(`EVIDENCE_INVALID_OR_STALE: dev_deploy ${pipeline.id}/${stage}; run dev-deploy-cli.ts record after installing the candidate`);
     }
   } else if (executor === 'github_ci' || executor === 'github_dev') {
     evidencePath = join(artifactRoot, 'github', `${pipeline.id}-${stage}.json`);

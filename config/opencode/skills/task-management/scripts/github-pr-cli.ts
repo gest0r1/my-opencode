@@ -87,10 +87,16 @@ async function readJson(file: string, label: string): Promise<Record<string, any
 }
 
 function completedIssueNumbers(state: Record<string, any>): number[] {
-  if (state.source_type !== 'github_issues') throw new GitHubPrCliError('run is not github_issues sourced');
   if (state.status !== 'completed') throw new GitHubPrCliError(`run must be completed before PR creation, got ${String(state.status)}`);
   if (!REPOSITORY.test(String(state.repository ?? ''))) {
     throw new GitHubPrCliError('state repository must be owner/repo');
+  }
+  // A RUN planned from an issue list rather than a GitHub handoff still delivers through a PR: it closes
+  // the listed issues of its own repository, without the handoff's per-pipeline mapping.
+  if (state.source_type !== 'github_issues') {
+    return [...new Set((state.source_issues ?? [])
+      .filter((issue: any) => issue?.repository === state.repository && Number.isInteger(issue?.number) && issue.number > 0)
+      .map((issue: any) => issue.number as number))].sort((a, b) => a - b);
   }
 
   const mapped = new Set<number>();
@@ -278,9 +284,11 @@ export async function publishPullRequest(
     prUrl = output.split(/\s+/).find((part) => /\/pull\/\d+/.test(part));
   }
 
-  const linked = await linkPr(runId, prNumber, { stateRoot });
-  if (linked.pending !== 0) {
-    throw new GitHubPrCliError(`PR link comments are still pending: ${String(linked.pending)}`);
+  if (state.source_type === 'github_issues') {
+    const linked = await linkPr(runId, prNumber, { stateRoot });
+    if (linked.pending !== 0) {
+      throw new GitHubPrCliError(`PR link comments are still pending: ${String(linked.pending)}`);
+    }
   }
 
   return {
