@@ -285,7 +285,7 @@ function validatePlanningReadiness(manifest, root) {
 
   const required = readiness.required_artifacts;
   const mandatory = ['decision_register', 'work_items'];
-  const optional = ['technology_evidence', 'contract_inventory', 'owner_approvals'];
+  const optional = ['technology_evidence', 'contract_inventory'];
   if (!required || typeof required !== 'object') {
     throw new ManifestV2PolicyError('planning_readiness.required_artifacts is required');
   }
