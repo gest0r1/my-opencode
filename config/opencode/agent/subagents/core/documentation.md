@@ -2,7 +2,7 @@
 name: DocWriter
 description: Updates approved Markdown documentation without changing pipeline policy.
 mode: subagent
-model: opencode-go/muse-spark-1.3-contributor
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.2
 permission:
   bash: deny
