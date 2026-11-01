@@ -4,7 +4,7 @@ description: "Architecture Decision Record specialist capturing decisions,
   context, alternatives, and consequences in lightweight ADR format."
 mode: subagent
 model: opencode-go/mimo-v2.6-flash
-temperature: 0.2
+temperature: 0.1
 permission:
   bash:
     "*": deny
