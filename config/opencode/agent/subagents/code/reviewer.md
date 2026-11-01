@@ -2,8 +2,8 @@
 name: CodeReviewer
 description: Fresh read-only code/security reviewer for approved pipeline changes.
 mode: subagent
-model: openai/gpt-6.1-sol
-reasoningEffort: medium
+model: opencode-go/deepseek-v4.1-flash
+variant: max
 permission:
   bash: deny
   edit:
