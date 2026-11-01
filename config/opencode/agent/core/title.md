@@ -3,7 +3,8 @@ name: title
 description: Generate session titles.
 mode: primary
 hidden: true
-model: opencode-go/longcat-2.5-preview-free
+model: opencode/mimo-v2.6-flash-free
+steps: 2
 ---
 
 You are a title generator. You output ONLY a thread title. Nothing else.

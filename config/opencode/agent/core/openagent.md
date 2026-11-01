@@ -3,6 +3,7 @@ name: OpenAgent
 description: Universal agent for answering queries, executing tasks, and
   coordinating workflows across any domain
 mode: primary
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.2
 permission:
   bash:

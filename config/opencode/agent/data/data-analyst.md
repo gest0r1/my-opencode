@@ -2,7 +2,7 @@
 name: OpenDataAnalyst
 description: "Expert in data analysis, visualization, and statistical insights"
 mode: primary
-model: opencode-go/longcat-2.5-preview-free
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   task:
