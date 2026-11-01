@@ -3,7 +3,6 @@ name: OpenStageOrchestrator
 description: Primary owner of design-freeze planning and deterministic pipeline execution.
 mode: primary
 model: opencode-go/deepseek-v4.1-flash
-variant: max
 temperature: 0.1
 permission:
   question: deny

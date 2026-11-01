@@ -6,7 +6,9 @@
 name: Simple Responder
 description: "Test agent that responds with 'AWESOME TESTING' - for eval framework testing"
 mode: subagent
-model: opencode-go/muse-spark-1.3-contributor
+model: opencode/mimo-v2.6-flash-free
+hidden: true
+steps: 2
 temperature: 0.0
 ---
 

@@ -3,6 +3,7 @@ name: OpenCoder
 description: Orchestration agent for complex coding, architecture, and
   multi-file refactoring
 mode: primary
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   bash:

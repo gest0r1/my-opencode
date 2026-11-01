@@ -22,6 +22,9 @@ for (const file of walk(source)) {
   identities.add(path.basename(file,'.md').toLowerCase());
 }
 identities.delete('');
+// Previously managed agents removed from source must also disappear from staged
+// installations. Otherwise the preserved user-agent overlay resurrects them.
+for (const retired of ['stageorchestrator', 'stage-orchestrator']) identities.add(retired);
 let removed=0;
 for (const file of walk(target)) {
   if (identities.has(name(file).toLowerCase()) || identities.has(path.basename(file,'.md').toLowerCase())) {
