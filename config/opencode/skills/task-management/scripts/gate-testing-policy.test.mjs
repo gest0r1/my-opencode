@@ -236,3 +236,14 @@ test('pre-publish release and install gates may hold test resources; post-publis
   const deploy = manifest(['dev-install'], { 'dev-install': 'local_gate' });
   assert.equal(isPrePublishGate({ ...deploy, gate_profiles: { release: { 'dev-deploy': ['x'] } } }, 'release', 'dev-deploy'), false);
 });
+
+test('post-deploy input classification is accepted without enabling deployment test resources', () => {
+  const manifest = {
+    pipelines: [{ id: 'app', profile: 'local', stages: ['deploy', 'smoke'], executors: { deploy: 'dev_deploy', smoke: 'local_gate' } }],
+    gate_profiles: { local: { smoke: ['curl http://localhost/health'] } },
+    gate_testing: { local: { smoke: { input_kind: 'deployed-service' } } },
+  };
+  assert.doesNotThrow(() => validateGateTesting(manifest));
+  manifest.gate_testing.local.smoke.live_postgres = { image, command_indexes: [0] };
+  assert.throws(() => validateGateTesting(manifest), /test resources cannot wrap deployment gates/);
+});
