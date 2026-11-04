@@ -9,3 +9,5 @@ Gateway job `job_01M6M5J84E00KX2T66FPCFEA2P` timed out до SSH, команды 
 Следующее: candidate provenance и gate identity; wake/owner intent и тесты reuse; получить реальные Git ancestry и native dependencies перед upstream merge. Основной отчёт и этот указатель обновлять при дальнейшем завершении. Main, production, release, install и платные Actions не затронуты.
 
 Дополнение: commits `a059f2ca51918ab39e58d8b44d297aa06b3a2e32` (explicit RUN wake) и `2eee74640ebed672ca2534c0f380809cd8d216ea` (candidate publish evidence binding). Native результаты, версии и ограничения — в дополнении REPORT; owner consent и deployed-service identity остаются открыты. Git fixture suite 16 PASS работал в созданных временных локальных репозиториях, не проверял upstream ancestry проекта.
+
+Дополнение: prep docs `f0f236bf371568c545c161898829384476f660cb`, wake/reprobe `ace82d4ded1ec9ac8c175c032fd31324a2724e64`. Full runtime suite 21 PASS с plugin 2.0.23 и loader shim; точная locked версия и доказанный missing-session contract остаются открытыми. Детали в REPORT.
