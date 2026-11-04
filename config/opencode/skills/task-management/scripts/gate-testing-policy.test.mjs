@@ -76,6 +76,8 @@ test('frozen input kind enforces tree-before-publish and exact candidate/service
     /GATE_CANDIDATE_BEFORE_VERIFY/,
   );
   assert.doesNotThrow(() => validateGateTesting(manifest('candidate', ['verify', 'check'], { verify: 'git_verify', check: 'local_gate' })));
+  assert.equal(isPrePublishGate(manifest('candidate', ['verify', 'check', 'publish'], { verify: 'git_verify', check: 'local_gate', publish: 'git_publish' }), 'local', 'check'), false,
+    'candidate gate must not be a clean-tree PLAN probe');
   assert.throws(
     () => validateGateTesting(manifest('deployed-service', ['check', 'deploy'], { check: 'local_gate', deploy: 'dev_deploy' })),
     /GATE_SERVICE_BEFORE_DEPLOY/,
