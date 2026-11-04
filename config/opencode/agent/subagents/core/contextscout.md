@@ -17,6 +17,15 @@ permission:
     ".tmp/pipelines/**/planning/source-requirements.json": deny
     ".tmp/pipelines/**/planning/deployment-target.json": deny
     ".tmp/pipelines/**/planning/refresh-impact.json": deny
+    ".tmp/pipelines/**/planning/checks/**": deny
+    ".tmp/pipelines/**/planning/handoffs/**": deny
+    ".tmp/pipelines/**/planning/gates/**": deny
+    ".tmp/pipelines/**/planning/state.json": deny
+    ".tmp/pipelines/**/planning/manifest.json": deny
+    "**/*.env*": deny
+    "**/*.key": deny
+    "**/*.secret": deny
+    ".git/**": deny
   bash: deny
   task: deny
   webfetch: deny
