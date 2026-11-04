@@ -24,7 +24,7 @@
 
 ## Пример одного синтетического экспорта
 
-```markdown
+````markdown
 # Pipeline demo
 
 *Exported on 2026-11-04*
@@ -58,6 +58,6 @@
 ```json
 {"session_id":"session-child","call_id":"child-1","name":"shell","status":"running","started_at":"2026-11-04T19:15:00.000Z","completed_at":"unavailable","duration_ms":"unavailable","duration_source":"unavailable","next_tool_started_at":"unavailable","next_tool_start_gap_ms":"unavailable","overlaps_next":"unavailable"}
 ```
-```
+````
 
 Файл-пример иллюстрирует контракт; итоговый реальный export и сверка UI/API с фиксированным историческим tool call отсутствуют до запуска тестов на окружении, доступном для OpenChamber.
