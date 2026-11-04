@@ -400,17 +400,17 @@ export default Plugin.define({
     // Background children: registry entries wait in "background" until the child session is idle.
     const childIdle = async (sessionID: string, timeoutMs?: number): Promise<boolean> => {
       const wait = (plugin.session as any).wait
-      if (typeof wait !== "function") return true
+      if (typeof wait !== "function") return false // no authoritative completion signal
       const done = Promise.resolve(wait({ sessionID })).then(() => true, () => false)
       if (timeoutMs === undefined) return done
       return Promise.race([done, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))])
     }
-    // idle: wait resolved; running: still pending at the timeout; gone: wait rejected or the session is missing.
+    // Only a resolved wait proves idle; failure to inspect or wait is unknown, never a completed child.
     const probeChild = async (sessionID: string): Promise<"idle" | "running" | "gone" | "unknown"> => {
       const wait = (plugin.session as any).wait
       if (typeof wait !== "function") return "unknown"
-      try { await plugin.session.get({ sessionID: sessionID as any }) } catch { return "gone" }
-      const outcome = Promise.resolve(wait({ sessionID })).then(() => "idle" as const, () => "gone" as const)
+      try { await plugin.session.get({ sessionID: sessionID as any }) } catch { return "unknown" } // transient/read/location failure is not completion
+      const outcome = Promise.resolve(wait({ sessionID })).then(() => "idle" as const, () => "unknown" as const)
       let timer: ReturnType<typeof setTimeout> | undefined
       const result = await Promise.race([outcome, new Promise<"running">((resolve) => { timer = setTimeout(() => resolve("running"), CHILD_IDLE_PROBE_MS) })])
       clearTimeout(timer)
@@ -437,7 +437,7 @@ export default Plugin.define({
     const trackChild = (parentID: string, childID: string) => {
       const set = pendingChildren.get(parentID) ?? new Set<string>()
       set.add(childID); pendingChildren.set(parentID, set)
-      void childIdle(childID).then(() => { set.delete(childID) })
+      void childIdle(childID).then(idle => { if (idle) set.delete(childID) }).catch(() => {})
     }
     const checkWake = async (sessionID: string) => {
       wakeTimers.delete(sessionID)
@@ -454,7 +454,7 @@ export default Plugin.define({
       // worker must not hold its lease forever.
       for (const lease of readLeases(runRoot(root, runID), { state })) {
         if (lease.parent_session_id !== sessionID) continue
-        let health: "idle" | "running" | "gone" | "unknown" = "gone"
+        let health: "idle" | "running" | "gone" | "unknown" = "unknown"
         if (lease.child_session_id) health = await probeChild(String(lease.child_session_id))
         if (health === "running" || health === "unknown") continue
         if (lease.child_session_id) await settleBackground(runID, identity(lease as RuntimeContext), String(lease.child_session_id), health === "idle")
