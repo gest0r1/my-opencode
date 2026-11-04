@@ -439,9 +439,9 @@ function assertWorkItemOrder(manifest, records) {
 
 const TEST_REWORK_ACTIONS = new Set(['update', 'split', 'rewrite', 'add', 'move_setup', 'remove']);
 
-// `test_rework[]` freezes tests the run must rework before source lanes start (inventories, pins,
-// near-limit or cold-import tests). They form the `test_preparation` lane that every other lane
-// with an agent stage depends on, so RUN starts there and test time limits never rise.
+// test_rework[] owns existing test changes. Only source pipelines that consume a specific
+// prep result must wait for it; unrelated lanes remain runnable. Legacy frozen manifests
+// without required_by preserve the old all-source dependency contract.
 export function validateTestRework(manifest) {
   const pipelines = manifest.pipelines ?? [];
   const lanes = pipelines.filter((pipeline) => pipeline.test_preparation !== undefined);
@@ -478,13 +478,31 @@ export function validateTestRework(manifest) {
     if (!owner || owner.test_preparation !== true) {
       throw new ManifestV2PolicyError(`TEST_REWORK_WORK_ITEM_INVALID: ${entry.id} work_item_id must be a frozen work item of a test_preparation pipeline`);
     }
+    const consumers = entry.required_by;
+    if (consumers !== undefined) {
+      if (!Array.isArray(consumers) || new Set(consumers).size !== consumers.length ||
+          consumers.some(id => typeof id !== 'string' || !pipelines.some(p => p.id === id && p.id !== owner.id && p.test_preparation !== true))) {
+        throw new ManifestV2PolicyError(`TEST_REWORK_CONSUMERS_INVALID: ${entry.id} required_by must name distinct, existing non-prep pipeline IDs`);
+      }
+      for (const consumer of consumers) {
+        if (!dependencyReachable(pipelines, consumer, owner.id)) {
+          throw new ManifestV2PolicyError(`TEST_REWORK_DEPENDENCY_MISSING: ${consumer} needs ${owner.id} for ${entry.id}`);
+        }
+      }
+    }
   }
   for (const lane of prep) {
     if (lane.deployable !== false) throw new ManifestV2PolicyError(`TEST_REWORK_LANE_DEPLOYABLE: ${lane.id} test_preparation pipeline must declare deployable=false`);
+    // Existing frozen manifests (no explicit consumers) keep their original
+    // start order. New PLANs declare required_by for every test_rework item,
+    // including [] if prep has no blocked consumer.
+    const legacy = entries.some(entry => entry.required_by === undefined &&
+      workItems.get(entry.work_item_id)?.pipeline_id === lane.id);
+    if (!legacy) continue;
     for (const other of pipelines) {
       if (other.test_preparation === true || !Object.values(other.executors ?? {}).includes('agent')) continue;
       if (!dependencyReachable(pipelines, other.id, lane.id)) {
-        throw new ManifestV2PolicyError(`TEST_REWORK_LANE_NOT_FIRST: ${other.id} must depend (directly or transitively) on test_preparation pipeline ${lane.id}`);
+        throw new ManifestV2PolicyError(`TEST_REWORK_LANE_NOT_FIRST: ${other.id} must depend (directly or transitively) on legacy test_preparation pipeline ${lane.id}`);
       }
     }
   }
