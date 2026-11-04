@@ -30,7 +30,7 @@ export async function assertContextScoutPlanningPath({ root, runId, artifactPath
       /[?*\[\]{}]/.test(part))) reject('unsafe path component');
   const tail = parts.slice(4);
   if (tail.some(part => RESERVED.has(part) || ['probes', 'checks', 'handoffs', 'gates', '.git'].includes(part)) ||
-      tail.some(part => /(?:^|\\.)env(?:\\.|$)|\\.(?:key|secret)$/i.test(part))) {
+      tail.some(part => part === '.env' || part.startsWith('.env.') || part.endsWith('.key') || part.endsWith('.secret'))) {
     reject('machine-owned planning evidence or secret');
   }
   const absoluteRoot = resolve(root);
