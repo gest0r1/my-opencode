@@ -90,3 +90,38 @@
 - Branches: https://github.com/gest0r1/my-opencode/tree/feature/pipeline-optimization-20261104 и https://github.com/gest0r1/openchamber-ru/tree/feature/pipeline-optimization-20261104 .
 - Main не изменён; merge/release/deploy/Actions/restart не проводились.
 - Совместимые verified SHA пары, команды будущей установки/rollback **ещё не существуют**, не устанавливать из этой feature-ветки.
+
+## Повторный запуск — 2026-11-04T20:41:21.391Z UTC
+
+### Фактическая дельта
+
+- **Stage 5 — частично:** `isPublishableStoryReview` теперь поддерживает ledger-bound `carried findings` и блокирует corrupt/foreign ledger; `github-issue-cli.ts` проверяет тот же статус, что preflight. Дополнили `pipeline-v2-contract.test.mjs`. `pipeline-plan.md` требует подтверждать текущий route/handler, invariant, существующий тест, исходное Issue и только доказанную дельту **до** вопросов владельцу. Approval intent в OpenChamber остаётся не проверенным на runtime.
+- **Stage 6 — частично:** `validateTestRework` более не навязывает universal prep. Новый `test_rework[].required_by` задаёт реальные pipeline consumers; omission сохраняет для старых frozen manifests обязательные зависимости. `TaskManager` и PLAN instructions обновлены, отдельный DAG не создавался. `gate-testing-policy.mjs` добавляет `input_kind=tree|candidate|deployed-service` и order check; `build-output` **не поддерживается** без producer proof и отклоняется. Candidate/service исключены из PLAN probe. Не реализованы ранний дешёвый live-lock check, build-output hash-binding и интеграционная проверка exact tree/candidate.
+- **Stage 8 — частично:** `orchestrator-wake.mjs` хеширует scheduling facts, исключая служебный JSON churn; `pipeline-runtime.ts` не освобождает lease, если child session невозможно прочитать или wait отклонён. Добавлен `orchestrator-wake.test.mjs`. Независимая runnable lane при другом pending child, restart reconciliation и bounded re-probe ещё не доказаны.
+- **Stage 9 — частично:** команды PLAN/replan больше не копируют полный `contextscout-path-check` вызов, ссылаясь на canonical pre-dispatch контракт в `OpenStageOrchestrator`. Отдельный scheduler, runner, ledger или экспорт renderer не создавались. Полный cleanup старых prompts/upstream обходов остаётся.
+- **Stage 1 — обновлён:** [DECISIONS.md](DECISIONS.md) отражает исходные точки blanket prep, gate ordering и wake, а не прежнее «требует поиска».
+- **Stage 3/4:** OpenChamber feature head `7bb813e7c09e88ff8c77f947dfeb0b3c8a538e5c` без изменений этого запуска. Upstream merge/pins/bun tests по-прежнему заблокированы отсутствием изолированного checkout с сетью.
+
+### Проверки этого запуска
+
+| Команда/действие | Окружение/точный источник | Результат | Время/CPU | Граница доказательства |
+|---|---|---|---|---|
+| `git ls-remote https://github.com/gest0r1/my-opencode.git HEAD` | container, сетевые настройки текущей сессии | FAIL (DNS: `Could not resolve host: github.com`) | unavailable | полноценный checkout не создан |
+| GitHub API branch HEAD, source reads и commits | Github connector, feature branch исходники | PASS | unavailable | подтверждены committed remote changes, не runtime |
+| `new Function` синтаксический разбор 8 изменённых `.mjs` источников с изъятыми import/export | V8 tool isolate, fetched GitHub source | **8/8 PARSE_PASS** | unavailable | это не полноценный `node --test`, не проверяет module import resolution |
+| Изолированное исполнение `validateTestRework` (independent / named consumer / invalid consumer) | V8 isolate, source function + mock dependencies | **3/3 PASS** | unavailable | тест фрагмента, не manifest-level checkout |
+| Изолированное исполнение `validateGateTesting/isPrePublishGate` | V8 isolate, source + mock dependencies | **7/7 PASS**, candidate probe=false | unavailable | не проверяет реальную gate command execution |
+| Изолированное исполнение `wakeDecision` | V8 isolate, source + mocked hash | **3 cases PASS** | unavailable | не проверяет OpenCode event subscriptions |
+| Изолированное исполнение `isPublishableStoryReview` | V8 isolate, source + synthetic machine ledger | **4/4 PASS** | unavailable | не проверяет end-to-end approve/publish |
+| `node --test`, `bash tests/test_contextscout_installation.sh`, `bun test`, `bun run check:changed`, pins, typecheck | нет полноценного checkout | **NOT RUN** | unavailable | обязательный blocker для ревью |
+
+### Prompt sizes и неподтверждённые эффекты
+
+Из GitHub source bytes, посчитанных по UTF-8 codepoints (не токены): `ContextScout` исходно 3792 → **5344 bytes**; `OpenStageOrchestrator` 19071 → **19606**; `pipeline-plan.md` 50653 → **52207**; `pipeline-run.md` 65230 → **65230**. Часть увеличения — новые проверки и фактический baseline, часть повторов удалена; **экономия платных токенов не измерена, утверждать ускорение нельзя**. Нет воспроизводимых before/after измерений `commands_reused`, CPU, wall-clock и фактического live wait.
+
+### Блокировки, состояние и продолжение
+
+- Репозитории доступны GitHub connector с read+commit, но встроенный container не резолвит GitHub и нет изолированного системного checkout/установленного Bun. Production host Sevami не затронут.
+- Не выполнялись изменения чужих процессов, locks, live БД; PID и OpenCode session неизвестны, не делать вывод о завершении чужого RUN.
+- **Точка продолжения:** сверить remote HEAD `feature/pipeline-optimization-20261104` с последним REPORT, затем на независимом checkout выполнить `node --test config/opencode/skills/task-management/scripts/contextscout-path-check.test.mjs config/opencode/skills/task-management/scripts/orchestrator-wake.test.mjs config/opencode/skills/task-management/scripts/pipeline-tmp-permissions.test.mjs config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs config/opencode/skills/task-management/scripts/pipeline-v2-contract.test.mjs`; проверить `tests/test_contextscout_installation.sh`. Только после PASS продолжить upstream/pins и lifecycle/evidence. OpenChamber требует отдельный `bun test packages/ui/src/lib/exportSession*.test.ts`, typecheck/build. Не merge main и не deploy.
+- **Незаконченные этапы:** 3 upstream, 5 owner UI contract, 6 build-output/lock proof, 7 reuse/live diagnostics, 8 child-recovery/independent runnable, 9 full prompt cleanup, 10 integration. К ревью всего ТЗ пока НЕ готово.
