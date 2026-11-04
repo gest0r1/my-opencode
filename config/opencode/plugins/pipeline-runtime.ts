@@ -436,6 +436,7 @@ export default Plugin.define({
     const lastWake = new Map<string, string>()
     const wakeTimers = new Map<string, ReturnType<typeof setTimeout>>()
     const unknownProbes = new Map<string, number>()
+    const unresolvedNoticeInFlight = new Set<string>()
     const trackChild = (parentID: string, childID: string) => {
       const set = pendingChildren.get(parentID) ?? new Set<string>()
       set.add(childID); pendingChildren.set(parentID, set)
@@ -454,22 +455,36 @@ export default Plugin.define({
       try { state = JSON.parse(stateRaw) } catch {}
       // The orchestrator's turn ended: its foreground children are done, and a force-stopped background
       // worker must not hold its lease forever.
-      let unknownChild = false
+      const unknownChildren: any[] = []
       for (const lease of readLeases(runRoot(root, runID), { state })) {
         if (lease.parent_session_id !== sessionID) continue
         let health: "idle" | "running" | "gone" | "unknown" = "idle"
         if (lease.child_session_id) health = await probeChild(String(lease.child_session_id))
-        if (health === "unknown") { unknownChild = true; continue }
+        if (health === "unknown") { unknownChildren.push(lease); continue }
         if (health === "running") continue
         if (lease.child_session_id) await settleBackground(runID, identity(lease as RuntimeContext), String(lease.child_session_id), health === "idle")
         if (lease.child_session_id) pendingChildren.get(sessionID)?.delete(String(lease.child_session_id))
         removeLease(runRoot(root, runID), lease)
       }
-      if (unknownChild) {
+      if (unknownChildren.length) {
         const count = (unknownProbes.get(sessionID) ?? 0) + 1
         unknownProbes.set(sessionID, count)
         if (count <= 3) wakeTimers.set(sessionID, setTimeout(() => { void checkWake(sessionID) }, wakeDelayMs()))
-        else appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "child_liveness_unresolved", run_id: runID, session_id: sessionID, probes: count })
+        else {
+          const key = sha256(JSON.stringify(unknownChildren.map(lease => [lease.child_session_id, lease.pipeline_id, lease.stage, lease.work_item_id, lease.created_at]).sort()))
+          const file = metricsFile(root, runID)
+          let alreadyNotified = false
+          try { alreadyNotified = fs.readFileSync(file, 'utf8').split('\n').some(line => { try { const item = JSON.parse(line); return item.event === 'child_liveness_unresolved' && item.notice_key === key } catch { return false } }) } catch {}
+          if (!alreadyNotified && !unresolvedNoticeInFlight.has(key)) {
+            unresolvedNoticeInFlight.add(key)
+            try {
+              await (plugin.session as any).synthetic({ sessionID, text: `Child session liveness for RUN \`${runID}\` remains unknown after repeated checks. Its lease is retained: do not redispatch that work or assume the child is gone. Check the existing session and continue any independently runnable work.`, description: 'pipeline child liveness unknown', delivery: 'queue', resume: true })
+              appendJsonLine(file, { timestamp: new Date().toISOString(), event: "child_liveness_unresolved", run_id: runID, session_id: sessionID, probes: count, notice_key: key })
+            } catch (error) {
+              appendJsonLine(file, { timestamp: new Date().toISOString(), event: "child_liveness_notice_failed", run_id: runID, session_id: sessionID, error: String((error as Error)?.message ?? error) })
+            } finally { unresolvedNoticeInFlight.delete(key) }
+          }
+        }
       } else unknownProbes.delete(sessionID)
       const runningWork = readLeases(runRoot(root, runID), { state }).length + runningGates(path.join(root, ".tmp/pipelines"), runID)
       let runnableCount: number | null = null

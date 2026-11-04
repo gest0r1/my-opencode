@@ -801,9 +801,22 @@ test('repeated unknown child health is bounded, diagnosed and leaves its lease i
     writeLease(runDir,{run_id:'unknown-run',pipeline_id:'p',stage:'implementation',work_item_id:'wi-1',role:'CoderAgent',scope:['src/**'],parent_session_id:'orch',child_session_id:'child'});
     await new Promise(resolve=>setTimeout(resolve,5)); push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
     await new Promise(resolve=>setTimeout(resolve,180));
-    assert.equal(probes,4); assert.equal(readLeases(runDir).length,1); assert.equal(synthetic.length,0);
+    assert.equal(probes,4); assert.equal(readLeases(runDir).length,1); assert.equal(synthetic.length,1);
+    assert.match(synthetic[0].text,/remains unknown.*lease is retained.*do not redispatch/s);
     const log=await readFile(path.join(runDir,'reuse-metrics/events.jsonl'),'utf8');
     assert.match(log,/child_liveness_unresolved/);
+    push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(synthetic.length,1,'repeated event does not repeat the notice');
+    let pushAfterRestart; const hooksAfterRestart={};
+    const restartEvents={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{pushAfterRestart=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooksAfterRestart[name]=fn;},transform:async fn=>fn({add:()=>{}})},event:{subscribe:()=>restartEvents},
+      session:{hook:async()=>{},get:async()=>({data:{}}),wait:async()=>{ throw Error('unavailable'); },synthetic:async value=>{synthetic.push(value);}}});
+    await hooksAfterRestart['execute.before']({tool:'subagent',sessionID:'orch',id:'gate2',input:{agent:'GateRunner',prompt:'Run: gate-runner-cli.ts unknown-run p fail-fast'}});
+    await new Promise(resolve=>setTimeout(resolve,5)); pushAfterRestart({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,180));
+    assert.equal(synthetic.length,1,'persisted notice prevents duplicates after restart');
+    assert.equal(readLeases(runDir).length,1);
   } finally {
     if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
     await rm(root,{recursive:true,force:true});
@@ -833,17 +846,18 @@ test('wake keeps unknown child leases, releases proven idle children and clears 
     assert.equal(readLeases(runDir).length,1);
     waits.c1=()=>Promise.reject(new Error('gone'));
     await idle();
-    assert.equal(synthetic.length,0,'a rejected wait does not prove the child is gone');
+    assert.equal(synthetic.length,1,'exhausted unknown probes report liveness without assuming completion');
+    assert.match(synthetic[0].text,/remains unknown/);
     assert.equal(readLeases(runDir).length,1);
     waits.c1=()=>Promise.resolve();
     await idle();
-    assert.equal(synthetic.length,1,'resolved wait proves idle: lease removed, one wake');
+    assert.equal(synthetic.length,2,'resolved wait proves idle: lease removed, one wake');
     assert.equal(readLeases(runDir).length,0);
     writeLease(runDir,{...base,work_item_id:'wi-2'});
     await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{p:{status:'in_progress',stages:{implementation:{status:'in_progress'},review:{status:'pending'}}}}}));
     await idle();
     assert.equal(readLeases(runDir).length,0,'foreground lease removed');
-    assert.equal(synthetic.length,2);
+    assert.equal(synthetic.length,3);
   } finally {
     if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
     process.chdir(previousCwd); await rm(root,{recursive:true,force:true});
