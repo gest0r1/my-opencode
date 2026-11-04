@@ -1,7 +1,7 @@
 # Отчёт продолжения pipeline optimization 20261104
 
 Статус: **частично / НЕ готово к независимому ревью как завершённое ТЗ**
-Дата/время: 2026-11-04T20:08:23.527Z (UTC)
+Дата/время: 2026-11-04T20:41:47.386Z (UTC)
 Запуск/сессия: ChatGPT GPT-6; идентификатор OpenCode session: unavailable
 Основной отчёт: `project/pipeline-optimization-20261104/REPORT.md`.
 
@@ -9,7 +9,7 @@
 
 | Repo | Рабочий каталог | Ветка | База origin/main | Последний источник / pointer SHA до этого отчёта | URL | Working tree |
 |---|---|---|---|---|---|---|
-| my-opencode | нет checkout; GitHub connector | `feature/pipeline-optimization-20261104` | `c58f452047df3806ea6e946d1909b075344bc069` | `233ad3ae3fd7b570b9ead8de35f226092c587f81` | https://github.com/gest0r1/my-opencode/tree/feature/pipeline-optimization-20261104 | неприменимо; все записи через API committed |
+| my-opencode | нет checkout; GitHub connector | `feature/pipeline-optimization-20261104` | `c58f452047df3806ea6e946d1909b075344bc069` | `bdfdc83f83ae236a3c060b98978cfeb1a67b82e5` (отчёт предыдущего commit; текущий HEAD читать из ref) | https://github.com/gest0r1/my-opencode/tree/feature/pipeline-optimization-20261104 | неприменимо; все записи через API committed |
 | openchamber-ru | нет checkout; GitHub connector | `feature/pipeline-optimization-20261104` | `f9521f168c894cb17dc60ba4f929d4df0722e263` | `7bb813e7c09e88ff8c77f947dfeb0b3c8a538e5c` | https://github.com/gest0r1/openchamber-ru/tree/feature/pipeline-optimization-20261104 | неприменимо; все записи через API committed |
 | sevami | чтение через connector | `main`, без feature-ветки (нет правок) | `6a4898b3aabed5a06a13f3071e870deb75ae139d` | тот же | https://github.com/gest0r1/sevami | неприменимо |
 
@@ -24,11 +24,11 @@
 | 2. ContextScout planning scope | **код внесён, тесты не запущены** | разрешение `.tmp/pipelines/**/planning/**`, deny machines, path-check с run-id/traversal/symlink, installation fixture, PLAN/replan instructions | `3974ca4` → `2cc4ad3`; files below | `node --test`, повторный install, runtime permission and dispatch check |
 | 3. Upstream и pins | **блокировано локальной средой** | stable OpenChamber `v2.6.1` `ce853f415704d1bfe8d076a5cfb2caabac00fffd`; OpenCode `v2.2.5` `9bbb8ce18c80f099e0e448775f59d965ead40a21` | GitHub tags + compare | безопасный merge из-за diverged history, conflicts, synced pins, local regression; versions targets НЕ установлены |
 | 4. Markdown timing | **код внесён, тесты не запущены** | добавлен формат tool timing на основе сохранённых ToolState times для main/child, synthetic sample, regression fixtures | OpenChamber `84060c1` → `5eafdf3`; `timing-evidence.md` | bun tests, type-check, build, полное сравнение с UI и исходным wire; repair end=start caveat |
-| 5. PLAN owner/readiness | **частично** | один предсказуемый reject `STORY_REVIEW_NOT_FULL_READY` вынесен в preapproval gate, общий predicate с publication, regression fixture | `8b48188`, `f2e7148`, `55a69db`, `233ad3a` | локальные тесты, baseline factual inventory, отдельный RUN intent/owner-revision cases |
-| 6. Prep DAG/gates | **не начат** | существующие DAG/local gates найдены, не создавался второй scheduler | `DECISIONS.md` | проверка реальных WI producer/consumer, tree/check identity, PLAN lifecycle probe |
+| 5. PLAN owner/readiness | **частично; source и isolated checks** | factual baseline до вопросов; общий ledger-bound ready/carried predicate preflight/publish | `eafa9cf`, `3fbd731`, `5ba2a13`; tests в `pipeline-v2-contract.test.mjs` | owner-response/manifest binding, local integration, no auto RUN |
+| 6. Prep DAG/gates | **частично; source и isolated checks** | targeted `required_by` вместо universal prep; `input_kind` и tree-before-publish validation | `72d6e38`, `ac92179`, `3e54de8`; test fixtures | build-output SHA producer, live lock cheap probe, true runner end-to-end |
 | 7. Test reuse/live | **не начат** | существующий `selectAffectedCommands`, snapshot/reuse/slot mechanism найден | `DECISIONS.md` | trace affected/reuse vs exact inputs, regression live test, no production |
-| 8. Wake/compaction | **не начат** | текущие registry/wake hooks осмотрены, новых timers не добавлено | `DECISIONS.md` | после upstream dedicated event/reconnect tests |
-| 9. Prompt cleanup | **не начат** | канонические владельцы определены, избегаем новые дубли | `DECISIONS.md` | measurable prompt diff and removal evidence |
+| 8. Wake/compaction | **частично; source и isolated checks** | dedup scheduling fingerprint; unknown child lease not released | `a457227`, `d8a1451`, `1d0a792` | parent/child lifecycle, restart, independent runnable work |
+| 9. Prompt cleanup | **частично** | shared ContextScout pre-dispatch contract stays in role, redundant command copies removed | `e594f3e`, `d7387ec`; `DECISIONS.md` | full current prompt/consumer audit and runtime context measurement |
 | 10. Integration & review | **не начат** | несколько точечных unit fixtures записаны как source, не выполнены | tests listed below | independent local checkout, full checks, cross-repo pins and acceptance |
 
 ## Сделано за этот запуск
