@@ -116,6 +116,41 @@ test('PLAN refuses a ready Story gate without a publishable final full review', 
   assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
 });
 
+test('PLAN and publication contract accept only an exact ledger-bound technical carry', async () => {
+  const fx = await fixture('story-carry-contract');
+  const story = await fx.frozen('stories/issue-123.md', '# existing story\n');
+  const review = await fx.frozen('reviews/story-review-4.md', 'status: needs_revision\nreview_scope: full\n');
+  const carry = await fx.frozen('planning/carried-story-findings.md', '# technical checks for RUN\n');
+  const ledger = {
+    schema: 1, run_id: fx.manifest.run_id,
+    entries: [
+      { kind: 'review', gate: 'stories', status: 'needs_revision', scope: 'full',
+        owner_decision: false, path: review.path, sha256: review.sha256, classes: ['test-only'], at: '2026-11-04T00:00:00Z' },
+      { kind: 'carry', gate: 'stories', path: carry.path, sha256: carry.sha256,
+        review_sha256: review.sha256, at: '2026-11-04T00:01:00Z' },
+    ],
+  };
+  await writeFile(path.join(fx.runRoot, 'planning', 'review-ledger.json'), JSON.stringify(ledger));
+  fx.manifest.planning_readiness.required_gates.push('stories');
+  fx.manifest.planning_readiness.gates.stories = { required: true, status: 'ready',
+    artifact: story, review, cycles: 4, blocking_decision_ids: [] };
+  fx.manifest.planning_readiness.carried_findings = [carry];
+  assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
+
+  fx.manifest.planning_readiness.carried_findings = [];
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /STORY_REVIEW_NOT_FULL_READY/,
+  );
+  fx.manifest.planning_readiness.carried_findings = [carry];
+  ledger.entries[0].owner_decision = true;
+  await writeFile(path.join(fx.runRoot, 'planning', 'review-ledger.json'), JSON.stringify(ledger));
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /STORY_REVIEW_NOT_FULL_READY/,
+  );
+});
+
 test('schema v2 rejects a planning gate that is not literally ready', async () => {
   const fx = await fixture('v2-needs-revision');
   fx.manifest.planning_readiness.gates.architecture.status = 'needs_revision';
