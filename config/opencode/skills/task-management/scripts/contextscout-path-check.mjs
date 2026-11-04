@@ -9,6 +9,7 @@ const RUN_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 const RESERVED = new Set([
   'revision.json', 'revisions.jsonl', 'review-ledger.json',
   'source-requirements.json', 'deployment-target.json', 'refresh-impact.json',
+  'state.json', 'manifest.json',
 ]);
 
 export async function assertContextScoutPlanningPath({ root, runId, artifactPath }) {
@@ -28,8 +29,9 @@ export async function assertContextScoutPlanningPath({ root, runId, artifactPath
   if (parts.some(part => !part || part === '.' || part === '..' ||
       /[?*\[\]{}]/.test(part))) reject('unsafe path component');
   const tail = parts.slice(4);
-  if (tail[0] === 'probes' || (tail.length === 1 && RESERVED.has(tail[0]))) {
-    reject('machine-owned planning evidence');
+  if (tail.some(part => RESERVED.has(part) || ['probes', 'checks', 'handoffs', 'gates', '.git'].includes(part)) ||
+      tail.some(part => /(?:^|\\.)env(?:\\.|$)|\\.(?:key|secret)$/i.test(part))) {
+    reject('machine-owned planning evidence or secret');
   }
   const absoluteRoot = resolve(root);
   const absolute = resolve(absoluteRoot, ...parts);
