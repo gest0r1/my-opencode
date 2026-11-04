@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import runtime from '../../../plugins/pipeline-runtime.ts';
 import { dispatchPacket } from './pipeline-dispatch.ts';
+import { computeRunnable } from './stage-cli-core.ts';
 const STAGE_CLI = fileURLToPath(new URL('./stage-cli.ts', import.meta.url));
 function run(cwd, args) {
  const result = spawnSync('npx',['--yes','tsx',STAGE_CLI,...args], {cwd,encoding:'utf8',env:process.env});
@@ -533,6 +534,32 @@ test('a PLAN prompt containing an example RUN command cannot trigger an automati
   }
 });
 
+test('an owner checkpoint does not suppress a wake for an independent queued pipeline', async () => {
+  const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='10';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/wake-lanes'); await mkdir(runDir,{recursive:true});
+    const manifestPath=path.join(runDir,'manifest.json');
+    await writeFile(manifestPath,JSON.stringify({pipelines:[{id:'waiting',executors:{accept:'owner_acceptance'}},{id:'work',executors:{build:'agent'}}]}));
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({run_id:'wake-lanes',status:'in_progress',manifest_file:manifestPath,pipelines:{
+      waiting:{id:'waiting',status:'in_progress',stage_order:['accept'],stages:{accept:{status:'in_progress'}}},
+      work:{id:'work',status:'approved',stage_order:['build'],stages:{build:{status:'pending'}}},
+    }}));
+    assert.deepEqual(computeRunnable(JSON.parse(await readFile(path.join(runDir,'state.json'),'utf8'))), [{pipeline_id:'work',stage:'build'}]);
+    const sessionHooks={}, synthetic=[]; let push;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async()=>{},transform:async fn=>fn({add:()=>{}})},
+      event:{subscribe:()=>events},session:{hook:async(name,fn)=>{sessionHooks[name]=fn;},get:async()=>({data:{}}),wait:async()=>{},synthetic:async input=>{synthetic.push(input);}}});
+    sessionHooks.prompt({sessionID:'orch',prompt:{text:'/pipeline-run wake-lanes'}});
+    await new Promise(resolve=>setTimeout(resolve,5)); push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,60));
+    assert.equal(synthetic.length,1); assert.match(synthetic[0].text,/stage-cli next wake-lanes/);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
 test('an OpenStage turn that ends with nothing running is woken once', async () => {
   const previousCwd=process.cwd(), root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
   process.env.PIPELINE_WAKE_DELAY_MS='10';
@@ -737,7 +764,53 @@ test('a lane in its gate or review reserves its planned files, not shared runtim
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });
 
-test('wake prunes stale leases of its parent: gone child, foreground lease; a running child keeps the session asleep', async () => {
+test('wake re-probes an unknown child and releases its lease only after a later resolved wait', async () => {
+  const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='15';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/reprobe-run'); await mkdir(runDir,{recursive:true});
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{p:{status:'in_progress',stages:{implementation:{status:'in_progress'}}}}}));
+    const hooks={}, synthetic=[]; let push, probes=0;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},event:{subscribe:()=>events},
+      session:{hook:async()=>{},get:async()=>({data:{}}),wait:async()=>{ if (++probes === 1) throw Error('transport unavailable'); },synthetic:async value=>{synthetic.push(value);}}});
+    await hooks['execute.before']({tool:'subagent',sessionID:'orch',id:'gate',input:{agent:'GateRunner',prompt:'Run: gate-runner-cli.ts reprobe-run p fail-fast'}});
+    const { writeLease, readLeases }=await import('./dispatch-leases.mjs');
+    writeLease(runDir,{run_id:'reprobe-run',pipeline_id:'p',stage:'implementation',work_item_id:'wi-1',role:'CoderAgent',scope:['src/**'],parent_session_id:'orch',child_session_id:'child'});
+    await new Promise(resolve=>setTimeout(resolve,5)); push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,120));
+    assert.equal(probes,2); assert.equal(readLeases(runDir).length,0); assert.equal(synthetic.length,1);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('repeated unknown child health is bounded, diagnosed and leaves its lease intact', async () => {
+  const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='15';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/unknown-run'); await mkdir(runDir,{recursive:true});
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{p:{status:'in_progress',stages:{implementation:{status:'in_progress'}}}}}));
+    const hooks={}, synthetic=[]; let push, probes=0;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},event:{subscribe:()=>events},
+      session:{hook:async()=>{},get:async()=>({data:{}}),wait:async()=>{ probes++; throw Error('unavailable'); },synthetic:async value=>{synthetic.push(value);}}});
+    await hooks['execute.before']({tool:'subagent',sessionID:'orch',id:'gate',input:{agent:'GateRunner',prompt:'Run: gate-runner-cli.ts unknown-run p fail-fast'}});
+    const { writeLease, readLeases }=await import('./dispatch-leases.mjs');
+    writeLease(runDir,{run_id:'unknown-run',pipeline_id:'p',stage:'implementation',work_item_id:'wi-1',role:'CoderAgent',scope:['src/**'],parent_session_id:'orch',child_session_id:'child'});
+    await new Promise(resolve=>setTimeout(resolve,5)); push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,180));
+    assert.equal(probes,4); assert.equal(readLeases(runDir).length,1); assert.equal(synthetic.length,0);
+    const log=await readFile(path.join(runDir,'reuse-metrics/events.jsonl'),'utf8');
+    assert.match(log,/child_liveness_unresolved/);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('wake keeps unknown child leases, releases proven idle children and clears foreground leases', async () => {
   const previousCwd=process.cwd(), root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
   process.env.PIPELINE_WAKE_DELAY_MS='10';
   try {
@@ -760,7 +833,11 @@ test('wake prunes stale leases of its parent: gone child, foreground lease; a ru
     assert.equal(readLeases(runDir).length,1);
     waits.c1=()=>Promise.reject(new Error('gone'));
     await idle();
-    assert.equal(synthetic.length,1,'gone child: lease removed, one wake');
+    assert.equal(synthetic.length,0,'a rejected wait does not prove the child is gone');
+    assert.equal(readLeases(runDir).length,1);
+    waits.c1=()=>Promise.resolve();
+    await idle();
+    assert.equal(synthetic.length,1,'resolved wait proves idle: lease removed, one wake');
     assert.equal(readLeases(runDir).length,0);
     writeLease(runDir,{...base,work_item_id:'wi-2'});
     await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{p:{status:'in_progress',stages:{implementation:{status:'in_progress'},review:{status:'pending'}}}}}));

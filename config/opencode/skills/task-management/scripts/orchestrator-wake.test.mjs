@@ -3,6 +3,7 @@ import test from 'node:test';
 import { wakeDecision, wakeText } from './orchestrator-wake.mjs';
 
 const runId = 'example';
+
 const manifest = { pipelines: [{ id: 'app', executors: { implementation: 'agent', review: 'review' } }] };
 const state = () => ({
   run_id: runId, status: 'in_progress', updated_at: '2026-11-04T10:00:00.000Z',
@@ -42,5 +43,19 @@ test('unknown/running children or owner checkpoints do not manufacture completio
   const question = state();
   question.pipelines.app.stages.review.status = 'awaiting_owner_approval';
   assert.equal(wakeDecision({ stateRaw: JSON.stringify(question), manifest }).reason, 'owner_checkpoint');
-  assert.match(wakeText(runId), /no child, worker lease or gate is running/);
+  assert.match(wakeText(runId), /Respect existing children, leases, gates and owner checkpoints/);
+});
+
+test('a lane awaiting owner review does not suppress an independent open lane', () => {
+  const m = { pipelines: [{ id: 'waiting', executors: { accept: 'owner_acceptance' } }, { id: 'work', executors: { build: 'agent' } }] };
+  const s = { run_id: runId, status: 'in_progress', pipelines: {
+    waiting: { status: 'in_progress', stages: { accept: { status: 'in_progress' } } },
+    work: { status: 'pending', stages: { build: { status: 'pending' } } },
+  } };
+  assert.equal(wakeDecision({ stateRaw: JSON.stringify(s), manifest: m, runnableCount: 1 }).wake, true);
+  assert.equal(wakeDecision({ stateRaw: JSON.stringify(s), manifest: m, runnableCount: 1, pendingChildren: 1, runningWork: 1 }).wake, true);
+  s.pipelines.waiting.stages.accept = { status: 'blocked', runtime_replans: [{ status: 'awaiting_owner_approval' }] };
+  assert.equal(wakeDecision({ stateRaw: JSON.stringify(s), manifest: m, runnableCount: 1 }).wake, true);
+  s.pipelines.work.status = 'completed';
+  assert.equal(wakeDecision({ stateRaw: JSON.stringify(s), manifest: m, runnableCount: 0 }).wake, false);
 });

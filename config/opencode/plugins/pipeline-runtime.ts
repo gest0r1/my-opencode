@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import { assertPipelineCapabilities } from "../skills/task-management/scripts/capability-preflight.mjs"
 import { RUN_PROMPT, WAKE_MARKER, runningGates, wakeDecision, wakeText } from "../skills/task-management/scripts/orchestrator-wake.mjs"
 import { readLeases, removeLease, updateLease, writeLease } from "../skills/task-management/scripts/dispatch-leases.mjs"
+import { computeRunnable } from "../skills/task-management/scripts/stage-cli-core.ts"
 
 const ELIGIBLE_ROLES = new Set([
   "CoderAgent", "TestEngineer", "BuildAgent",
@@ -434,6 +435,7 @@ export default Plugin.define({
     const pendingChildren = new Map<string, Set<string>>()
     const lastWake = new Map<string, string>()
     const wakeTimers = new Map<string, ReturnType<typeof setTimeout>>()
+    const unknownProbes = new Map<string, number>()
     const trackChild = (parentID: string, childID: string) => {
       const set = pendingChildren.get(parentID) ?? new Set<string>()
       set.add(childID); pendingChildren.set(parentID, set)
@@ -452,16 +454,27 @@ export default Plugin.define({
       try { state = JSON.parse(stateRaw) } catch {}
       // The orchestrator's turn ended: its foreground children are done, and a force-stopped background
       // worker must not hold its lease forever.
+      let unknownChild = false
       for (const lease of readLeases(runRoot(root, runID), { state })) {
         if (lease.parent_session_id !== sessionID) continue
-        let health: "idle" | "running" | "gone" | "unknown" = "unknown"
+        let health: "idle" | "running" | "gone" | "unknown" = "idle"
         if (lease.child_session_id) health = await probeChild(String(lease.child_session_id))
-        if (health === "running" || health === "unknown") continue
+        if (health === "unknown") { unknownChild = true; continue }
+        if (health === "running") continue
         if (lease.child_session_id) await settleBackground(runID, identity(lease as RuntimeContext), String(lease.child_session_id), health === "idle")
+        if (lease.child_session_id) pendingChildren.get(sessionID)?.delete(String(lease.child_session_id))
         removeLease(runRoot(root, runID), lease)
       }
+      if (unknownChild) {
+        const count = (unknownProbes.get(sessionID) ?? 0) + 1
+        unknownProbes.set(sessionID, count)
+        if (count <= 3) wakeTimers.set(sessionID, setTimeout(() => { void checkWake(sessionID) }, wakeDelayMs()))
+        else appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "child_liveness_unresolved", run_id: runID, session_id: sessionID, probes: count })
+      } else unknownProbes.delete(sessionID)
       const runningWork = readLeases(runRoot(root, runID), { state }).length + runningGates(path.join(root, ".tmp/pipelines"), runID)
-      const decision = wakeDecision({ stateRaw, manifest, pendingChildren: pendingChildren.get(sessionID)?.size ?? 0, runningWork, lastFingerprint: lastWake.get(sessionID) ?? null })
+      let runnableCount: number | null = null
+      try { if (state) runnableCount = computeRunnable(state).length } catch {}
+      const decision = wakeDecision({ stateRaw, manifest, runnableCount, pendingChildren: pendingChildren.get(sessionID)?.size ?? 0, runningWork, lastFingerprint: lastWake.get(sessionID) ?? null })
       if (!decision.wake) return
       lastWake.set(sessionID, decision.fingerprint)
       appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake", run_id: runID, session_id: sessionID })
@@ -481,6 +494,7 @@ export default Plugin.define({
             if (!sessionID || !orchestratorRun.has(sessionID)) continue
             const type = String((event as any)?.type ?? "")
             if (type === "session.execution.started") {
+              unknownProbes.delete(sessionID)
               const timer = wakeTimers.get(sessionID); if (timer) clearTimeout(timer); wakeTimers.delete(sessionID)
             } else if (type === "session.execution.succeeded") {
               const timer = wakeTimers.get(sessionID); if (timer) clearTimeout(timer)
