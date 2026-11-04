@@ -246,6 +246,13 @@ function validatePlanningInputs(manifest) {
   }
 }
 
+// The same frozen Story review contract gates PLAN approval and GitHub publication.
+// This is evidence of a full ready review, not merely a model-reported gate status.
+export function isPublishableStoryReview(content) {
+  return typeof content === 'string' && /(?:^|\n)status:\s*ready(?:\s|$)/i.test(content) &&
+    /(?:^|\n)review_scope:\s*full(?:\s|$)/i.test(content);
+}
+
 function validatePlanningReadiness(manifest, root) {
   const readiness = manifest.planning_readiness;
   if (!readiness || typeof readiness !== 'object' || readiness.design_freeze !== true) {
@@ -278,7 +285,15 @@ function validatePlanningReadiness(manifest, root) {
       throw new ManifestV2PolicyError(`ready planning gate cannot retain blocking_decision_ids: ${gate}`);
     }
     readFrozenArtifact(root, record.artifact, `planning_readiness.gates.${gate}.artifact`);
-    if (record.review !== undefined) {
+    if (/stor/i.test(gate)) {
+      if (record.review === undefined) {
+        throw new ManifestV2PolicyError('STORY_REVIEW_NOT_FULL_READY: missing frozen full Story review');
+      }
+      const reviewPath = readFrozenArtifact(root, record.review, `planning_readiness.gates.${gate}.review`);
+      if (!isPublishableStoryReview(readFileSync(reviewPath, 'utf8'))) {
+        throw new ManifestV2PolicyError('STORY_REVIEW_NOT_FULL_READY: full ready Story review required before PLAN approval');
+      }
+    } else if (record.review !== undefined) {
       readFrozenArtifact(root, record.review, `planning_readiness.gates.${gate}.review`);
     }
   }
