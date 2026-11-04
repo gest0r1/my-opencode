@@ -119,6 +119,13 @@ export function validateGateTesting(manifest) {
         })) {
           throw new Error(`GATE_CANDIDATE_BEFORE_VERIFY: ${profile}/${gate} requires a preceding git_verify`);
         }
+        if (kind === 'candidate' && users.some(pipeline => {
+          const index = pipeline.stages.indexOf(gate);
+          return !pipeline.stages.slice(0, index).some(stage => pipeline.executors?.[stage] === 'git_publish');
+        })) throw new Error(`GATE_CANDIDATE_BEFORE_PUBLISH: ${profile}/${gate} requires a preceding git_publish producer`);
+        if (kind === 'candidate' && commands.some(command => !String(command).includes('{candidate_sha}'))) {
+          throw new Error(`GATE_CANDIDATE_UNBOUND: ${profile}/${gate} each command must consume {candidate_sha}`);
+        }
         if (kind === 'deployed-service' && users.some(pipeline => {
           const index = pipeline.stages.indexOf(gate);
           return !pipeline.stages.slice(0, index).some(stage => pipeline.executors?.[stage] === 'dev_deploy');

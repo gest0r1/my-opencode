@@ -338,6 +338,7 @@ async function publish(manifest: Manifest, manifestPath: string, cwd: string): P
   const evidencePath = join(dirname(resolve(manifestPath)), 'candidate.json');
   // A candidate is identified by its SHA; the version tag is set only after acceptance (github-pr-cli release).
   const evidence = { status: 'PASS', run_id: manifest.run_id ?? null, branch: manifest.git_setup.branch,
+    manifest_sha256: createHash('sha256').update(await readFile(manifestPath)).digest('hex'),
     candidate_sha: candidate, remote_sha: remote, changed_files: changed,
     published_at: new Date().toISOString() };
   await writeJsonAtomic(evidencePath, evidence);

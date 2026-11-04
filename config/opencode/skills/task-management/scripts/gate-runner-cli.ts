@@ -24,7 +24,7 @@ type Manifest = {
   pipelines: PipelineSpec[];
   gate_profiles?: Record<string, Record<string, string[]>>;
   gate_testing?: Record<string, Record<string, any>>;
-  git_setup?: { base_sha: string };
+  git_setup?: { base_sha: string; branch?: string };
 };
 
 type State = {
@@ -36,6 +36,11 @@ type State = {
 
 type CandidateEvidence = {
   candidate_sha?: string;
+  remote_sha?: string;
+  run_id?: string;
+  branch?: string;
+  status?: string;
+  manifest_sha256?: string;
 };
 
 class GateRunnerError extends Error {}
@@ -124,6 +129,18 @@ async function loadCandidate(manifestFile: string): Promise<string | undefined> 
   } catch {
     return undefined;
   }
+}
+
+async function loadDeclaredCandidate(manifestFile: string, manifest: Manifest, manifestSha: string): Promise<string> {
+  let candidate: CandidateEvidence;
+  try { candidate = JSON.parse(await readFile(join(dirname(manifestFile), 'candidate.json'), 'utf8')); }
+  catch { throw new GateRunnerError('CANDIDATE_EVIDENCE_INVALID: published candidate evidence missing or unreadable'); }
+  if (candidate.status !== 'PASS' || candidate.run_id !== manifest.run_id || !manifest.git_setup?.branch ||
+      candidate.branch !== manifest.git_setup.branch || candidate.manifest_sha256 !== manifestSha || !candidate.candidate_sha || !SHA.test(candidate.candidate_sha) ||
+      candidate.remote_sha?.toLowerCase() !== candidate.candidate_sha.toLowerCase()) {
+    throw new GateRunnerError('CANDIDATE_EVIDENCE_INVALID: published run, branch or remote SHA mismatch');
+  }
+  return candidate.candidate_sha;
 }
 
 // Lock files are named by the hash of the lock name; the record carries the name for its readers.
@@ -447,7 +464,9 @@ async function main(): Promise<void> {
     // so explicitly; the wave gate and the final complete gate run those commands.
     if (!selected.length) selectionReason = `deferred to coordinator: commands ${deferred.join(', ')}`;
   }
-  const candidateSha = advisory ? undefined : await loadCandidate(state.manifest_file);
+  if (advisory && config?.input_kind === 'candidate') throw new GateRunnerError('candidate gates cannot be advisory');
+  const candidateSha = advisory ? undefined : config?.input_kind === 'candidate'
+    ? await loadDeclaredCandidate(state.manifest_file, manifest, state.manifest_sha256) : await loadCandidate(state.manifest_file);
   const invocations = selected.map(item => {
     const tokens = substituteCandidate(tokenizeCommand(item.command), candidateSha);
     tokens.push(...item.test_files);

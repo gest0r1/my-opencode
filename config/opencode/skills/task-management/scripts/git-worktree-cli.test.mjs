@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -84,6 +85,7 @@ test('owner-created linked worktree is adopted read-only; setup and primary chec
   const published = JSON.parse(result.stdout);
   assert.equal(published.run_id, 'run-b');
   assert.equal(published.candidate_sha, published.remote_sha);
+  assert.equal(published.manifest_sha256, createHash('sha256').update(await readFile(f.manifestPath)).digest('hex'));
   assert.equal(exec(f.b, 'git', ['branch', '--show-current']), 'feature/B');
   assert.equal(JSON.parse(await readFile(path.join(f.artifactRoot, 'candidate.json'))).candidate_sha,
     published.candidate_sha);
