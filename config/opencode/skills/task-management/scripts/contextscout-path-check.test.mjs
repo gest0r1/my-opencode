@@ -59,6 +59,8 @@ test('does not authorize reserved machine-owned planning evidence', async t => {
   for (const file of [
     'revision.json', 'revisions.jsonl', 'review-ledger.json', 'source-requirements.json',
     'deployment-target.json', 'refresh-impact.json', 'probes/app-unit.json',
+    'checks/tree.json', 'handoffs/child.json', 'gates/build.json',
+    'state.json', 'manifest.json', '.env', 'drift/credentials.key', 'research/private.secret',
   ]) {
     await assert.rejects(
       assertContextScoutPlanningPath({ root, runId: RUN, artifactPath: PREFIX + file }),
