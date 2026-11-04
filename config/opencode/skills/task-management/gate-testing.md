@@ -1,6 +1,21 @@
 # Frozen local test contract
 
 `gate_profiles[profile][gate]` remains the complete authoritative command array.
+## Declared gate input (new PLANs)
+
+A local gate may freeze `gate_testing[profile][gate].input_kind`, which is
+validated by the existing gate policy rather than a second executor:
+
+- `tree`: test/check the working tree; the local gate must be **before** `git_publish` and cannot require `{candidate_sha}`.
+- `candidate`: must follow `git_verify` and use the canonical candidate evidence (the runner's `CANDIDATE_SHA`).
+- `deployed-service`: must follow `dev_deploy`, never a PLAN probe.
+- `build-output`: **not yet supported** as an input declaration. It requires an exact producer artifact hash binding; choosing it without that mechanism is rejected, not silently treated as tree evidence.
+
+Existing frozen manifests that omit `input_kind` retain their previous behavior.
+This declaration does not replace `git_verify`, runner snapshot identity, SHA checks,
+or a final full gate. Mark tree-only expensive suites before publish; post-publish
+candidate checks must verify the same committed candidate, not a mutable checkout.
+
 The optional `gate_testing[profile][gate]` adds diagnostic impact groups and
 managed PostgreSQL resources. Validation and selection are implemented once in
 `scripts/gate-testing-policy.mjs`; lifecycle and evidence belong to the existing
