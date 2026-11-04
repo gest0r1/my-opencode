@@ -97,6 +97,25 @@ function run(root, args) {
   });
 }
 
+test('PLAN refuses a ready Story gate without a publishable final full review', async () => {
+  const fx = await fixture('story-full-approval-contract');
+  const story = await fx.frozen('stories/issue-123.md', '# story\\n');
+  const badReview = await fx.frozen('reviews/story-review-1.md', 'status: ready\\nreview_scope: delta\\n');
+  fx.manifest.planning_readiness.required_gates.push('stories');
+  fx.manifest.planning_readiness.gates.stories = {
+    required: true, status: 'ready', artifact: story, review: badReview,
+    cycles: 1, blocking_decision_ids: [],
+  };
+
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /STORY_REVIEW_NOT_FULL_READY/,
+  );
+  const goodReview = await fx.frozen('reviews/story-review-2.md', 'status: ready\\nreview_scope: full\\n');
+  fx.manifest.planning_readiness.gates.stories.review = goodReview;
+  assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
+});
+
 test('schema v2 rejects a planning gate that is not literally ready', async () => {
   const fx = await fixture('v2-needs-revision');
   fx.manifest.planning_readiness.gates.architecture.status = 'needs_revision';
