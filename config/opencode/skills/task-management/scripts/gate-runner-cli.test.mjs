@@ -107,6 +107,33 @@ test('runtime candidate placeholder fails closed without published candidate evi
   assert.match(result.stderr, /candidate evidence is missing/);
 });
 
+test('declared candidate gate rejects missing, foreign and mismatched publish evidence', async () => {
+  const fx = await makeRun('bash scripts/verify.sh {candidate_sha}', 'release-candidate');
+  await mkdir(path.join(fx.root, 'scripts')); await writeFile(path.join(fx.root, 'scripts/verify.sh'), '#!/bin/sh\nexit 0\n');
+  const manifestFile = path.join(fx.root, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  manifest.pipelines[0].stages = ['verify', 'publish', 'release-candidate'];
+  manifest.pipelines[0].executors = { verify: 'git_verify', publish: 'git_publish', 'release-candidate': 'local_gate' };
+  manifest.git_setup = { branch: 'feature/test' };
+  manifest.gate_testing = { default: { 'release-candidate': { input_kind: 'candidate' } } };
+  const content = JSON.stringify(manifest); await writeFile(manifestFile, content);
+  const stateFile = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(stateFile, 'utf8')); state.manifest_sha256 = sha256(content); await writeFile(stateFile, JSON.stringify(state));
+  const args = [fx.runId, 'app', 'release-candidate', '--state-root', fx.stateRoot];
+  let result = run(fx.root, args);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /CANDIDATE_EVIDENCE_INVALID/);
+  const candidate = 'a'.repeat(40);
+  const evidence = { status: 'PASS', run_id: fx.runId, branch: 'feature/test', manifest_sha256: sha256(content), candidate_sha: candidate, remote_sha: candidate };
+  for (const invalid of [{ ...evidence, run_id: 'other' }, { ...evidence, remote_sha: 'b'.repeat(40) }, { ...evidence, status: 'FAIL' }, { ...evidence, manifest_sha256: 'c'.repeat(64) }]) {
+    await writeFile(path.join(fx.root, 'candidate.json'), JSON.stringify(invalid));
+    result = run(fx.root, args); assert.notEqual(result.status, 0); assert.match(result.stderr, /CANDIDATE_EVIDENCE_INVALID/);
+  }
+  await writeFile(path.join(fx.root, 'candidate.json'), JSON.stringify(evidence));
+  result = run(fx.root, args); assert.equal(result.status, 0, result.stderr);
+  const written = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+  assert.equal(written.candidate_sha, candidate);
+});
+
 
 test('runner executes frozen uv pytest and rejects every non-pytest uv form', async () => {
   const fixture = await makeRun('uv run --frozen pytest backend/tests/test_x.py -q');

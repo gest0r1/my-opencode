@@ -7,7 +7,7 @@ A local gate may freeze `gate_testing[profile][gate].input_kind`, which is
 validated by the existing gate policy rather than a second executor:
 
 - `tree`: test/check the working tree; the local gate must be **before** `git_publish` and cannot require `{candidate_sha}`.
-- `candidate`: must follow `git_verify` and use the canonical candidate evidence (the runner's `CANDIDATE_SHA`).
+- `candidate`: must follow `git_verify` and the `git_publish` producer; every frozen command includes `{candidate_sha}`. The runner checks the canonical publish evidence for the same run, frozen manifest, branch and matching candidate/remote SHA before substitution. This establishes the identity passed to a command, not that a command actually verifies the candidate correctly.
 - `deployed-service`: must follow `dev_deploy`, never a PLAN probe.
 - `build-output`: **not yet supported** as an input declaration. It requires an exact producer artifact hash binding; choosing it without that mechanism is rejected, not silently treated as tree evidence.
 
