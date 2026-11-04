@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { accessSync, constants, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { validateGateTesting, resolveGateTesting, commandsDigest, isPrePublishGate } from './gate-testing-policy.mjs';
 import { validateGenerators } from './generator-cli.mjs';
 
@@ -271,7 +271,7 @@ export function isPublishableStoryReview(content, { runRoot, gate, reviewSha256,
   let ledger;
   try { ledger = JSON.parse(readFileSync(ledgerFile, 'utf8')); }
   catch { return false; } // A corrupt existing ledger must never fall back to legacy.
-  if (ledger.run_id !== String(runRoot).split(/[\\/]/).at(-1) || !Array.isArray(ledger.entries)) return false;
+  if (ledger.run_id !== basename(runRoot) || !Array.isArray(ledger.entries)) return false;
   const entries = ledger.entries.filter(entry => entry?.gate === gate);
   const reviews = entries.filter(entry => entry.kind === 'review');
   const last = reviews.at(-1);
