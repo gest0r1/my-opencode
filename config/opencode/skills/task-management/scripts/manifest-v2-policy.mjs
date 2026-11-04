@@ -258,7 +258,9 @@ export function isPublishableStoryReview(content, { runRoot, gate, reviewSha256,
     status = parsed?.status;
     scope = parsed?.review_scope;
   } catch {
-    const field = name => new RegExp(`^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${name}(?:\\*\\*)?\\s*:\\s*(?:\\*\\*)?\\s*\\`?([a-z_]+)\\b`, 'im').exec(content)?.[1];
+    const field = name => content.split(/\r?\n/).map(line => line.replace(/[\`*]/g, '').trim())
+      .map(line => new RegExp('^' + name + '\\s*:\\s*(ready|needs_revision|blocked|full|delta)\\b', 'i').exec(line)?.[1])
+      .find(Boolean);
     status = field('status');
     scope = field('review_scope');
   }
