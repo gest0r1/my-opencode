@@ -823,6 +823,31 @@ test('repeated unknown child health is bounded, diagnosed and leaves its lease i
   }
 });
 
+test('exhausted unknown child and newly runnable independent work produce one parent message', async () => {
+  const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='15';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/combined-run'); await mkdir(runDir,{recursive:true});
+    const statePath=path.join(runDir,'state.json');
+    const state={run_id:'combined-run',status:'in_progress',pipelines:{p:{status:'in_progress',stage_order:['implementation'],stages:{implementation:{status:'in_progress'}}}}};
+    await writeFile(statePath,JSON.stringify(state));
+    const hooks={}, synthetic=[]; let push, probes=0;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},event:{subscribe:()=>events},
+      session:{hook:async()=>{},get:async()=>({data:{}}),wait:async()=>{ if (++probes===3) { state.pipelines.q={status:'approved',stage_order:['build'],stages:{build:{status:'pending'}}}; await writeFile(statePath,JSON.stringify(state)); } throw Error('unavailable'); },synthetic:async value=>{synthetic.push(value);}}});
+    await hooks['execute.before']({tool:'subagent',sessionID:'orch',id:'gate',input:{agent:'GateRunner',prompt:'Run: gate-runner-cli.ts combined-run p fail-fast'}});
+    const { writeLease, readLeases }=await import('./dispatch-leases.mjs');
+    writeLease(runDir,{run_id:'combined-run',pipeline_id:'p',stage:'implementation',work_item_id:'wi-1',role:'CoderAgent',scope:['src/**'],parent_session_id:'orch',child_session_id:'child'});
+    await new Promise(resolve=>setTimeout(resolve,5)); push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,180));
+    assert.equal(probes,4); assert.equal(synthetic.length,1); assert.match(synthetic[0].text,/remains unknown.*independently runnable/s);
+    assert.equal(readLeases(runDir).length,1);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
 test('wake keeps unknown child leases, releases proven idle children and clears foreground leases', async () => {
   const previousCwd=process.cwd(), root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
   process.env.PIPELINE_WAKE_DELAY_MS='10';
