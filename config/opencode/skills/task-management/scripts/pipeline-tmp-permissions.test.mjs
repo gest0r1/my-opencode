@@ -36,7 +36,12 @@ test('planning and review agents can write their run-scoped artifacts', async ()
   }
 
   const context = frontmatter(await text('config/opencode/agent/subagents/core/contextscout.md'));
-  assert.ok(has(context, '\\.tmp/pipelines/\\*\\*/planning/context-packet\\.md.*allow'));
+  assert.ok(has(context, '\\.tmp/pipelines/\\*\\*/planning/\\*\\*.*allow'), 'ContextScout must write the whole planning subtree');
+  assert.ok(!has(context, '\\.tmp/pipelines/\\*\\*/planning/context-packet\\.md.*allow'), 'single-file permission must not return');
+  for (const artifact of ['revision.json', 'revisions.jsonl', 'review-ledger.json', 'source-requirements.json', 'deployment-target.json', 'refresh-impact.json']) {
+    assert.ok(context.includes(`planning/${artifact}": deny`), `${artifact} is machine-owned`);
+  }
+  assert.ok(context.includes('planning/probes/**": deny'), 'PLAN probes are machine-owned');
   const web = frontmatter(await text('config/opencode/agent/subagents/core/web-researcher.md'));
   assert.ok(has(web, '\\.tmp/pipelines/\\*\\*/planning/research/\\*\\*.*allow'));
 });
