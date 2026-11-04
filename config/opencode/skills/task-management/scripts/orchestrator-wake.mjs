@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { processAlive } from './runtime-locks.mjs';
 
 export const WAKE_MARKER = '<pipeline_wake/>';
-export const RUN_PROMPT = /\/pip(?:e)?line-run\s+([A-Za-z0-9._-]+)/;
+export const RUN_PROMPT = /^\s*\/pip(?:e)?line-run[ \t]+([A-Za-z0-9._-]+)(?=[ \t\r\n]|$)([^\r\n]*)/;
 
 export function wakeText(runId) {
   return `${WAKE_MARKER} Automatic pipeline wake: your last turn ended while RUN \`${runId}\` is active, no child, worker lease or gate is running and no owner checkpoint is open. Run \`stage-cli next ${runId} --json\` and continue under pipeline-run rules. If you are genuinely waiting for the owner, say so in one line and stop.`;

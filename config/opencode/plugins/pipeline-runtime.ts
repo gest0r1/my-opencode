@@ -499,13 +499,15 @@ export default Plugin.define({
     const parentFiles = new Map<string, Set<string>>()
     await plugin.session.hook("prompt", (event) => {
       const text = JSON.stringify(event.prompt)
-      const runID = RUN_PROMPT.exec(text)?.[1]
+      const prompt = typeof event.prompt === "string" ? event.prompt : (event.prompt as any)?.text
+      const invocation = typeof prompt === "string" ? RUN_PROMPT.exec(prompt) : null
+      const runID = invocation?.[1]
       if (runID) orchestratorRun.set(String(event.sessionID), runID)
       // An owner prompt reopens waking; our own wake does not.
       if (!text.includes(WAKE_MARKER)) lastWake.delete(String(event.sessionID))
-      if (/pipeline-run/.test(text)) {
+      if (invocation) {
         // Only the owner's invocation line counts; the expanded command body documents the flag in its usage template.
-        const optedOut = [...text.matchAll(/pip(?:e)?line-run\s+[A-Za-z0-9._-]+([^\\"]*)/g)].some((m) => /(?:^|\s)--no-session-reuse(?=\s|$)/.test(m[1]))
+        const optedOut = /(?:^|\s)--no-session-reuse(?=\s|$)/.test(invocation[2])
         const file = optionFile(String(event.sessionID)); ensureDir(path.dirname(file))
         fs.writeFileSync(file, JSON.stringify({ no_session_reuse: optedOut }))
       }
