@@ -7,3 +7,5 @@
 Gateway job `job_01M6M5J84E00KX2T66FPCFEA2P` timed out до SSH, команды на сервере не выполнялись; продолжения запущенного процесса нет. Собственные тестовые процессы завершены; чужие процессы/locks не исследованы и не удалялись. Незакоммиченный локальный snapshot может содержать следующую независимую правку, не считать её опубликованной до сверки с remote.
 
 Следующее: candidate provenance и gate identity; wake/owner intent и тесты reuse; получить реальные Git ancestry и native dependencies перед upstream merge. Основной отчёт и этот указатель обновлять при дальнейшем завершении. Main, production, release, install и платные Actions не затронуты.
+
+Дополнение: commits `a059f2ca51918ab39e58d8b44d297aa06b3a2e32` (explicit RUN wake) и `2eee74640ebed672ca2534c0f380809cd8d216ea` (candidate publish evidence binding). Native результаты, версии и ограничения — в дополнении REPORT; owner consent и deployed-service identity остаются открыты. Git fixture suite 16 PASS работал в созданных временных локальных репозиториях, не проверял upstream ancestry проекта.
