@@ -93,7 +93,35 @@ export function validateGateTesting(manifest) {
       const commands = manifest.gate_profiles?.[profile]?.[gate];
       if (!Array.isArray(commands) || !config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`GATE_TESTING_INVALID: ${profile}/${gate}`);
       if (/(runtime|deploy|release|smoke|install)/i.test(gate) && !isPrePublishGate(manifest, profile, gate)) throw new Error('GATE_TESTING_INVALID: test resources cannot wrap deployment gates');
-      if (Object.keys(config).some(key => !['impact_groups', 'live_postgres', 'timeout_seconds', 'report_files', 'coordinator_only', 'parallel_groups', 'ignored_inputs', 'source'].includes(key))) throw new Error('GATE_TESTING_INVALID: unknown option');
+      if (Object.keys(config).some(key => !['input_kind', 'impact_groups', 'live_postgres', 'timeout_seconds', 'report_files', 'coordinator_only', 'parallel_groups', 'ignored_inputs', 'source'].includes(key))) throw new Error('GATE_TESTING_INVALID: unknown option');
+      // Optional for legacy manifests. New PLANs classify what a gate actually checks.
+      // A tree check may never be silently postponed until after publication.
+      if (config.input_kind !== undefined) {
+        const kind = config.input_kind;
+        if (!['tree', 'candidate', 'deployed-service'].includes(kind)) {
+          throw new Error(`GATE_INPUT_KIND_INVALID: ${profile}/${gate} requires tree|candidate|deployed-service; build-output needs a frozen artifact producer binding before support`);
+        }
+        const users = (manifest.pipelines ?? []).filter(pipeline => pipeline.profile === profile && (pipeline.stages ?? []).includes(gate));
+        if (!users.length || users.some(pipeline => pipeline.executors?.[gate] !== 'local_gate')) {
+          throw new Error(`GATE_INPUT_OWNER_INVALID: ${profile}/${gate} must belong to a local_gate stage`);
+        }
+        if (kind === 'tree' && (!isPrePublishGate(manifest, profile, gate) ||
+            commands.some(command => String(command).includes('{candidate_sha}')))) {
+          throw new Error(`GATE_TREE_AFTER_PUBLISH: ${profile}/${gate} tree evidence must run before git_publish, independent of candidate`);
+        }
+        if (kind === 'candidate' && users.some(pipeline => {
+          const index = pipeline.stages.indexOf(gate);
+          return !pipeline.stages.slice(0, index).some(stage => pipeline.executors?.[stage] === 'git_verify');
+        })) {
+          throw new Error(`GATE_CANDIDATE_BEFORE_VERIFY: ${profile}/${gate} requires a preceding git_verify`);
+        }
+        if (kind === 'deployed-service' && users.some(pipeline => {
+          const index = pipeline.stages.indexOf(gate);
+          return !pipeline.stages.slice(0, index).some(stage => pipeline.executors?.[stage] === 'dev_deploy');
+        })) {
+          throw new Error(`GATE_SERVICE_BEFORE_DEPLOY: ${profile}/${gate} needs a completed dev_deploy stage`);
+        }
+      }
       // An unresolved source reference is validated after resolveGateTesting merges its snapshot.
       if (config.source !== undefined) continue;
       if (config.ignored_inputs !== undefined && (!Array.isArray(config.ignored_inputs) || config.ignored_inputs.some(rule => {
