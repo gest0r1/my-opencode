@@ -512,6 +512,27 @@ test('after a restart the session that drives the RUN CLI is woken without a new
   }
 });
 
+test('a PLAN prompt containing an example RUN command cannot trigger an automatic wake', async () => {
+  const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='10';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/wake-run'); await mkdir(runDir,{recursive:true});
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{}}));
+    const sessionHooks={}, synthetic=[]; let push;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async()=>{},transform:async fn=>fn({add:()=>{}})},
+      event:{subscribe:()=>events}, session:{hook:async(name,fn)=>{sessionHooks[name]=fn;},get:async()=>({data:{}}),wait:async()=>{},synthetic:async input=>{synthetic.push(input);}}});
+    sessionHooks.prompt({sessionID:'orch',prompt:{text:'/pipeline-plan wake-run\nExample after approval: /pipeline-run wake-run'}});
+    await new Promise(resolve=>setTimeout(resolve,5));
+    push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,60));
+    assert.equal(synthetic.length,0);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
 test('an OpenStage turn that ends with nothing running is woken once', async () => {
   const previousCwd=process.cwd(), root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
   process.env.PIPELINE_WAKE_DELAY_MS='10';
