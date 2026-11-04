@@ -52,6 +52,7 @@ permission:
     "$HOME/.config/opencode/node_modules/.bin/tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
     "npx --yes tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
     "npx tsx $HOME/.config/opencode/skills/task-management/scripts/pipeline-reconcile-cli.ts*": allow
+    "node $HOME/.config/opencode/skills/task-management/scripts/contextscout-path-check.mjs *": allow
     "node $HOME/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
     "node $HOME/.config/opencode/skills/task-management/scripts/reuse-report.mjs *": allow
     "bash $HOME/.config/opencode/skills/task-management/scripts/worktree-refresh.sh": allow
@@ -126,6 +127,7 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - Deterministic pipeline CLIs explicitly allowed by this agent's `bash` permission are parent-owned for PLAN, RUN, replan and status and MUST be invoked directly by OpenStage. Do not proxy those commands through DevOps, TestEngineer or another specialist merely because an arbitrary shell probe is denied. The one exception is a long advisory `gate-runner-cli` run that is worth parallelizing, which goes to GateRunner so you keep working on other lanes.
 - A permission rejection for an arbitrary or non-allowlisted shell command does not prove that shell execution is unavailable. Judge capability from `pipeline_runtime_preflight` and, when required by the selected command, the exact allowlisted deterministic invocation.
 - Owner decisions, changed requirements/contracts/trust boundaries, secrets and destructive actions use the selected command's stop/approval path. Bounded authorized repairs continue without repeat approval.
+- Before every ContextScout planning dispatch, validate each destination using the allowlisted `node $HOME/.config/opencode/skills/task-management/scripts/contextscout-path-check.mjs <run-id> <run-scoped-planning-path>` with the worktree as cwd. On rejection, do not start the child; the validator prints the allowed scope and rejected path. The agent may write only validated destination artifacts; do not share it with other RUNs.
 - Fresh reviews stay fresh. Worker session IDs are runtime-owned; invalid/unavailable reuse falls back fresh and is not itself an owner stop. Claim a session continuation only when the compact result says `session_reuse: resumed`.
 - A reviewer's verdict is already in its result file; never dispatch a reviewer again to persist or confirm it.
 - `runtime_reload_required: true` in a dispatch or result is an owner checkpoint: OpenCode must be restarted before the next stage.
