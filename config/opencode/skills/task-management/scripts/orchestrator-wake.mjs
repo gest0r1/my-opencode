@@ -38,7 +38,23 @@ export function wakeDecision({ stateRaw, manifest, pendingChildren = 0, runningW
     else if (!['completed', 'ready', 'release_ready'].includes(pipeline?.status)) open += 1;
   }
   if (stopped && open === 0) return { wake: false, reason: stopped };
-  const fingerprint = createHash('sha256').update(stateRaw).digest('hex');
+  // Fingerprint only scheduling/decision facts. updated_at, GitHub audit outbox,
+  // scope probes and diagnostics can change without any runnable progress; hashing
+  // raw state causes a new synthetic wake for each such maintenance write.
+  const scheduling = {
+    run_id: state.run_id,
+    status: state.status,
+    superseded_by: state.superseded_by,
+    deferred_decisions: (state.deferred_decisions ?? []).map(item => [item.id, item.status]),
+    pipelines: Object.entries(state.pipelines ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, pipeline]) => [
+      id, pipeline.status, pipeline.current_stage,
+      Object.entries(pipeline.stages ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([stage, runtime]) => [
+        stage, runtime.status, runtime.technical_fix_cycles, runtime.architecture_review_due,
+        runtime.class_review_due, runtime.runtime_replans?.at(-1)?.status,
+      ]),
+    ]),
+  };
+  const fingerprint = createHash('sha256').update(JSON.stringify(scheduling)).digest('hex');
   if (fingerprint === lastFingerprint) return { wake: false, reason: 'no_progress_since_last_wake' };
   return { wake: true, reason: 'stalled', fingerprint };
 }
