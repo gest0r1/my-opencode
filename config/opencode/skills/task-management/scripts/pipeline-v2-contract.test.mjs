@@ -1595,6 +1595,35 @@ test('PLAN rejects orphaned work items, missing dependencies, cycles and reverse
   }
 });
 
+test('PLAN allows independent source lanes beside prep and enforces only named prerequisites', async () => {
+  const fx = await fixture('v2-targeted-prep');
+  const file = 'tests/obsolete.test.ts';
+  fx.manifest.allowed_change_paths.push(file);
+  const prepItem = await fx.frozen('work-items/wi-prep.json', JSON.stringify({
+    id: 'wi-prep', pipeline_id: 'prep', stage: 'implementation', allowed_change_paths: [file],
+  }));
+  fx.manifest.work_items.push({ id: 'wi-prep', pipeline_id: 'prep', ...prepItem });
+  fx.manifest.pipelines.push({
+    id: 'prep', deployable: false, test_preparation: true,
+    stages: ['implementation', 'review'], executors: { implementation: 'agent', review: 'review' },
+    ready_after_stage: 'review', work_items: ['wi-prep'],
+    decision_ids: [], research_ids: [], contract_ids: [],
+  });
+  fx.manifest.test_rework = [{ id: 'obsolete-inventory', action: 'update', path: file,
+    reason: 'existing inventory expectation', work_item_id: 'wi-prep', required_by: [] }];
+  const validate = () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath });
+  assert.doesNotThrow(validate, 'independent app lane must not await unrelated prep');
+  fx.manifest.test_rework[0].required_by = ['app'];
+  assert.throws(validate, /TEST_REWORK_DEPENDENCY_MISSING/);
+  fx.manifest.pipelines[0].depends_on = ['prep'];
+  assert.doesNotThrow(validate);
+  fx.manifest.pipelines[0].depends_on = [];
+  delete fx.manifest.test_rework[0].required_by;
+  assert.throws(validate, /TEST_REWORK_LANE_NOT_FIRST/, 'frozen legacy entries keep blanket contract');
+  fx.manifest.test_rework[0].required_by = ['missing'];
+  assert.throws(validate, /TEST_REWORK_CONSUMERS_INVALID/);
+});
+
 test('schema v2 rejects parallel pipelines whose work items may change the same paths', async () => {
   const fx = await fixture('v2-parallel-scope');
   const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', allowed_change_paths: ['src/api/**', 'vitest.config.ts'] }));
