@@ -59,6 +59,34 @@ test('frozen test/resource contracts reject privilege flags, mutable images and 
   }
 });
 
+test('frozen input kind enforces tree-before-publish and exact candidate/service ordering', () => {
+  const manifest = (kind, stages, executors, gate = 'check') => ({
+    gate_profiles: { local: { [gate]: ['pnpm exec tsc --noEmit'] } },
+    gate_testing: { local: { [gate]: { input_kind: kind } } },
+    pipelines: [{ id: 'delivery', profile: 'local', stages, executors }],
+  });
+  const tree = manifest('tree', ['check', 'publish'], { check: 'local_gate', publish: 'git_publish' });
+  assert.doesNotThrow(() => validateGateTesting(tree));
+  assert.throws(
+    () => validateGateTesting(manifest('tree', ['publish', 'check'], { publish: 'git_publish', check: 'local_gate' })),
+    /GATE_TREE_AFTER_PUBLISH/,
+  );
+  assert.throws(
+    () => validateGateTesting(manifest('candidate', ['check', 'verify'], { check: 'local_gate', verify: 'git_verify' })),
+    /GATE_CANDIDATE_BEFORE_VERIFY/,
+  );
+  assert.doesNotThrow(() => validateGateTesting(manifest('candidate', ['verify', 'check'], { verify: 'git_verify', check: 'local_gate' })));
+  assert.throws(
+    () => validateGateTesting(manifest('deployed-service', ['check', 'deploy'], { check: 'local_gate', deploy: 'dev_deploy' })),
+    /GATE_SERVICE_BEFORE_DEPLOY/,
+  );
+  assert.doesNotThrow(() => validateGateTesting(manifest('deployed-service', ['deploy', 'check'], { deploy: 'dev_deploy', check: 'local_gate' })));
+  assert.throws(
+    () => validateGateTesting(manifest('build-output', ['check'], { check: 'local_gate' })),
+    /GATE_INPUT_KIND_INVALID/,
+  );
+});
+
 function fakeDocker({ startFails = false, badOwner = false, readinessFails = false } = {}) {
   const calls = []; let owner;
   const invoke = async (exe, args, env) => {
