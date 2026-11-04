@@ -266,10 +266,12 @@ export function isPublishableStoryReview(content, { runRoot, gate, reviewSha256,
   }
   const readyFull = String(status).toLowerCase() === 'ready' && String(scope).toLowerCase() === 'full';
   if (!runRoot || !gate || !SHA256.test(String(reviewSha256 ?? ''))) return readyFull;
+  const ledgerFile = join(runRoot, 'planning', 'review-ledger.json');
+  if (!exists(ledgerFile)) return readyFull; // Legacy plans without a ledger.
   let ledger;
-  try { ledger = JSON.parse(readFileSync(join(runRoot, 'planning', 'review-ledger.json'), 'utf8')); }
-  catch { return readyFull; } // Legacy plans may not have a review ledger.
-  if (!Array.isArray(ledger.entries)) return false;
+  try { ledger = JSON.parse(readFileSync(ledgerFile, 'utf8')); }
+  catch { return false; } // A corrupt existing ledger must never fall back to legacy.
+  if (ledger.run_id !== String(runRoot).split(/[\\/]/).at(-1) || !Array.isArray(ledger.entries)) return false;
   const entries = ledger.entries.filter(entry => entry?.gate === gate);
   const reviews = entries.filter(entry => entry.kind === 'review');
   const last = reviews.at(-1);
