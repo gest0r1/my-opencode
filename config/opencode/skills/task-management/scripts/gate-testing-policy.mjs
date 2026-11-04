@@ -74,6 +74,10 @@ export function impactMatches(pattern, file) {
 // git_publish (or has no git_publish stage). Pre-publish gates may hold test resources and run in
 // the PLAN probe whatever their name; deployment and smoke gates never do.
 export function isPrePublishGate(manifest, profile, gate) {
+  // Candidate and service gates need evidence created after the clean-tree PLAN
+  // probe. Do not probe them as tree gates merely because they precede push.
+  const inputKind = manifest.gate_testing?.[profile]?.[gate]?.input_kind;
+  if (inputKind && inputKind !== 'tree') return false;
   if (/(deploy|smoke)/i.test(gate)) return false;
   const users = (manifest.pipelines ?? []).filter(pipeline => pipeline?.profile === profile && (pipeline.stages ?? []).includes(gate));
   if (!users.length) return false;
