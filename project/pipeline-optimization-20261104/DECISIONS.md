@@ -40,3 +40,8 @@
 - **Ненужные повторные механизмы не созданы:** scheduler, review ledger, gate runner, export renderer сохранены; сторонние upstream обходы не удалялись без проверки.
 
 **Проверки на завершение:** Github source-read/commit и изолированное исполнение трёх чистых функций в V8 PASS; полноценный `node --test` / `bun test` / CI-local tests НЕ выполнялись. Редактирование через connector не является тестом.
+
+## Дополнение: verified source snapshot
+
+- Candidate gate: existing `git-worktree-cli.ts::publish` — единственный producer `candidate.json`, `git_verify` сам candidate не создаёт. В `2eee746` canonical publisher записывает manifest hash; declared candidate runner валидирует сохранённый publish evidence и подставляет SHA в каждую frozen команду. Legacy без нового input_kind сохранён; текущий remote state и семантика внешней команды отдельно не доказаны. Deployed-service installed-SHA binding и build-output пока открыты.
+- Wake intent: `a059f2c` ограничивает распознавание явной командой в начале текстового prompt; integration regression защищает от примера RUN в PLAN. Это не замена consent ledger или привязки утверждения owner к manifest.
