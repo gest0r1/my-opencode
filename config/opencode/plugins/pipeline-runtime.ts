@@ -456,6 +456,7 @@ export default Plugin.define({
       // The orchestrator's turn ended: its foreground children are done, and a force-stopped background
       // worker must not hold its lease forever.
       const unknownChildren: any[] = []
+      let noticeDelivered = false
       for (const lease of readLeases(runRoot(root, runID), { state })) {
         if (lease.parent_session_id !== sessionID) continue
         let health: "idle" | "running" | "gone" | "unknown" = "idle"
@@ -479,6 +480,7 @@ export default Plugin.define({
             unresolvedNoticeInFlight.add(key)
             try {
               await (plugin.session as any).synthetic({ sessionID, text: `Child session liveness for RUN \`${runID}\` remains unknown after repeated checks. Its lease is retained: do not redispatch that work or assume the child is gone. Check the existing session and continue any independently runnable work.`, description: 'pipeline child liveness unknown', delivery: 'queue', resume: true })
+              noticeDelivered = true
               appendJsonLine(file, { timestamp: new Date().toISOString(), event: "child_liveness_unresolved", run_id: runID, session_id: sessionID, probes: count, notice_key: key })
             } catch (error) {
               appendJsonLine(file, { timestamp: new Date().toISOString(), event: "child_liveness_notice_failed", run_id: runID, session_id: sessionID, error: String((error as Error)?.message ?? error) })
@@ -492,6 +494,7 @@ export default Plugin.define({
       const decision = wakeDecision({ stateRaw, manifest, runnableCount, pendingChildren: pendingChildren.get(sessionID)?.size ?? 0, runningWork, lastFingerprint: lastWake.get(sessionID) ?? null })
       if (!decision.wake) return
       lastWake.set(sessionID, decision.fingerprint)
+      if (noticeDelivered) return // the diagnostic already resumes the parent with the same instruction
       appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake", run_id: runID, session_id: sessionID })
       try {
         await (plugin.session as any).synthetic({ sessionID, text: wakeText(runID), description: "pipeline wake", delivery: "queue", resume: true })
