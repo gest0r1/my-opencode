@@ -246,11 +246,36 @@ function validatePlanningInputs(manifest) {
   }
 }
 
-// The same frozen Story review contract gates PLAN approval and GitHub publication.
-// This is evidence of a full ready review, not merely a model-reported gate status.
-export function isPublishableStoryReview(content) {
-  return typeof content === 'string' && /(?:^|\n)status:\s*ready(?:\s|$)/i.test(content) &&
-    /(?:^|\n)review_scope:\s*full(?:\s|$)/i.test(content);
+// Keep PLAN's frozen evidence acceptance and GitHub publication identical.
+// A carried technical finding is accepted only when the machine-owned plan-review
+// ledger binds its final review and carry event to the same immutable SHA-256.
+export function isPublishableStoryReview(content, { runRoot, gate, reviewSha256, carriedFindings = [] } = {}) {
+  if (typeof content !== 'string' || !content.trim()) return false;
+  let status;
+  let scope;
+  try {
+    const parsed = JSON.parse(content);
+    status = parsed?.status;
+    scope = parsed?.review_scope;
+  } catch {
+    const field = name => new RegExp(`^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${name}(?:\\*\\*)?\\s*:\\s*(?:\\*\\*)?\\s*\\`?([a-z_]+)\\b`, 'im').exec(content)?.[1];
+    status = field('status');
+    scope = field('review_scope');
+  }
+  const readyFull = String(status).toLowerCase() === 'ready' && String(scope).toLowerCase() === 'full';
+  if (!runRoot || !gate || !SHA256.test(String(reviewSha256 ?? ''))) return readyFull;
+  let ledger;
+  try { ledger = JSON.parse(readFileSync(join(runRoot, 'planning', 'review-ledger.json'), 'utf8')); }
+  catch { return readyFull; } // Legacy plans may not have a review ledger.
+  if (!Array.isArray(ledger.entries)) return false;
+  const entries = ledger.entries.filter(entry => entry?.gate === gate);
+  const reviews = entries.filter(entry => entry.kind === 'review');
+  const last = reviews.at(-1);
+  if (!last || last.sha256 !== reviewSha256) return false;
+  if (readyFull) return last.status === 'ready' && last.scope === 'full' && !last.owner_decision;
+  if (String(status).toLowerCase() !== 'needs_revision' || last.status !== 'needs_revision' || last.owner_decision) return false;
+  const carried = entries.find(entry => entry.kind === 'carry' && entry.review_sha256 === last.sha256);
+  return Boolean(carried && carriedFindings.some(item => item.sha256 === carried.sha256));
 }
 
 function validatePlanningReadiness(manifest, root) {
@@ -290,7 +315,10 @@ function validatePlanningReadiness(manifest, root) {
         throw new ManifestV2PolicyError('STORY_REVIEW_NOT_FULL_READY: missing frozen full Story review');
       }
       const reviewPath = readFrozenArtifact(root, record.review, `planning_readiness.gates.${gate}.review`);
-      if (!isPublishableStoryReview(readFileSync(reviewPath, 'utf8'))) {
+      if (!isPublishableStoryReview(readFileSync(reviewPath, 'utf8'), {
+        runRoot: root, gate, reviewSha256: record.review.sha256,
+        carriedFindings: readiness.carried_findings ?? [],
+      })) {
         throw new ManifestV2PolicyError('STORY_REVIEW_NOT_FULL_READY: full ready Story review required before PLAN approval');
       }
     } else if (record.review !== undefined) {
