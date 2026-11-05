@@ -93,6 +93,27 @@ test('frozen input kind enforces tree-before-publish and exact candidate/service
   );
 });
 
+test('live PostgreSQL preflight freezes only safe, explicit validateOnly repository scripts', () => {
+  const image = 'postgres:16@sha256:' + 'a'.repeat(64);
+  const build = command => ({ gate_profiles: { local: { check: ['pnpm exec vitest run --config vitest.live.ts'] } },
+    gate_testing: { local: { check: { live_postgres: {
+      image, command_indexes: [0], preflight_command: command,
+    } } } } });
+  for (const command of [
+    'node scripts/testing/preflight.mjs --pipeline-preflight',
+    'pnpm exec tsx scripts/testing/preflight.ts --pipeline-preflight',
+    'corepack pnpm exec tsx scripts/testing/preflight.ts --pipeline-preflight',
+  ]) assert.doesNotThrow(() => validateGateTesting(build(command)));
+  for (const command of [
+    'node -e process.exit(0) --pipeline-preflight',
+    'node ../outside.js --pipeline-preflight',
+    'node scripts/testing/preflight.mjs',
+    'pnpm exec tsx /tmp/evil.ts --pipeline-preflight',
+    'pnpm exec tsx scripts/testing/preflight.ts --pipeline-preflight && touch x',
+    'bash scripts/testing/preflight.sh --pipeline-preflight',
+  ]) assert.throws(() => validateGateTesting(build(command)), /GATE_TESTING_PREFLIGHT_INVALID/, command);
+});
+
 function fakeDocker({ startFails = false, badOwner = false, readinessFails = false } = {}) {
   const calls = []; let owner;
   const invoke = async (exe, args, env) => {
