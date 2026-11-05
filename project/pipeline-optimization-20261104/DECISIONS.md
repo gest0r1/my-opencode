@@ -69,3 +69,13 @@
 ## Дополнение 2026-11-05: Gate snapshot local inputs
 
 Один источник списка локальных файлов для snapshot и reuse теперь находится в `gate-snapshot.mjs`. `gate-reuse-identity.mjs` учитывает эти входы, `gate-runner-cli.ts` проверяет их повторно перед reuse и при завершении. При недоказанной идентичности повторное использование отключается. Доказательство: source diff и изолированная проверка выбора путей; полный Node/tsx suite — NOT RUN. Фактический runtime cost нового обхода не измерен.
+
+## Wake after child completion and failed synthetic delivery (2026-11-05)
+
+**Existing owner preserved:** `pipeline-runtime.ts` tracks background children in its existing session registry and leases. An authoritative `session.wait` completion now explicitly schedules `checkWake` for the RUN parent, even without `session.execution.succeeded` on that parent. Duplicate acknowledgements do not start duplicate waiters. Unknown child still retains its pending state/lease.
+
+**Correct delivery boundary:** automatic synthetic wake fingerprint is committed to `lastWake` **after** accepted `plugin.session.synthetic`, not before. Rejected delivery is retried at most three times (bounded delay up to 5 seconds); same-parent concurrent sends are guarded, successful resume resets transient-failure counters. This addresses a specific previously silent permanent stop after one failed send. No persistent second wake store was created.
+
+**Runnable-work fingerprint:** `orchestrator-wake.mjs` adds actual `runnable_count` and boolean active child/lease/gate work to its stable scheduling fingerprint. A child/lease release is meaningful new progress without a `state.json` edit; timestamps, outbox and diagnostics remain excluded. An unchanged availability state stays deduplicated.
+
+**Proof boundary:** new regression scenarios are in `pipeline-runtime.test.mjs`, `orchestrator-wake.test.mjs`. Remote source parse and isolated invocation of exact `trackChild`, wake delivery block and `wakeDecision` passed. Full Node/tsx SDK tests are **NOT RUN** without an isolated GitHub checkout/dependencies. Native event subscription and installed plugin API remain open acceptance criteria. No assertions about measured savings.
