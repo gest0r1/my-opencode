@@ -14,6 +14,7 @@ import { checkProjectTooling, restoreDependencies } from './project-tooling.mjs'
 // are restored from the lockfile, and `.tmp/pipelines` points back to the run's state root.
 
 const IGNORED_SKIP = /(^|\/)(node_modules|dist|build|coverage|\.tmp|\.git|\.pnpm-store|\.next|\.turbo|\.cache|\.vite|out)(\/|$)/;
+const SENSITIVE_UNTRACKED = /(^|\/)(\.env(?:\..*)?|[^/]+\.(?:key|pem|secret))$/i;
 const generated = file => /(^|\/)(\.tmp|\.git|node_modules|dist|build|coverage)(\/|$)/i.test(file);
 const sensitive = file => /(^|\/)(\.env(?:\..*)?|[^/]+\.(?:key|pem|secret))$/i.test(file);
 
@@ -72,10 +73,20 @@ export function copiedIgnoredInputs(cwd) {
     .filter(entry => !entry.endsWith('/') && !IGNORED_SKIP.test(entry));
 }
 
+// An untracked, nonignored secret is intentionally not committed to a snapshot,
+// but may affect a fallback in-place gate. Hash its bytes in the reuse identity;
+// never expose the content or persist an individual secret hash.
+export function reuseLocalInputs(cwd) {
+  const excludedSensitive = lines(git(cwd, ['ls-files', '--others', '--exclude-standard', '-z']))
+    .filter(file => !IGNORED_SKIP.test(file) && SENSITIVE_UNTRACKED.test(file));
+  return [...new Set([...copiedIgnoredInputs(cwd), ...excludedSensitive])].sort();
+}
+
 function copyIgnoredFiles(cwd, dir) {
   for (const entry of copiedIgnoredInputs(cwd)) {
     mkdirSync(dirname(join(dir, entry)), { recursive: true });
-    try { copyFileSync(join(cwd, entry), join(dir, entry)); } catch {}
+    try { copyFileSync(join(cwd, entry), join(dir, entry)); }
+    catch (error) { throw new Error(`SNAPSHOT_LOCAL_INPUT_COPY_FAILED: ${entry}: ${String(error instanceof Error ? error.message : error)}`); }
   }
 }
 
