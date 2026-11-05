@@ -871,6 +871,13 @@ test('deployed-service smoke reads exact completed deploy proof and refuses stal
         finished_at: new Date().toISOString(), status_file: statusFile };
       await writeFile(path.join(deployState, 'dev-test.json'), JSON.stringify(install));
       const args = [fx.runId, 'app', 'smoke', '--state-root', fx.stateRoot, '--no-reuse'];
+      // The command must receive the verified contour key, not an inherited
+      // or hand-selected target; commands that target a different contour fail.
+      const binFile = path.join(fx.bin, 'pnpm');
+      const binContent = await readFile(binFile, 'utf8');
+      assert.match(binContent, /const fs = require\('node:fs'\)/);
+      await writeFile(binFile, binContent.replace("const fs = require('node:fs');",
+        "if (process.env.PIPELINE_DEPLOY_TARGET !== 'dev-test') process.exit(42);\nconst fs = require('node:fs');"), { mode: 0o755 });
       let result = run(fx.root, args);
       assert.equal(result.status, 0, result.stderr);
       const data = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
