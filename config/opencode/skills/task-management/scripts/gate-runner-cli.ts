@@ -333,7 +333,7 @@ async function planProbe(args: string[]): Promise<void> {
       const result = await runInvocation(tokens[0], tokens.slice(1), process.cwd(), {
         PIPELINE_RUN_ID: manifest.run_id, PIPELINE_ID: pipelineId, PIPELINE_GATE: gate,
         PIPELINE_GATE_ATTEMPT: undefined, PIPELINE_SCRATCH_DIR: undefined,
-        CANDIDATE_SHA: undefined,
+        CANDIDATE_SHA: undefined, PIPELINE_DEPLOY_TARGET: undefined,
       }, 60);
       if (result.exit_code !== 0) {
         throw new GateRunnerError('PLAN_LIVE_PREFLIGHT_FAILED: exit=' + result.exit_code + ' ' + redact(result.stderr).slice(0, 500));
@@ -354,7 +354,7 @@ async function planProbe(args: string[]): Promise<void> {
       resource = await createLivePostgres(config.live_postgres,
         process.cwd() + ':' + manifest.run_id + ':' + pipelineId + ':' + gate,
         (exe: string, argv: string[], liveEnv?: Record<string, string>) =>
-          runInvocation(exe, argv, process.cwd(), { ...liveEnv, CANDIDATE_SHA: undefined }, 60, ['inspect', 'rm'].includes(argv[0])));
+          runInvocation(exe, argv, process.cwd(), { ...liveEnv, CANDIDATE_SHA: undefined, PIPELINE_DEPLOY_TARGET: undefined }, 60, ['inspect', 'rm'].includes(argv[0])));
     }
     for (const batch of parallelBatches(invocations, config, liveIndexes(config))) {
       const settled = await Promise.all(batch.map((invocation: Invocation) => {
