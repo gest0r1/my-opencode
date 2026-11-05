@@ -829,6 +829,70 @@ if (fs.existsSync('.tmp/reject-cheap')) process.exit(19);
   }
 });
 
+test('deployed-service smoke reads exact completed deploy proof and refuses stale contour before commands', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = fx.bin + ':' + oldPath;
+    const stateFile = path.join(fx.stateRoot, fx.runId, 'state.json');
+    const state = JSON.parse(await readFile(stateFile, 'utf8'));
+    const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+    const sha = 'a'.repeat(40);
+    manifest.git_setup.branch = 'feature/test';
+    manifest.deploy_target = 'dev-test';
+    manifest.pipelines[0].stages = ['deploy', 'smoke'];
+    manifest.pipelines[0].executors = { deploy: 'dev_deploy', smoke: 'local_gate' };
+    manifest.gate_profiles.default.smoke = [...manifest.gate_profiles.default.build];
+    manifest.gate_testing.default.smoke = { input_kind: 'deployed-service' };
+    const raw = JSON.stringify(manifest);
+    state.manifest_sha256 = sha256(raw);
+    state.pipelines = { app: { stages: { deploy: {
+      status: 'completed', started_at: new Date(Date.now() - 30_000).toISOString(),
+    } } } };
+    await writeFile(state.manifest_file, raw);
+    await writeFile(stateFile, JSON.stringify(state));
+    const runDir = path.dirname(state.manifest_file);
+    const deployState = path.join(fx.root, '.tmp', 'deploy-state');
+    await mkdir(deployState, { recursive: true });
+    const originalDeployDir = process.env.OPENCODE_DEPLOY_STATE_DIR;
+    process.env.OPENCODE_DEPLOY_STATE_DIR = deployState;
+    try {
+      await writeFile(path.join(runDir, 'candidate.json'), JSON.stringify({
+        status: 'PASS', run_id: fx.runId, branch: 'feature/test',
+        manifest_sha256: state.manifest_sha256, candidate_sha: sha, remote_sha: sha,
+      }));
+      await mkdir(path.join(runDir, 'deploy'), { recursive: true });
+      await writeFile(path.join(runDir, 'deploy/app-deploy.json'), JSON.stringify({
+        status: 'PASS', run_id: fx.runId, pipeline_id: 'app', stage: 'deploy',
+        target: 'dev-test', candidate_sha: sha,
+      }));
+      const statusFile = path.join(deployState, 'dev-test.status.json');
+      await writeFile(statusFile, JSON.stringify({ sha, health: 'ok' }));
+      const install = { key: 'dev-test', sha, exit_code: 0,
+        finished_at: new Date().toISOString(), status_file: statusFile };
+      await writeFile(path.join(deployState, 'dev-test.json'), JSON.stringify(install));
+      const args = [fx.runId, 'app', 'smoke', '--state-root', fx.stateRoot, '--no-reuse'];
+      let result = run(fx.root, args);
+      assert.equal(result.status, 0, result.stderr);
+      const data = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+      assert.equal(data.deployed_service.installed_sha, sha);
+      assert.equal(data.deployed_service.target, 'dev-test');
+      await writeFile(path.join(deployState, 'dev-test.json'), JSON.stringify({ ...install, sha: 'b'.repeat(40) }));
+      result = run(fx.root, args);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /GATE_SERVICE_INSTALL_CHANGED/);
+      await writeFile(path.join(deployState, 'dev-test.json'), JSON.stringify(install));
+      state.pipelines.app.stages.deploy.status = 'pending';
+      await writeFile(stateFile, JSON.stringify(state));
+      result = run(fx.root, args);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /GATE_SERVICE_DEPLOY_INCOMPLETE/);
+    } finally {
+      if (originalDeployDir === undefined) delete process.env.OPENCODE_DEPLOY_STATE_DIR;
+      else process.env.OPENCODE_DEPLOY_STATE_DIR = originalDeployDir;
+    }
+  } finally { process.env.PATH = oldPath; }
+});
+
 test('plan probe refuses candidate-sha and deployment gates and unknown pipelines', async () => {
   const candidate = await makeRun('bash scripts/install.sh {candidate_sha}', 'verify');
   const manifestFile = path.join(candidate.root, 'manifest.json');
