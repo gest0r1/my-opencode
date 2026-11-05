@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { access, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import os from 'node:os';
 import process from 'node:process';
-import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
+import { gatePolicyError, tokenizeGateCommand, preflightPolicyError } from './gate-command-policy.mjs';
 import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGateTestingFile, isPrePublishGate } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
 import { sourceSnapshot, sourceInventory, changedFromInventory, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports, retryTimeouts } from './gate-diagnostics.mjs';
@@ -13,6 +13,7 @@ import { laneDigest, laneScope } from './dispatch-leases.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { acquireHeavySlot, acquireLiveSlot, acquireLockFiles, waitForHeavySlot } from './runtime-locks.mjs';
 import { resolveReuseIdentity } from './gate-reuse-identity.mjs';
+import { planProbeInputDigest, requirePlanProbeManifestPath } from './plan-probe-identity.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -251,21 +252,23 @@ async function requireCleanCheckout(): Promise<string> {
   return head.stdout.trim();
 }
 
-// PLAN probe: stateless, runs the complete frozen set of one local gate against the draft manifest
-// before any state.json exists, so unstartable gate commands surface during PLAN, not at the end of RUN.
+// PLAN probe: stateless and provenance-bound, without creating a RUN state.json.
+// Live profiles hold one phase-aware runtime lock and validate cheaply before
+// allocating an attempt, container, scratch directory or running expensive suites.
 async function planProbe(args: string[]): Promise<void> {
   const [manifestArg, pipelineId, gate] = args;
   if (!manifestArg || !pipelineId || !gate || args.length !== 3) throw new GateRunnerError('usage: gate-runner-cli.ts --plan-probe <manifest-path> <pipeline-id> <gate>');
   const manifestFile = resolve(manifestArg);
-  const manifest = resolveGateTestingFile(JSON.parse(await readFile(manifestFile, 'utf8')), manifestFile) as Manifest;
+  const manifestRaw = await readFile(manifestFile, 'utf8');
+  const manifest = resolveGateTestingFile(JSON.parse(manifestRaw), manifestFile) as Manifest;
   const pipeline = manifest.pipelines?.find(item => item.id === pipelineId);
-  if (!pipeline) throw new GateRunnerError(`pipeline not found: ${pipelineId}`);
-  if (!pipeline.profile) throw new GateRunnerError(`pipeline has no gate profile: ${pipelineId}`);
+  if (!pipeline) throw new GateRunnerError('pipeline not found: ' + pipelineId);
+  if (!pipeline.profile) throw new GateRunnerError('pipeline has no gate profile: ' + pipelineId);
   const commands = manifest.gate_profiles?.[pipeline.profile]?.[gate];
-  if (!Array.isArray(commands) || commands.length === 0) throw new GateRunnerError(`no executable gate commands: profile=${pipeline.profile} gate=${gate}`);
+  if (!Array.isArray(commands) || commands.length === 0) throw new GateRunnerError('no executable gate commands: profile=' + pipeline.profile + ' gate=' + gate);
   validateGateTesting(manifest);
-  if (!isPrePublishGate(manifest, pipeline.profile, gate)) throw new GateRunnerError(`PLAN_PROBE_UNSUPPORTED: ${gate} is not a pre-publish local gate`);
-  if (commands.some(command => command.includes('{candidate_sha}'))) throw new GateRunnerError(`PLAN_PROBE_UNSUPPORTED: ${pipeline.profile}/${gate} uses {candidate_sha}`);
+  if (!isPrePublishGate(manifest, pipeline.profile, gate)) throw new GateRunnerError('PLAN_PROBE_UNSUPPORTED: ' + gate + ' is not a pre-publish local gate');
+  if (commands.some(command => command.includes('{candidate_sha}'))) throw new GateRunnerError('PLAN_PROBE_UNSUPPORTED: ' + pipeline.profile + '/' + gate + ' uses {candidate_sha}');
   const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
   const invocations: Invocation[] = commands.map((command, index) => {
     const tokens = tokenizeCommand(command);
@@ -273,30 +276,84 @@ async function planProbe(args: string[]): Promise<void> {
     return { command, index, test_files: [], exe: tokens[0], args: tokens.slice(1) };
   });
   const headSha = await requireCleanCheckout();
+  const hasLive = Boolean(config?.live_postgres && invocations.some(item => config.live_postgres.command_indexes.includes(item.index)));
+  if (hasLive) requirePlanProbeManifestPath(manifestFile, manifest.run_id);
+  const manifestSha = sha256(manifestRaw);
+  const inputDigest = planProbeInputDigest(commands, config?.live_postgres, headSha);
   const root = dirname(manifestFile);
-  const evidenceFile = join(root, 'planning', 'probes', `${pipelineId}-${gate}.json`);
-  await mkdir(dirname(evidenceFile), { recursive: true });
-  let previous: any;
-  try { previous = JSON.parse(await readFile(evidenceFile, 'utf8')); } catch {}
-  const attempt = (Number.isInteger(previous?.attempt) ? previous.attempt : 0) + 1;
-  const scratchDir = join(root, 'scratch', `${pipelineId}-${gate}-plan-probe-${attempt}`);
-  await mkdir(scratchDir, { recursive: true });
-  const env = gateEnv({ runId: manifest.run_id, pipelineId, gate, attempt, scratchDir });
-  const results: Array<Record<string, any>> = [];
-  let resource: Awaited<ReturnType<typeof createLivePostgres>> | undefined;
-  let failure: unknown; let status = 'PASS';
+  const evidenceFile = join(root, 'planning', 'probes', pipelineId + '-' + gate + '.json');
   const startedAt = new Date().toISOString();
-  const heavySlot = await acquireHeavySlot({ run_id: manifest.run_id, pipeline_id: pipelineId, gate, plan_probe: true });
+  const results: Array<Record<string, any>> = [];
+  let attempt: number | null = null;
+  let scratchDir: string | null = null;
+  let resource: Awaited<ReturnType<typeof createLivePostgres>> | undefined;
+  let heavySlot: { release: () => Promise<void> } | undefined;
   let liveSlot: { release: () => Promise<void> } | undefined;
+  let phaseLock: { release: () => Promise<unknown> } | undefined;
+  let failure: unknown;
+  let preflightStatus: 'not_required' | 'PASS' | 'FAIL' = hasLive ? 'FAIL' : 'not_required';
+  let status = 'PASS';
   try {
-    if (config?.live_postgres && invocations.some(item => config.live_postgres.command_indexes.includes(item.index))) {
+    if (hasLive && !config.live_postgres.preflight_command) {
+      throw new GateRunnerError('PLAN_LIVE_PREFLIGHT_REQUIRED: freeze live_postgres.preflight_command before PLAN probe');
+    }
+    heavySlot = await acquireHeavySlot({ run_id: manifest.run_id, pipeline_id: pipelineId, gate, plan_probe: true });
+    if (hasLive) {
+      // Slot first: the adapter must never see two simultaneous phase-lock owners.
+      // Heavy slot first preserves the existing RUN heavy -> live acquisition order.
       liveSlot = await acquireLiveSlot({ run_id: manifest.run_id, pipeline_id: pipelineId, gate, plan_probe: true });
-      resource = await createLivePostgres(config.live_postgres, `${process.cwd()}:${manifest.run_id}:${pipelineId}:${gate}`, (exe: string, argv: string[], liveEnv?: Record<string, string>) => runInvocation(exe, argv, process.cwd(), liveEnv, 60, ['inspect', 'rm'].includes(argv[0])));
+      const lockName = 'gate:' + manifest.run_id + ':' + pipelineId + ':' + gate;
+      phaseLock = await acquireLockFiles(join(dirname(root), '.runtime-locks'), [{
+        file: sha256(lockName) + '.lock',
+        record: {
+          lock: lockName, run_id: manifest.run_id, pipeline_id: pipelineId, gate,
+          profile: pipeline.profile, phase: 'plan_probe', manifest_file: manifestFile,
+          manifest_sha256: manifestSha, head_sha: headSha, input_digest: inputDigest,
+          candidate_sha: null,
+        },
+      }]);
+      const command = config.live_postgres.preflight_command;
+      const tokens = tokenizeCommand(command);
+      const policyError = preflightPolicyError(tokens);
+      if (policyError) throw new GateRunnerError(policyError);
+      const script = tokens[0] === 'node' ? tokens[1] : tokens[0] === 'pnpm' ? tokens[3] : tokens[4];
+      const scriptReal = await realpath(resolve(process.cwd(), script));
+      const workspaceReal = await realpath(process.cwd());
+      if (!scriptReal.startsWith(workspaceReal + sep) || relative(workspaceReal, scriptReal).startsWith('..')) {
+        throw new GateRunnerError('PLAN_LIVE_PREFLIGHT_SCRIPT_ESCAPE: script is outside checkout');
+      }
+      // Inherited CANDIDATE_SHA and an old attempt must not contaminate the stateless PLAN.
+      const result = await runInvocation(tokens[0], tokens.slice(1), process.cwd(), {
+        PIPELINE_RUN_ID: manifest.run_id, PIPELINE_ID: pipelineId, PIPELINE_GATE: gate,
+        PIPELINE_GATE_ATTEMPT: undefined, PIPELINE_SCRATCH_DIR: undefined,
+        CANDIDATE_SHA: undefined,
+      }, 60);
+      if (result.exit_code !== 0) {
+        throw new GateRunnerError('PLAN_LIVE_PREFLIGHT_FAILED: exit=' + result.exit_code + ' ' + redact(result.stderr).slice(0, 500));
+      }
+      preflightStatus = 'PASS';
+    }
+
+    // Only now may a real gate attempt be allocated. A rejected cheap preflight
+    // has attempt=null, no scratch and no Docker and cannot leave a false PASS.
+    await mkdir(dirname(evidenceFile), { recursive: true });
+    let previous: any;
+    try { previous = JSON.parse(await readFile(evidenceFile, 'utf8')); } catch {}
+    attempt = (Number.isInteger(previous?.attempt) ? previous.attempt : 0) + 1;
+    scratchDir = join(root, 'scratch', pipelineId + '-' + gate + '-plan-probe-' + attempt);
+    await mkdir(scratchDir, { recursive: true });
+    const env = gateEnv({ runId: manifest.run_id, pipelineId, gate, attempt, scratchDir });
+    if (hasLive) {
+      resource = await createLivePostgres(config.live_postgres,
+        process.cwd() + ':' + manifest.run_id + ':' + pipelineId + ':' + gate,
+        (exe: string, argv: string[], liveEnv?: Record<string, string>) =>
+          runInvocation(exe, argv, process.cwd(), liveEnv, 60, ['inspect', 'rm'].includes(argv[0])));
     }
     for (const batch of parallelBatches(invocations, config, liveIndexes(config))) {
       const settled = await Promise.all(batch.map((invocation: Invocation) => {
         const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
-        return executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800).then(done => ({ invocation, ...done }));
+        return executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800)
+          .then(done => ({ invocation, ...done }));
       }));
       await retryTimeouts(settled, () => interrupted, (invocation: Invocation) => {
         const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
@@ -304,26 +361,42 @@ async function planProbe(args: string[]): Promise<void> {
       });
       for (const item of settled) results.push(item.result);
       const failed = settled.find(item => item.result.exit_code !== 0);
-      if (failed) { status = 'FAIL'; throw new GateRunnerError(`gate command failed (${failed.result.exit_code}): ${failed.result.command}; evidence=${evidenceFile}`); }
+      if (failed) {
+        status = 'FAIL';
+        throw new GateRunnerError('gate command failed (' + failed.result.exit_code + '): ' + failed.result.command + '; evidence=' + evidenceFile);
+      }
     }
   } catch (error) {
     failure = error; if (status !== 'FAIL') status = 'BLOCKED';
   } finally {
-    if (resource) {
-      try { await resource.cleanup(); }
-      catch (error) { status = 'BLOCKED'; failure = new GateRunnerError(`${failure ? String(failure) + '; ' : ''}${String(error)}`); }
+    try {
+      if (resource) await resource.cleanup();
+    } catch (error) {
+      status = 'BLOCKED';
+      failure = new GateRunnerError((failure ? String(failure) + '; ' : '') + String(error));
     }
-    await writeFile(evidenceFile, `${JSON.stringify({ kind: 'plan_probe', status, run_id: manifest.run_id, pipeline_id: pipelineId, gate, profile: pipeline.profile,
-      head_sha: headSha, base_sha: manifest.git_setup?.base_sha ?? null, commands_sha256: planProbeCommandsSha256(commands), attempt, scratch_dir: scratchDir,
-      results: [...results].sort((a, b) => a.command_index - b.command_index),
-      started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
-      error: failure ? redact(String(failure)) : null }, null, 2)}\n`, 'utf8');
-    await liveSlot?.release();
-    await heavySlot.release();
+    try {
+      await mkdir(dirname(evidenceFile), { recursive: true });
+      await writeFile(evidenceFile, JSON.stringify({
+        kind: 'plan_probe', phase: 'plan_probe', status,
+        run_id: manifest.run_id, pipeline_id: pipelineId, gate, profile: pipeline.profile,
+        head_sha: headSha, base_sha: manifest.git_setup?.base_sha ?? null,
+        manifest_sha256: manifestSha, input_digest: inputDigest,
+        candidate_sha: null, preflight_status: preflightStatus,
+        commands_sha256: planProbeCommandsSha256(commands), attempt, scratch_dir: scratchDir,
+        results: [...results].sort((a, b) => a.command_index - b.command_index),
+        started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
+        error: failure ? redact(String(failure)) : null,
+      }, null, 2) + '\n', 'utf8');
+    } finally {
+      try { await phaseLock?.release(); }
+      finally { try { await liveSlot?.release(); } finally { await heavySlot?.release(); } }
+    }
   }
   if (failure) throw failure;
-  console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: null, candidate_sha: null, evidence: evidenceFile,
-    selection_reason: 'plan probe: full frozen set', commands_run: results.length, commands_reused: 0, reused_from: null }));
+  console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: null, candidate_sha: null,
+    evidence: evidenceFile, selection_reason: 'plan probe: full frozen set', commands_run: results.length,
+    commands_reused: 0, reused_from: null }));
 }
 
 async function main(): Promise<void> {
