@@ -692,12 +692,11 @@ async function main(): Promise<void> {
     } else {
       reuseIdentity = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles: freshInputs });
       if (reuseIdentity.metrics) reuseIdentityMeasurements.push(reuseIdentity.metrics);
-    }
-    if (reuseIdentity.digest !== environmentDigest) {
-      reusable.clear();
-      environmentDigest = null;
-      reuseDisabledReason = reuseIdentity.reason ?? 'toolchain or relevant environment changed during reuse lookup';
-    }
+      if (reuseIdentity.digest !== environmentDigest) {
+        reusable.clear();
+        environmentDigest = null;
+        reuseDisabledReason = reuseIdentity.reason ?? 'toolchain or relevant environment changed during reuse lookup';
+      }
     }
   }
   // A gate that passed on an earlier snapshot and runs again (its lane files moved after it, or a plain
