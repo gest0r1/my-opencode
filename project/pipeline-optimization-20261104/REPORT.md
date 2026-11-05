@@ -179,3 +179,31 @@ API commits немедленно опубликованы в feature; локал
 **Проверки текущего input:** GitHub connector source и commits PASS. V8 isolated JS parser four updated modules/tests PASS (imports удалены только для parse); isolated запуск точной `reuseLocalInputs` с симулированным Git-index PASS: исключённые каталоги пропущены, локальные входы включены. Нативные `node --test config/opencode/skills/task-management/scripts/gate-reuse-identity.test.mjs config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs` **NOT RUN**; TS/Bun/full regression/real Docker **NOT RUN**. Container: Node22.16.0, git2.47.3, Bun отсутствует, `curl https://github.com` завершается `Could not resolve host`. Изолированного repository checkout по-прежнему нет. Ни synthetic PASS, ни старые 39/39 не считаются актуальным full PASS.
 
 **Риски:** дополнительные чтения локальных файлов могут увеличивать время хеширования; реального before/after по CPU/elapsed нет. Доказательства корректного восстановления OpenCode child после аварии и bundled upstream OpenChamber 2.6.1 / OpenCode 2.2.5 также отсутствуют. Целевая приёмка: focused Node suite на exact HEAD, тест с изменением локального файла между двумя одинаковыми gate-runs, тест с изменением набора входов во время RUN, затем full affected, pins/Bun, безопасное обновление upstream в feature и rollback documentation. Статус **частично**.
+
+## Wake/child continuation — 2026-11-05T21:00:36.763Z
+
+**Source input:** старт `my-opencode/feature@b48b719d74ddf6ef4f4be050db2826bad862ff05`; `main@c58f452047df3806ea6e946d1909b075344bc069`. Исходники OpenChamber `feature@f9e8831586efc5b6ef975102bc3facef968561e3` не редактировались. Sevami не читали. Этот запуск содержит 8 source/test commits до DECISIONS `c1d05b6`; full test на точном HEAD не выполнен.
+
+### Найденные причины и корректировки
+
+1. `pipeline-runtime.ts::trackChild` при успешном `session.wait` только удалял child из `pendingChildren`; родитель RUN мог оставаться idle, потому что событие `session.execution.succeeded` приходит ребёнку, не обязательно родителю. Теперь успешный `session.wait` вызывает существующий `checkWake(parent)` через его таймер. Duplicate ack не создаёт второго waiter. Если wait недоступен или rejected, lease сохраняется по прежним правилам. Code commit `5af5706`; regression `7b66c8c`.
+2. До изменения `checkWake` записывал fingerprint **до** API `synthetic`, и единичный transient API failure делал следующий wake невозможным. Теперь fingerprint фиксируется только после принятого вызова; синхронные вызовы сериализуются guard `wakeInFlight`, отказы логируются и повторяются до трёх раз, с задержкой не более 5 секунд. При новом `session.execution.started` transient failure counter очищается. Code commits `0894c5a`, `4c5649a`, `f642be3`; regression `acc3954`.
+3. `orchestrator-wake.mjs` fingerprint раньше учитывал только state JSON без доступности работ. После завершения ребёнка количество runnable lanes/активных leases меняется без edit state, и dedup мог подавить нужное продолжение. Добавлены `runnable_count` и `active_work` (boolean, без noise timestamps). Code commit `01906d3`; regression `289a5fd`.
+
+### Фактические проверки этого запуска
+
+| Проверка | Результат | Граница |
+|---|---|---|
+| GitHub feature и main SHA, 8 commits, список 4 изменённых source/test файлов | PASS | remote source, не checkout |
+| Native Node22.16.0 + git2.47.3 на локальном fixture с ignored/untracked Git paths | **PASS**, содержимое входного набора проверено | fixture моделирует Git semantics, не выполняет full gate |
+| Exact fetched `trackChild` source, JS isolate: дедуп waiter, no wake before child complete, one timer after success | PASS | не actual SDK/plugin setup |
+| Exact fetched `checkWake` delivery source, JS isolate: failed synthetic не отмечен, second success consumed once | PASS | mocked plugin.session.synthetic |
+| Exact fetched `wakeDecision` source, JS isolate: stable maintenance JSON, child active→released fingerprint change, dedup | PASS | mocked hash I/O, не integrated RUN |
+| Isolated V8 parse `orchestrator-wake.mjs`, `orchestrator-wake.test.mjs`, `pipeline-runtime.test.mjs` | 3/3 PASS | импорты убраны только на этапе parser check |
+| `node --test .../orchestrator-wake.test.mjs .../pipeline-runtime.test.mjs` | **NOT RUN** | нет checkout с настоящими imports/pinned deps |
+| Pinned TypeScript/Bun/full OpenChamber, installed-plugin wait/synthetic, restart/compaction, cross-repo smoke | **NOT RUN** | нет проверенного runtime |
+
+Завершение полного этапа 8 **НЕ подтверждено**: после restart/compaction нужны реальные installed SDK hooks, owner questions, ошибки доставки, duplicate event и управление orphan leases. Выбор модели/токены/экономия времени не измерялись. Никакой дополнительный scheduler/cache или постоянный второй wake store не добавлен.
+
+### Продолжение
+Точный изолированный feature checkout с pinned dependencies → целевые Node/tsx suites (wake, pipeline runtime, local gate inputs), затем parent wake и child wait tests на установленном OpenCode; после — stage 3 upstream/pins, stage 6 build-output producer/hash, полный integration/rollback. Сохранять запрет на чтение Sevami, production/deploy/release/paid Actions и отсутствие merge в main. **Статус по-прежнему ЧАСТИЧНО.**
