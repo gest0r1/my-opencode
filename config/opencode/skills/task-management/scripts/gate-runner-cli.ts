@@ -264,6 +264,7 @@ async function requireCleanCheckout(): Promise<string> {
 async function planProbe(args: string[]): Promise<void> {
   const [manifestArg, pipelineId, gate] = args;
   if (!manifestArg || !pipelineId || !gate || args.length !== 3) throw new GateRunnerError('usage: gate-runner-cli.ts --plan-probe <manifest-path> <pipeline-id> <gate>');
+  if (![pipelineId, gate].every(id => SAFE_ID.test(id) && !id.includes('..'))) throw new GateRunnerError('PLAN_PROBE_STAGE_ID_INVALID');
   const manifestFile = resolve(manifestArg);
   const manifestRaw = await readFile(manifestFile, 'utf8');
   const manifest = resolveGateTestingFile(JSON.parse(manifestRaw), manifestFile) as Manifest;
