@@ -458,6 +458,7 @@ async function main(): Promise<void> {
       ? await loadDeclaredCandidate(state.manifest_file, manifest, state.manifest_sha256)
       : await loadCandidate(state.manifest_file);
   let deployedServiceEvidence: Record<string, unknown> | null = null;
+  let deployedServiceInput: Parameters<typeof verifyDeployedServiceGate>[0] | null = null;
   if (config?.input_kind === 'deployed-service') {
     const stages = pipeline.stages ?? [];
     const gateIndex = stages.indexOf(gate);
@@ -468,11 +469,12 @@ async function main(): Promise<void> {
     if (deployment?.status !== 'completed' || !deployment.started_at || !manifest.deploy_target || !candidateSha) {
       throw new GateRunnerError('GATE_SERVICE_DEPLOY_INCOMPLETE: missing completed install, target or published candidate');
     }
-    deployedServiceEvidence = await verifyDeployedServiceGate({
+    deployedServiceInput = {
       artifactRoot: dirname(state.manifest_file), runId, pipelineId,
       stage: deployStage, target: manifest.deploy_target,
       candidateSha, startedAt: deployment.started_at,
-    });
+    };
+    deployedServiceEvidence = await verifyDeployedServiceGate(deployedServiceInput);
   }
   const affected = args.includes('--affected');
   if (affected && !advisory) throw new GateRunnerError('affected tests are advisory only; final gates always run the full frozen set');
@@ -802,6 +804,13 @@ async function main(): Promise<void> {
       catch (error) { cleanupComplete = false; status = 'BLOCKED'; failure = new GateRunnerError(`${failure ? String(failure) + '; ' : ''}${String(error)}`); }
     }
     await releaseLive();
+    if (deployedServiceInput && status === 'PASS') {
+      try { deployedServiceEvidence = await verifyDeployedServiceGate(deployedServiceInput); }
+      catch (error) {
+        status = 'BLOCKED';
+        failure = new GateRunnerError('GATE_SERVICE_CHANGED_DURING_GATE: ' + String(error instanceof Error ? error.message : error));
+      }
+    }
     if (environmentDigest && pending.length > 0) {
       const afterRun = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment });
       if (afterRun.metrics) reuseIdentityMeasurements.push(afterRun.metrics);
