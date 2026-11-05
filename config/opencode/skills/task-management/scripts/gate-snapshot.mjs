@@ -64,10 +64,16 @@ function linkDependencyTrees(cwd, dir) {
   return { dependency_trees: trees, link_ms: Date.now() - started };
 }
 
+// This is the exact read-set of ignored local inputs copied into the snapshot.
+// The gate reuse identity hashes these same paths, otherwise a changed .env.local
+// could reuse a PASS from a different service/test configuration.
+export function copiedIgnoredInputs(cwd) {
+  return lines(git(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']))
+    .filter(entry => !entry.endsWith('/') && !IGNORED_SKIP.test(entry));
+}
+
 function copyIgnoredFiles(cwd, dir) {
-  const ignored = lines(git(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']));
-  for (const entry of ignored) {
-    if (entry.endsWith('/') || IGNORED_SKIP.test(entry)) continue;
+  for (const entry of copiedIgnoredInputs(cwd)) {
     mkdirSync(dirname(join(dir, entry)), { recursive: true });
     try { copyFileSync(join(cwd, entry), join(dir, entry)); } catch {}
   }
