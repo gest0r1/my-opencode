@@ -110,6 +110,14 @@ test('build-output requires an earlier materializing tree gate and immutable art
   assert.equal(isPrePublishGate(manifest, 'local', 'assemble'), false,
     'materialized build output must run in RUN, not as PLAN clean-tree probe');
   assert.equal(isPrePublishGate(manifest, 'local', 'inspect'), false);
+  const renamed = JSON.parse(JSON.stringify(manifest));
+  renamed.pipelines[0].stages[0] = 'release-assemble';
+  renamed.pipelines[0].executors['release-assemble'] = 'local_gate';
+  delete renamed.pipelines[0].executors.assemble;
+  renamed.gate_profiles.local['release-assemble'] = renamed.gate_profiles.local.assemble;
+  renamed.gate_testing.local['release-assemble'] = renamed.gate_testing.local.assemble;
+  renamed.gate_testing.local.inspect.build_output.producer_gate = 'release-assemble';
+  assert.doesNotThrow(() => validateGateTesting(renamed), 'producer semantics must not depend on its name');
   const broken = mutator => {
     const copy = JSON.parse(JSON.stringify(manifest));
     mutator(copy);
