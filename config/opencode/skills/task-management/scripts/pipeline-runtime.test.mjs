@@ -514,6 +514,66 @@ test('after a restart the session that drives the RUN CLI is woken without a new
   }
 });
 
+test('a settled background child wakes its parent without any parent execution event', async () => {
+  const previousCwd = process.cwd(), root = await tempProject();
+  const previousDelay = process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS = '15';
+  try {
+    const runDir = path.join(root, '.tmp/pipelines/child-wake-run');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(path.join(runDir, 'state.json'), JSON.stringify({
+      status: 'in_progress',
+      pipelines: { p: { status: 'in_progress', stages: { implementation: { status: 'in_progress' } } } },
+    }));
+    const hooks = {}, synthetic = [];
+    let resolveChild;
+    const childDone = new Promise(resolve => { resolveChild = resolve; });
+    await runtime.setup({
+      location: { directory: root },
+      tool: { hook: async (name, callback) => { hooks[name] = callback; }, transform: async fn => fn({ add: () => {} }) },
+      session: {
+        hook: async () => {},
+        get: async () => ({ data: {} }),
+        wait: async ({ sessionID }) => {
+          assert.equal(sessionID, 'child-background');
+          await childDone;
+        },
+        synthetic: async input => { synthetic.push(input); },
+      },
+    });
+    process.chdir(root);
+    await hooks['execute.before']({
+      tool: 'subagent', sessionID: 'orch', id: 'gate',
+      input: { agent: 'GateRunner', prompt: 'Run: gate-runner-cli.ts child-wake-run p fail-fast' },
+    });
+    const { writeLease, readLeases } = await import('./dispatch-leases.mjs');
+    writeLease(runDir, {
+      run_id: 'child-wake-run', pipeline_id: 'p', stage: 'implementation',
+      work_item_id: 'wi-1', role: 'CoderAgent', writes: true,
+      parent_session_id: 'orch', child_session_id: 'child-background', scope: ['src/**'],
+    });
+    await hooks['execute.after']({
+      tool: 'subagent', status: 'completed', sessionID: 'orch', id: 'bg',
+      input: { background: true },
+      result: { content: 'working in the background (sessionID: child-background)' },
+    });
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.equal(synthetic.length, 0, 'unfinished child must not resume parent');
+    assert.equal(readLeases(runDir).length, 1);
+    resolveChild();
+    // Deliberately never emit session.execution.succeeded for the parent.
+    await new Promise(resolve => setTimeout(resolve, 120));
+    assert.equal(readLeases(runDir).length, 0, 'resolved wait releases the child lease');
+    assert.equal(synthetic.length, 1, 'child completion schedules one parent wake');
+    assert.match(synthetic[0].text, /child-wake-run/);
+  } finally {
+    if (previousDelay === undefined) delete process.env.PIPELINE_WAKE_DELAY_MS;
+    else process.env.PIPELINE_WAKE_DELAY_MS = previousDelay;
+    process.chdir(previousCwd);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a PLAN prompt containing an example RUN command cannot trigger an automatic wake', async () => {
   const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
   process.env.PIPELINE_WAKE_DELAY_MS='10';
