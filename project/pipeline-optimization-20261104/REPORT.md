@@ -1,6 +1,35 @@
 # Pipeline optimization 20261104 — текущий REPORT
 
-**Статус на 05.11.2026, 17:19 UTC: ЧАСТИЧНО; локальный gate-input identity обновлён, финальные Node/Bun и интеграция NOT RUN.** Работа возобновлена в feature-ветке my-opencode по handoff; общая независимая приёмка и тестирование на итоговом коде отсутствуют. В этой сессии `main`, релизы, установку и production не меняли. По прямому запрету владельца репозиторий `sevami` не открывали и не изменяли.
+**Статус на 2026-11-06: ГОТОВО К ПЕРЕДАЧЕ НА ИЗОЛИРОВАННОЕ ТЕСТИРОВАНИЕ ОПУБЛИКОВАННЫХ FEATURE-ИЗМЕНЕНИЙ; полный план ЧАСТИЧНО ЗАБЛОКИРОВАН.** Это не статус готовности к merge/release/deploy: upstream OpenChamber/OpenCode и финальный Bun/Node/SDK regression не проведены.
+
+**Начинать тестирование здесь:** [TESTING_HANDOFF.md](TESTING_HANDOFF.md). Канонические механизмы: [DECISIONS.md](DECISIONS.md). Вариант Markdown timing: [synthetic fixture](artifacts/markdown-timing-synthetic.md) (не выдавать за реальный экспорт).
+
+## 2026-11-06 — current handoff status
+
+| Repo | Start feature SHA this turn | Source HEAD before this report | Base main | Actual changes this turn |
+|---|---|---|---|---|
+| my-opencode | `ca2d557e79d3543f46e206ec07a5681e857bcc53` | `99a1ba244b2e49a94e2b34087ba4f479669ea6cf` | `c58f452047df3806ea6e946d1909b075344bc069` | 16 source/test/doc commits before report, build-output producer and consumer |
+| openchamber-ru | `f9e8831586efc5b6ef975102bc3facef968561e3` | `06afd56dffe3e0fc0c2863d0017ae243b037cc1b` | `f9521f168c894cb17dc60ba4f929d4df0722e263` | one docs-only correction of Markdown timing evidence link/test handoff |
+
+Both feature branches are remote GitHub branches. All `main` branches were unchanged at the last verified refs. No SeVami read/change, production install, release or paid Actions.
+
+**Source delta:** `gate-testing-policy.mjs` and `gate-runner-cli.ts` support producer `input_kind=tree, artifact_output.path=dist|build/...` and consumer `input_kind=build-output, build_output.producer_gate=...` with `{artifact_path}` on each command. `build-output-proof.mjs` hashes real file bytes and binds run, pipeline, producer gate, frozen manifest SHA and tree digest. RUN producer emits proof into existing gate evidence; consumer checks completed stage and proof before/after, both run fresh without cached PASS. Source and tests: `gate-testing-policy.test.mjs`, `gate-runner-cli.test.mjs`, `build-output-proof.test.mjs`; docs synced. No second scheduler/runner/cache/approval store. This closes the **source implementation** of the previously unsupported gate input kind.
+
+**Evidence at exact source input (not aggregate historical PASS):**
+- `node --test /mnt/data/pipeline-native-test/build-output-proof.test.mjs` on local materialization of exact GitHub blobs `1a4a0170d24b5c1a92bcfc13a9f997f1f6bf77a8` and `ce03a9540bf147c5726f4c1be8d7526941d1dcf6`: **PASS 2/2, exit 0, 82.19 ms Node test duration**. `git hash-object` matched both remote blobs.
+- Frozen gate policy (the exact fetched source with imported helper) executed in V8 with dependencies mocked: **7/7** positive/negative cases pass (producer ordering, safe path, placeholder, missing producer, after-publish rejection). **Not** a native test suite.
+- `gate-runner-cli.test.mjs` includes new complete source/Git fixture for producer → consumer and stale artifact but has **NOT RUN**: there is no independent full checkout with pinned `tsx` available here.
+- OpenChamber Bun, project-wide TypeScript/pin check, live Docker/installed SDK and cross-repo acceptance **NOT RUN**. Older 39/39, 120/120, 16/16 belong to different input refs and are not current regression evidence. No before/after speed or paid token measurements on comparable RUNs; **unavailable**.
+
+**Blocking unfinished work:**
+1. OpenChamber upstream `v2.6.1@ce853f4` has **18 text-conflicting paths** among 98 both-modified files plus 6 delete/modify decisions; no supported full checkout/Bun1.4.4 or mandatory `bun run check:changed`. A blind GitData merge/pin bump would violate repository rules and risk breaking client/server. OpenCode target `v2.2.5@9bbb8ce` is also not pinned. Keep this blocked until tested feature integration can be assembled.
+2. Full `node --test` suite for current my-opencode branch, pinned TSX/SDK, actual disposable PostgreSQL/lifecycle, OpenChamber typecheck/build, and install/rollback are pending. Specific command list and expected artifacts: `TESTING_HANDOFF.md`.
+3. Real compaction/restart child session and owner consent / source implementation integration remains untested against installed SDK. Do not infer correct behavior from V8 synthetic helper tests.
+
+**Disposition:** Feature source package is available now for another testing agent. Overall optimization is **not release-ready** and does **not** meet the full original acceptance gate until upstream and native integration checks are completed.
+
+---
+
 
 ## Основная передача
 
