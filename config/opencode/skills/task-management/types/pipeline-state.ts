@@ -403,7 +403,25 @@ export interface SecurityFixPreflight {
   evidence_sha256: string;
 }
 
+/** Workflow audit data for a final design-freeze response. This records what the workflow received; it is not an authenticated transcript. */
+export interface PipelineApprovalRecord {
+  subject: 'final-manifest';
+  run_id: string;
+  decision: 'approved';
+  shown_manifest_sha256: string;
+  owner_response: string;
+  recorded_at: string;
+  message_id?: string;
+  source_session?: string;
+  /** Present when a technical revision carries the original approval to a new manifest hash. */
+  current_manifest_sha256?: string;
+  revision_evidence_path?: string;
+  revision_evidence_sha256?: string;
+  revision_reviewed_manifest_sha256?: string;
+}
+
 export interface PipelineState {
+  approval_record?: PipelineApprovalRecord;
   deferred_decisions?: Array<{
     id: string; pipeline_id: string; source_stage: string; before_stage: string;
     status: 'pending' | 'approved' | 'rejected';

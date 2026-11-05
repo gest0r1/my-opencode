@@ -9,9 +9,10 @@ import test from 'node:test';
 import runtime from '../../../plugins/pipeline-runtime.ts';
 import { dispatchPacket } from './pipeline-dispatch.ts';
 import { computeRunnable } from './stage-cli-core.ts';
+import { withApprovalArgs } from './test-approval-args.mjs';
 const STAGE_CLI = fileURLToPath(new URL('./stage-cli.ts', import.meta.url));
 function run(cwd, args) {
- const result = spawnSync('npx',['--yes','tsx',STAGE_CLI,...args], {cwd,encoding:'utf8',env:process.env});
+ const result = spawnSync('npx',['--yes','tsx',STAGE_CLI,...withApprovalArgs(cwd,args)], {cwd,encoding:'utf8',env:process.env});
  assert.equal(result.status,0,result.stderr); return result;
 }
 async function tempProject() {
