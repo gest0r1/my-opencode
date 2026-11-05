@@ -7,7 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { validateGateManifest } from './manifest-preflight.mjs';
-import { planProbeCommandsSha256, validatePlanProbes } from './manifest-v2-policy.mjs';
+import { planProbeCommandsSha256, planProbeMatches, validatePlanProbes } from './manifest-v2-policy.mjs';
+import { planProbeInputDigest } from './plan-probe-identity.mjs';
 import { withApprovalArgs } from './test-approval-args.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -97,6 +98,40 @@ function run(root, args) {
     env: process.env,
   });
 }
+
+test('PLAN live evidence requires the same pipeline, baseline HEAD, phase and preflight inputs', () => {
+  const commands = ['pnpm exec vitest run --config vitest.live.ts'];
+  const resource = { image: 'postgres:16@sha256:' + 'c'.repeat(64), command_indexes: [0],
+    preflight_command: 'node scripts/validate.mjs --pipeline-preflight' };
+  const head = 'a'.repeat(40);
+  const manifest = {
+    run_id: 'test-live', git_setup: { base_sha: head },
+    pipelines: [
+      { id: 'api', profile: 'local' }, { id: 'web', profile: 'local' },
+    ],
+    gate_testing: { local: { tests: { live_postgres: resource } } },
+  };
+  const target = { pipeline_id: 'api', profile: 'local', gate: 'tests', commands };
+  const probe = {
+    kind: 'plan_probe', phase: 'plan_probe', status: 'PASS', run_id: 'test-live',
+    pipeline_id: 'api', profile: 'local', gate: 'tests',
+    candidate_sha: null, preflight_status: 'PASS', manifest_sha256: 'b'.repeat(64),
+    commands_sha256: planProbeCommandsSha256(commands), head_sha: head,
+    input_digest: planProbeInputDigest(commands, resource, head),
+  };
+  assert.equal(planProbeMatches(probe, manifest, target), true);
+  for (const mutant of [
+    { pipeline_id: 'web' }, { phase: 'run' }, { candidate_sha: 'd'.repeat(40) },
+    { preflight_status: 'FAIL' }, { head_sha: 'd'.repeat(40) },
+    { input_digest: 'd'.repeat(64) }, { manifest_sha256: null },
+  ]) assert.equal(planProbeMatches({ ...probe, ...mutant }, manifest, target), false, JSON.stringify(mutant));
+  const changed = { ...manifest, gate_testing: { local: { tests: {
+    live_postgres: { ...resource, image: 'postgres:17@sha256:' + 'c'.repeat(64) },
+  } } } };
+  assert.equal(planProbeMatches(probe, changed, target), false);
+  const newBaseline = { ...manifest, git_setup: { base_sha: 'e'.repeat(40) } };
+  assert.equal(planProbeMatches(probe, newBaseline, target), false);
+});
 
 test('PLAN refuses a ready Story gate without a publishable final full review', async () => {
   const fx = await fixture('story-full-approval-contract');
