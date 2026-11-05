@@ -437,6 +437,8 @@ export default Plugin.define({
     const lastWake = new Map<string, string>()
     const wakeTimers = new Map<string, ReturnType<typeof setTimeout>>()
     const unknownProbes = new Map<string, number>()
+    const wakeInFlight = new Set<string>()
+    const wakeFailures = new Map<string, { fingerprint: string; attempts: number }>()
     const unresolvedNoticeInFlight = new Set<string>()
     const trackChild = (parentID: string, childID: string) => {
       const set = pendingChildren.get(parentID) ?? new Set<string>()
@@ -507,13 +509,28 @@ export default Plugin.define({
       try { if (state) runnableCount = computeRunnable(state).length } catch {}
       const decision = wakeDecision({ stateRaw, manifest, runnableCount, pendingChildren: pendingChildren.get(sessionID)?.size ?? 0, runningWork, lastFingerprint: lastWake.get(sessionID) ?? null })
       if (!decision.wake) return
-      lastWake.set(sessionID, decision.fingerprint)
-      if (noticeDelivered) return // the diagnostic already resumes the parent with the same instruction
-      appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake", run_id: runID, session_id: sessionID })
+      if (noticeDelivered) {
+        lastWake.set(sessionID, decision.fingerprint) // a separate successful notice resumed the parent
+        return
+      }
+      if (wakeInFlight.has(sessionID)) return
+      wakeInFlight.add(sessionID)
       try {
         await (plugin.session as any).synthetic({ sessionID, text: wakeText(runID), description: "pipeline wake", delivery: "queue", resume: true })
+        lastWake.set(sessionID, decision.fingerprint)
+        wakeFailures.delete(sessionID)
+        appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake", run_id: runID, session_id: sessionID })
       } catch (error) {
-        appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake_failed", run_id: runID, error: String((error as Error)?.message ?? error) })
+        const previous = wakeFailures.get(sessionID)
+        const count = previous?.fingerprint === decision.fingerprint ? previous.attempts + 1 : 1
+        wakeFailures.set(sessionID, { fingerprint: decision.fingerprint, attempts: count })
+        appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake_failed", run_id: runID, session_id: sessionID,
+          attempts: count, error: String((error as Error)?.message ?? error) })
+        // A rejected synthetic message was NOT delivered: retry only a bounded
+        // number of times. Failed delivery must not poison lastWake.
+        if (count <= 3) wakeTimers.set(sessionID, setTimeout(() => { void checkWake(sessionID) }, wakeDelayMs()))
+      } finally {
+        wakeInFlight.delete(sessionID)
       }
     }
     void (async () => {
