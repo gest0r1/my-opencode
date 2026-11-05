@@ -1,6 +1,7 @@
 # Frozen local test contract
 
 `gate_profiles[profile][gate]` remains the complete authoritative command array.
+
 ## Stateless PLAN live-gate preflight
 
 A PLAN probe is not a RUN. It never creates or simulates `state.json` and never
@@ -9,10 +10,12 @@ For a `local_gate` with `gate_testing[profile][gate].live_postgres`, freeze an
 **explicit** `live_postgres.preflight_command`:
 
 ```json
-"live_postgres": {
+{
+  "live_postgres": {
   "image": "postgres:16@sha256:<actual 64-hex digest>",
   "command_indexes": [0],
   "preflight_command": "pnpm exec tsx scripts/testing/live-pg-preflight.ts --pipeline-preflight"
+  }
 }
 ```
 
@@ -63,7 +66,8 @@ record from `OPENCODE_DEPLOY_STATE_DIR` (default:
 `/var/lib/opencode/deploy-targets`), checks the target key, installed candidate
 SHA, successful install and installed timestamp after stage start, plus a
 candidate-referencing service status file. **Only then** can the smoke commands
-run. The gate evidence records `deployed_service` provenance; it does not
+run. It passes the verified contour key as `PIPELINE_DEPLOY_TARGET` and rechecks
+candidate and contour identity before accepting their PASS result. The gate evidence records `deployed_service` provenance; it does not
 deploy, modify the target, or create a second installation store.
 
 The target state is a read-only point-in-time observation; if the target changes
