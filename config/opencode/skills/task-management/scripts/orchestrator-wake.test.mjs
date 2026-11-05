@@ -36,6 +36,22 @@ test('real stage completion and repair-cycle change allow a new wake', () => {
   assert.equal(wakeDecision({ stateRaw: JSON.stringify(repaired), manifest, lastFingerprint: first.fingerprint }).wake, true);
 });
 
+test('unchanged state wakes once when pending work becomes runnable after child completion', () => {
+  const raw = JSON.stringify(state());
+  const running = wakeDecision({ stateRaw: raw, manifest, runnableCount: 1, pendingChildren: 1, runningWork: 1 });
+  assert.equal(running.wake, true, 'an unrelated lane can run while the child is active');
+  const repeated = wakeDecision({ stateRaw: raw, manifest, runnableCount: 1, pendingChildren: 1, runningWork: 1,
+    lastFingerprint: running.fingerprint });
+  assert.equal(repeated.wake, false, 'unchanged work does not generate duplicate synthetic messages');
+  const finished = wakeDecision({ stateRaw: raw, manifest, runnableCount: 1, pendingChildren: 0, runningWork: 0,
+    lastFingerprint: running.fingerprint });
+  assert.equal(finished.wake, true, 'completed child changes actual runnable availability');
+  assert.notEqual(finished.fingerprint, running.fingerprint);
+  const stable = wakeDecision({ stateRaw: raw, manifest, runnableCount: 1,
+    lastFingerprint: finished.fingerprint });
+  assert.equal(stable.wake, false);
+});
+
 test('unknown/running children or owner checkpoints do not manufacture completion', () => {
   const raw = JSON.stringify(state());
   assert.equal(wakeDecision({ stateRaw: raw, manifest, pendingChildren: 1 }).reason, 'child_running');
