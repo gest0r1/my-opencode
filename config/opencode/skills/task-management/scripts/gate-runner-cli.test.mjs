@@ -361,6 +361,38 @@ test('runner provisions env and owned cleanup for both passing and failed live g
   }
 });
 
+test('a second identical gate cannot reuse a prior disposable live PostgreSQL PASS', async () => {
+  const fx = await diagnosticFixture();
+  await attachPostgres(fx);
+  const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    const first = run(fx.root, fx.args);
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(JSON.parse(first.stdout).commands_run, 2);
+
+    // No source, dependency, test or command changes: only the disposable
+    // database/attempt is new. A previous PASS is not a proof of this attempt.
+    const second = run(fx.root, fx.args);
+    assert.equal(second.status, 0, second.stderr);
+    const output = JSON.parse(second.stdout);
+    assert.equal(output.commands_run, 2);
+    assert.equal(output.commands_reused, 0);
+    assert.equal(output.reused_from, null);
+    const evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.equal(evidence.cleanup_complete, true);
+    assert.equal(evidence.results.every(item => !item.reused_from), true);
+    const calls = (await readFile(path.join(fx.root, '.tmp/docker.log'), 'utf8'))
+      .trim().split('\n').map(JSON.parse);
+    assert.equal(calls.filter(call => call[0] === 'create').length, 2,
+      'every live attempt must own a newly created container');
+    assert.equal(calls.filter(call => call[0] === 'rm').length, 2,
+      'each container must be removed by its own attempt');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+});
+
 test('a live command sees exactly its own gate lock, and two runs of one lane gate queue instead of failing', async () => {
   const fx = await diagnosticFixture(); await attachPostgres(fx);
   await writeFile(path.join(fx.bin, 'pnpm'), `#!/usr/bin/env node
