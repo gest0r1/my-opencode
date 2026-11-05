@@ -79,6 +79,76 @@ test('runner executes an approved argv command without a shell and records evide
   assert.equal(evidence.heavy_slot, true);
 });
 
+test('materialized build-output gate consumes exact producer bytes and rejects stale artifact', async () => {
+  const fx = await makeRun('npm run build', 'assemble');
+  const root = fx.root;
+  const bin = path.join(root, 'bin');
+  const manifestFile = path.join(root, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  manifest.pipelines[0].stages = ['assemble', 'inspect'];
+  manifest.pipelines[0].executors = { assemble: 'local_gate', inspect: 'local_gate' };
+  manifest.gate_profiles.default.inspect = ['npm test -- {artifact_path}'];
+  manifest.gate_testing = { default: {
+    assemble: { input_kind: 'tree', artifact_output: { path: 'dist/bundle.tgz' } },
+    inspect: { input_kind: 'build-output', build_output: { producer_gate: 'assemble' } },
+  } };
+  const content = JSON.stringify(manifest);
+  await writeFile(manifestFile, content);
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.manifest_sha256 = sha256(content);
+  await writeFile(statePath, JSON.stringify(state));
+  await mkdir(bin);
+  await writeFile(path.join(bin, 'npm'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'run' && args[1] === 'build') {
+  fs.mkdirSync('dist', { recursive: true });
+  fs.writeFileSync('dist/bundle.tgz', 'artifact-v1');
+} else if (args[0] === 'test') {
+  if (!args.includes('dist/bundle.tgz') || fs.readFileSync('dist/bundle.tgz', 'utf8') !== 'artifact-v1') process.exit(3);
+  fs.writeFileSync('.tmp/consumer-called', 'yes');
+} else process.exit(5);
+`, { mode: 0o755 });
+  await writeFile(path.join(root, '.gitignore'), '.tmp/\ndist/\n');
+  const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  assert.equal(git('init').status, 0);
+  git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
+  assert.equal(git('add', 'manifest.json', '.gitignore', 'bin/npm').status, 0);
+  assert.equal(git('commit', '-m', 'build input').status, 0);
+  const oldPath = process.env.PATH;
+  const producerArgs = [fx.runId, 'app', 'assemble', '--state-root', fx.stateRoot];
+  const consumerArgs = [fx.runId, 'app', 'inspect', '--state-root', fx.stateRoot];
+  try {
+    process.env.PATH = `${bin}:${oldPath}`;
+    let result = run(root, consumerArgs);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /BUILD_OUTPUT_PRODUCER_NOT_COMPLETED/);
+
+    result = run(root, producerArgs);
+    assert.equal(result.status, 0, result.stderr);
+    const evidence = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(evidence.status, 'PASS');
+    assert.equal(evidence.build_output.artifact.path, 'dist/bundle.tgz');
+    assert.match(evidence.build_output.artifact.sha256, /^[a-f0-9]{64}$/);
+    state.pipelines = { app: { stages: { assemble: { status: 'completed' } } } };
+    await writeFile(statePath, JSON.stringify(state));
+
+    result = run(root, consumerArgs);
+    assert.equal(result.status, 0, result.stderr);
+    const checked = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(checked.status, 'PASS');
+    assert.equal(checked.build_output_input.artifact.sha256, evidence.build_output.artifact.sha256);
+
+    await writeFile(path.join(root, 'dist/bundle.tgz'), 'artifact-v2');
+    result = run(root, consumerArgs);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /BUILD_OUTPUT_ARTIFACT_CHANGED/);
+  } finally {
+    process.env.PATH = oldPath;
+  }
+});
+
 test('runner rejects shell composition before any command is executed', async () => {
   const fixture = await makeRun('bash -n check.sh; touch pwned');
   await writeFile(path.join(fixture.root, 'check.sh'), '#!/usr/bin/env bash\necho ok\n', 'utf8');
