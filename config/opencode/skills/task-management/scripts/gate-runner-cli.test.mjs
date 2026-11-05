@@ -761,6 +761,74 @@ test('plan probe runs the complete frozen set statelessly and writes planning/pr
   } finally { process.env.PATH = oldPath; }
 });
 
+test('PLAN live probe validates with a real phase lock before attempt/Docker, then executes statelessly', async () => {
+  const fx = await envFixture();
+  await attachPostgres(fx);
+  const scriptDir = path.join(fx.root, 'scripts');
+  await mkdir(scriptDir, { recursive: true });
+  await writeFile(path.join(scriptDir, 'live-preflight.mjs'), String.raw`
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+const location = '.tmp/pipelines/.runtime-locks';
+const files = fs.readdirSync(location).filter(name => name.endsWith('.lock'));
+if (files.length !== 1 || process.argv[2] !== '--pipeline-preflight') process.exit(11);
+const lock = JSON.parse(fs.readFileSync(location + '/' + files[0], 'utf8'));
+const raw = fs.readFileSync(lock.manifest_file);
+const manifestHash = createHash('sha256').update(raw).digest('hex');
+if (lock.phase !== 'plan_probe' || lock.pid !== process.ppid || lock.manifest_sha256 !== manifestHash ||
+    !/^[a-f0-9]{64}$/.test(lock.input_digest) || !/^[a-f0-9]{40}$/.test(lock.head_sha) ||
+    process.env.CANDIDATE_SHA || process.env.PIPELINE_GATE_ATTEMPT) process.exit(12);
+fs.writeFileSync('.tmp/preflight-evidence.json', JSON.stringify(lock));
+if (fs.existsSync('.tmp/reject-cheap')) process.exit(19);
+`, 'utf8');
+
+  const git = (...args) => spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
+  assert.equal(git('add', 'bin', 'scripts').status, 0);
+  assert.equal(git('commit', '-m', 'live phase probe fixture').status, 0);
+  const head = git('rev-parse', 'HEAD').stdout.trim();
+  const manifest = JSON.parse(await readFile(fx.manifestFile, 'utf8'));
+  manifest.git_setup.base_sha = head;
+  manifest.gate_testing.default.build.live_postgres.preflight_command =
+    'node scripts/live-preflight.mjs --pipeline-preflight';
+  await writeFile(fx.manifestFile, JSON.stringify(manifest));
+  await unlink(path.join(fx.stateRoot, fx.runId, 'state.json'));
+  const oldPath = process.env.PATH, inherited = process.env.CANDIDATE_SHA;
+  const args = ['--plan-probe', fx.manifestFile, 'app', 'build'];
+  try {
+    process.env.PATH = fx.bin + ':' + oldPath;
+    process.env.CANDIDATE_SHA = 'f'.repeat(40);
+    await writeFile(path.join(fx.root, '.tmp/reject-cheap'), 'yes');
+    let result = run(fx.root, args);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /PLAN_LIVE_PREFLIGHT_FAILED/);
+    let evidence = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'planning/probes/app-build.json'), 'utf8'));
+    assert.deepEqual([evidence.phase, evidence.status, evidence.attempt, evidence.scratch_dir, evidence.candidate_sha, evidence.preflight_status],
+      ['plan_probe', 'BLOCKED', null, null, null, 'FAIL']);
+    await assert.rejects(access(path.join(fx.root, '.tmp/docker.log')), 'preflight failure must not call Docker');
+    await assert.rejects(access(path.join(fx.stateRoot, '.runtime-locks', sha256('gate:' + fx.runId + ':app:build') + '.lock')));
+    const preflight = JSON.parse(await readFile(path.join(fx.root, '.tmp/preflight-evidence.json'), 'utf8'));
+    assert.equal(preflight.manifest_sha256, sha256(JSON.stringify(manifest)));
+    assert.equal(preflight.head_sha, head);
+    await unlink(path.join(fx.root, '.tmp/reject-cheap'));
+    result = run(fx.root, args);
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.equal(evidence.status, 'PASS');
+    assert.equal(evidence.preflight_status, 'PASS');
+    assert.equal(evidence.attempt, 1);
+    assert.equal(evidence.candidate_sha, null);
+    assert.equal(evidence.input_digest, preflight.input_digest);
+    const calls = (await readFile(path.join(fx.root, '.tmp/docker.log'), 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.ok(calls.some(x => x[0] === 'create'));
+    assert.equal(calls.at(-1)[0], 'rm');
+    await assert.rejects(access(path.join(fx.stateRoot, '.runtime-locks', sha256('gate:' + fx.runId + ':app:build') + '.lock')));
+  } finally {
+    process.env.PATH = oldPath;
+    if (inherited === undefined) delete process.env.CANDIDATE_SHA; else process.env.CANDIDATE_SHA = inherited;
+  }
+});
+
 test('plan probe refuses candidate-sha and deployment gates and unknown pipelines', async () => {
   const candidate = await makeRun('bash scripts/install.sh {candidate_sha}', 'verify');
   const manifestFile = path.join(candidate.root, 'manifest.json');
