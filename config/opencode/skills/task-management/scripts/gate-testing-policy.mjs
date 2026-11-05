@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
-import { gatePolicyError, tokenizeGateCommand } from './gate-command-policy.mjs';
+import { gatePolicyError, tokenizeGateCommand, preflightPolicyError } from './gate-command-policy.mjs';
 
 // Keys a project-generated impact map may supply; the manifest keeps only its frozen reference.
 const SOURCE_KEYS = ['impact_groups', 'coordinator_only', 'parallel_groups', 'live_postgres', 'ignored_inputs'];
@@ -177,10 +177,16 @@ export function validateGateTesting(manifest) {
         }
       }
       const pg = config.live_postgres;
-      if (pg !== undefined && (!pg || Object.keys(pg).some(key => !['image', 'command_indexes'].includes(key)) ||
+      if (pg !== undefined && (!pg || Object.keys(pg).some(key => !['image', 'command_indexes', 'preflight_command'].includes(key)) ||
           !/^postgres:(?:1[6-9]|[2-9][0-9])(?:\.[0-9]+)?(?:-bookworm)?@sha256:[0-9a-f]{64}$/.test(pg.image ?? '') ||
           !Array.isArray(pg.command_indexes) || !pg.command_indexes.length || pg.command_indexes.some(index => !indexValid(index)))) {
         throw new Error('GATE_TESTING_INVALID: live_postgres requires an official digest-pinned PostgreSQL image and command_indexes');
+      }
+      if (pg?.preflight_command !== undefined) {
+        let reason;
+        try { reason = preflightPolicyError(tokenizeGateCommand(pg.preflight_command)); }
+        catch (error) { reason = String(error instanceof Error ? error.message : error); }
+        if (reason) throw new Error('GATE_TESTING_PREFLIGHT_INVALID: ' + reason);
       }
     }
   }
