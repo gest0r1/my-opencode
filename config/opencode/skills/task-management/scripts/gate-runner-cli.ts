@@ -220,9 +220,10 @@ export function planProbeCommandsSha256(commands: string[]): string {
 // Gate environment (A1): identity + per-attempt scratch dir for every gate command. The reuse identity
 // excludes only these run-specific IDs/attempt/scratch path; worker limits and all other inherited values
 // remain part of the digest. CANDIDATE_SHA is explicitly unset without a candidate.
-function gateEnv(identity: { runId: string; pipelineId: string; gate: string; attempt: number; candidateSha?: string; scratchDir: string }): Record<string, string | undefined> {
+function gateEnv(identity: { runId: string; pipelineId: string; gate: string; attempt: number; candidateSha?: string; deployTarget?: string; scratchDir: string }): Record<string, string | undefined> {
   return { PIPELINE_RUN_ID: identity.runId, PIPELINE_ID: identity.pipelineId, PIPELINE_GATE: identity.gate, PIPELINE_GATE_ATTEMPT: String(identity.attempt),
     CANDIDATE_SHA: identity.candidateSha, PIPELINE_SCRATCH_DIR: identity.scratchDir,
+    PIPELINE_DEPLOY_TARGET: identity.deployTarget,
     // Half the machine for a gate's own workers; a project wires it into its runner (vitest --maxWorkers,
     // jest --maxWorkers, pytest -n) in the frozen command. Set PIPELINE_MAX_WORKERS outside to override.
     PIPELINE_MAX_WORKERS: process.env.PIPELINE_MAX_WORKERS || String(Math.max(1, Math.floor(os.availableParallelism() / 2))) };
@@ -594,7 +595,7 @@ async function main(): Promise<void> {
     assertSafeInvocation(tokens, gate);
     return { command, index, test_files: [], exe: tokens[0], args: tokens.slice(1) };
   });
-  const identityEnvironment: Record<string, string | undefined> = { ...process.env, ...gateEnv({ runId, pipelineId, gate, attempt, candidateSha, scratchDir: '' }) };
+  const identityEnvironment: Record<string, string | undefined> = { ...process.env, ...gateEnv({ runId, pipelineId, gate, attempt, candidateSha, deployTarget: config?.input_kind === 'deployed-service' ? manifest.deploy_target : undefined, scratchDir: '' }) };
   for (const key of Object.keys(identityEnvironment)) if (identityEnvironment[key] === undefined) delete identityEnvironment[key];
   let reuseIdentity = await resolveReuseIdentity({ cwd: process.cwd(), invocations: identityInvocations, env: identityEnvironment });
   const reuseIdentityMeasurements: Array<{ files: number; bytes: number; elapsed_ms: number }> = reuseIdentity.metrics ? [reuseIdentity.metrics] : [];
@@ -690,7 +691,7 @@ async function main(): Promise<void> {
   const reuse = invocations.length > 0 && pending.length === 0 ? { path: [...reusable.values()][0].path } : null;
   // Fresh empty scratch dir per run of this evidence file; only created when a command will run.
   const scratchDir = pending.length ? join(resolve(stateRoot), runId, 'scratch', `${pipelineId}-${gate}${evidenceSuffix}-${attempt}`) : null;
-  const env = gateEnv({ runId, pipelineId, gate, attempt, candidateSha, scratchDir: scratchDir ?? '' });
+  const env = gateEnv({ runId, pipelineId, gate, attempt, candidateSha, deployTarget: config?.input_kind === 'deployed-service' ? manifest.deploy_target : undefined, scratchDir: scratchDir ?? '' });
   // A full set takes the machine-wide heavy slot; a narrow check waits while a full set holds it.
   const heavy = pending.length > 0 && !affected && selection < 0;
   let heavySlot: { waited_ms: number; release: () => Promise<void> } | undefined;
@@ -805,8 +806,11 @@ async function main(): Promise<void> {
     }
     await releaseLive();
     if (deployedServiceInput && status === 'PASS') {
-      try { deployedServiceEvidence = await verifyDeployedServiceGate(deployedServiceInput); }
-      catch (error) {
+      try {
+        const currentCandidate = await loadDeclaredCandidate(state.manifest_file, manifest, state.manifest_sha256);
+        if (currentCandidate !== deployedServiceInput.candidateSha) throw new Error('published candidate changed');
+        deployedServiceEvidence = await verifyDeployedServiceGate(deployedServiceInput);
+      } catch (error) {
         status = 'BLOCKED';
         failure = new GateRunnerError('GATE_SERVICE_CHANGED_DURING_GATE: ' + String(error instanceof Error ? error.message : error));
       }
