@@ -52,6 +52,24 @@ state/candidate resolution remains unchanged. This source contract requires a
 separate actual-adapter integration test; generic fake-Docker PASS cannot verify
 a consumer's phase resolver.
 
+### Deployed-service provenance
+
+For a frozen `input_kind: "deployed-service"` local gate, the existing
+`gate-runner-cli.ts` requires the preceding `dev_deploy` stage to be
+`completed`, the exact published candidate from `candidate.json` (including
+run/branch/manifest/remote SHA checks), and the existing
+`dev-deploy-cli.ts` proof. Its verifier reads the root-owned current target
+record from `OPENCODE_DEPLOY_STATE_DIR` (default:
+`/var/lib/opencode/deploy-targets`), checks the target key, installed candidate
+SHA, successful install and installed timestamp after stage start, plus a
+candidate-referencing service status file. **Only then** can the smoke commands
+run. The gate evidence records `deployed_service` provenance; it does not
+deploy, modify the target, or create a second installation store.
+
+The target state is a read-only point-in-time observation; if the target changes
+during the smoke, external services may change independently. Do not describe
+this as a cryptographic attestation or as a production deployment test.
+
 ## Declared gate input (new PLANs)
 
 A local gate may freeze `gate_testing[profile][gate].input_kind`, which is
