@@ -14,11 +14,14 @@ import { gitReadEnv } from './git-readonly.mjs';
 import { acquireHeavySlot, acquireLiveSlot, acquireLockFiles, waitForHeavySlot } from './runtime-locks.mjs';
 import { resolveReuseIdentity } from './gate-reuse-identity.mjs';
 import { planProbeInputDigest, requirePlanProbeManifestPath } from './plan-probe-identity.mjs';
+import { verifyDeployedServiceGate } from './dev-deploy-cli.ts';
 
 type PipelineSpec = {
   id: string;
   profile?: string;
   runtime_locks?: string[];
+  stages?: string[];
+  executors?: Record<string, string>;
 };
 
 type Manifest = {
@@ -27,6 +30,7 @@ type Manifest = {
   gate_profiles?: Record<string, Record<string, string[]>>;
   gate_testing?: Record<string, Record<string, any>>;
   git_setup?: { base_sha: string; branch?: string };
+  deploy_target?: string;
 };
 
 type State = {
@@ -34,6 +38,7 @@ type State = {
   status: string;
   manifest_file?: string;
   manifest_sha256?: string;
+  pipelines?: Record<string, { stages?: Record<string, { status?: string; started_at?: string }> }>;
 };
 
 type CandidateEvidence = {
@@ -443,6 +448,32 @@ async function main(): Promise<void> {
   if (advisory && RUNTIME_GATE.test(gate)) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
   validateGateTesting(manifest);
   const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
+  if (advisory && ['candidate', 'deployed-service'].includes(config?.input_kind)) {
+    throw new GateRunnerError('candidate/deployed-service gates cannot be advisory');
+  }
+  // Service checks consume the existing dev_deploy proof, not a new deployment
+  // state store; do this before source inventory and test/container allocations.
+  const candidateSha = advisory ? undefined
+    : ['candidate', 'deployed-service'].includes(config?.input_kind)
+      ? await loadDeclaredCandidate(state.manifest_file, manifest, state.manifest_sha256)
+      : await loadCandidate(state.manifest_file);
+  let deployedServiceEvidence: Record<string, unknown> | null = null;
+  if (config?.input_kind === 'deployed-service') {
+    const stages = pipeline.stages ?? [];
+    const gateIndex = stages.indexOf(gate);
+    const deployStage = stages.slice(0, gateIndex).reverse()
+      .find(stage => pipeline.executors?.[stage] === 'dev_deploy');
+    if (!deployStage) throw new GateRunnerError('GATE_SERVICE_DEPLOY_STAGE_MISSING');
+    const deployment = state.pipelines?.[pipelineId]?.stages?.[deployStage];
+    if (deployment?.status !== 'completed' || !deployment.started_at || !manifest.deploy_target || !candidateSha) {
+      throw new GateRunnerError('GATE_SERVICE_DEPLOY_INCOMPLETE: missing completed install, target or published candidate');
+    }
+    deployedServiceEvidence = await verifyDeployedServiceGate({
+      artifactRoot: dirname(state.manifest_file), runId, pipelineId,
+      stage: deployStage, target: manifest.deploy_target,
+      candidateSha, startedAt: deployment.started_at,
+    });
+  }
   const affected = args.includes('--affected');
   if (affected && !advisory) throw new GateRunnerError('affected tests are advisory only; final gates always run the full frozen set');
 
@@ -541,9 +572,6 @@ async function main(): Promise<void> {
     // so explicitly; the wave gate and the final complete gate run those commands.
     if (!selected.length) selectionReason = `deferred to coordinator: commands ${deferred.join(', ')}`;
   }
-  if (advisory && config?.input_kind === 'candidate') throw new GateRunnerError('candidate gates cannot be advisory');
-  const candidateSha = advisory ? undefined : config?.input_kind === 'candidate'
-    ? await loadDeclaredCandidate(state.manifest_file, manifest, state.manifest_sha256) : await loadCandidate(state.manifest_file);
   const invocations = selected.map(item => {
     const tokens = substituteCandidate(tokenizeCommand(item.command), candidateSha);
     tokens.push(...item.test_files);
@@ -795,7 +823,7 @@ async function main(): Promise<void> {
       };
       await writeFile(evidenceFile, `${JSON.stringify({ status, purpose: advisory ? 'advisory' : 'authoritative', run_id: runId, pipeline_id: pipelineId, gate,
         work_item_id: workItemId ?? null, dispatch_stage: baseline?.stage ?? null, baseline_path: baselinePath ?? null, baseline_sha256: baselineSha ?? null,
-        runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, fingerprint, attempt, scratch_dir: scratchDir,
+        runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, deployed_service: deployedServiceEvidence, fingerprint, attempt, scratch_dir: scratchDir,
         manifest_sha256: state.manifest_sha256, environment_digest: environmentDigest, reuse_disabled_reason: reuseDisabledReason,
         reuse_identity_metrics: reuseIdentityMetrics, reused_from: reuse?.path ?? null,
         hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])],
