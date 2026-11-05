@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { accessSync, constants, readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { validateGateTesting, resolveGateTesting, commandsDigest, isPrePublishGate } from './gate-testing-policy.mjs';
+import { planProbeInputDigest } from './plan-probe-identity.mjs';
 import { validateGenerators } from './generator-cli.mjs';
 
 export class ManifestV2PolicyError extends Error {}
@@ -538,9 +539,21 @@ function readPlanProbe(runDirectory, pipelineId, gate) {
 }
 
 export function planProbeMatches(probe, manifest, { pipeline_id, profile, gate, commands }) {
-  return probe?.kind === 'plan_probe' && probe.run_id === manifest.run_id && probe.profile === profile && probe.gate === gate &&
+  const common = probe?.kind === 'plan_probe' && probe.run_id === manifest.run_id && probe.profile === profile && probe.gate === gate &&
     typeof probe.pipeline_id === 'string' && (manifest.pipelines ?? []).some((p) => p.id === probe.pipeline_id && p.profile === profile) &&
     probe.commands_sha256 === planProbeCommandsSha256(commands);
+  if (!common) return false;
+  const resource = manifest.gate_testing?.[profile]?.[gate]?.live_postgres;
+  if (!resource) return true; // Historical non-live probes retain their existing cross-lane contract.
+  // Live adapters derive owner and phase from the held gate runtime lock; evidence
+  // from another pipeline, another baseline HEAD, or a RUN cannot fulfill this PLAN.
+  const expectedHead = manifest.preserved_baseline?.head_sha ?? manifest.git_setup?.base_sha;
+  if (!SHA.test(expectedHead ?? '') || probe.pipeline_id !== pipeline_id ||
+      probe.phase !== 'plan_probe' || probe.candidate_sha !== null || probe.preflight_status !== 'PASS' ||
+      !SHA256.test(probe.manifest_sha256 ?? '') ||
+      String(probe.head_sha).toLowerCase() !== String(expectedHead).toLowerCase()) return false;
+  try { return probe.input_digest === planProbeInputDigest(commands, resource, probe.head_sha); }
+  catch { return false; }
 }
 
 // A baseline_repair item of the profile lets a red base through: PLAN assigned the failing suites to it.
