@@ -15,6 +15,7 @@ import { acquireHeavySlot, acquireLiveSlot, acquireLockFiles, waitForHeavySlot }
 import { resolveReuseIdentity } from './gate-reuse-identity.mjs';
 import { planProbeInputDigest, requirePlanProbeManifestPath } from './plan-probe-identity.mjs';
 import { verifyDeployedServiceGate } from './dev-deploy-cli.ts';
+import { artifactDigest, outputProof, verifyOutputProof } from './build-output-proof.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -459,8 +460,8 @@ async function main(): Promise<void> {
   if (advisory && RUNTIME_GATE.test(gate)) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
   validateGateTesting(manifest);
   const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
-  if (advisory && ['candidate', 'deployed-service'].includes(config?.input_kind)) {
-    throw new GateRunnerError('candidate/deployed-service gates cannot be advisory');
+  if (advisory && (['candidate', 'build-output', 'deployed-service'].includes(config?.input_kind) || config?.artifact_output)) {
+    throw new GateRunnerError('candidate/build-output/deployed-service or artifact-producing gates cannot be advisory');
   }
   // Service checks consume the existing dev_deploy proof, not a new deployment
   // state store; do this before source inventory and test/container allocations.
@@ -574,6 +575,23 @@ async function main(): Promise<void> {
   const gitIn = (dir: string) => (exe: string, argv: string[]) => runInvocation(exe, argv, dir, gitReadEnv({}), 30);
   // Read-only inventory: never take .git/index.lock while a worker or publish may be writing.
   let snapshot = await sourceSnapshot(process.cwd(), manifest, gitIn(process.cwd()), advisory ? baseline : null);
+  // A build-output gate reads an existing producer gate PASS, not a mutable
+  // regenerated artifact or a second copy of build state. Check before test work.
+  let buildOutputInput: Parameters<typeof verifyOutputProof>[0] | null = null;
+  let buildOutputEvidence: Record<string, unknown> | null = null;
+  if (config?.input_kind === 'build-output') {
+    const producerGate = config.build_output.producer_gate as string;
+    const producerStage = state.pipelines?.[pipelineId]?.stages?.[producerGate];
+    if (producerStage?.status !== 'completed' || !snapshot?.digest) {
+      throw new GateRunnerError('BUILD_OUTPUT_PRODUCER_NOT_COMPLETED: producer stage and clean source evidence required');
+    }
+    const artifactPath = manifest.gate_testing?.[pipeline.profile]?.[producerGate]?.artifact_output?.path;
+    buildOutputInput = { cwd: process.cwd(),
+      evidencePath: join(resolve(stateRoot), runId, 'gates', `${pipelineId}-${producerGate}.json`),
+      runId, pipelineId, producerGate, manifestSha: state.manifest_sha256,
+      sourceDigest: snapshot.digest, artifactPath };
+    buildOutputEvidence = await verifyOutputProof(buildOutputInput);
+  }
   let deferred: number[] = [];
   let selectionReason = baseProbe ? 'base probe: full frozen set' : coordinator ? 'coordinator-only commands' : testFiles.length ? 'focused test files' : 'full frozen set';
   if (affected) {
@@ -586,7 +604,8 @@ async function main(): Promise<void> {
     if (!selected.length) selectionReason = `deferred to coordinator: commands ${deferred.join(', ')}`;
   }
   const invocations = selected.map(item => {
-    const tokens = substituteCandidate(tokenizeCommand(item.command), candidateSha);
+    const tokens = substituteCandidate(tokenizeCommand(item.command), candidateSha)
+      .map(token => token.replaceAll('{artifact_path}', buildOutputInput?.artifactPath ?? '{artifact_path}'));
     tokens.push(...item.test_files);
     assertSafeInvocation(tokens, gate);
     return { ...item, exe: tokens[0], args: tokens.slice(1) };
@@ -601,7 +620,8 @@ async function main(): Promise<void> {
     ? { lane_scope: laneScopeList, lane_exclude: generatedPaths, lane_scope_digest: laneDigest(files, laneScopeList, generatedPaths) } : {};
   const originalCwd = process.cwd();
   const identityInvocations = commands.map((command, index) => {
-    const tokens = substituteCandidate(tokenizeCommand(command), candidateSha);
+    const tokens = substituteCandidate(tokenizeCommand(command), candidateSha)
+      .map(token => token.replaceAll('{artifact_path}', buildOutputInput?.artifactPath ?? '{artifact_path}'));
     assertSafeInvocation(tokens, gate);
     return { command, index, test_files: [], exe: tokens[0], args: tokens.slice(1) };
   });
@@ -648,7 +668,7 @@ async function main(): Promise<void> {
   let treeCopy: any;
   let copyFiles: Record<string, string> | null = null;
   let snapshotRecord: Record<string, any> | null = null;
-  if ((!advisory || coordinator) && !RUNTIME_GATE.test(gate) && !commands.some(command => command.includes('{candidate_sha}')) && process.env.PIPELINE_GATE_SNAPSHOT !== '0' && !args.includes('--in-place')) {
+  if ((!advisory || coordinator) && !config?.artifact_output && config?.input_kind !== 'build-output' && !RUNTIME_GATE.test(gate) && !commands.some(command => command.includes('{candidate_sha}')) && process.env.PIPELINE_GATE_SNAPSHOT !== '0' && !args.includes('--in-place')) {
     const created = await createGateSnapshot({ cwd: originalCwd, stateRoot, label: `${pipelineId}-${gate}`,
       installEvidence: join(stateRoot, runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-snapshot-install.json`) });
     if (created.snapshot) {
@@ -676,7 +696,7 @@ async function main(): Promise<void> {
   // Resource-bound results do not prove the state of a later disposable DB or deployed service.
   // Keep reuse for pure commands from the same gate, but always establish fresh live evidence.
   const liveCommandIndexes = new Set(liveIndexes(config));
-  const canReuseCommand = (index: number) => config?.input_kind !== 'deployed-service' && !liveCommandIndexes.has(index);
+  const canReuseCommand = (index: number) => !config?.artifact_output && !['build-output', 'deployed-service'].includes(config?.input_kind) && !liveCommandIndexes.has(index);
   const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest || !environmentDigest ? new Map()
     : await findReusableResults({ stateRoot: resolve(stateRoot), runId, gate, sourceDigest: snapshot.digest, environmentDigest,
       selected: invocations.filter(item => canReuseCommand(item.index))
