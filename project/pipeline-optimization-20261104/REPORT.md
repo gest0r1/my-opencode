@@ -1,6 +1,6 @@
 # Pipeline optimization 20261104 — текущий REPORT
 
-**Статус на 05.11.2026, 13:42 UTC: ЧАСТИЧНО.** Работа возобновлена в feature-ветке my-opencode по handoff; общая независимая приёмка и тестирование на итоговом коде отсутствуют. В этой сессии `main`, релизы, установку и production не меняли. По прямому запрету владельца репозиторий `sevami` не открывали и не изменяли.
+**Статус на 05.11.2026: ЧАСТИЧНО.** Работа возобновлена в feature-ветке my-opencode по handoff; общая независимая приёмка и тестирование на итоговом коде отсутствуют. В этой сессии `main`, релизы, установку и production не меняли. По прямому запрету владельца репозиторий `sevami` не открывали и не изменяли.
 
 ## Основная передача
 
@@ -137,3 +137,31 @@ API commits немедленно опубликованы в feature; локал
 - `gate-runner-cli.ts`: stateless PLAN cheap validator теперь обнуляет **не только** `CANDIDATE_SHA` и `PIPELINE_DEPLOY_TARGET`, но и унаследованные `DATABASE_URL`, `LIVE_PG_TEST`, `LIVE_PG_CONTOUR`, `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` перед запуском validateOnly. Добавлен regression в существующий `gate-runner-cli.test.mjs`: внешний `DATABASE_URL` намеренно задан и в preflight запрещён. Синтаксический V8 PARSE_PASS для обновлённого теста; Node test по-прежнему **NOT RUN**.
 - Инструкции OpenChamber были прочитаны только в разрешённом fork: `AGENTS.md`, `openchamber-change-discipline/SKILL.md`, `opencode-v2/SKILL.md`, `package.json`. Source merge там требует `bun run check:changed` **до каждого source commit**, полноценный Bun toolchain и ветку конфликтных файлов. В текущем source-only GitHub API окружении выполнить эти checks нельзя, поэтому не создавался фиктивный upstream merge commit и не менялись lockfile/pins.
 - Checkpoint перед этим дополнением: git feature `739293a5cb5bdf2fd4c9f159eefbf827d5cd301e` (source); для актуального commit после отчёта/дополнений читать ref. `main` и OpenChamber feature в этом запуске неизменны. Запрещённый репозиторий не открывался.
+
+## Ревью и точечный safety-fix, 2026-11-05T16:42:47.910Z UTC
+
+**Точка входа:** `my-opencode feature@330c675bde9454614d9745769761aac04374ecd4`, `openchamber-ru feature@f9e8831586efc5b6ef975102bc3facef968561e3`; базовые `main` SHAs не изменились. На момент начала после предыдущего checkpoint в ветках уже были +51/+12 commits. В текущем запуске редактировали **только** `my-opencode`; чужие worktrees/процессы неизвестны, инструменты локального checkout/production не использовали. Состояние текущего ref следует проверять после run-note.
+
+### Изменения
+1. `gate-runner-cli.ts` (commit `3b5a8e8`): при межзапусковом `findReusableResults` и при `snapshot.reused_by_impact` запрещено зачитывать PASS для `live_postgres.command_indexes` и всех `input_kind=deployed-service`. Последующий RUN обязан получить новое evidence ресурса, при этом независимые pure commands сохраняют per-command reuse. Старый код сравнивал source/toolchain/env, **но не доказывал состояние другого disposable DB/service**, мог записать `commands_run=0` без Docker. Регрессия `gate-runner-cli.test.mjs` commit `230bf89`: два одинаковых запуска, две attempt-owned Docker create/rm, `commands_reused=0`. Документация `gate-testing.md` commit `ef332df`.
+2. `dispatch-leases.mjs` (commits `06d7eee`, `7ba6ac3`): после гибели owner process lease с `parent_session_id` либо `child_session_id` **не удаляется**, если stage ещё не completed. Это покрывает crash-window до acknowledgement childID. `pipeline-runtime.ts::checkWake` (commit `9eb3c04`) для такого lease без childID распознаёт `unknown`, не `idle`, сохраняет bounded diagnostics вместо повторного dispatch. Старый legacy lease без parent/child по-прежнему может быть очищен после подтверждённого dead PID; stage completed также освобождает lease. Регрессия в `pipeline-runtime.test.mjs` commits `594a8f6`, `c5cabb9`.
+3. `DECISIONS.md` commit `88a28b7`: кратко сохранены канонические владельцы, причина запрета resource reuse и незакрытые риски crash-window.
+
+### Проверки именно этих source inputs
+
+| Проверка | Фактический результат | Ограничение |
+|---|---|---|
+| `git ls-remote https://github.com/gest0r1/my-opencode.git HEAD` | FAIL: DNS `github.com` отсутствует | изолированный checkout недоступен |
+| GitHub connector read/commit/branch compare | PASS, проверен прирост +51/+12 commits до текущего запуска | не выполняет project commands |
+| Native Node 22 + Git, Bun | Node 22 / git присутствуют, Bun нет | без full checkout невозможно запустить затронутые TS source imports |
+| V8 isolate, exact fetched `dispatch-leases.mjs` with in-memory FS | PASS: dead parent retains both child-known and crash-window leases; overlapping writer blocked; complete stage cleanup; legacy lease pruned | synthetic test, не OpenCode SDK/Node integration |
+| V8 isolate, exact fetched `gate-runner-cli.ts` resource-filter | PASS: pure `[true,true,true]`, live index `[true,false,true]`, deployed-service `[false,false,false]` | не запускает Docker и gate-runner |
+| V8 syntax parse fetched `dispatch-leases.mjs`, `pipeline-runtime.test.mjs` | PARSE_PASS 2/2 после stripping import/export для JS parser | полноценный `node --test` не выполнен |
+| `node --test config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs config/opencode/skills/task-management/scripts/pipeline-runtime.test.mjs` | **NOT RUN** | нужен checkout с pinned tsx и test dependencies |
+| Cross-repo Bun/check:changed, native OpenCode session restart, actual disposable PostgreSQL, install/rollback | **NOT RUN** | целевое изолированное окружение отсутствует |
+
+### Границы и следующие действия
+- Функционально оба дефекта на source-path исправлены, но **совместимость со всем RUN кодом и отсутствием regressions не подтверждена**. В особенности проверить `readLeases`/plugin pause/resume при server restart и все async paths `checkWake` (у background child должен быть только один автор).
+- Команды проверки: `node --test config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs config/opencode/skills/task-management/scripts/pipeline-runtime.test.mjs config/opencode/skills/task-management/scripts/gate-reuse-identity.test.mjs`, далее остальные suites из основного отчёта, `bun run check:changed` в OpenChamber до его source edits.
+- Следующие блоки ТЗ остаются: **upstream OpenChamber 2.6.1 + OpenCode 2.2.5 with real merge/pins, build-output producer/hash, компакция/restored session tests, full cross-repo smoke/rollback и интеграционная приёмка**. Вся фактическая экономия времени/tokens без сопоставимого PLAN/RUN остаётся неподтверждённой.
+- Прямой запрет владельца на чтение/изменение `sevami` сохранён. `main`, releases, deployments, платные GitHub Actions не затронуты. **Итог: частично, к независимому ревью полного ТЗ пока не готово.**
