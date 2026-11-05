@@ -335,6 +335,11 @@ async function planProbe(args: string[]): Promise<void> {
         PIPELINE_RUN_ID: manifest.run_id, PIPELINE_ID: pipelineId, PIPELINE_GATE: gate,
         PIPELINE_GATE_ATTEMPT: undefined, PIPELINE_SCRATCH_DIR: undefined,
         CANDIDATE_SHA: undefined, PIPELINE_DEPLOY_TARGET: undefined,
+        // validateOnly never needs a live database connection or inherited
+        // credentials; prevent an outer shell from selecting another contour.
+        DATABASE_URL: undefined, LIVE_PG_TEST: undefined, LIVE_PG_CONTOUR: undefined,
+        PGHOST: undefined, PGPORT: undefined, PGUSER: undefined,
+        PGPASSWORD: undefined, PGDATABASE: undefined,
       }, 60);
       if (result.exit_code !== 0) {
         throw new GateRunnerError('PLAN_LIVE_PREFLIGHT_FAILED: exit=' + result.exit_code + ' ' + redact(result.stderr).slice(0, 500));
