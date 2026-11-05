@@ -100,7 +100,10 @@ export function validateGateTesting(manifest) {
     for (const [gate, config] of Object.entries(gates)) {
       const commands = manifest.gate_profiles?.[profile]?.[gate];
       if (!Array.isArray(commands) || !config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`GATE_TESTING_INVALID: ${profile}/${gate}`);
-      if (/(runtime|deploy|release|smoke|install)/i.test(gate) && !isPrePublishGate(manifest, profile, gate) && Object.keys(config).some(key => key !== 'input_kind')) throw new Error('GATE_TESTING_INVALID: test resources cannot wrap deployment gates');
+      if (/(runtime|deploy|release|smoke|install)/i.test(gate) && !isPrePublishGate(manifest, profile, gate) &&
+          Object.keys(config).some(key => !['input_kind', 'build_output'].includes(key))) {
+        throw new Error('GATE_TESTING_INVALID: test resources cannot wrap deployment gates');
+      }
       if (Object.keys(config).some(key => !['input_kind', 'artifact_output', 'build_output', 'impact_groups', 'live_postgres', 'timeout_seconds', 'report_files', 'coordinator_only', 'parallel_groups', 'ignored_inputs', 'source'].includes(key))) throw new Error('GATE_TESTING_INVALID: unknown option');
       // Optional for legacy manifests. New PLANs classify what a gate actually checks.
       // A tree check may never be silently postponed until after publication.
