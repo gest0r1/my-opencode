@@ -287,6 +287,7 @@ async function planProbe(args: string[]): Promise<void> {
   let attempt: number | null = null;
   let scratchDir: string | null = null;
   let resource: Awaited<ReturnType<typeof createLivePostgres>> | undefined;
+  let cleanupComplete: boolean | null = null;
   let heavySlot: { release: () => Promise<void> } | undefined;
   let liveSlot: { release: () => Promise<void> } | undefined;
   let phaseLock: { release: () => Promise<unknown> } | undefined;
@@ -347,7 +348,7 @@ async function planProbe(args: string[]): Promise<void> {
       resource = await createLivePostgres(config.live_postgres,
         process.cwd() + ':' + manifest.run_id + ':' + pipelineId + ':' + gate,
         (exe: string, argv: string[], liveEnv?: Record<string, string>) =>
-          runInvocation(exe, argv, process.cwd(), liveEnv, 60, ['inspect', 'rm'].includes(argv[0])));
+          runInvocation(exe, argv, process.cwd(), { ...liveEnv, CANDIDATE_SHA: undefined }, 60, ['inspect', 'rm'].includes(argv[0])));
     }
     for (const batch of parallelBatches(invocations, config, liveIndexes(config))) {
       const settled = await Promise.all(batch.map((invocation: Invocation) => {
@@ -370,9 +371,10 @@ async function planProbe(args: string[]): Promise<void> {
     failure = error; if (status !== 'FAIL') status = 'BLOCKED';
   } finally {
     try {
-      if (resource) await resource.cleanup();
+      if (resource) { await resource.cleanup(); cleanupComplete = true; }
     } catch (error) {
       status = 'BLOCKED';
+      cleanupComplete = false;
       failure = new GateRunnerError((failure ? String(failure) + '; ' : '') + String(error));
     }
     try {
@@ -383,6 +385,7 @@ async function planProbe(args: string[]): Promise<void> {
         head_sha: headSha, base_sha: manifest.git_setup?.base_sha ?? null,
         manifest_sha256: manifestSha, input_digest: inputDigest,
         candidate_sha: null, preflight_status: preflightStatus,
+        live_postgres: resource?.evidence ?? null, cleanup_complete: cleanupComplete,
         commands_sha256: planProbeCommandsSha256(commands), attempt, scratch_dir: scratchDir,
         results: [...results].sort((a, b) => a.command_index - b.command_index),
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
