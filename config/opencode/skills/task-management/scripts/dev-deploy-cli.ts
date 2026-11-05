@@ -37,6 +37,44 @@ export function deployEvidencePath(artifactRoot: string, pipelineId: string, sta
   return join(artifactRoot, 'deploy', `${pipelineId}-${stage}.json`);
 }
 
+// Local post-deploy smoke gates consume the existing dev-deploy evidence and
+// current root-owned contour state, not an invented second deployment record.
+// A completed stage alone does not prove the service still runs that candidate.
+export async function verifyDeployedServiceGate(input: {
+  artifactRoot: string; runId: string; pipelineId: string; stage: string;
+  target: string; candidateSha: string; startedAt: string;
+}): Promise<Record<string, unknown>> {
+  const { artifactRoot, runId, pipelineId, stage, target, startedAt } = input;
+  const candidateSha = input.candidateSha.toLowerCase();
+  if (![runId, pipelineId, stage, target].every(value =>
+      /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && !value.includes('..')) ||
+      !SHA.test(candidateSha) || !Number.isFinite(Date.parse(startedAt))) {
+    throw new DevDeployError('GATE_SERVICE_IDENTITY_INVALID: unsafe target/stage/candidate/baseline');
+  }
+  const recordedPath = deployEvidencePath(artifactRoot, pipelineId, stage);
+  const evidence = await readJson(recordedPath, 'dev_deploy evidence');
+  if (evidence.status !== 'PASS' || evidence.run_id !== runId || evidence.pipeline_id !== pipelineId ||
+      evidence.stage !== stage || evidence.target !== target ||
+      String(evidence.candidate_sha ?? '').toLowerCase() !== candidateSha) {
+    throw new DevDeployError('GATE_SERVICE_EVIDENCE_MISMATCH: dev_deploy evidence is not for this run/target/candidate');
+  }
+  const stateDir = process.env.OPENCODE_DEPLOY_STATE_DIR || '/var/lib/opencode/deploy-targets';
+  const installed = await readJson(join(stateDir, target + '.json'), 'current contour state');
+  if (installed.key !== target || String(installed.sha ?? '').toLowerCase() !== candidateSha ||
+      installed.exit_code !== 0 || !Number.isFinite(Date.parse(installed.finished_at)) ||
+      Date.parse(installed.finished_at) < Date.parse(startedAt)) {
+    throw new DevDeployError('GATE_SERVICE_INSTALL_CHANGED: contour no longer reports the approved deployment');
+  }
+  if (!installed.status_file) throw new DevDeployError('GATE_SERVICE_STATUS_MISSING: no current service status file');
+  const status = await readJson(String(installed.status_file), 'current contour status');
+  if (!JSON.stringify(status).toLowerCase().includes(candidateSha)) {
+    throw new DevDeployError('GATE_SERVICE_STATUS_MISMATCH: service status does not name the installed candidate');
+  }
+  return { status: 'PASS', run_id: runId, pipeline_id: pipelineId,
+    stage, target, candidate_sha: candidateSha, installed_sha: installed.sha,
+    installed_at: installed.finished_at, evidence_path: recordedPath };
+}
+
 async function record(args: string[]): Promise<Record<string, unknown>> {
   const runId = args[1]; const stage = args[2]; const pipelineId = option(args, '--pipeline');
   if (!runId || !RUN_ID.test(runId) || !stage || !pipelineId) {
