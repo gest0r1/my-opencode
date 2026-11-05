@@ -701,10 +701,15 @@ test('detached child lease survives a dead parent until the stage is proven comp
       { pipeline_id: 'p', stage: 'implementation', work_item_id: 'w2' }, ['src/file.ts']),
       'the orphaned writer still reserves overlapping paths');
 
-    // Legacy foreground leases without child session evidence can still be pruned
-    // after the owning process dies. Other unrelated work remains runnable.
-    writeLease(runDir, { ...entry, work_item_id: 'foreground', child_session_id: undefined });
-    assert.equal(readLeases(runDir, { alive: () => false, state: running }).length, 1);
+    // A crash before an acknowledgement leaves only parent_session_id; that
+    // reservation must also survive because the child may already be writing.
+    writeLease(runDir, { ...entry, work_item_id: 'before-ack', child_session_id: undefined });
+    assert.equal(readLeases(runDir, { alive: () => false, state: running }).length, 2);
+    // An old legacy lease with no parent or child correlation can still be
+    // pruned on a dead owner without blocking unrelated source lanes.
+    writeLease(runDir, { ...entry, work_item_id: 'legacy',
+      parent_session_id: undefined, child_session_id: undefined });
+    assert.equal(readLeases(runDir, { alive: () => false, state: running }).length, 2);
 
     const completed = { pipelines: { p: { stages: { implementation: { status: 'completed' } } } } };
     assert.equal(readLeases(runDir, { alive: () => false, state: completed }).length, 0,
