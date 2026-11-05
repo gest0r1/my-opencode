@@ -574,6 +574,56 @@ test('a settled background child wakes its parent without any parent execution e
   }
 });
 
+test('failed automatic wake is retried and only a delivered wake consumes the fingerprint', async () => {
+  const previousCwd = process.cwd(), root = await tempProject();
+  const previousDelay = process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS = '15';
+  try {
+    const runDir = path.join(root, '.tmp/pipelines/wake-retry-run');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(path.join(runDir, 'state.json'), JSON.stringify({ status: 'in_progress', pipelines: {} }));
+    const hooks = {};
+    let attempts = 0, delivered = 0;
+    await runtime.setup({
+      location: { directory: root },
+      tool: { hook: async (name, callback) => { hooks[name] = callback; }, transform: async fn => fn({ add: () => {} }) },
+      session: {
+        hook: async () => {},
+        get: async () => ({ data: {} }),
+        wait: async () => {},
+        synthetic: async () => {
+          attempts++;
+          if (attempts === 1) throw new Error('temporary transport failure');
+          delivered++;
+        },
+      },
+    });
+    process.chdir(root);
+    await hooks['execute.before']({
+      tool: 'subagent', sessionID: 'orch', id: 'gate',
+      input: { agent: 'GateRunner', prompt: 'Run: gate-runner-cli.ts wake-retry-run p fail-fast' },
+    });
+    await hooks['execute.after']({
+      tool: 'subagent', status: 'completed', sessionID: 'orch', id: 'bg',
+      input: { background: true },
+      result: { content: 'working in the background (sessionID: completed-child)' },
+    });
+    await new Promise(resolve => setTimeout(resolve, 160));
+    assert.equal(attempts, 2, 'failed synthetic must not permanently suppress the next attempt');
+    assert.equal(delivered, 1);
+    const log = await readFile(path.join(runDir, 'reuse-metrics/events.jsonl'), 'utf8');
+    assert.match(log, /orchestrator_wake_failed/);
+    assert.match(log, /orchestrator_wake/);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(attempts, 2, 'successful delivery is deduplicated');
+  } finally {
+    if (previousDelay === undefined) delete process.env.PIPELINE_WAKE_DELAY_MS;
+    else process.env.PIPELINE_WAKE_DELAY_MS = previousDelay;
+    process.chdir(previousCwd);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a PLAN prompt containing an example RUN command cannot trigger an automatic wake', async () => {
   const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
   process.env.PIPELINE_WAKE_DELAY_MS='10';
