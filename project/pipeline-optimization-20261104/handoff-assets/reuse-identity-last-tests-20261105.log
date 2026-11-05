@@ -1,0 +1,47 @@
+✔ the same resolved package-manager toolchain has a stable identity and changed bytes invalidate it (948.708488ms)
+✔ dependency symlink cycles are recorded without recursive traversal or disabling identity (475.085695ms)
+✔ unknown launcher routes return an explicit reuse-disabled reason without a digest (286.004778ms)
+✔ Corepack routing overrides and a conflicting devEngines pin fail closed for reuse (614.594238ms)
+✔ runner executes an approved argv command without a shell and records evidence (1177.840775ms)
+✔ runner rejects shell composition before any command is executed (286.370486ms)
+✔ runtime candidate placeholder fails closed without published candidate evidence (341.476117ms)
+✔ declared candidate gate rejects missing, foreign and mismatched publish evidence (1911.083221ms)
+✔ runner executes frozen uv pytest and rejects every non-pytest uv form (2485.691873ms)
+✔ advisory checks use a selected frozen command and cannot overwrite final evidence (2901.916648ms)
+✔ affected advisory filters suites but authoritative invocation always runs the complete frozen set (4383.178332ms)
+✔ focused advisory narrows one frozen vitest command to existing test files only (2440.327066ms)
+✔ base probe runs the complete frozen set only on a clean checkout and records its base (3067.524961ms)
+✔ unchanged diagnostic failures cannot spin; a unique hypothesis permits one retry and source corrections resume (5952.082813ms)
+✔ runner provisions env and owned cleanup for both passing and failed live gates (3380.005759ms)
+✔ a live command sees exactly its own gate lock, and two runs of one lane gate queue instead of failing (3873.928396ms)
+✔ SIGTERM stops the test tree, cleans its container and preserves failed evidence (848.966471ms)
+✔ a PASS on the identical tree is reused instead of rerun; any source change runs the commands again (4148.061734ms)
+✔ a same-PATH executable replacement invalidates reusable evidence (2881.497143ms)
+✔ a same-PATH local vitest replacement invalidates evidence through pnpm exec (2817.381652ms)
+✔ a missing local pnpm exec tool that could fall back to global PATH is not reused (1235.415953ms)
+✔ a dependency tree that changes during execution cannot produce reusable evidence (2096.726933ms)
+✔ legacy partial environment digests are not eligible for reuse (2176.32567ms)
+✔ reuse is per command: a complete run executes only the commands not yet passed on this tree (2734.976991ms)
+✔ coordinator mode runs only coordinator_only commands and the complete run reuses them (2171.21391ms)
+✔ a focused PASS never stands in for the complete authoritative set (1965.409206ms)
+✔ an advisory run stopped by its caller is INTERRUPTED and does not consume the no-progress fingerprint (2270.157956ms)
+✔ frozen parallel groups run together and coordinator-only commands stay out of affected checks (3590.434694ms)
+✔ gate commands get identity env, a fresh scratch dir per attempt and CANDIDATE_SHA only with a candidate (3570.506791ms)
+✔ gate env vars leave environment_digest unchanged so evidence reuse still works (3481.685423ms)
+✔ a relevant inherited gate environment change invalidates reusable evidence (2218.986619ms)
+✔ lockfile changes invalidate evidence and keep affected selection broad (2177.585499ms)
+✔ plan probe runs the complete frozen set statelessly and writes planning/probes evidence (1279.393496ms)
+✔ plan probe refuses candidate-sha and deployment gates and unknown pipelines (974.81772ms)
+✔ a later RUN over the same tree reuses the gate commands an earlier RUN passed (1793.983907ms)
+✔ reuse export drops sensitive content and keeps comparable measurements (3.712007ms)
+✔ gate timeline summarizes reused, interrupted and executed gate runs (1.593995ms)
+✔ agent reuse, background children and runtime changes are reported apart from gate reuse (0.269366ms)
+✔ token and cost usage is summed per role and model from per-session deltas (0.939813ms)
+ℹ tests 39
+ℹ suites 0
+ℹ pass 39
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 77014.979779
