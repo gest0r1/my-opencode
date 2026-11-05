@@ -89,8 +89,47 @@ test('frozen input kind enforces tree-before-publish and exact candidate/service
   assert.doesNotThrow(() => validateGateTesting(manifest('deployed-service', ['deploy', 'check'], { deploy: 'dev_deploy', check: 'local_gate' })));
   assert.throws(
     () => validateGateTesting(manifest('build-output', ['check'], { check: 'local_gate' })),
-    /GATE_INPUT_KIND_INVALID/,
+    /GATE_BUILD_OUTPUT_INVALID/,
   );
+});
+
+test('build-output requires an earlier materializing tree gate and immutable artifact input', () => {
+  const manifest = {
+    pipelines: [{ id: 'app', profile: 'local',
+      stages: ['assemble', 'verify', 'publish', 'inspect'],
+      executors: { assemble: 'local_gate', verify: 'git_verify', publish: 'git_publish', inspect: 'local_gate' } }],
+    gate_profiles: { local: {
+      assemble: ['npm run build'], inspect: ['npm test -- {artifact_path}'],
+    } },
+    gate_testing: { local: {
+      assemble: { input_kind: 'tree', artifact_output: { path: 'dist/bundle.tgz' } },
+      inspect: { input_kind: 'build-output', build_output: { producer_gate: 'assemble' } },
+    } },
+  };
+  assert.doesNotThrow(() => validateGateTesting(manifest));
+  assert.equal(isPrePublishGate(manifest, 'local', 'assemble'), false,
+    'materialized build output must run in RUN, not as PLAN clean-tree probe');
+  assert.equal(isPrePublishGate(manifest, 'local', 'inspect'), false);
+  const broken = mutator => {
+    const copy = JSON.parse(JSON.stringify(manifest));
+    mutator(copy);
+    return copy;
+  };
+  assert.throws(() => validateGateTesting(broken(m => {
+    m.gate_testing.local.assemble.artifact_output.path = 'src/unstable.tgz';
+  })), /GATE_BUILD_OUTPUT_PRODUCER_INVALID/);
+  assert.throws(() => validateGateTesting(broken(m => {
+    m.gate_testing.local.assemble.artifact_output.path = '../../outside';
+  })), /GATE_BUILD_OUTPUT_PRODUCER_INVALID/);
+  assert.throws(() => validateGateTesting(broken(m => {
+    m.pipelines[0].stages = ['inspect', 'assemble', 'verify', 'publish'];
+  })), /GATE_BUILD_OUTPUT_PRODUCER_MISSING/);
+  assert.throws(() => validateGateTesting(broken(m => {
+    m.gate_profiles.local.inspect = ['npm test'];
+  })), /GATE_BUILD_OUTPUT_INVALID/);
+  assert.throws(() => validateGateTesting(broken(m => {
+    m.gate_testing.local.inspect.build_output.producer_gate = 'other';
+  })), /GATE_BUILD_OUTPUT_PRODUCER_MISSING/);
 });
 
 test('live PostgreSQL preflight freezes only safe, explicit validateOnly repository scripts', () => {
