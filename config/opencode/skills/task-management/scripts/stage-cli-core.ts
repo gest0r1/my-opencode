@@ -2,12 +2,13 @@ import { acceptedReconciliations } from './reconcile-evidence.ts';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { access, cp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type {
   PipelineManifest,
   PipelineManifestPipeline,
+  PipelineApprovalRecord,
   PipelineGithubOutboxEvent,
   PipelineRuntime,
   PipelineState,
@@ -79,6 +80,13 @@ export interface StageCommandOptions {
   defectClasses?: string[];
   researchPath?: string;
   carryPath?: string;
+  approvalSubject?: string;
+  approvalRunId?: string;
+  approvalManifestSha256?: string;
+  approvalDecision?: string;
+  ownerResponse?: string;
+  ownerMessageId?: string;
+  ownerSourceSession?: string;
 }
 
 export interface RunnableStage {
@@ -92,6 +100,26 @@ function now(): string {
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+export function validateApprovalRecord(input: Partial<PipelineApprovalRecord> | undefined, runId: string, manifestSha: string): PipelineApprovalRecord {
+  if (input?.subject !== 'final-manifest') throw new StageCliError('FINAL_MANIFEST_APPROVAL_REQUIRED: subject must be final-manifest');
+  if (input.run_id !== runId) throw new StageCliError('FINAL_MANIFEST_APPROVAL_RUN_MISMATCH');
+  if (input.decision !== 'approved') throw new StageCliError('FINAL_MANIFEST_APPROVAL_DECISION_REQUIRED');
+  if (input.shown_manifest_sha256 !== manifestSha || !/^[a-f0-9]{64}$/.test(input.shown_manifest_sha256 ?? '')) {
+    throw new StageCliError('FINAL_MANIFEST_APPROVAL_HASH_MISMATCH');
+  }
+  if (typeof input.owner_response !== 'string' || !input.owner_response.trim()) throw new StageCliError('FINAL_MANIFEST_APPROVAL_RESPONSE_REQUIRED');
+  return {
+    subject: 'final-manifest', run_id: runId, decision: 'approved',
+    shown_manifest_sha256: manifestSha, owner_response: input.owner_response,
+    recorded_at: input.recorded_at ?? now(),
+    ...(input.message_id ? { message_id: input.message_id } : {}),
+    ...(input.source_session ? { source_session: input.source_session } : {}),
+    current_manifest_sha256: input.current_manifest_sha256 ?? manifestSha,
+    ...(input.revision_evidence_path ? { revision_evidence_path: input.revision_evidence_path } : {}),
+    ...(input.revision_evidence_sha256 ? { revision_evidence_sha256: input.revision_evidence_sha256 } : {}),
+  };
 }
 
 function parseFrontmatter(content: string): RulesMetadata {
@@ -827,6 +855,32 @@ export async function initFromManifest(
   if (revision?.previous_approval === true && revision.owner_contract_changed === false) {
     state.status = 'approved';
     for (const pipeline of Object.values(state.pipelines)) pipeline.status = 'approved';
+    if (revision.approval_carry) {
+      if (!revision.approval_carry.revision_evidence_path || !revision.approval_carry.revision_evidence_sha256 ||
+          !revision.approval_carry.revision_reviewed_manifest_sha256) throw new StageCliError('APPROVAL_CARRY_EVIDENCE_REQUIRED');
+      const carried = validateApprovalRecord(revision.approval_carry, manifest.run_id, revision.approval_carry.shown_manifest_sha256);
+      const runRoot = resolve(dirname(absoluteManifestPath));
+      const evidencePath = resolve(runRoot, revision.approval_carry.revision_evidence_path);
+      if (!evidencePath.startsWith(runRoot + sep)) throw new StageCliError('APPROVAL_CARRY_REVIEW_EVIDENCE_PATH_INVALID');
+      const evidenceContent = await readFile(evidencePath, 'utf8').catch(() => {
+        throw new StageCliError('APPROVAL_CARRY_REVIEW_EVIDENCE_MISSING');
+      });
+      const evidence = JSON.parse(evidenceContent);
+      if (sha256(evidenceContent) !== revision.approval_carry.revision_evidence_sha256 ||
+          evidence.manifest_sha256 !== revision.manifest_sha256 ||
+          evidence.manifest_sha256 !== revision.approval_carry.revision_reviewed_manifest_sha256 ||
+          evidence.owner_contract_changed !== false) {
+        throw new StageCliError('APPROVAL_CARRY_REVIEW_EVIDENCE_MISMATCH');
+      }
+      state.approval_record = {
+        ...carried,
+        current_manifest_sha256: state.manifest_sha256,
+        revision_evidence_path: revision.approval_carry.revision_evidence_path,
+        revision_evidence_sha256: revision.approval_carry.revision_evidence_sha256,
+        revision_reviewed_manifest_sha256: revision.approval_carry.revision_reviewed_manifest_sha256,
+      };
+      if (Array.isArray(revision.approval_outbox)) state.github_outbox = revision.approval_outbox;
+    }
   }
 
   const unlock = await acquireLock(stateRoot, manifest.run_id);
@@ -874,6 +928,28 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
     });
     if (sha256(manifestContent) !== state.manifest_sha256) {
       throw new StageCliError('Manifest changed since pipeline initialization');
+    }
+    if (state.approval_record) {
+      const approval = state.approval_record;
+      if (approval.subject !== 'final-manifest' || approval.run_id !== runId || approval.decision !== 'approved' ||
+          !approval.owner_response?.trim() || !/^[a-f0-9]{64}$/.test(approval.shown_manifest_sha256) ||
+          approval.current_manifest_sha256 !== state.manifest_sha256) {
+        throw new StageCliError('FINAL_MANIFEST_APPROVAL_RECORD_INVALID');
+      }
+      if (approval.shown_manifest_sha256 !== state.manifest_sha256) {
+        if (!approval.revision_evidence_path || !approval.revision_evidence_sha256 || !approval.revision_reviewed_manifest_sha256) throw new StageCliError('APPROVAL_CARRY_EVIDENCE_REQUIRED');
+        const runRoot = resolve(dirname(state.manifest_file));
+        const carriedEvidencePath = resolve(runRoot, approval.revision_evidence_path);
+        if (!carriedEvidencePath.startsWith(runRoot + sep)) throw new StageCliError('APPROVAL_CARRY_REVIEW_EVIDENCE_PATH_INVALID');
+        const carriedEvidence = await readFile(carriedEvidencePath, 'utf8').catch(() => {
+          throw new StageCliError('APPROVAL_CARRY_REVIEW_EVIDENCE_MISSING');
+        });
+        const evidence = JSON.parse(carriedEvidence);
+        if (sha256(carriedEvidence) !== approval.revision_evidence_sha256 ||
+            evidence.manifest_sha256 !== approval.revision_reviewed_manifest_sha256 || evidence.owner_contract_changed !== false) {
+          throw new StageCliError('APPROVAL_CARRY_REVIEW_EVIDENCE_MISMATCH');
+        }
+      }
     }
     const manifest = JSON.parse(manifestContent) as unknown;
     await acceptedReconciliations(dirname(state.manifest_file), state, state.manifest_sha256);
@@ -1255,9 +1331,13 @@ export async function authorizeTechnicalScope(
   return output!;
 }
 
-export async function approvePipeline(stateRoot: string, runId: string): Promise<PipelineState> {
+export async function approvePipeline(stateRoot: string, runId: string, approval: Partial<PipelineApprovalRecord>): Promise<PipelineState> {
   return updateState(stateRoot, runId, (state) => {
     if (state.status !== 'planned') throw new StageCliError(`Cannot approve run while it is ${state.status}`);
+    if (!state.manifest_file || !state.manifest_sha256) throw new StageCliError('Frozen manifest is missing');
+    const rawManifest = readFileSync(state.manifest_file, 'utf8');
+    if (sha256(rawManifest) !== state.manifest_sha256) throw new StageCliError('Frozen manifest hash mismatch');
+    state.approval_record = validateApprovalRecord(approval, runId, state.manifest_sha256);
     for (const pipeline of Object.values(state.pipelines)) {
       if (pipeline.status !== 'planned') throw new StageCliError(`Pipeline is not planned: ${pipeline.id}`);
       pipeline.status = 'approved';
@@ -2452,6 +2532,13 @@ function parseOptions(args: string[]): { positional: string[]; options: StageCom
     else if (argument === '--evidence') options.evidencePath = args[++index];
     else if (argument === '--research') options.researchPath = args[++index];
     else if (argument === '--carry') options.carryPath = args[++index];
+    else if (argument === '--approval-subject') options.approvalSubject = args[++index];
+    else if (argument === '--approval-run-id') options.approvalRunId = args[++index];
+    else if (argument === '--approval-manifest-sha256') options.approvalManifestSha256 = args[++index];
+    else if (argument === '--approval-decision') options.approvalDecision = args[++index];
+    else if (argument === '--owner-response') options.ownerResponse = args[++index];
+    else if (argument === '--owner-message-id') options.ownerMessageId = args[++index];
+    else if (argument === '--owner-source-session') options.ownerSourceSession = args[++index];
     else if (argument === '--defect-class') {
       options.defectClasses = [...(options.defectClasses ?? []), ...String(args[++index] ?? '').split(',').filter(Boolean)];
     }
@@ -2581,12 +2668,12 @@ function usage(): string {
     '  stage-cli plan-run-preflight <manifest> [--environment] [--json]',
     '  stage-cli manifest-refresh <manifest> [--check]   (SHA-256 of work items and planning artifacts from disk; before init only)',
     '  stage-cli plan-check <manifest> [--state-root <path>]   (plan-run-preflight + adopt + verify)',
-    '  stage-cli plan-start <manifest> [--state-root <path>]   (plan-check + init + approve + sync + validate + next)',
+    '  stage-cli plan-start <manifest> [--state-root <path>] --approval-subject final-manifest --approval-run-id <id> --approval-manifest-sha256 <sha> --approval-decision approved --owner-response <text> [--owner-message-id <id>] [--owner-source-session <id>]',
     '  stage-cli artifacts <run-id> <run-relative-path>... [--state-root <path>] [--json]',
     '  stage-cli plan-review <run-id> <gate> --evidence <review> [--defect-class <a,b>] | --research <file> | --carry <carried-findings> [--json]',
     '  stage-cli policy [repo-relative-path] [--json]',
     '  stage-cli init <manifest> [--state-root <path>] [--environment]',
-    '  stage-cli approve <run-id> [--state-root <path>]',
+    '  stage-cli approve <run-id> --approval-subject final-manifest --approval-run-id <id> --approval-manifest-sha256 <sha> --approval-decision approved --owner-response <text> [--owner-message-id <id>] [--owner-source-session <id>] [--state-root <path>]',
     '  stage-cli status <run-id> [--json|--chart] [--state-root <path>]',
     '  stage-cli validate <run-id> [--json] [--state-root <path>]',
     '  stage-cli run-preflight <run-id> [--json] [--state-root <path>]',
@@ -2738,10 +2825,26 @@ export async function runCli(args: string[]): Promise<void> {
   }
   if (command === 'approve') {
     const state = await readState(options.stateRoot, runId);
+    if (state.status !== 'planned') throw new StageCliError(`Cannot approve run while it is ${state.status}`);
     if (!state.manifest_file) throw new StageCliError('Frozen manifest is missing');
+    const manifestContent = await readFile(state.manifest_file, 'utf8').catch(() => {
+      throw new StageCliError('Frozen manifest is missing');
+    });
+    if (!state.manifest_sha256 || sha256(manifestContent) !== state.manifest_sha256) {
+      throw new StageCliError('FINAL_MANIFEST_APPROVAL_HASH_MISMATCH');
+    }
+    const approval = validateApprovalRecord({
+      subject: options.approvalSubject as any,
+      run_id: options.approvalRunId,
+      shown_manifest_sha256: options.approvalManifestSha256,
+      decision: options.approvalDecision as any,
+      owner_response: options.ownerResponse,
+      message_id: options.ownerMessageId,
+      source_session: options.ownerSourceSession,
+    }, runId, state.manifest_sha256);
     const { preflightFile } = await import('./manifest-preflight.mjs');
     await preflightFile(state.manifest_file, { environment: true, cwd: process.cwd() });
-    printState(await approvePipeline(options.stateRoot, runId), options.json);
+    printState(await approvePipeline(options.stateRoot, runId, approval), options.json);
     return;
   }
   if (command === 'scope-check') {

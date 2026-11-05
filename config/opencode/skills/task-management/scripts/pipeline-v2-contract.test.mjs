@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { validateGateManifest } from './manifest-preflight.mjs';
 import { planProbeCommandsSha256, validatePlanProbes } from './manifest-v2-policy.mjs';
+import { withApprovalArgs } from './test-approval-args.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STAGE_CLI = path.join(HERE, 'stage-cli.ts');
@@ -90,7 +91,7 @@ async function fixture(runId = 'v2-run') {
 }
 
 function run(root, args) {
-  return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...args], {
+  return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...withApprovalArgs(root, args)], {
     cwd: root,
     encoding: 'utf8',
     env: process.env,

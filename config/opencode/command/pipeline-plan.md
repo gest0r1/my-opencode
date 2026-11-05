@@ -297,13 +297,21 @@ For a new PLAN or owner-contract-changing revision, present gate readiness, bran
 
 **Owner questions and approval text.** Write every owner question and the approval summary in plain functional language: what the user will see or get, what changes in testing and time, what the choice costs. No decision codes, gate names or flags without a one-phrase meaning. When the `openchamber_render` tool is available, present the approval (and each multi-option question) as a page with `awaitAnswer`, options as buttons with the last one always «Свой вариант» and a free-text field, and continue in the same turn on the answer; otherwise use plain text with numbered options ending with «свой вариант». The explicit approval message requirement below is unchanged. A technical-only `--revise` with previous approval and `owner_contract_changed=false` instead runs normal preflight/adopt/verify/init; init restores approved status, so do not ask for approval again or invoke approve on the already-approved state.
 
-Only AFTER a separate explicit owner message approving this exact v2 manifest/run ID, with every owner decision resolved and every required planning gate `ready`, run:
+Only AFTER the owner explicitly approves the **final manifest** (not a scope/story clarification) and every required planning gate is `ready`, run `plan-start` with an audit descriptor that names this run and the exact SHA-256 shown to the owner. The descriptor records the response and decision; an OpenCode `messageID` or source session may be included only when actually available. These fields maintain workflow correlation and do not authenticate authorship.
+
+Add the final-manifest decision, exact displayed manifest SHA, run ID and explicit response to the existing `decision-register.md`. A response to a preceding Story, scope, or probe question belongs to that question's existing decision entry and cannot be reused as the final-manifest descriptor. The CLI checks the descriptor fields and the current manifest bytes; it does not infer consent from natural-language wording.
 
 ```text
-stage-cli.ts plan-start .tmp/pipelines/{run-id}/manifest.json
+stage-cli.ts plan-start .tmp/pipelines/{run-id}/manifest.json \
+  --approval-subject final-manifest \
+  --approval-run-id {run-id} \
+  --approval-manifest-sha256 {shown-manifest-sha256} \
+  --approval-decision approved \
+  --owner-response 'Approved: {explicit response}' \
+  [--owner-message-id {actual-message-id}] [--owner-source-session {actual-session-id}]
 ```
 
-It runs `plan-check`, then `init`, `approve`, the GitHub sync, `validate` and `next`, in that order, and stops at the first failure with `failed_step`.
+It checks the descriptor against the manifest bytes before any initialization or approval mutation, then runs `plan-check`, `init`, `approve`, the GitHub sync, `validate` and `next`, in that order, and stops at the first failure with `failed_step`. A technical-only revision with `previous_approval=true` and `owner_contract_changed=false` carries the existing approval record through `planning/revision.json` and skips a second approval; owner-contract changes require a fresh descriptor for the new manifest hash.
 
 The initial PLAN invocation never runs init/approve. `--unattended` and reviewer approval are not owner approval. Approval sync for Issue runs must finish with `pending=0`. GitHub audit delivery is event-oriented, not a sticky-status comment: `init` queues a separate `created -> planned` event for every mapped pipeline and `approve` queues a separate `planned -> approved` event. `pipeline-github-sync` posts each distinct event as its own idempotent Issue comment; it does not edit the previous comment, and one Issue mapped to several pipelines may therefore receive several audit comments from one PLAN approval sequence.
 

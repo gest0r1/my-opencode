@@ -6,12 +6,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { withApprovalArgs } from './test-approval-args.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STAGE_CLI = path.join(HERE, 'stage-cli.ts');
 
 function run(cwd, args) {
-  return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...args], {
+  return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...withApprovalArgs(cwd, args)], {
     cwd,
     encoding: 'utf8',
     env: process.env,
