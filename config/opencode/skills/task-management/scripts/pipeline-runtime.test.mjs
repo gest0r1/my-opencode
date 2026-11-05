@@ -684,6 +684,34 @@ test('waves start independent work items together and hold back dependents and p
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });
 
+test('detached child lease survives a dead parent until the stage is proven complete', async () => {
+  const root = await tempProject();
+  try {
+    const runDir = path.join(root, '.tmp/pipelines/orphan-run');
+    await mkdir(runDir, { recursive: true });
+    const { writeLease, readLeases, leaseConflict } = await import('./dispatch-leases.mjs');
+    const entry = { run_id: 'orphan-run', pipeline_id: 'p', stage: 'implementation',
+      work_item_id: 'w1', role: 'CoderAgent', writes: true, scope: ['src/**'],
+      parent_session_id: 'old-parent', child_session_id: 'still-running-child' };
+    const running = { pipelines: { p: { stages: { implementation: { status: 'in_progress' } } } } };
+    writeLease(runDir, entry);
+    const afterRestart = readLeases(runDir, { alive: () => false, state: running });
+    assert.equal(afterRestart.length, 1, 'a dead parent is not evidence of child completion');
+    assert.ok(leaseConflict(afterRestart,
+      { pipeline_id: 'p', stage: 'implementation', work_item_id: 'w2' }, ['src/file.ts']),
+      'the orphaned writer still reserves overlapping paths');
+
+    // Legacy foreground leases without child session evidence can still be pruned
+    // after the owning process dies. Other unrelated work remains runnable.
+    writeLease(runDir, { ...entry, work_item_id: 'foreground', child_session_id: undefined });
+    assert.equal(readLeases(runDir, { alive: () => false, state: running }).length, 1);
+
+    const completed = { pipelines: { p: { stages: { implementation: { status: 'completed' } } } } };
+    assert.equal(readLeases(runDir, { alive: () => false, state: completed }).length, 0,
+      'authoritative stage completion is sufficient to release the old lease');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('a gate passed on a tree snapshot completes only while the lane files still match that snapshot', async () => {
  const previousCwd = process.cwd(), root = await tempProject();
  try {
