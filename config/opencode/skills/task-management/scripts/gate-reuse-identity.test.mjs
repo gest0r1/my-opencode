@@ -45,6 +45,26 @@ test('the same resolved package-manager toolchain has a stable identity and chan
   } finally { await rm(fx.cwd, { recursive: true, force: true }); }
 });
 
+test('ignored snapshot configuration changes invalidate otherwise identical toolchain identity', async () => {
+  const fx = await fixture();
+  try {
+    await writeFile(join(fx.cwd, '.env.local'), 'FEATURE_FLAG=off\n');
+    const options = { cwd: fx.cwd, invocations: [fx.invocation], env: fx.env,
+      ignoredSnapshotFiles: ['.env.local'] };
+    const first = await resolveReuseIdentity(options);
+    const second = await resolveReuseIdentity(options);
+    assert.ok(first.digest, first.reason);
+    assert.equal(second.digest, first.digest);
+    await writeFile(join(fx.cwd, '.env.local'), 'FEATURE_FLAG=on\n');
+    const changed = await resolveReuseIdentity(options);
+    assert.ok(changed.digest, changed.reason);
+    assert.notEqual(changed.digest, first.digest);
+    await writeFile(join(fx.cwd, '.env.extra'), 'NEW=1\n');
+    const added = await resolveReuseIdentity({ ...options, ignoredSnapshotFiles: ['.env.local', '.env.extra'] });
+    assert.notEqual(added.digest, changed.digest);
+  } finally { await rm(fx.cwd, { recursive: true, force: true }); }
+});
+
 test('dependency symlink cycles are recorded without recursive traversal or disabling identity', async () => {
   const fx = await fixture();
   try {
