@@ -544,6 +544,7 @@ export default Plugin.define({
             const type = String((event as any)?.type ?? "")
             if (type === "session.execution.started") {
               unknownProbes.delete(sessionID)
+              wakeFailures.delete(sessionID)
               const timer = wakeTimers.get(sessionID); if (timer) clearTimeout(timer); wakeTimers.delete(sessionID)
             } else if (type === "session.execution.succeeded") {
               const timer = wakeTimers.get(sessionID); if (timer) clearTimeout(timer)
