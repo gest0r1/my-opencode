@@ -125,7 +125,7 @@ export function validateGateTesting(manifest) {
         }
         if (config.artifact_output !== undefined && (kind !== 'tree' ||
             !config.artifact_output || Object.keys(config.artifact_output).some(key => key !== 'path') ||
-            !validArtifactPath(config.artifact_output.path) || config.live_postgres ||
+            (!validArtifactPath(config.artifact_output.path) || !/^(?:dist|build)\//.test(config.artifact_output.path)) || config.live_postgres ||
             commands.some(command => String(command).includes('{artifact_path}')))) {
           throw new Error(`GATE_BUILD_OUTPUT_PRODUCER_INVALID: ${profile}/${gate} needs one exact artifact path on a tree gate`);
         }
