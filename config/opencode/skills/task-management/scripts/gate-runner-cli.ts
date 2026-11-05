@@ -664,9 +664,14 @@ async function main(): Promise<void> {
   let status = 'PASS';
   const startedAt = new Date().toISOString();
   const usesCandidate = commands.some(command => command.includes('{candidate_sha}'));
+  // Resource-bound results do not prove the state of a later disposable DB or deployed service.
+  // Keep reuse for pure commands from the same gate, but always establish fresh live evidence.
+  const liveCommandIndexes = new Set(liveIndexes(config));
+  const canReuseCommand = (index: number) => config?.input_kind !== 'deployed-service' && !liveCommandIndexes.has(index);
   const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest || !environmentDigest ? new Map()
     : await findReusableResults({ stateRoot: resolve(stateRoot), runId, gate, sourceDigest: snapshot.digest, environmentDigest,
-      selected: invocations.map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
+      selected: invocations.filter(item => canReuseCommand(item.index))
+        .map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
   if (environmentDigest) {
     reuseIdentity = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment });
     if (reuseIdentity.metrics) reuseIdentityMeasurements.push(reuseIdentity.metrics);
@@ -687,6 +692,7 @@ async function main(): Promise<void> {
       const touched = changed.length ? selectAffectedCommands(commands, config, changed, []) : { selected: [], deferred: [] };
       const reached = new Set<number>([...touched.selected.map((item: any) => item.index), ...touched.deferred]);
       for (const item of invocations) {
+        if (!canReuseCommand(item.index)) continue;
         const prior = (previous.results ?? []).find((result: any) => result.command_index === item.index);
         if (reusable.has(item.index) || reached.has(item.index) || prior?.exit_code !== 0 ||
             JSON.stringify(prior.test_files ?? []) !== JSON.stringify(item.test_files)) continue;
