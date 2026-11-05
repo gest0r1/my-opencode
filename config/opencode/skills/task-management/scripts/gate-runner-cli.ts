@@ -869,6 +869,24 @@ async function main(): Promise<void> {
         failure = new GateRunnerError('GATE_SERVICE_CHANGED_DURING_GATE: ' + String(error instanceof Error ? error.message : error));
       }
     }
+    if ((config?.artifact_output || buildOutputInput) && status === 'PASS') {
+      try {
+        const freshSource = await sourceInventory(originalCwd, gitIn(originalCwd));
+        if (!snapshot?.digest || freshSource.digest !== snapshot.digest) {
+          throw new Error('source tree changed since build producer / consumer started');
+        }
+        if (config?.artifact_output) {
+          const artifact = await artifactDigest(originalCwd, config.artifact_output.path);
+          buildOutputEvidence = outputProof({ runId, pipelineId, gate, manifestSha: state.manifest_sha256,
+            sourceDigest: snapshot.digest, artifact });
+        } else if (buildOutputInput) {
+          buildOutputEvidence = await verifyOutputProof(buildOutputInput);
+        }
+      } catch (error) {
+        status = 'BLOCKED';
+        failure = new GateRunnerError('BUILD_OUTPUT_CHANGED_DURING_GATE: ' + String(error instanceof Error ? error.message : error));
+      }
+    }
     if (environmentDigest && (pending.length > 0 || reusable.size > 0)) {
       let finalInputs: string[] | null = null;
       try { finalInputs = reuseLocalInputs(originalCwd); } catch {}
@@ -896,6 +914,8 @@ async function main(): Promise<void> {
         work_item_id: workItemId ?? null, dispatch_stage: baseline?.stage ?? null, baseline_path: baselinePath ?? null, baseline_sha256: baselineSha ?? null,
         runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, deployed_service: deployedServiceEvidence, fingerprint, attempt, scratch_dir: scratchDir,
         manifest_sha256: state.manifest_sha256, environment_digest: environmentDigest, reuse_disabled_reason: reuseDisabledReason,
+        build_output: config?.artifact_output ? buildOutputEvidence : null,
+        build_output_input: buildOutputInput ? buildOutputEvidence : null,
         reuse_identity_metrics: reuseIdentityMetrics, reused_from: reuse?.path ?? null,
         hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])],
         selection_reason: selectionReason, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
