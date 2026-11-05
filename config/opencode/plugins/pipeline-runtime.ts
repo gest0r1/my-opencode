@@ -440,8 +440,18 @@ export default Plugin.define({
     const unresolvedNoticeInFlight = new Set<string>()
     const trackChild = (parentID: string, childID: string) => {
       const set = pendingChildren.get(parentID) ?? new Set<string>()
+      if (set.has(childID)) return // one authoritative waiter per background child
       set.add(childID); pendingChildren.set(parentID, set)
-      void childIdle(childID).then(idle => { if (idle) set.delete(childID) }).catch(() => {})
+      void childIdle(childID).then(idle => {
+        if (!idle) return // unknown completion retains lease and pending child
+        set.delete(childID)
+        // A child's completion need not emit session.execution.succeeded for its
+        // idle parent. Reconcile leases and wake independently of parent events.
+        if (!orchestratorRun.has(parentID)) return
+        const previous = wakeTimers.get(parentID)
+        if (previous) clearTimeout(previous)
+        wakeTimers.set(parentID, setTimeout(() => { void checkWake(parentID) }, wakeDelayMs()))
+      }).catch(() => {})
     }
     const checkWake = async (sessionID: string) => {
       wakeTimers.delete(sessionID)
