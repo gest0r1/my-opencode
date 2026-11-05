@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import { assertPipelineCapabilities } from "../skills/task-management/scripts/capability-preflight.mjs"
 import { RUN_PROMPT, WAKE_MARKER, runningGates, wakeDecision, wakeText } from "../skills/task-management/scripts/orchestrator-wake.mjs"
 import { readLeases, removeLease, updateLease, writeLease } from "../skills/task-management/scripts/dispatch-leases.mjs"
+import { processAlive } from "../skills/task-management/scripts/runtime-locks.mjs"
 import { computeRunnable } from "../skills/task-management/scripts/stage-cli-core.ts"
 
 const ELIGIBLE_ROLES = new Set([
@@ -459,7 +460,10 @@ export default Plugin.define({
       let noticeDelivered = false
       for (const lease of readLeases(runRoot(root, runID), { state })) {
         if (lease.parent_session_id !== sessionID) continue
-        let health: "idle" | "running" | "gone" | "unknown" = "idle"
+        // A lease without child_session_id can be in the reservation->ack crash window.
+        // After the owning process dies, a resumed parent must not infer completion.
+        let health: "idle" | "running" | "gone" | "unknown" =
+          !lease.child_session_id && !processAlive(lease.owner_pid, lease.owner_pid_start) ? "unknown" : "idle"
         if (lease.child_session_id) health = await probeChild(String(lease.child_session_id))
         if (health === "unknown") { unknownChildren.push(lease); continue }
         if (health === "running") continue
