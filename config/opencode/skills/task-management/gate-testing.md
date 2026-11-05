@@ -235,8 +235,7 @@ clock, competes for CPU and memory, and reports other workers' half-finished edi
   When a change impacts only coordinator commands, the worker check runs nothing and its
   evidence names them in `deferred_to_coordinator`; the coordinator check
   (`--advisory --coordinator`) before a review and the final complete gate run them.
-- Reuse is per command: a command that already passed on the identical tree, manifest, gate and
-  environment is not run again (`commands_reused`), in advisory and authoritative runs alike.
+- Reuse is per command for **source-only evidence**: an already passing command with proven identical source, toolchain and environment may be reused (`commands_reused`) in advisory and authoritative runs. Commands backed by a disposable `live_postgres` container and `input_kind: deployed-service` checks are **always executed** for each gate attempt: earlier PASS does not prove the new database/service state. Unrelated pure commands in the same gate may still be reused.
 - `parallel_groups` lists 2–3 consecutive frozen indexes that may run at the same time, so a
   group is one step of the frozen order. Neighbouring selected members run concurrently;
   everything else runs alone in frozen order. Live-PostgreSQL commands never join a group, and two
