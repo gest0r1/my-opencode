@@ -682,12 +682,22 @@ async function main(): Promise<void> {
       selected: invocations.filter(item => canReuseCommand(item.index))
         .map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
   if (environmentDigest) {
-    reuseIdentity = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles: ignoredSnapshotFiles ?? [] });
-    if (reuseIdentity.metrics) reuseIdentityMeasurements.push(reuseIdentity.metrics);
+    let freshInputs: string[] | null = null;
+    try { freshInputs = copiedIgnoredInputs(originalCwd); }
+    catch { /* a failed input inventory invalidates reusable evidence */ }
+    if (!freshInputs || JSON.stringify(freshInputs) !== JSON.stringify(ignoredSnapshotFiles)) {
+      reusable.clear();
+      environmentDigest = null;
+      reuseDisabledReason = 'ignored snapshot input set changed during gate preparation';
+    } else {
+      reuseIdentity = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles: freshInputs });
+      if (reuseIdentity.metrics) reuseIdentityMeasurements.push(reuseIdentity.metrics);
+    }
     if (reuseIdentity.digest !== environmentDigest) {
       reusable.clear();
       environmentDigest = null;
       reuseDisabledReason = reuseIdentity.reason ?? 'toolchain or relevant environment changed during reuse lookup';
+    }
     }
   }
   // A gate that passed on an earlier snapshot and runs again (its lane files moved after it, or a plain
@@ -840,13 +850,17 @@ async function main(): Promise<void> {
         failure = new GateRunnerError('GATE_SERVICE_CHANGED_DURING_GATE: ' + String(error instanceof Error ? error.message : error));
       }
     }
-    if (environmentDigest && pending.length > 0) {
-      const afterRun = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles: ignoredSnapshotFiles ?? [] });
+    if (environmentDigest && (pending.length > 0 || reusable.size > 0)) {
+      let finalInputs: string[] | null = null;
+      try { finalInputs = copiedIgnoredInputs(originalCwd); } catch {}
+      const afterRun = finalInputs && JSON.stringify(finalInputs) === JSON.stringify(ignoredSnapshotFiles)
+        ? await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles: finalInputs })
+        : { digest: null, reason: 'ignored snapshot input set changed during gate execution', metrics: { files: 0, bytes: 0, elapsed_ms: 0 } };
       if (afterRun.metrics) reuseIdentityMeasurements.push(afterRun.metrics);
       if (afterRun.digest !== environmentDigest) {
         if (reusable.size > 0 && status === 'PASS') {
           status = 'BLOCKED';
-          failure = new GateRunnerError('REUSE_IDENTITY_CHANGED_DURING_GATE: mixed reused and executed results cannot prove one toolchain');
+          failure = new GateRunnerError('REUSE_IDENTITY_CHANGED_DURING_GATE: reused results cannot prove an altered toolchain or ignored input set');
         }
         environmentDigest = null;
         reuseDisabledReason = afterRun.reason ?? 'toolchain or relevant environment changed during gate execution';
