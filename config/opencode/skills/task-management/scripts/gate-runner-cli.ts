@@ -12,6 +12,7 @@ import { createGateSnapshot } from './gate-snapshot.mjs';
 import { laneDigest, laneScope } from './dispatch-leases.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { acquireHeavySlot, acquireLiveSlot, acquireLockFiles, waitForHeavySlot } from './runtime-locks.mjs';
+import { resolveReuseIdentity } from './gate-reuse-identity.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -210,9 +211,9 @@ export function planProbeCommandsSha256(commands: string[]): string {
   return sha256(JSON.stringify(commands));
 }
 
-// Gate environment (A1): identity + per-attempt scratch dir for every gate command. These vars are
-// deliberately not part of environment_digest, so evidence reuse keeps working. CANDIDATE_SHA is
-// explicitly unset when no candidate is loaded, so an inherited outer value never leaks in.
+// Gate environment (A1): identity + per-attempt scratch dir for every gate command. The reuse identity
+// excludes only these run-specific IDs/attempt/scratch path; worker limits and all other inherited values
+// remain part of the digest. CANDIDATE_SHA is explicitly unset without a candidate.
 function gateEnv(identity: { runId: string; pipelineId: string; gate: string; attempt: number; candidateSha?: string; scratchDir: string }): Record<string, string | undefined> {
   return { PIPELINE_RUN_ID: identity.runId, PIPELINE_ID: identity.pipelineId, PIPELINE_GATE: identity.gate, PIPELINE_GATE_ATTEMPT: String(identity.attempt),
     CANDIDATE_SHA: identity.candidateSha, PIPELINE_SCRATCH_DIR: identity.scratchDir,
@@ -481,7 +482,18 @@ async function main(): Promise<void> {
   const generatedPaths: string[] = (manifest as any).generated_paths ?? [];
   const laneProof = (files: Record<string, string>) => laneScopeList.length
     ? { lane_scope: laneScopeList, lane_exclude: generatedPaths, lane_scope_digest: laneDigest(files, laneScopeList, generatedPaths) } : {};
-  const environmentDigest = sha256(JSON.stringify([process.version, process.env.PATH, process.env.NODE_ENV, process.env.LIVE_PG_TEST, process.env.LIVE_PG_CONTOUR, process.env.DATABASE_URL]));
+  const originalCwd = process.cwd();
+  const identityInvocations = commands.map((command, index) => {
+    const tokens = substituteCandidate(tokenizeCommand(command), candidateSha);
+    assertSafeInvocation(tokens, gate);
+    return { command, index, test_files: [], exe: tokens[0], args: tokens.slice(1) };
+  });
+  const identityEnvironment: Record<string, string | undefined> = { ...process.env, ...gateEnv({ runId, pipelineId, gate, attempt, candidateSha, scratchDir: '' }) };
+  for (const key of Object.keys(identityEnvironment)) if (identityEnvironment[key] === undefined) delete identityEnvironment[key];
+  let reuseIdentity = await resolveReuseIdentity({ cwd: process.cwd(), invocations: identityInvocations, env: identityEnvironment });
+  const reuseIdentityMeasurements: Array<{ files: number; bytes: number; elapsed_ms: number }> = reuseIdentity.metrics ? [reuseIdentity.metrics] : [];
+  let environmentDigest = reuseIdentity.digest;
+  let reuseDisabledReason = reuseIdentity.reason;
   // The whole tree: a rerun after a shared config or test changed outside the work item (another lane, a
   // coordinator fix) is progress, not a repeat; only a rerun on byte-identical sources is refused.
   const inputIdentity = snapshot?.digest ? sha256(JSON.stringify([snapshot.digest, state.manifest_sha256, baselineSha ?? null, environmentDigest])) : null;
@@ -507,7 +519,6 @@ async function main(): Promise<void> {
   // Full gates and coordinator checks run on a snapshot of the tree in a separate worktree: workers keep
   // writing meanwhile and the gate measures one fixed tree. `--in-place` (or PIPELINE_GATE_SNAPSHOT=0)
   // runs in the checkout; the orchestrator's allowlist admits the flag, not an env prefix.
-  const originalCwd = process.cwd();
   let treeCopy: any;
   let copyFiles: Record<string, string> | null = null;
   let snapshotRecord: Record<string, any> | null = null;
@@ -536,13 +547,22 @@ async function main(): Promise<void> {
   let status = 'PASS';
   const startedAt = new Date().toISOString();
   const usesCandidate = commands.some(command => command.includes('{candidate_sha}'));
-  const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest ? new Map()
+  const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest || !environmentDigest ? new Map()
     : await findReusableResults({ stateRoot: resolve(stateRoot), runId, gate, sourceDigest: snapshot.digest, environmentDigest,
       selected: invocations.map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
+  if (environmentDigest) {
+    reuseIdentity = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment });
+    if (reuseIdentity.metrics) reuseIdentityMeasurements.push(reuseIdentity.metrics);
+    if (reuseIdentity.digest !== environmentDigest) {
+      reusable.clear();
+      environmentDigest = null;
+      reuseDisabledReason = reuseIdentity.reason ?? 'toolchain or relevant environment changed during reuse lookup';
+    }
+  }
   // A gate that passed on an earlier snapshot and runs again (its lane files moved after it, or a plain
   // rerun) repeats only the commands that the changes between the two snapshots reach through the frozen
   // impact map; the others keep their PASS. Unmapped and dependency changes reach every command.
-  if (treeCopy && !args.includes('--no-reuse') && !hypothesis && previous?.status === 'PASS' && previous.snapshot?.status === 'used' &&
+  if (environmentDigest && treeCopy && !args.includes('--no-reuse') && !hypothesis && previous?.status === 'PASS' && previous.snapshot?.status === 'used' &&
       SHA.test(previous.snapshot.commit ?? '') && previous.manifest_sha256 === state.manifest_sha256 && previous.environment_digest === environmentDigest) {
     const diff = await runInvocation('git', ['diff', '--name-only', '-z', '--no-renames', previous.snapshot.commit, treeCopy.commit, '--'], originalCwd, gitReadEnv({}), 30);
     if (diff.exit_code === 0 && !diff.truncated) {
@@ -678,11 +698,30 @@ async function main(): Promise<void> {
       catch (error) { cleanupComplete = false; status = 'BLOCKED'; failure = new GateRunnerError(`${failure ? String(failure) + '; ' : ''}${String(error)}`); }
     }
     await releaseLive();
+    if (environmentDigest && pending.length > 0) {
+      const afterRun = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment });
+      if (afterRun.metrics) reuseIdentityMeasurements.push(afterRun.metrics);
+      if (afterRun.digest !== environmentDigest) {
+        if (reusable.size > 0 && status === 'PASS') {
+          status = 'BLOCKED';
+          failure = new GateRunnerError('REUSE_IDENTITY_CHANGED_DURING_GATE: mixed reused and executed results cannot prove one toolchain');
+        }
+        environmentDigest = null;
+        reuseDisabledReason = afterRun.reason ?? 'toolchain or relevant environment changed during gate execution';
+      }
+    }
     try {
+      const reuseIdentityMetrics = {
+        passes: reuseIdentityMeasurements.length,
+        file_entries: reuseIdentityMeasurements.reduce((sum, measurement) => sum + measurement.files, 0),
+        bytes_read: reuseIdentityMeasurements.reduce((sum, measurement) => sum + measurement.bytes, 0),
+        hashing_ms: reuseIdentityMeasurements.reduce((sum, measurement) => sum + measurement.elapsed_ms, 0),
+      };
       await writeFile(evidenceFile, `${JSON.stringify({ status, purpose: advisory ? 'advisory' : 'authoritative', run_id: runId, pipeline_id: pipelineId, gate,
         work_item_id: workItemId ?? null, dispatch_stage: baseline?.stage ?? null, baseline_path: baselinePath ?? null, baseline_sha256: baselineSha ?? null,
         runtime_locks: releaseLocks, candidate_sha: candidateSha ?? null, fingerprint, attempt, scratch_dir: scratchDir,
-        manifest_sha256: state.manifest_sha256, environment_digest: environmentDigest, reused_from: reuse?.path ?? null,
+        manifest_sha256: state.manifest_sha256, environment_digest: environmentDigest, reuse_disabled_reason: reuseDisabledReason,
+        reuse_identity_metrics: reuseIdentityMetrics, reused_from: reuse?.path ?? null,
         hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])],
         selection_reason: selectionReason, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
         changed_paths: snapshot?.changed ?? null,
