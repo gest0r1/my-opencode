@@ -59,10 +59,11 @@ export function removeLease(runRoot, identity) {
   rmSync(join(leaseDir(runRoot), leaseName(identity)), { force: true });
 }
 
-// A completed stage releases its lease. A missing owner process releases only a foreground
-// lease with no child session ID: detached background children may survive parent restarts,
-// and only an explicit successful child wait or completed stage proves they are finished.
-// The runtime's bounded unknown-child probe retains these leases until proven idle.
+// A completed stage releases its lease. A missing owner process releases only a legacy
+// lease with neither parent-session nor child-session evidence: a dispatch can crash
+// between reservation and child acknowledgement, and detached children can survive
+// the parent restart. The runtime's bounded unknown-child probe retains these
+// reservations until a successful wait, explicit owner action, or completed stage.
 export function readLeases(runRoot, { alive = ownerAlive, state } = {}) {
   let names = [];
   try { names = readdirSync(leaseDir(runRoot)).filter(name => name.endsWith('.json')); } catch { return []; }
@@ -73,7 +74,7 @@ export function readLeases(runRoot, { alive = ownerAlive, state } = {}) {
     try { lease = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }
     const finished = state?.pipelines?.[lease.pipeline_id]?.stages?.[lease.stage]?.status === 'completed';
     const ownerGone = !alive(lease.owner_pid, lease.owner_pid_start);
-    if (finished || (ownerGone && !lease.child_session_id)) {
+    if (finished || (ownerGone && !lease.parent_session_id && !lease.child_session_id)) {
       rmSync(file, { force: true });
       continue;
     }
