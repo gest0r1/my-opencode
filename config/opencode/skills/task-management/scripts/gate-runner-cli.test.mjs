@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, readFile, writeFile, unlink } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, writeFile, unlink, symlink, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,10 +18,14 @@ function sha256(value) {
 }
 
 function run(cwd, args) {
+  const env = { ...process.env };
+  // NODE_PATH only lets this test worker resolve the external tsx install. Gate child fixtures use
+  // built-ins/project dependencies; do not make that loader-only path part of their runtime identity.
+  delete env.NODE_PATH;
   return spawnSync('npx', ['--yes', 'tsx', RUNNER, ...args], {
     cwd,
     encoding: 'utf8',
-    env: process.env,
+    env,
   });
 }
 
@@ -179,13 +183,24 @@ async function diagnosticFixture() {
   const fx = await makeRun('pnpm exec vitest run --config vitest.unit.ts --passWithNoTests=false');
   await mkdir(path.join(fx.root, 'bin'));
   await mkdir(path.join(fx.root, 'src'));
+  await mkdir(path.join(fx.root, 'node_modules/pnpm/bin'), { recursive: true });
+  await mkdir(path.join(fx.root, 'node_modules/vitest/bin'), { recursive: true });
+  await mkdir(path.join(fx.root, 'node_modules/.bin'), { recursive: true });
   await writeFile(path.join(fx.root, 'src/orders.ts'), 'initial\n');
   await writeFile(path.join(fx.root, 'src/web.ts'), 'initial\n');
-  await writeFile(path.join(fx.root, 'bin/pnpm'), `#!/usr/bin/env node
+  await writeFile(path.join(fx.root, '.gitignore'), 'node_modules/\n');
+  await writeFile(path.join(fx.root, 'package.json'), JSON.stringify({ name: 'gate-fixture', packageManager: 'pnpm@1.0.0' }));
+  await writeFile(path.join(fx.root, 'pnpm-lock.yaml'), 'lockfileVersion: "9.0"\n');
+  await writeFile(path.join(fx.root, 'node_modules/pnpm/package.json'), JSON.stringify({ name: 'pnpm', version: '1.0.0' }));
+  await writeFile(path.join(fx.root, 'node_modules/vitest/package.json'), JSON.stringify({ name: 'vitest', version: '1.0.0' }));
+  await writeFile(path.join(fx.root, 'node_modules/vitest/bin/vitest.mjs'), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
+  await symlink('../vitest/bin/vitest.mjs', path.join(fx.root, 'node_modules/.bin/vitest'));
+  await writeFile(path.join(fx.root, 'node_modules/pnpm/bin/pnpm.cjs'), `#!/usr/bin/env node
 const fs = require('node:fs');
 fs.appendFileSync('.tmp/calls.log', JSON.stringify(process.argv.slice(2)) + '\\n');
 if (fs.existsSync('.tmp/fail')) { console.error('FAIL orders invariant'); process.exit(1); }
 `, { mode: 0o755 });
+  await symlink('../node_modules/pnpm/bin/pnpm.cjs', path.join(fx.root, 'bin/pnpm'));
   const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
   const state = JSON.parse(await readFile(statePath, 'utf8'));
   const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
@@ -194,7 +209,7 @@ if (fs.existsSync('.tmp/fail')) { console.error('FAIL orders invariant'); proces
   const git = (...args) => spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
   assert.equal(git('init').status, 0);
   git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
-  git('add', 'src', 'bin'); assert.equal(git('commit', '-m', 'base').status, 0);
+  git('add', '.gitignore', 'src', 'bin', 'package.json', 'pnpm-lock.yaml'); assert.equal(git('commit', '-m', 'base').status, 0);
   manifest.git_setup = { base_sha: git('rev-parse', 'HEAD').stdout.trim() };
   manifest.gate_profiles.default.build.push('pnpm exec vitest run --config vitest.web.ts --passWithNoTests=false');
   manifest.gate_testing = { default: { build: { impact_groups: [
@@ -429,6 +444,98 @@ test('a PASS on the identical tree is reused instead of rerun; any source change
   } finally { process.env.PATH = oldPath; }
 });
 
+test('a same-PATH executable replacement invalidates reusable evidence', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  const executable = path.join(fx.root, 'node_modules/pnpm/bin/pnpm.cjs');
+  const writeExecutable = async marker => writeFile(executable, `#!/usr/bin/env node\nconst fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(path.join(fx.root, '.tmp/calls.log'))}, ${JSON.stringify(`${marker}\n`)});\n`, { mode: 0o755 });
+  try {
+    await writeExecutable('first-tool');
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const first = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(first.results.length, 2);
+    const calls = await callCount(fx.root);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 0, 'unchanged executable should still reuse');
+    assert.equal(await callCount(fx.root), calls);
+
+    await writeExecutable('replacement-tool');
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 2, 'changed executable bytes at the same PATH must rerun commands');
+    const replacement = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.notEqual(replacement.environment_digest, first.environment_digest);
+    assert.equal(await callCount(fx.root), calls + 2);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('a same-PATH local vitest replacement invalidates evidence through pnpm exec', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  const executable = path.join(fx.root, 'node_modules/vitest/bin/vitest.mjs');
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const first = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 0);
+    await writeFile(executable, '#!/usr/bin/env node\nprocess.exit(1);\n', { mode: 0o755 });
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 2);
+    const changed = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.notEqual(changed.environment_digest, first.environment_digest);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('a missing local pnpm exec tool that could fall back to global PATH is not reused', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  const globalBin = await mkdtemp(path.join(os.tmpdir(), 'gate-global-tool-'));
+  try {
+    await rm(path.join(fx.root, 'node_modules/.bin/vitest'));
+    await writeFile(path.join(globalBin, 'vitest'), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
+    process.env.PATH = `${fx.bin}:${globalBin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const evidence = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(evidence.environment_digest, null);
+    assert.match(evidence.reuse_disabled_reason, /no project-root node_modules/);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
+  } finally { process.env.PATH = oldPath; await rm(globalBin, { recursive: true, force: true }); }
+});
+
+test('a dependency tree that changes during execution cannot produce reusable evidence', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  const executable = path.join(fx.root, 'node_modules/pnpm/bin/pnpm.cjs');
+  const changed = `#!/usr/bin/env node\nconst fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(path.join(fx.root, '.tmp/calls.log'))}, JSON.stringify(process.argv.slice(2)) + '\\n');\n`;
+  await writeFile(executable, `#!/usr/bin/env node\nconst fs = require('node:fs');\nconst target = ${JSON.stringify(executable)};\nfs.appendFileSync(${JSON.stringify(path.join(fx.root, '.tmp/calls.log'))}, JSON.stringify(process.argv.slice(2)) + '\\n');\nif (!fs.existsSync('.tmp/tool-mutated')) { fs.writeFileSync('.tmp/tool-mutated', 'yes'); fs.writeFileSync(target, ${JSON.stringify(changed)}); }\n`);
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const firstOutput = JSON.parse(result.stdout);
+    const first = JSON.parse(await readFile(firstOutput.evidence, 'utf8'));
+    assert.equal(first.status, 'PASS', 'the commands ran and passed');
+    assert.equal(first.environment_digest, null, 'post-run identity drift must not be reusable');
+    assert.match(first.reuse_disabled_reason, /changed during gate execution/);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2, 'the next run must execute after post-run identity drift');
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('legacy partial environment digests are not eligible for reuse', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const evidencePath = JSON.parse(result.stdout).evidence;
+    const evidence = JSON.parse(await readFile(evidencePath, 'utf8'));
+    evidence.environment_digest = sha256(JSON.stringify([process.version, process.env.PATH, process.env.NODE_ENV,
+      process.env.LIVE_PG_TEST, process.env.LIVE_PG_CONTOUR, process.env.DATABASE_URL]));
+    await writeFile(evidencePath, JSON.stringify(evidence));
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
+  } finally { process.env.PATH = oldPath; }
+});
+
 test('reuse is per command: a complete run executes only the commands not yet passed on this tree', async () => {
   const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
   try {
@@ -537,7 +644,9 @@ if (fs.existsSync('.tmp/fail')) { console.error('FAIL orders invariant'); proces
 `, { mode: 0o755 });
   const git = (...args) => spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
   git('checkout', '--', 'src/orders.ts');
-  git('add', 'bin'); assert.equal(git('commit', '-m', 'env pnpm').status, 0);
+  git('add', 'bin');
+  const committed = git('commit', '-m', 'env pnpm');
+  if (committed.status !== 0) assert.match(`${committed.stdout}\n${committed.stderr}`, /nothing (?:added to commit|to commit)/);
   const manifestFile = path.join(fx.stateRoot, fx.runId, 'manifest.json');
   const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
   manifest.git_setup = { base_sha: git('rev-parse', 'HEAD').stdout.trim() };
@@ -585,6 +694,36 @@ test('gate env vars leave environment_digest unchanged so evidence reuse still w
     result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout); assert.equal(output.commands_run, 0); assert.match(output.reused_from, /checks\/app-build\.json$/);
     assert.equal(JSON.parse(await readFile(output.evidence, 'utf8')).scratch_dir, null);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('a relevant inherited gate environment change invalidates reusable evidence', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH; const oldWorkers = process.env.PIPELINE_MAX_WORKERS;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    process.env.PIPELINE_MAX_WORKERS = '2';
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const first = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    process.env.PIPELINE_MAX_WORKERS = '3';
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 2);
+    const changed = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.notEqual(changed.environment_digest, first.environment_digest);
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldWorkers === undefined) delete process.env.PIPELINE_MAX_WORKERS; else process.env.PIPELINE_MAX_WORKERS = oldWorkers;
+  }
+});
+
+test('lockfile changes invalidate evidence and keep affected selection broad', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    await writeFile(path.join(fx.root, 'pnpm-lock.yaml'), 'lockfileVersion: "9.0"\n# changed\n');
+    result = run(fx.root, [...fx.args, '--advisory', '--affected']); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
   } finally { process.env.PATH = oldPath; }
 });
 
