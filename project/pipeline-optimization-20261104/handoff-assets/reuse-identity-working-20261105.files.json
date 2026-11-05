@@ -1,0 +1,26 @@
+[
+  {
+    "path": "config/opencode/skills/task-management/scripts/gate-runner-cli.ts",
+    "new_sha256": "6ae4ba85e4231afbab7f4ba20ed11cba8d964d15808b8fbd3f716c0bbaf1afff",
+    "base_commit": "8925bcbbf3228bf315ea11a891b5d192d358a5da",
+    "new_file": false
+  },
+  {
+    "path": "config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs",
+    "new_sha256": "86b58587280c97bb8ec411ff6284924ad0ea35b45580dede2c0cd15b213856f2",
+    "base_commit": "8925bcbbf3228bf315ea11a891b5d192d358a5da",
+    "new_file": false
+  },
+  {
+    "path": "config/opencode/skills/task-management/scripts/gate-reuse-identity.mjs",
+    "new_sha256": "bc4b56b0f367b69104b15d195affaa328bf70b088c9436648fad94fde4397f30",
+    "base_commit": "8925bcbbf3228bf315ea11a891b5d192d358a5da",
+    "new_file": true
+  },
+  {
+    "path": "config/opencode/skills/task-management/scripts/gate-reuse-identity.test.mjs",
+    "new_sha256": "5b02ac63b77b1f58ef3932a60006bf3958047379c89d402dcccd6903fada9300",
+    "base_commit": "8925bcbbf3228bf315ea11a891b5d192d358a5da",
+    "new_file": true
+  }
+]
