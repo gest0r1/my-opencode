@@ -1,6 +1,6 @@
-# Pipeline optimization 20261104 — текущий checkpoint
+# Pipeline optimization 20261104 — текущий REPORT
 
-**Разработка остановлена 05.11.2026 по указанию владельца. Общая приёмка не завершена.** Следующий исполнитель — младшая модель без тестового окружения; после исходников и отчёта работа возвращается ChatGPT для ревью и тестирования. Main, release, deploy и production в этой задаче не менялись.
+**Статус на 05.11.2026, 13:42 UTC: ЧАСТИЧНО.** Работа возобновлена в feature-ветке my-opencode по handoff; общая независимая приёмка и тестирование на итоговом коде отсутствуют. В этой сессии `main`, релизы, установку и production не меняли. По прямому запрету владельца репозиторий `sevami` не открывали и не изменяли.
 
 ## Основная передача
 
@@ -8,7 +8,7 @@
 
 Исходное ТЗ: [pipeline-improvement-prompt-20261104.md](https://chatgpt.com/library?file_id=libfile_5cb2f8787138819187518776c6d73d2b&account_id=personal). Аудит механизмов: [DECISIONS.md](DECISIONS.md); история — `runs/` и история Git. Старый срез REPORT на 04.11 21:50 UTC устарел; нижеследующее заменяет его текущие статусы.
 
-## Проверенные опубликованные source HEAD перед документационным checkpoint
+## Исходные published SHA handoff (исторический checkpoint, не актуальный HEAD)
 
 Во всех repo ветка `feature/pipeline-optimization-20261104`; текущий ref будет содержать и документационный commit.
 
@@ -25,9 +25,9 @@
 | ContextScout | Planning subtree, path validator, multiple support files, reinstall regression | Installed/pinned runtime integration |
 | Instructions/prep | Consumer-only `required_by`, legacy fallback; последний blanket reminder исправлен в `5454011...`; карта loader/callers в `runs/chatgpt-20261105-instruction-audit-01.md` | Полная проверка действительной runtime загрузки; upstream cleanup только при доказанной замене |
 | Owner approval | `8925bcbb...`: exact manifest/run/subject/decision/response audit, fail-fast, technical carry и legacy continuation | Повтор на final integrated source; explicit separate RUN entry coverage |
-| Gate inputs | Tree placement и candidate publisher/runner binding | Build-output producer/hash; deployed-service installed SHA/target identity |
-| Live PLAN/RUN | SeVami phase-aware consumer, PLAN candidate=null, 16 tests | my-opencode lock/preflight integration и actual cross-repo tests; test-blocks failure diagnosis |
-| Reuse | Сохранён четырёхфайловый рабочий патч, последний локальный журнал 39 PASS | Перенести/проверить/опубликовать source, финальная приёмка и измерение затрат |
+| Gate inputs | tree/candidate source сохраняется; deployed-service proof подключён в существующий RUN runner с before/after target/candidate recheck | build-output producer/hash; actual installed target smoke tests; повторный TypeScript check |
+| Live PLAN/RUN | **my-opencode source добавлен**: phase-aware runtime lock, cheap preflight до Docker и attempt, stateless PLAN/candidate=null, отдельная PLAN evidence; тот же validator при RUN base reuse | запуск Node/tsx и actual cross-repo consumer integration **запрещён для этой сессии**, исходники другого repo не открывались |
+| Reuse | **Source опубликован**: 4-файловый patch, итоговые SHA256 совпали на переносе; исторический 39/39 не переносится на итоговый код | финальная независимая приёмка, Node/tsx, реальная стоимость hashing/ускорение |
 | Wake/children | Independent lanes, unknown lease/reprobe, visible dedup notice | Pinned SDK missing/404 и compaction/restart; crash-window exactly-once не доказан |
 | Markdown timing | Actual projection→export runtime принят ограниченно | Bun/full UI/sync-context/build checks после upstream |
 | Upstream/pins | Common base/trees проверены, 98 merge-file inputs: 80 clean/18 conflicts, отдельно 6 delete/modify | Разрешить конфликты, настоящий merge в feature, OpenCode 2.2.5/OpenChamber 2.6.1 pins, frozen checks |
@@ -48,7 +48,7 @@
 
 ## Сохранённая незавершённая работа
 
-`handoff-assets/reuse-identity-working-20261105.patch` основан на source `8925bcbb...`; это checkpoint существующего WIP, а не автоматически принятая реализация. Итоговые file SHA-256 — рядом в `.files.json`, последний журнал — `reuse-identity-last-tests-20261105.log`. Патч меняет runner+runner tests и добавляет identity module+tests; другой cache не создаёт. Не потерять при переходе в новую среду.
+`handoff-assets/reuse-identity-working-20261105.patch` основан на source `8925bcbb...` и **опубликован в исходниках** этого продолжения; все четыре SHA256 перенесённых файлов совпали с `.files.json` на отдельных transfer commits. Последующие commits меняют runner и его тесты для PLAN и service: их новые hashes, естественно, отличаются от preservation checkpoint. Исторический 39/39 тест больше не удостоверяет итоговый код.
 
 `handoff-assets/upstream-conflicts-20261105/manifest.jsonl` хранит точные metadata/blob SHA всех 98 text и 6 delete/modify inputs. Скрипт `merge-check.py` воспроизводит three-way check после materialization exact blobs в `input-blobs/`. Ручные resolutions и upstream merge не сохранены/не опубликованы. Target: OpenChamber `ce853f415704d1bfe8d076a5cfb2caabac00fffd`, merge-base `c4919abc1e7a0a3beeaa126666487806bf79cfe0`; OpenCode `9bbb8ce18c80f099e0e448775f59d965ead40a21`.
 
@@ -66,4 +66,68 @@ Terra остановился по usage limit при диагностике base
 
 ## Следующее действие
 
-Младшей модели прочитать основной handoff и instructions, сверить refs, проверить применимость сохранённого reuse patch к актуальной feature. Затем закончить общий PLAN/RUN contract, upstream/pins и прочие открытые требования. При каждом завершении сохранить точные commits, changed paths, NOT RUN, blockers и следующий шаг; финальная передача владельцу — для ревью и тестирования ChatGPT. Не продолжать разработку в текущей сессии.
+Сверить feature HEAD после последнего runs report, выполнить локальные Node/tsx и TypeScript suites на source из feature (точные команды ниже), затем независимое ревью diff. Source-only PLAN контракт не утверждать как cross-repo integration; OpenChamber upstream/pins и build-output остаются отдельно. Пользователь запретил обращаться к `sevami` — не делать это даже ради интеграционного теста.
+
+## Продолжение: 2026-11-05, source и статическая приёмка
+
+**Рабочие ветки и точные точки входа**
+
+| Repo | Base origin/main | Старт HEAD этого запуска | Последний известный source HEAD перед REPORT | URL | Working tree |
+|---|---|---|---|---|---|
+| my-opencode | `c58f452047df3806ea6e946d1909b075344bc069` | `85c8969a807f1cae3ee14f9bdd9fbcbd7644301e` | `e38c3c7cf0bbc7ebf4bc0393256e61176f09e895` (плюс следующие commits этого отчёта) | https://github.com/gest0r1/my-opencode/tree/feature/pipeline-optimization-20261104 | repo checkout отсутствует, изменения только GitHub API commits |
+| openchamber-ru | `f9521f168c894cb17dc60ba4f929d4df0722e263` | `f9e8831586efc5b6ef975102bc3facef968561e3` | тот же, source не изменялся | https://github.com/gest0r1/openchamber-ru/tree/feature/pipeline-optimization-20261104 | checkout отсутствует |
+| sevami | **не проверялся в этом запуске** | **не читался** | **не изменялся** | — | доступ к repo не использовался по указанию владельца |
+
+Исторический base указан из handoff; фактический `main` двух разрешённых репозиториев был проверен в начале запуска: прежний SHA, без merge. Текущий HEAD проверяется чтением feature ref **после** создания runs-записи; отчёт не должен притворяться ссылкой на собственный ещё не существующий commit.
+
+**Состояние этапов** (source-ready ≠ reviewed ≠ tested):
+
+| Этап | Source | Независимая проверка / тест | Не завершено |
+|---|---|---|---|
+| 0–2. База, инвентаризация, ContextScout | подготовлено в предыдущих commits | историческая узкая приёмка | целевой установленный runtime, full tests |
+| 3. Upstream/pins | **не готово** | 80 clean/18 conflict text + 6 delete/modify: только исторический three-way, не опубликованный merge | два настоящих parents, ручные resolutions, compatible OpenCode v2.2.5, Bun lock regeneration и pin checker |
+| 4. Markdown tool timing | опубликовано ранее в OpenChamber | исторический actual projection→export runtime PASS | Bun/UI/typecheck/build на итоговом upstream |
+| 5. PLAN approval/owner | source approval `8925bcb` принят ранее ограниченно | исторические 120/120 + 9/9, не новые tests | отдельный RUN intent во всех входах, full integration |
+| 6. Prep/live/gates | targeted prep ранее; **PLAN phase lock/preflight + deployed-service proof добавлены** | новые source tests записаны, **NOT RUN** | actual consumer, build-output producer hash |
+| 7. Reuse/live diagnostics | сохранённый reuse identity patch 4 файла **перенесён**, SHA256 всех четырёх совпали на commits переноса; source дополнен PLAN | прежний 39/39 — другой input, текущие тесты **NOT RUN** | real impact/reuse performance, actual live, post-patch regression |
+| 8. Wake/compaction | wake/unknown child исходники ранее | pinned runtime не протестирован | actual missing-session/404, restart/compaction |
+| 9. Canonical instructions | ранее частично исправлено, ownership в DECISIONS | исходники только | upstream-dependent cleanup/runtime load |
+| 10. Integration | новые fixture tests написаны | **NOT RUN** | полный набор Node/tsx/TS/Bun, cross-repo, Docker, independent review |
+
+**Изменения текущего запуска — только `my-opencode` feature**
+
+- Сохранённый patch: `gate-runner-cli.ts`, `gate-runner-cli.test.mjs`; новый `gate-reuse-identity.mjs`, `gate-reuse-identity.test.mjs`. На переносе совпали *точные четыре* SHA256 из `handoff-assets/reuse-identity-working-20261105.files.json`. Модуль хеширует Node/действительный manager/tool/local bin, полное наследуемое env (минус 5 attempt-полей), дерево зависимостей/config, запрещает stale/unsupported reuse без нового cache.
+- Новые `plan-probe-identity.mjs` и `plan-probe-identity.test.mjs`: версионированный `input_digest` по HEAD/commands/live image/index/cheap command и физический manifest-path check.
+- `gate-command-policy.mjs`, `gate-testing-policy.mjs`, `gate-testing-policy.test.mjs`: только безопасный `preflight_command` в существующем `live_postgres`; `--pipeline-preflight` до реальных gate commands.
+- `gate-runner-cli.ts` и старый `gate-runner-cli.test.mjs`: статeless `--plan-probe`, реальный `.runtime-locks` с PID/start, `phase=plan_probe`, raw manifest SHA, HEAD, input digest и candidate=null. Cheap preflight выполняется **до** выделения attempt/scratch/Docker; FAIL помечается BLOCKED, cleanup проверяется. После команд повторная проверка чистого checkout и неизменного raw manifest до PASS. Добавлены регрессии для fake Docker и fail-before-Docker; тесты не запускались.
+- `manifest-v2-policy.mjs`, `pipeline-v2-contract.test.mjs`, `pipeline-dispatch.ts`, `pipeline-run.md`: один и тот же `planProbeMatches` при PLAN approval и RUN base reuse, live evidence строго для данной pipeline, phase/head/image/input/preflight, без ложного PASS от другой линии.
+- `dev-deploy-cli.ts`, `gate-runner-cli.ts`: существующий `dev_deploy` evidence и root target status проверяются перед smoke и после него; команды получают `PIPELINE_DEPLOY_TARGET`, `CANDIDATE_SHA` от frozen published candidate; read-only, без sudo. Новый тест smoke PASS, stale SHA, missing completed stage и смены installed SHA во время команд.
+- `gate-testing.md` и `DECISIONS.md` содержат канонические контракты, ограничения и разделение владельцев. Новых scheduler/cache/state/approval-store нет. `runtime-locks.mjs` и RUN state format не меняли.
+
+**Проверки этого запуска и точная граница**
+
+| Команда/действие | CWD / source input | Result | Duration / log |
+|---|---|---|---|
+| GitHub connector: проверка двух feature/main refs, `fetch_file`, коммиты | remote feature, начальные HEAD выше | PASS: published commits, сохранены прежние исходники при переносе | wall-clock unavailable; GitHub commit refs |
+| Реконструкция 4-file unified diff + проверка каждых hunk context/length против source `8925bcbb...` | JS V8 isolate, exact GitHub source | PASS, 4/4 apply; старые два blob SHA не изменились после source baseline | duration unavailable; transfer commits `553dd563`, `4597078c`, `f25d52f9`, `1e891253` |
+| SHA-256 transferred source files vs handoff `.files.json` | GitHub transfer commit refs; JS hash function c known test vector `abc` | **4/4 MATCH** на точках переноса; после новых commits runner файлы закономерно другие | duration unavailable; exact refs выше |
+| V8 static JavaScript parse для 9 `.mjs` sources/tests (imports removed solely for parser); повтор для двух multiline imports | fetched remote source, JS isolate | **9/9 PARSE_PASS** | duration unavailable; не Node test и не module-resolution |
+| Direct synthetic invocation `preflightPolicyError` from remote exact source | JS isolate, 3 good + 5 unsafe argv examples | PASS for declared scenarios | duration unavailable; без filesystem runner |
+| `node --test ...gate-reuse-identity.test.mjs ...gate-runner-cli.test.mjs ...pipeline-v2-contract.test.mjs ...gate-testing-policy.test.mjs ...plan-probe-identity.test.mjs` | независимый checkout отсутствует | **NOT RUN — environment unavailable** | N/A |
+| `bash tests/test_contextscout_installation.sh`, `node scripts/check-opencode-pins.mjs --openchamber <checkout>` | изолированный checkout / второй repo checkout отсутствует | **NOT RUN** | N/A |
+| OpenChamber `bun test`, `bun run type-check`, `bun run check:changed`, frozen install/build | Bun/полный checkout отсутствуют | **NOT RUN** | N/A |
+| Cross-repo consumer integration, actual disposable PostgreSQL / service target | прямое ограничение владельца на доступ к третьему repo; production запрещён | **NOT RUN** | N/A |
+
+**Несовпадения / риски для независимого ревью**
+
+1. Потребитель phase-aware lock не был открыт по запрету владельца; runner-side `input_digest` и `preflight_command` должны быть проверены на фактическом адаптере **отдельно**, без изменения запрещённого repo в этой сессии.
+2. Проверка installed service использует существующие root-owned install/status records, не remote attestation; реальная форма `status_file` и post-smoke update могут потребовать уточнения.
+3. Reuse identity hashing исторически требовал 401,961,187 bytes/21,365 paths и 3.782–4.986 s/pass на другом input; нового измерения скорости/токенов нет. Потенциальный privacy/cache риск неизвестных env routes блокируется отказом reuse (fresh execution), не переписыванием env.
+4. `build-output` по-прежнему намеренно отклоняется без proof producer/hash. Upstream OpenChamber 2.6.1 / OpenCode 2.2.5 merge/pins не обновлялись без конфликтного дерева и проверок. Текущие source commits не означают release-ready.
+5. Старые 39/39 и 120/120 являются **историческими результатами на других исходниках**; новые тесты не запускались. Команды `npx` или импорт `.ts` в полном runtime требуют отдельного TypeScript-check.
+
+**Процессы, изменения и безопасное продолжение**
+
+API commits немедленно опубликованы в feature; локальных uncommitted files в этом окружении нет, checkout не существует (состояние чужого workspace не заявляется). Новых фоновых агентских сессий, shell PID, Docker-контейнеров, gate locks или jobs **не создавали**; наличие чужих live процессов/locks не проверялось и не изменялось. Изолированные V8 функции не открывали producer systems.
+
+Следующее действие: в изолированном feature checkout запустить указанные focused tests и TS validation, **не трогая** запрещённый repo. При успешной независимой приёмке к рассмотрению останутся OpenChamber upstream конфликтные resolutions, pinned compatible versions, build-output producer и остальные integration требования. Передача: **«Разработка частично завершена, требуется ревью и тестирование»**.
