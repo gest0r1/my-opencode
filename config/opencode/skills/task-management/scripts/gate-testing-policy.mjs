@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { gatePolicyError, tokenizeGateCommand, preflightPolicyError } from './gate-command-policy.mjs';
+import { validArtifactPath } from './build-output-proof.mjs';
 
 // Keys a project-generated impact map may supply; the manifest keeps only its frozen reference.
 const SOURCE_KEYS = ['impact_groups', 'coordinator_only', 'parallel_groups', 'live_postgres', 'ignored_inputs'];
@@ -76,8 +77,11 @@ export function impactMatches(pattern, file) {
 export function isPrePublishGate(manifest, profile, gate) {
   // Candidate and service gates need evidence created after the clean-tree PLAN
   // probe. Do not probe them as tree gates merely because they precede push.
-  const inputKind = manifest.gate_testing?.[profile]?.[gate]?.input_kind;
-  if (inputKind && inputKind !== 'tree') return false;
+  const config = manifest.gate_testing?.[profile]?.[gate];
+  const inputKind = config?.input_kind;
+  // A materializing build needs a RUN producer and an in-place artifact proof.
+  // A clean-tree PLAN probe cannot stand in for that producer.
+  if (config?.artifact_output || (inputKind && inputKind !== 'tree')) return false;
   if (/(deploy|smoke)/i.test(gate)) return false;
   const users = (manifest.pipelines ?? []).filter(pipeline => pipeline?.profile === profile && (pipeline.stages ?? []).includes(gate));
   if (!users.length) return false;
@@ -97,21 +101,53 @@ export function validateGateTesting(manifest) {
       const commands = manifest.gate_profiles?.[profile]?.[gate];
       if (!Array.isArray(commands) || !config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`GATE_TESTING_INVALID: ${profile}/${gate}`);
       if (/(runtime|deploy|release|smoke|install)/i.test(gate) && !isPrePublishGate(manifest, profile, gate) && Object.keys(config).some(key => key !== 'input_kind')) throw new Error('GATE_TESTING_INVALID: test resources cannot wrap deployment gates');
-      if (Object.keys(config).some(key => !['input_kind', 'impact_groups', 'live_postgres', 'timeout_seconds', 'report_files', 'coordinator_only', 'parallel_groups', 'ignored_inputs', 'source'].includes(key))) throw new Error('GATE_TESTING_INVALID: unknown option');
+      if (Object.keys(config).some(key => !['input_kind', 'artifact_output', 'build_output', 'impact_groups', 'live_postgres', 'timeout_seconds', 'report_files', 'coordinator_only', 'parallel_groups', 'ignored_inputs', 'source'].includes(key))) throw new Error('GATE_TESTING_INVALID: unknown option');
       // Optional for legacy manifests. New PLANs classify what a gate actually checks.
       // A tree check may never be silently postponed until after publication.
       if (config.input_kind !== undefined) {
         const kind = config.input_kind;
-        if (!['tree', 'candidate', 'deployed-service'].includes(kind)) {
-          throw new Error(`GATE_INPUT_KIND_INVALID: ${profile}/${gate} requires tree|candidate|deployed-service; build-output needs a frozen artifact producer binding before support`);
+        if (!['tree', 'candidate', 'build-output', 'deployed-service'].includes(kind)) {
+          throw new Error(`GATE_INPUT_KIND_INVALID: ${profile}/${gate} requires tree|candidate|build-output|deployed-service`);
         }
         const users = (manifest.pipelines ?? []).filter(pipeline => pipeline.profile === profile && (pipeline.stages ?? []).includes(gate));
         if (!users.length || users.some(pipeline => pipeline.executors?.[gate] !== 'local_gate')) {
           throw new Error(`GATE_INPUT_OWNER_INVALID: ${profile}/${gate} must belong to a local_gate stage`);
         }
-        if (kind === 'tree' && (!isPrePublishGate(manifest, profile, gate) ||
-            commands.some(command => String(command).includes('{candidate_sha}')))) {
+        if (kind === 'tree' && (!(isPrePublishGate(manifest, profile, gate) ||
+            (config.artifact_output && users.every(pipeline => {
+              const publish = pipeline.stages.findIndex(stage => pipeline.executors?.[stage] === 'git_publish');
+              return publish < 0 || pipeline.stages.indexOf(gate) < publish;
+            }))) || commands.some(command => String(command).includes('{candidate_sha}')))) {
           throw new Error(`GATE_TREE_AFTER_PUBLISH: ${profile}/${gate} tree evidence must run before git_publish, independent of candidate`);
+        }
+        if (config.artifact_output !== undefined && (kind !== 'tree' ||
+            !config.artifact_output || Object.keys(config.artifact_output).some(key => key !== 'path') ||
+            !validArtifactPath(config.artifact_output.path) || config.live_postgres ||
+            commands.some(command => String(command).includes('{artifact_path}')))) {
+          throw new Error(`GATE_BUILD_OUTPUT_PRODUCER_INVALID: ${profile}/${gate} needs one exact artifact path on a tree gate`);
+        }
+        if (kind === 'build-output') {
+          const producer = config.build_output?.producer_gate;
+          if (!producer || Object.keys(config.build_output).some(key => key !== 'producer_gate') ||
+              typeof producer !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(producer) ||
+              producer === gate || config.live_postgres || config.artifact_output ||
+              commands.some(command => !String(command).includes('{artifact_path}'))) {
+            throw new Error(`GATE_BUILD_OUTPUT_INVALID: ${profile}/${gate} needs frozen producer_gate and an artifact placeholder in each command`);
+          }
+          const source = manifest.gate_testing?.[profile]?.[producer];
+          if (source?.input_kind !== 'tree' || !validArtifactPath(source?.artifact_output?.path) ||
+              users.some(pipeline => {
+                const prior = pipeline.stages.slice(0, pipeline.stages.indexOf(gate));
+                return !prior.includes(producer) || pipeline.executors?.[producer] !== 'local_gate';
+              })) {
+            throw new Error(`GATE_BUILD_OUTPUT_PRODUCER_MISSING: ${profile}/${gate} needs a preceding declared tree local_gate producer`);
+          }
+        }
+        if (config.build_output !== undefined && kind !== 'build-output') {
+          throw new Error(`GATE_BUILD_OUTPUT_UNUSED: ${profile}/${gate}`);
+        }
+        if (kind !== 'build-output' && commands.some(command => String(command).includes('{artifact_path}'))) {
+          throw new Error(`GATE_BUILD_OUTPUT_PLACEHOLDER_UNBOUND: ${profile}/${gate}`);
         }
         if (kind === 'candidate' && users.some(pipeline => {
           const index = pipeline.stages.indexOf(gate);
