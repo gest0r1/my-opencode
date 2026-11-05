@@ -486,7 +486,7 @@ export default Plugin.define({
       if (unknownChildren.length) {
         const count = (unknownProbes.get(sessionID) ?? 0) + 1
         unknownProbes.set(sessionID, count)
-        if (count <= 3) wakeTimers.set(sessionID, setTimeout(() => { void checkWake(sessionID) }, wakeDelayMs()))
+        if (count <= 3) wakeTimers.set(sessionID, setTimeout(() => { void checkWake(sessionID) }, Math.min(wakeDelayMs(), 5_000)))
         else {
           const key = sha256(JSON.stringify(unknownChildren.map(lease => [lease.child_session_id, lease.pipeline_id, lease.stage, lease.work_item_id, lease.created_at]).sort()))
           const file = metricsFile(root, runID)
