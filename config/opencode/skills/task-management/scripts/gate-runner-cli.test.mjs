@@ -886,6 +886,21 @@ test('deployed-service smoke reads exact completed deploy proof and refuses stal
       result = run(fx.root, args);
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /GATE_SERVICE_DEPLOY_INCOMPLETE/);
+      // A target that changes DURING an otherwise passing smoke must not emit PASS.
+      state.pipelines.app.stages.deploy.status = 'completed';
+      await writeFile(stateFile, JSON.stringify(state));
+      await writeFile(path.join(fx.bin, 'pnpm'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const p = '.tmp/deploy-state/dev-test.json';
+const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+data.sha = 'c'.repeat(40);
+fs.writeFileSync(p, JSON.stringify(data));
+`, { mode: 0o755 });
+      result = run(fx.root, args);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /GATE_SERVICE_CHANGED_DURING_GATE/);
+      const smokeEvidence = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'gates/app-smoke.json'), 'utf8'));
+      assert.equal(smokeEvidence.status, 'BLOCKED');
     } finally {
       if (originalDeployDir === undefined) delete process.env.OPENCODE_DEPLOY_STATE_DIR;
       else process.env.OPENCODE_DEPLOY_STATE_DIR = originalDeployDir;
