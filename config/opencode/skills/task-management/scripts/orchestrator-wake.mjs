@@ -45,6 +45,10 @@ export function wakeDecision({ stateRaw, manifest, pendingChildren = 0, runningW
   const scheduling = {
     run_id: state.run_id,
     status: state.status,
+    // Scheduler availability can change when a child/lease settles without
+    // a new state.json write. Do not dedupe away that legitimate wake.
+    runnable_count: Number.isInteger(runnableCount) ? runnableCount : null,
+    active_work: pendingChildren > 0 || runningWork > 0,
     superseded_by: state.superseded_by,
     deferred_decisions: (state.deferred_decisions ?? []).map(item => [item.id, item.status]),
     pipelines: Object.entries(state.pipelines ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, pipeline]) => [
