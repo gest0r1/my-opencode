@@ -42,3 +42,7 @@ Sevami repo, production, main, installs, Actions and releases untouched. Existin
 4. No task-run/model capacity switches and no fabricated performance results. Report scope/source proof separately from production readiness.
 
 **Передача:** опубликованные feature-ветки и тестовый чеклист готовы для тестового агента. Слияние/релиз запрещены до закрытия отмеченных блокеров.
+
+## Дополнительный итоговый review-check
+
+В текущем feature после исходной записи добавлены два атомарных коммита: `9302cb4` разрешает materializing tree-gate с `release-` в имени, не ослабляя запрет runtime resources; `9622d94` добавляет regression на этот маршрут. Проверено на извлечённом exact policy source: `validateGateTesting` принимает корректный producer, `isPrePublishGate` возвращает `false` — **PASS** (изолированный V8, не Node suite). Обновлён текущий REPORT commit `29612e6596874d18c07eddac088ecffa98b7542f`. Итоговый SHA этой run note сверить с удалённым ref после коммита. Отсутствие полноценного TypeScript/tsx не скрывается.
