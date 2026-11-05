@@ -374,6 +374,10 @@ async function planProbe(args: string[]): Promise<void> {
         throw new GateRunnerError('gate command failed (' + failed.result.exit_code + '): ' + failed.result.command + '; evidence=' + evidenceFile);
       }
     }
+    const completedHead = await requireCleanCheckout();
+    if (completedHead !== headSha || sha256(await readFile(manifestFile, 'utf8')) !== manifestSha) {
+      throw new GateRunnerError('PLAN_PROBE_INPUT_CHANGED: HEAD/checkout or draft manifest changed during probe; rerun on a stable base');
+    }
   } catch (error) {
     failure = error; if (status !== 'FAIL') status = 'BLOCKED';
   } finally {
