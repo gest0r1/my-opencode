@@ -6,7 +6,6 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 const SHA256 = /^[0-9a-f]{64}$/;
-const SHA40 = /^[0-9a-f]{40}$/i;
 
 export function validArtifactPath(path) {
   return typeof path === 'string' && path.length > 0 && path.length <= 512 &&
