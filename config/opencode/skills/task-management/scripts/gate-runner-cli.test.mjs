@@ -777,7 +777,8 @@ const raw = fs.readFileSync(lock.manifest_file);
 const manifestHash = createHash('sha256').update(raw).digest('hex');
 if (lock.phase !== 'plan_probe' || lock.pid !== process.ppid || lock.manifest_sha256 !== manifestHash ||
     !/^[a-f0-9]{64}$/.test(lock.input_digest) || !/^[a-f0-9]{40}$/.test(lock.head_sha) ||
-    process.env.CANDIDATE_SHA || process.env.PIPELINE_GATE_ATTEMPT) process.exit(12);
+    process.env.CANDIDATE_SHA || process.env.PIPELINE_GATE_ATTEMPT || process.env.DATABASE_URL ||
+    process.env.LIVE_PG_TEST || process.env.PGPASSWORD) process.exit(12);
 fs.writeFileSync('.tmp/preflight-evidence.json', JSON.stringify(lock));
 if (fs.existsSync('.tmp/reject-cheap')) process.exit(19);
 `, 'utf8');
@@ -792,11 +793,12 @@ if (fs.existsSync('.tmp/reject-cheap')) process.exit(19);
     'node scripts/live-preflight.mjs --pipeline-preflight';
   await writeFile(fx.manifestFile, JSON.stringify(manifest));
   await unlink(path.join(fx.stateRoot, fx.runId, 'state.json'));
-  const oldPath = process.env.PATH, inherited = process.env.CANDIDATE_SHA;
+  const oldPath = process.env.PATH, inherited = process.env.CANDIDATE_SHA, inheritedDb = process.env.DATABASE_URL;
   const args = ['--plan-probe', fx.manifestFile, 'app', 'build'];
   try {
     process.env.PATH = fx.bin + ':' + oldPath;
     process.env.CANDIDATE_SHA = 'f'.repeat(40);
+    process.env.DATABASE_URL = 'postgresql://inherited-prod.invalid/must-not-see';
     await writeFile(path.join(fx.root, '.tmp/reject-cheap'), 'yes');
     let result = run(fx.root, args);
     assert.notEqual(result.status, 0);
@@ -826,6 +828,7 @@ if (fs.existsSync('.tmp/reject-cheap')) process.exit(19);
   } finally {
     process.env.PATH = oldPath;
     if (inherited === undefined) delete process.env.CANDIDATE_SHA; else process.env.CANDIDATE_SHA = inherited;
+    if (inheritedDb === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = inheritedDb;
   }
 });
 
