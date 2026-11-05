@@ -3,51 +3,51 @@
 `gate_profiles[profile][gate]` remains the complete authoritative command array.
 ## Stateless PLAN live-gate preflight
 
-A PLAN probe is not a RUN. It never creates or simulates \`state.json\` and never
-imports a published \`candidate.json\`, \`CANDIDATE_SHA\` or a production contour.
-For a \`local_gate\` with \`gate_testing[profile][gate].live_postgres\`, freeze an
-**explicit** \`live_postgres.preflight_command\`:
+A PLAN probe is not a RUN. It never creates or simulates `state.json` and never
+imports a published `candidate.json`, `CANDIDATE_SHA` or a production contour.
+For a `local_gate` with `gate_testing[profile][gate].live_postgres`, freeze an
+**explicit** `live_postgres.preflight_command`:
 
-\`\`\`json
+```json
 "live_postgres": {
   "image": "postgres:16@sha256:<actual 64-hex digest>",
   "command_indexes": [0],
   "preflight_command": "pnpm exec tsx scripts/testing/live-pg-preflight.ts --pipeline-preflight"
 }
-\`\`\`
+```
 
-The preflight command is a repository-local \`node <script.js>\` or
-\`pnpm exec tsx <script.ts>\` (also \`corepack pnpm exec tsx\`) ending with
-\`--pipeline-preflight\`, without shell composition or arbitrary flags. Its
-\`validateOnly\` mode must use the project's **same** phase-aware evidence resolver
+The preflight command is a repository-local `node <script.js>` or
+`pnpm exec tsx <script.ts>` (also `corepack pnpm exec tsx`) ending with
+`--pipeline-preflight`, without shell composition or arbitrary flags. Its
+`validateOnly` mode must use the project's **same** phase-aware evidence resolver
 as its live runner, return nonzero on unresolvable/ambiguous runtime or input, and
 not create evidence, allocate resources or touch production. This is a contract
 for the consumer; the generic runner does not implement project-specific adapters.
 
 The runner checks a clean git checkout, then holds the existing machine heavy
 and live slots in their established acquisition order. It creates **one**
-\`.tmp/pipelines/.runtime-locks\` gate lock with PID/PID-start, \`phase=plan_probe\`,
-absolute canonical \`manifest_file\` under \`.tmp/pipelines/<run-id>/\`,
-\`manifest_sha256\` of the **raw** draft bytes, \`head_sha\` and \`input_digest\`.
+`.tmp/pipelines/.runtime-locks` gate lock with PID/PID-start, `phase=plan_probe`,
+absolute canonical `manifest_file` under `.tmp/pipelines/<run-id>/`,
+`manifest_sha256` of the **raw** draft bytes, `head_sha` and `input_digest`.
 The digest is SHA-256(JSON.stringify([
-\`"plan-probe-input-v1"\`, lowercase HEAD SHA, commandsDigest(frozen commands),
+`"plan-probe-input-v1"`, lowercase HEAD SHA, commandsDigest(frozen commands),
 { image, command_indexes, preflight_command }
-])). The \`manifest_sha256\` is audit provenance and may change while PLAN edits
+])). The `manifest_sha256` is audit provenance and may change while PLAN edits
 unrelated frozen sections; it does not independently invalidate a probe. The
 HEAD, commands and resource contract do invalidate it.
 
 While the lock is held, run the cheap validator **before** allocating a gate
 attempt/scratch directory or running Docker/expensive test commands. On nonzero
-validation or missing preflight the runner writes \`status=BLOCKED\`,
-\`attempt=null\`, \`preflight_status=FAIL\` and no command PASS. On success it
-runs the original frozen gate, records \`phase\`, raw manifest SHA, input digest,
-\`candidate_sha=null\`, cleanup outcome and exits without leaving phase locks.
+validation or missing preflight the runner writes `status=BLOCKED`,
+`attempt=null`, `preflight_status=FAIL` and no command PASS. On success it
+runs the original frozen gate, records `phase`, raw manifest SHA, input digest,
+`candidate_sha=null`, cleanup outcome and exits without leaving phase locks.
 The existing project live resource lifecycle remains authoritative; cleanup
 failures turn the result into BLOCKED.
 
 For PLAN acceptance a live probe must bind the exact pipeline (no cross-pipeline
 reuse), its frozen HEAD, commands and resource contract, with successful
-\`preflight_status\`. Legacy non-live probe behavior is unchanged. Existing RUN
+`preflight_status`. Legacy non-live probe behavior is unchanged. Existing RUN
 state/candidate resolution remains unchanged. This source contract requires a
 separate actual-adapter integration test; generic fake-Docker PASS cannot verify
 a consumer's phase resolver.
