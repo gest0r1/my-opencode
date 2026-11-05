@@ -476,6 +476,32 @@ test('a PASS on the identical tree is reused instead of rerun; any source change
   } finally { process.env.PATH = oldPath; }
 });
 
+test('ignored local snapshot configuration invalidates gate reuse without a tracked diff', async () => {
+  const fx = await diagnosticFixture();
+  const oldPath = process.env.PATH;
+  try {
+    await writeFile(path.join(fx.root, '.gitignore'), 'node_modules/\n.env.local\n');
+    await writeFile(path.join(fx.root, '.env.local'), 'FEATURE_FLAG=off\n');
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args);
+    assert.equal(result.status, 0, result.stderr);
+    const first = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.ok(first.environment_digest, first.reuse_disabled_reason);
+
+    result = run(fx.root, fx.args);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 0, 'unchanged ignored config is safely reusable');
+
+    await writeFile(path.join(fx.root, '.env.local'), 'FEATURE_FLAG=on\n');
+    result = run(fx.root, fx.args);
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 2, 'changed .env bytes must invalidate prior PASS');
+    const changed = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.notEqual(changed.environment_digest, first.environment_digest);
+  } finally { process.env.PATH = oldPath; }
+});
+
 test('a same-PATH executable replacement invalidates reusable evidence', async () => {
   const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
   const executable = path.join(fx.root, 'node_modules/pnpm/bin/pnpm.cjs');
