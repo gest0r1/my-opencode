@@ -8,7 +8,7 @@ import { gatePolicyError, tokenizeGateCommand, preflightPolicyError } from './ga
 import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGateTestingFile, isPrePublishGate } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
 import { sourceSnapshot, sourceInventory, changedFromInventory, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports, retryTimeouts } from './gate-diagnostics.mjs';
-import { createGateSnapshot } from './gate-snapshot.mjs';
+import { createGateSnapshot, copiedIgnoredInputs } from './gate-snapshot.mjs';
 import { laneDigest, laneScope } from './dispatch-leases.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { acquireHeavySlot, acquireLiveSlot, acquireLockFiles, waitForHeavySlot } from './runtime-locks.mjs';
@@ -607,7 +607,16 @@ async function main(): Promise<void> {
   });
   const identityEnvironment: Record<string, string | undefined> = { ...process.env, ...gateEnv({ runId, pipelineId, gate, attempt, candidateSha, deployTarget: config?.input_kind === 'deployed-service' ? manifest.deploy_target : undefined, scratchDir: '' }) };
   for (const key of Object.keys(identityEnvironment)) if (identityEnvironment[key] === undefined) delete identityEnvironment[key];
-  let reuseIdentity = await resolveReuseIdentity({ cwd: process.cwd(), invocations: identityInvocations, env: identityEnvironment });
+  // Ignored local input files are copied into gate snapshots; source inventory
+  // deliberately excludes them, so the toolchain identity must hash their bytes.
+  // Failure to enumerate them means reuse is unsafe, but fresh execution remains allowed.
+  let ignoredSnapshotFiles: string[] | null = null;
+  let ignoredSnapshotError: string | null = null;
+  try { ignoredSnapshotFiles = copiedIgnoredInputs(originalCwd); }
+  catch (error) { ignoredSnapshotError = 'ignored snapshot inputs cannot be enumerated: ' + String(error instanceof Error ? error.message : error); }
+  let reuseIdentity = ignoredSnapshotFiles === null
+    ? { digest: null, reason: ignoredSnapshotError, metrics: { files: 0, bytes: 0, elapsed_ms: 0 } }
+    : await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles });
   const reuseIdentityMeasurements: Array<{ files: number; bytes: number; elapsed_ms: number }> = reuseIdentity.metrics ? [reuseIdentity.metrics] : [];
   let environmentDigest = reuseIdentity.digest;
   let reuseDisabledReason = reuseIdentity.reason;
@@ -673,7 +682,7 @@ async function main(): Promise<void> {
       selected: invocations.filter(item => canReuseCommand(item.index))
         .map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
   if (environmentDigest) {
-    reuseIdentity = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment });
+    reuseIdentity = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles: ignoredSnapshotFiles ?? [] });
     if (reuseIdentity.metrics) reuseIdentityMeasurements.push(reuseIdentity.metrics);
     if (reuseIdentity.digest !== environmentDigest) {
       reusable.clear();
@@ -832,7 +841,7 @@ async function main(): Promise<void> {
       }
     }
     if (environmentDigest && pending.length > 0) {
-      const afterRun = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment });
+      const afterRun = await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles: ignoredSnapshotFiles ?? [] });
       if (afterRun.metrics) reuseIdentityMeasurements.push(afterRun.metrics);
       if (afterRun.digest !== environmentDigest) {
         if (reusable.size > 0 && status === 'PASS') {
