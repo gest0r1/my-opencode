@@ -8,7 +8,7 @@ import { gatePolicyError, tokenizeGateCommand, preflightPolicyError } from './ga
 import { validateGateTesting, selectAffectedCommands, parallelBatches, resolveGateTestingFile, isPrePublishGate } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
 import { sourceSnapshot, sourceInventory, changedFromInventory, readDiagnosticHypothesis, failureSummary, outputTail, readTestReports, retryTimeouts } from './gate-diagnostics.mjs';
-import { createGateSnapshot, copiedIgnoredInputs } from './gate-snapshot.mjs';
+import { createGateSnapshot, reuseLocalInputs } from './gate-snapshot.mjs';
 import { laneDigest, laneScope } from './dispatch-leases.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { acquireHeavySlot, acquireLiveSlot, acquireLockFiles, waitForHeavySlot } from './runtime-locks.mjs';
@@ -612,7 +612,7 @@ async function main(): Promise<void> {
   // Failure to enumerate them means reuse is unsafe, but fresh execution remains allowed.
   let ignoredSnapshotFiles: string[] | null = null;
   let ignoredSnapshotError: string | null = null;
-  try { ignoredSnapshotFiles = copiedIgnoredInputs(originalCwd); }
+  try { ignoredSnapshotFiles = reuseLocalInputs(originalCwd); }
   catch (error) { ignoredSnapshotError = 'ignored snapshot inputs cannot be enumerated: ' + String(error instanceof Error ? error.message : error); }
   let reuseIdentity = ignoredSnapshotFiles === null
     ? { digest: null, reason: ignoredSnapshotError, metrics: { files: 0, bytes: 0, elapsed_ms: 0 } }
@@ -683,7 +683,7 @@ async function main(): Promise<void> {
         .map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
   if (environmentDigest) {
     let freshInputs: string[] | null = null;
-    try { freshInputs = copiedIgnoredInputs(originalCwd); }
+    try { freshInputs = reuseLocalInputs(originalCwd); }
     catch { /* a failed input inventory invalidates reusable evidence */ }
     if (!freshInputs || JSON.stringify(freshInputs) !== JSON.stringify(ignoredSnapshotFiles)) {
       reusable.clear();
@@ -851,7 +851,7 @@ async function main(): Promise<void> {
     }
     if (environmentDigest && (pending.length > 0 || reusable.size > 0)) {
       let finalInputs: string[] | null = null;
-      try { finalInputs = copiedIgnoredInputs(originalCwd); } catch {}
+      try { finalInputs = reuseLocalInputs(originalCwd); } catch {}
       const afterRun = finalInputs && JSON.stringify(finalInputs) === JSON.stringify(ignoredSnapshotFiles)
         ? await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles: finalInputs })
         : { digest: null, reason: 'ignored snapshot input set changed during gate execution', metrics: { files: 0, bytes: 0, elapsed_ms: 0 } };
