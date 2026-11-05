@@ -242,7 +242,7 @@ function hashEnvironment(env) {
   return createHash('sha256').update(JSON.stringify(selected)).digest('hex');
 }
 
-export async function resolveReuseIdentity({ cwd, invocations, env }) {
+export async function resolveReuseIdentity({ cwd, invocations, env, ignoredSnapshotFiles = [] }) {
   const records = [];
   const stats = { files: 0, bytes: 0 };
   const visited = new Set();
@@ -252,6 +252,16 @@ export async function resolveReuseIdentity({ cwd, invocations, env }) {
   try {
     const environmentDigest = hashEnvironment(env);
     await externalModulePaths(env, records);
+    // Snapshot preparation copies these ignored files (for example .env.local).
+    // Their bytes are not in sourceInventory and must be part of reuse identity.
+    // Paths are supplied by gate-snapshot's exact shared copiedIgnoredInputs().
+    if (!Array.isArray(ignoredSnapshotFiles) || ignoredSnapshotFiles.some(file =>
+        typeof file !== 'string' || !file || isAbsolute(file) || file.split('/').some(part => part === '..' || part === '.git'))) {
+      throw new Error('ignored snapshot input paths are not safe');
+    }
+    for (const file of [...new Set(ignoredSnapshotFiles)].sort()) {
+      await hashPath(join(resolve(cwd), file), `ignored-snapshot-input:${file}`, records, visited, fileDigests, stats);
+    }
     const nodeFromPath = findExecutable('node', env);
     const nodeReal = realpathSync(nodeFromPath);
     if (nodeReal !== realpathSync(process.execPath)) throw new Error('PATH node differs from the gate runner Node runtime');
