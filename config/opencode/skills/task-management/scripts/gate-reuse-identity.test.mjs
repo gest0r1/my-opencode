@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
+import { spawnSync } from 'node:child_process';
+import { reuseLocalInputs } from './gate-snapshot.mjs';
 import test from 'node:test';
 import { resolveReuseIdentity } from './gate-reuse-identity.mjs';
 
@@ -62,6 +64,34 @@ test('ignored snapshot configuration changes invalidate otherwise identical tool
     await writeFile(join(fx.cwd, '.env.extra'), 'NEW=1\n');
     const added = await resolveReuseIdentity({ ...options, ignoredSnapshotFiles: ['.env.local', '.env.extra'] });
     assert.notEqual(added.digest, changed.digest);
+  } finally { await rm(fx.cwd, { recursive: true, force: true }); }
+});
+
+test('actual nested ignored Git read-set invalidates reuse on byte and membership changes', async () => {
+  const fx = await fixture();
+  try {
+    const git = (...args) => spawnSync('git', args, { cwd: fx.cwd, encoding: 'utf8' });
+    assert.equal(git('init').status, 0);
+    await writeFile(join(fx.cwd, '.gitignore'), '.local-config/\nnode_modules/\n');
+    await mkdir(join(fx.cwd, '.local-config/nested'), { recursive: true });
+    await writeFile(join(fx.cwd, '.local-config/nested/mode.txt'), 'good');
+    const read = async () => resolveReuseIdentity({ cwd: fx.cwd, invocations: [fx.invocation], env: fx.env,
+      ignoredSnapshotFiles: reuseLocalInputs(fx.cwd) });
+    const first = await read();
+    const stable = await read();
+    assert.ok(first.digest, first.reason);
+    assert.equal(stable.digest, first.digest, 'unchanged nested config may still reuse');
+    await writeFile(join(fx.cwd, '.local-config/nested/mode.txt'), 'bad');
+    const changed = await read();
+    assert.ok(changed.digest, changed.reason);
+    assert.notEqual(changed.digest, first.digest);
+    await writeFile(join(fx.cwd, '.local-config/nested/extra.txt'), 'added');
+    const added = await read();
+    assert.notEqual(added.digest, changed.digest);
+    await rename(join(fx.cwd, '.local-config/nested/extra.txt'),
+      join(fx.cwd, '.local-config/nested/renamed.txt'));
+    const renamed = await read();
+    assert.notEqual(renamed.digest, added.digest);
   } finally { await rm(fx.cwd, { recursive: true, force: true }); }
 });
 
