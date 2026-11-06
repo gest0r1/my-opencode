@@ -588,7 +588,7 @@ async function main(): Promise<void> {
   };
   try {
     const liveConfig = config?.live_postgres;
-    if (!advisory && liveConfig && liveIndexes(config).length) {
+    if (liveConfig && liveIndexes(config).length) {
       if (!liveConfig.preflight_command) throw new GateRunnerError(
         'RUN_LIVE_PREFLIGHT_REQUIRED: freeze live_postgres.preflight_command before RUN');
       // Use existing heavy->live order for both phases. The lock is visible
