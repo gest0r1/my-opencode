@@ -19,7 +19,7 @@ async function snapshotFixture(script) {
   const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
   await mkdir(path.join(root, 'src'), { recursive: true });
   await mkdir(path.join(root, 'bin'));
-  await writeFile(path.join(root, '.gitignore'), '.tmp/\n.env*\n.snapshots/\n.locks/\nnode_modules/\n');
+  await writeFile(path.join(root, '.gitignore'), '.tmp/\n.env*\n.local-config/\n.snapshots/\n.locks/\nnode_modules/\n');
   await writeFile(path.join(root, 'src/value.txt'), 'base\n');
   await writeFile(path.join(root, 'src/other.txt'), 'base\n');
   // Reuse identity requires a real bounded project manager route, not merely a
@@ -75,11 +75,14 @@ test('a full gate runs on a snapshot of the working tree and leaves the checkout
 const fs = require('node:fs'); const path = require('node:path');
 fs.appendFileSync(path.join(process.env.PIPELINE_SCRATCH_DIR, 'seen.jsonl'), JSON.stringify({ cwd: process.cwd(),
   value: fs.readFileSync('src/value.txt', 'utf8'), added: fs.existsSync('src/added.txt'), env: fs.existsSync('.env.local'),
+  nested: fs.readFileSync('.local-config/nested/mode.txt', 'utf8'),
   state: fs.existsSync('.tmp/pipelines/snap-run/state.json') }) + '\\n');`);
   try {
     await writeFile(path.join(fx.root, 'src/value.txt'), 'uncommitted\n');
     await writeFile(path.join(fx.root, 'src/added.txt'), 'new\n');
     await writeFile(path.join(fx.root, '.env.local'), 'LOCAL=1\n');
+    await mkdir(path.join(fx.root, '.local-config/nested'), { recursive: true });
+    await writeFile(path.join(fx.root, '.local-config/nested/mode.txt'), 'snapshot-visible');
     const statusBefore = fx.git('status', '--porcelain').stdout;
     const result = fx.runGate();
     assert.equal(result.status, 0, result.stderr);
@@ -91,7 +94,7 @@ fs.appendFileSync(path.join(process.env.PIPELINE_SCRATCH_DIR, 'seen.jsonl'), JSO
     assert.equal(seen.length, 2);
     for (const entry of seen) {
       assert.notEqual(entry.cwd, fx.root);
-      assert.deepEqual({ ...entry, cwd: undefined }, { cwd: undefined, value: 'uncommitted\n', added: true, env: true, state: true });
+      assert.deepEqual({ ...entry, cwd: undefined }, { cwd: undefined, value: 'uncommitted\n', added: true, env: true, nested: 'snapshot-visible', state: true });
     }
     await assert.rejects(access(seen[0].cwd));
     assert.equal(fx.git('status', '--porcelain').stdout, statusBefore);
