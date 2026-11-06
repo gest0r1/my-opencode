@@ -1126,7 +1126,7 @@ test('RUN preflight rejects before expensive commands or Docker',async t=>{
   const manifest=JSON.parse(await readFile(state.manifest_file,'utf8'));
   manifest.gate_testing.default.build.live_postgres.command_indexes=[1];
   manifest.gate_testing.default.build.live_postgres.preflight_command='node scripts/live-preflight.mjs --pipeline-preflight';
-  await mkdir(path.join(fx.root,'scripts'));
+  await mkdir(path.join(fx.root,'scripts'),{recursive:true});
   await writeFile(path.join(fx.root,'scripts/live-preflight.mjs'),"import fs from 'node:fs';fs.writeFileSync('.tmp/preflight-called','yes');process.exit(41);\n");
   await writeFile(path.join(fx.bin,'pnpm'),"#!/usr/bin/env node\nrequire('node:fs').appendFileSync('.tmp/expensive-called','called\\n');\n",{mode:0o755});
   state.status='in_progress';const raw=JSON.stringify(manifest);state.manifest_sha256=sha256(raw);

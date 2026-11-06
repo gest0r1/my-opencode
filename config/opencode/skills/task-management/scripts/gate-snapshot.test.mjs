@@ -32,7 +32,7 @@ async function snapshotFixture(script) {
   await writeFile(path.join(root, 'node_modules/pnpm/package.json'), JSON.stringify({ name: 'pnpm', version: '1.0.0' }));
   await writeFile(path.join(root, 'node_modules/vitest/package.json'), JSON.stringify({ name: 'vitest', version: '1.0.0' }));
   await writeFile(path.join(root, 'node_modules/vitest/bin/vitest.mjs'), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
-  await writeFile(path.join(root, 'node_modules/pnpm/bin/pnpm.cjs'), `#!/usr/bin/env node\n${script}\n`, { mode: 0o755 });
+  await writeFile(path.join(root, 'node_modules/pnpm/bin/pnpm.cjs'), `#!/usr/bin/env node\nif (process.argv[2] === '--version') { console.log('1.0.0'); process.exit(0); }\n${script}\n`, { mode: 0o755 });
   await symlink('../node_modules/pnpm/bin/pnpm.cjs', path.join(root, 'bin/pnpm'));
   await symlink('../vitest/bin/vitest.mjs', path.join(root, 'node_modules/.bin/vitest'));
   assert.equal(git('init').status, 0);
@@ -56,10 +56,10 @@ async function snapshotFixture(script) {
   const manifestFile = path.join(stateRoot, runId, 'manifest.json');
   await writeFile(manifestFile, content);
   await writeFile(path.join(stateRoot, runId, 'state.json'), JSON.stringify({ run_id: runId, status: 'in_progress', manifest_file: manifestFile, manifest_sha256: sha256(content) }));
-  const snapshots = path.join(root, '.snapshots');
+  const snapshots = path.join(root, '.tmp', 'snapshots');
   const runGate = ({ reuse = false } = {}) => {
     const env = { ...process.env, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`, PIPELINE_GATE_SNAPSHOT: '1',
-      PIPELINE_SNAPSHOT_DIR: snapshots, ORIGINAL_ROOT: root, PIPELINE_HEAVY_LOCK_DIR: path.join(root, '.locks') };
+      PIPELINE_SNAPSHOT_DIR: snapshots, ORIGINAL_ROOT: root, PIPELINE_HEAVY_LOCK_DIR: path.join(root, '.tmp', 'locks') };
     // NODE_PATH was supplied by the review runner loader, not by this
     // project's actual gate environment. Do not leak its untracked tool path.
     delete env.NODE_PATH;
