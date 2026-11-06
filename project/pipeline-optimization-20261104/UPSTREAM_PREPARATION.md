@@ -12,6 +12,19 @@
 
 Historical reproducible 3-way input: [manifest.jsonl](handoff-assets/upstream-conflicts-20261105/manifest.jsonl) and [merge-check.py](handoff-assets/upstream-conflicts-20261105/merge-check.py). For the old fork SHA, union of paths = 8,154, both-modified text = 98, clean = 80, textual conflicts = 18 files / 29 regions, delete/modify = 6. The **only** later OpenChamber feature change is docs-only `06afd56d`; semantic source merge has not been tested anew. No merge tree or new commit with two parents exists.
 
+## GitData staging tree — source preparation, NOT a merge
+
+I created and re-read an **unreferenced Git tree object** in the OpenChamber fork:
+
+- `18f1b7cc287adf0507ea1aa92430fd42976c0867` — base is exact upstream `v2.6.1` tree `9d2471f2c9e72f86e18c4becdd4c044588bd67f3`.
+- Overlaid **132 ours-only paths** with exact existing fork blob hashes/modes, preserving fork-only features and deletions where upstream was unchanged.
+- Explicitly removed **6** fork-deleted GitHub workflows that upstream had modified, to ensure they do not reappear even in the staged candidate.
+- **98 both-modified text paths are deliberately unresolved**: the staged tree retains the upstream versions of those paths, and **must not** be used as a tested or ready-to-merge source tree. This includes critical session/projection/notification logic, pins, README and UI translations.
+- Validation: GitHub recursive tree read succeeded, `truncated=false`, 8,089 file/symlink paths, six forbidden workflows absent, fork-only `packages/ui/src/lib/exportSession.ts` blob retained as `0c2e520c27adedf364ad454891d55378cf5b8be7`.
+- No commit or branch ref was created or moved in `openchamber-ru` by this step; no workflow started. This Git tree is a reusable immutable **partial merge basis**, not an installed upstream update.
+
+This work can accelerate conflict resolution in a Bun-equipped isolated checkout. Source integration stays **NOT DONE** until the 98 paths have real three-way resolutions, compatible locks/pins and required tests. Publishing the staged tree as-is would silently discard fork behavior.
+
 ## Conflict decisions reserved for source-level review
 
 - **Keep deletions pending explicit security review** (never restore on autopilot): `.github/workflows/issue-intake.yml`, `.github/workflows/nix-eval.yml`, `.github/workflows/pr-intake.yml`, `.github/workflows/pr-review.yml`, `.github/workflows/release-desktop-smoke.yml`, `.github/workflows/stale.yml`. Reintroducing upstream workflows can start paid Actions on a feature push, contrary to the task restrictions.
