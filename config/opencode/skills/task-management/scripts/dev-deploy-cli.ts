@@ -33,6 +33,34 @@ async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
   await rename(temp, file);
 }
 
+// The root-owned helper preserves the project installer's --json output verbatim.
+// Current supported adapter contract is an exact top-level "sha" (see
+// dev-deploy-cli.test.mjs). Desired/requested/history SHA mentions never prove
+// what runs. A contradictory nested current SHA makes the status ambiguous.
+export function currentContourSha(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new DevDeployError('GATE_SERVICE_STATUS_CURRENT_SHA_MISSING');
+  }
+  const status = value as Record<string, unknown>;
+  const current = status.sha;
+  if (typeof current !== 'string' || !SHA.test(current)) {
+    throw new DevDeployError('GATE_SERVICE_STATUS_CURRENT_SHA_MISSING: expected exact status.sha');
+  }
+  const nested = status.current;
+  if (nested !== undefined) {
+    if (!nested || typeof nested !== 'object' || Array.isArray(nested)) {
+      throw new DevDeployError('GATE_SERVICE_STATUS_AMBIGUOUS_CURRENT');
+    }
+    const nestedSha = (nested as Record<string, unknown>).sha;
+    if (nestedSha !== undefined &&
+        (typeof nestedSha !== 'string' || !SHA.test(nestedSha) ||
+         nestedSha.toLowerCase() !== current.toLowerCase())) {
+      throw new DevDeployError('GATE_SERVICE_STATUS_AMBIGUOUS_CURRENT');
+    }
+  }
+  return current.toLowerCase();
+}
+
 export function deployEvidencePath(artifactRoot: string, pipelineId: string, stage: string): string {
   return join(artifactRoot, 'deploy', `${pipelineId}-${stage}.json`);
 }
@@ -67,8 +95,8 @@ export async function verifyDeployedServiceGate(input: {
   }
   if (!installed.status_file) throw new DevDeployError('GATE_SERVICE_STATUS_MISSING: no current service status file');
   const status = await readJson(String(installed.status_file), 'current contour status');
-  if (!JSON.stringify(status).toLowerCase().includes(candidateSha)) {
-    throw new DevDeployError('GATE_SERVICE_STATUS_MISMATCH: service status does not name the installed candidate');
+  if (currentContourSha(status) !== candidateSha) {
+    throw new DevDeployError('GATE_SERVICE_STATUS_MISMATCH: current service SHA differs from published candidate');
   }
   return { status: 'PASS', run_id: runId, pipeline_id: pipelineId,
     stage, target, candidate_sha: candidateSha, installed_sha: installed.sha,
@@ -110,11 +138,19 @@ async function record(args: string[]): Promise<Record<string, unknown>> {
     failure = `DEV_DEPLOY_FAILED: the installer exited ${String(installed.exit_code)}; read its output above`;
   }
   let status: any = null;
-  if (!failure && installed.status_file) {
-    try { status = JSON.parse(await readFile(String(installed.status_file), 'utf8')); } catch {}
-    // The contour reports what runs there; it must name the candidate.
-    if (!status || !JSON.stringify(status).toLowerCase().includes(candidateSha)) {
-      failure = `DEV_DEPLOY_STATUS_MISMATCH: the installer status of ${target} does not report ${candidateSha}`;
+  if (!failure) {
+    if (!installed.status_file || typeof installed.status_file !== 'string') {
+      failure = 'DEV_DEPLOY_STATUS_MISSING: current status output is required';
+    } else {
+      try {
+        status = await readJson(installed.status_file, 'current contour status');
+        const currentSha = currentContourSha(status);
+        if (currentSha !== candidateSha) {
+          failure = `DEV_DEPLOY_STATUS_MISMATCH: ${target} runs ${currentSha}, not ${candidateSha}`;
+        }
+      } catch (error) {
+        failure = 'DEV_DEPLOY_STATUS_INVALID: ' + String(error instanceof Error ? error.message : error);
+      }
     }
   }
   Object.assign(evidence, { status: failure ? 'FAIL' : 'PASS', installed, contour_status: status, error: failure });
