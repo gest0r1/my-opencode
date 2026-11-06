@@ -116,8 +116,14 @@ test('build-output requires an earlier materializing tree gate and immutable art
   delete renamed.pipelines[0].executors.assemble;
   renamed.gate_profiles.local['release-assemble'] = renamed.gate_profiles.local.assemble;
   renamed.gate_testing.local['release-assemble'] = renamed.gate_testing.local.assemble;
+  delete renamed.gate_profiles.local.assemble;
+  delete renamed.gate_testing.local.assemble;
   renamed.gate_testing.local.inspect.build_output.producer_gate = 'release-assemble';
   assert.doesNotThrow(() => validateGateTesting(renamed), 'producer semantics must not depend on its name');
+  const orphaned = JSON.parse(JSON.stringify(renamed));
+  orphaned.gate_testing.local.assemble = { input_kind: 'tree' };
+  orphaned.gate_profiles.local.assemble = ['npm run build'];
+  assert.throws(() => validateGateTesting(orphaned), /GATE_INPUT_OWNER_INVALID/, 'an orphan gate must still be rejected');
   const broken = mutator => {
     const copy = JSON.parse(JSON.stringify(manifest));
     mutator(copy);
