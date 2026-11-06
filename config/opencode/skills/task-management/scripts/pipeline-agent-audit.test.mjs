@@ -315,7 +315,6 @@ test('rules drift is adopted from the current file for both rule sources', async
 
 test('pipeline agents cannot edit project or distribution rules', async () => {
   for (const file of [
-    'config/opencode/agent/subagents/core/stage-orchestrator.md',
     'config/opencode/agent/subagents/code/coder-agent.md',
     'config/opencode/agent/subagents/code/test-engineer.md',
     'config/opencode/agent/subagents/core/documentation.md',

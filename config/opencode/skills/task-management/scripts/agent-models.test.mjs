@@ -30,6 +30,9 @@ const flash41 = [
   'config/opencode/agent/subagents/system-builder/agent-generator.md',
   'config/opencode/agent/subagents/core/externalscout.md',
   'config/opencode/agent/subagents/code/findings-reviewer.md',
+  'config/opencode/agent/data/data-analyst.md',
+  'config/opencode/agent/content/technical-writer.md',
+  'config/opencode/agent/subagents/core/documentation.md',
 ];
 
 test('approved DeepSeek agents use V4.1 Flash', () => {
@@ -49,7 +52,6 @@ test('system builder remains on V4 Pro', () => {
 test('GPT-6 agent assignments and reasoning levels are pinned', () => {
   const expectations = [
     ['config/opencode/agent/subagents/code/senior-story-reviewer.md', 'openai/gpt-6-luna', null],
-    ['config/opencode/agent/subagents/code/reviewer.md', 'openai/gpt-6.1-sol', 'medium'],
     ['config/opencode/agent/subagents/planning/architecture-analyzer.md', 'openai/gpt-6.1-sol', 'medium'],
   ];
 
@@ -63,11 +65,18 @@ test('GPT-6 agent assignments and reasoning levels are pinned', () => {
 test('GPT-6 agents omit temperature when reasoning is enabled', () => {
   for (const path of [
     'config/opencode/agent/subagents/code/senior-story-reviewer.md',
-    'config/opencode/agent/subagents/code/reviewer.md',
     'config/opencode/agent/subagents/planning/architecture-analyzer.md',
   ]) {
     assert.equal(value(path, 'temperature'), null, path);
   }
+});
+
+test('CodeReviewer uses DeepSeek V4.1 Flash max variant without GPT reasoning options', () => {
+  const path = 'config/opencode/agent/subagents/code/reviewer.md';
+  assert.equal(value(path, 'model'), 'opencode-go/deepseek-v4.1-flash');
+  assert.equal(value(path, 'variant'), 'max');
+  assert.equal(value(path, 'reasoningEffort'), null);
+  assert.equal(value(path, 'temperature'), null);
 });
 
 
@@ -89,35 +98,31 @@ test('WebResearcher uses the free DeepSeek V4.1 Flash', () => {
   assert.equal(value('config/opencode/agent/subagents/core/web-researcher.md', 'model'), 'opencode/deepseek-v4.1-flash-free');
 });
 
-test('LongCat for auxiliary search and analysis', () => {
+test('LongCat for auxiliary search', () => {
   for (const path of [
-    "config/opencode/agent/subagents/core/context-retriever.md",
-    "config/opencode/agent/data/data-analyst.md"
+    "config/opencode/agent/subagents/core/context-retriever.md"
 ]) {
     assert.equal(value(path, 'model'), 'opencode-go/longcat-2.5-preview-free', path);
   }
 });
 
-test('Muse Contributor for text and simple responses', () => {
-  for (const path of [
-    "config/opencode/agent/content/copywriter.md",
-    "config/opencode/agent/content/technical-writer.md",
-    "config/opencode/agent/subagents/core/documentation.md",
-    "config/opencode/agent/subagents/test/simple-responder.md"
-]) {
-    assert.equal(value(path, 'model'), 'opencode-go/muse-spark-1.3-contributor', path);
-  }
+test('Muse Contributor remains assigned to copywriting', () => {
+  assert.equal(value('config/opencode/agent/content/copywriter.md', 'model'), 'opencode-go/muse-spark-1.3-contributor');
 });
 
-test('title uses unlimited LongCat instead of Muse or MiMo', () => {
+test('SimpleResponder uses free MiMo', () => {
+  assert.equal(value('config/opencode/agent/subagents/test/simple-responder.md', 'model'), 'opencode/mimo-v2.6-flash-free');
+});
+
+test('title uses free MiMo', () => {
   const config = JSON.parse(readFileSync('config/opencode/opencode.json', 'utf8'));
   assert.ok(!config.agents, 'agent definitions must live only in Markdown');
-  assert.match(readFileSync('config/opencode/agent/core/title.md', 'utf8'), /model: opencode-go\/longcat-2\.5-preview-free/);
+  assert.equal(value('config/opencode/agent/core/title.md', 'model'), 'opencode/mimo-v2.6-flash-free');
 });
 
-test('technical plan reviewer uses Claude Opus 5.5 without OpenAI reasoning options', () => {
+test('technical plan reviewer uses Kimi K3.1 Pro without OpenAI reasoning options', () => {
   const path = 'config/opencode/agent/subagents/code/senior-technical-plan-reviewer.md';
-  assert.equal(value(path, 'model'), 'claude-code/claude-opus-5-5[1m]');
+  assert.equal(value(path, 'model'), 'kimi-for-coding/k3.1-pro');
   assert.equal(value(path, 'reasoningEffort'), null);
 });
 
@@ -140,10 +145,10 @@ test('architecture and technical review retain evidence-based reuse/drift checks
   }
 });
 
-test('OpenStage stays on DeepSeek V4.1 Flash with the max reasoning variant', () => {
-  // OpenCode 2.x joins a legacy `variant` with `model` (model#variant); the opencode-go catalog
-  // offers low/high/max for this model, and max is one step above the provider default.
+test('OpenStage stays on DeepSeek V4.1 Flash with the default reasoning configuration', () => {
   const path = 'config/opencode/agent/core/openstage-orchestrator.md';
   assert.equal(value(path, 'model'), 'opencode-go/deepseek-v4.1-flash');
-  assert.equal(value(path, 'variant'), 'max');
+  assert.equal(value(path, 'temperature'), '0.1');
+  assert.equal(value(path, 'variant'), null);
+  assert.equal(value(path, 'reasoningEffort'), null);
 });
