@@ -1,6 +1,6 @@
 # Pipeline optimization — current status (2026-11-06)
 
-**Source fixes F1–F5 prepared; independent native retest NOT RUN. Upstream OpenChamber/OpenCode integration NOT DONE.** No release, main merge, install or production change. This document is the **only current snapshot**; historical snapshots are in `runs/`, Git history and [20261106 REVIEW](reviews/20261106/REVIEW.md). Older baseline PASS is not acceptance of the changed HEAD.
+**Source fixes F1–F5 prepared; independent native retest NOT RUN. Upstream OpenChamber/OpenCode integration NOT DONE (unreferenced partial merge-tree only).** No release, main merge, install or production change. This document is the **only current snapshot**; historical snapshots are in `runs/`, Git history and [20261106 REVIEW](reviews/20261106/REVIEW.md). Older baseline PASS is not acceptance of the changed HEAD.
 
 ## Canonical inputs
 
@@ -30,7 +30,7 @@ Current HEAD **after** REPORT/docs commits must be read from the live feature br
 
 ## Upstream/pins — separate unfinished stage
 
-Upstream tags verified via official GitHub tag refs 2026-11-06: OpenChamber `v2.6.1@ce853f415704d1bfe8d076a5cfb2caabac00fffd`; OpenCode `v2.2.5@9bbb8ce18c80f099e0e448775f59d965ead40a21`. Fork common base is `c4919abc1e7a0a3beeaa126666487806bf79cfe0`. Existing three-way inventory: **98 both-modified** text, **80 clean**, **18 conflict files/29 regions**, **6 delete/modify**. No genuine merge commit/tree or target package lock was published; see [UPSTREAM_PREPARATION.md](UPSTREAM_PREPARATION.md). In OpenChamber, `AGENTS.md` requires `bun run check:changed` **before source commit**, which is not available here. Exact target package integrity cannot be guessed. Do not restore deleted workflow triggers or consume paid Actions.
+Upstream tags verified via official GitHub tag refs 2026-11-06: OpenChamber `v2.6.1@ce853f415704d1bfe8d076a5cfb2caabac00fffd`; OpenCode `v2.2.5@9bbb8ce18c80f099e0e448775f59d965ead40a21`. Fork common base is `c4919abc1e7a0a3beeaa126666487806bf79cfe0`. Existing three-way inventory: **98 both-modified** text, **80 clean**, **18 conflict files/29 regions**, **6 delete/modify**. A **non-referenced partial GitData staging tree** was created, preserving 132 fork-only paths, six deleted workflows, and one conservatively non-overlapping merged file. Latest unreferenced tree `bdacc1ececfa446036e17c9edfd3f4d9ee78e7b7` still leaves **97 both-modified paths unresolved**. The tree retains the upstream versions for those unresolved paths and MUST NOT become a branch or installed source. Upstream Bun lock blob `2eb5813b...` is present in that unpublished tree but **never validated/installed**. No merge commit/two-parent ancestry, target pins in actual feature branches, nor tests were published; see [UPSTREAM_PREPARATION.md](UPSTREAM_PREPARATION.md). In OpenChamber, `AGENTS.md` requires `bun run check:changed` **before source commit**, which is not available here. Exact target package integrity cannot be guessed. Do not restore deleted workflow triggers or consume paid Actions.
 
 ## Next single action
 
