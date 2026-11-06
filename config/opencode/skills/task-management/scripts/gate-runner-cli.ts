@@ -579,16 +579,20 @@ async function main(): Promise<void> {
   const gateLock = `gate:${runId}:${pipelineId}:${gate}`;
   const runtimeGate = RUNTIME_GATE.test(gate);
   const releaseLocks = [...(runtimeGate ? pipeline.runtime_locks ?? [] : []), gateLock];
-  const unlock = await acquireGateLocks(stateRoot, runId, gateLock, runtimeGate ? releaseLocks : []);
+  // Pure gates keep their original late lock acquisition, so hashing does
+  // not serialize other invocations of the same lane. Live RUN alone holds
+  // its gate lock across the early preflight and subsequent gate execution.
+  let unlock: (() => Promise<void>) | undefined;
   let unlocked = false;
   const release = async () => {
     if (unlocked) return;
     unlocked = true;
-    await unlock();
+    await unlock?.();
   };
   try {
     const liveConfig = config?.live_postgres;
     if (liveConfig && liveIndexes(config).length) {
+      unlock = await acquireGateLocks(stateRoot, runId, gateLock, runtimeGate ? releaseLocks : []);
       if (!liveConfig.preflight_command) throw new GateRunnerError(
         'RUN_LIVE_PREFLIGHT_REQUIRED: freeze live_postgres.preflight_command before RUN');
       // Use existing heavy->live order for both phases. The lock is visible
@@ -720,7 +724,8 @@ async function main(): Promise<void> {
   const inputIdentity = snapshot?.digest ? sha256(JSON.stringify([snapshot.digest, state.manifest_sha256, baselineSha ?? null, environmentDigest])) : null;
   const fingerprint = inputIdentity ? sha256(JSON.stringify([inputIdentity, invocations])) : null;
   const ledgerFile = join(resolve(stateRoot), runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-attempts.json`);
-  // The gate lock was acquired before RUN preflight and remains held here.
+  // Pure gates acquire here as before; live gates retain the earlier lock.
+  if (!unlock) unlock = await acquireGateLocks(stateRoot, runId, gateLock, runtimeGate ? releaseLocks : []);
   let ledger: any = { input_identity: inputIdentity, attempts: {} };
   let previousHypotheses: string[] = [];
   try {
