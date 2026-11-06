@@ -80,21 +80,26 @@ test('current service status requires exact running sha, never desired/history/r
     assert.equal(currentContourSha({ sha: SHA.toUpperCase() }), SHA);
 
     await fx.install({}, { sha: wrong, requested_sha: SHA, message: 'installed ' + SHA });
-    assert.match(fx.record().stderr, /DEV_DEPLOY_STATUS_MISMATCH/);
+    // Verify against the last successful install evidence *before* record()
+    // replaces it with FAIL. Otherwise this only tests the evidence status.
     await assert.rejects(verifyDeployedServiceGate(input), /GATE_SERVICE_STATUS_MISMATCH/);
-
-    await fx.install({}, { current: { sha: wrong }, requested_sha: SHA });
-    assert.match(fx.record().stderr, /DEV_DEPLOY_STATUS_INVALID/);
-    await assert.rejects(verifyDeployedServiceGate(input), /GATE_SERVICE_STATUS_CURRENT_SHA_MISSING/);
-
-    await fx.install({}, { sha: SHA, current: { sha: wrong }, requested_sha: SHA });
-    assert.match(fx.record().stderr, /GATE_SERVICE_STATUS_AMBIGUOUS_CURRENT/);
-    await assert.rejects(verifyDeployedServiceGate(input), /GATE_SERVICE_STATUS_AMBIGUOUS_CURRENT/);
+    assert.match(fx.record().stderr, /DEV_DEPLOY_STATUS_MISMATCH/);
 
     await fx.install({}, { sha: SHA });
-    await assert.rejects(verifyDeployedServiceGate({ ...input, target: 'svd2' }), /EVIDENCE_MISMATCH|missing/);
+    assert.equal(fx.record().status, 0);
+    await fx.install({}, { current: { sha: wrong }, requested_sha: SHA });
+    await assert.rejects(verifyDeployedServiceGate(input), /GATE_SERVICE_STATUS_CURRENT_SHA_MISSING/);
+    assert.match(fx.record().stderr, /DEV_DEPLOY_STATUS_INVALID/);
+
+    await fx.install({}, { sha: SHA });
+    assert.equal(fx.record().status, 0);
+    await fx.install({}, { sha: SHA, current: { sha: wrong }, requested_sha: SHA });
+    await assert.rejects(verifyDeployedServiceGate(input), /GATE_SERVICE_STATUS_AMBIGUOUS_CURRENT/);
+    assert.match(fx.record().stderr, /GATE_SERVICE_STATUS_AMBIGUOUS_CURRENT/);
+
     await fx.install({}, { sha: SHA, current: { sha: SHA } });
     assert.equal(fx.record().status, 0);
+    await assert.rejects(verifyDeployedServiceGate({ ...input, target: 'svd2' }), /EVIDENCE_MISMATCH|missing/);
 
     await fx.install({}, undefined);
     assert.match(fx.record().stderr, /DEV_DEPLOY_STATUS_MISSING/);
