@@ -92,10 +92,11 @@ async function fixture(runId = 'v2-run') {
 }
 
 function run(root, args) {
+  const fixtureBin = path.join(root, '.fixture-bin');
   return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...withApprovalArgs(root, args)], {
     cwd: root,
     encoding: 'utf8',
-    env: process.env,
+    env: { ...process.env, PATH: `${fixtureBin}${path.delimiter}${process.env.PATH ?? ''}` },
   });
 }
 
@@ -1700,6 +1701,9 @@ test('PLAN rejects two work items of one pipeline that may change the same path 
 
 async function planProbeFixture(runId) {
   const fx = await fixture(runId);
+  const fixtureBin = path.join(fx.root, '.fixture-bin');
+  await mkdir(fixtureBin, { recursive: true });
+  await writeFile(path.join(fixtureBin, 'pnpm'), '#!/bin/sh\nprintf "11.17.0\\n"\n', { mode: 0o755 });
   fx.manifest.pipelines[0].stages.push('fast-tests');
   fx.manifest.pipelines[0].executors['fast-tests'] = 'local_gate';
   fx.manifest.pipelines[0].profile = 'default';

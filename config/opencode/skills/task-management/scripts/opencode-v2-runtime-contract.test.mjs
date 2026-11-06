@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readdirSync } from 'node:fs';
 import test from 'node:test';
 
@@ -17,16 +17,17 @@ test('installed agent prompts use native V2 delegation fields', () => {
     }
   }
   walk('config/opencode/agent');
-  assert.match(read('config/opencode/agent/subagents/core/stage-orchestrator.md'), /retired|retirement|canonical/i);
+  assert.equal(existsSync('config/opencode/agent/subagents/core/stage-orchestrator.md'), false,
+    'retired stage-orchestrator agent must remain absent');
 });
 
-test('OpenCode 2.1.4 runtime contract retains native subagent session resume', () => {
+test('OpenCode 2.2.5 runtime contract retains native subagent session resume', () => {
   const pkg = JSON.parse(read('config/opencode/package.json'));
   const runtime = read('config/opencode/plugins/pipeline-runtime.ts');
   const installer = read('install.sh');
 
-  assert.equal(pkg.dependencies['@opencode/plugin'], '2.1.4');
-  assert.match(installer, /OPENCODE_INSTALL_VERSION="\$\{OPENCODE_INSTALL_VERSION:-2\.1\.4\}"/);
+  assert.equal(pkg.dependencies['@opencode/plugin'], '2.2.5');
+  assert.match(installer, /OPENCODE_INSTALL_VERSION="\$\{OPENCODE_INSTALL_VERSION:-2\.2\.5\}"/);
 
   assert.match(runtime, /import \{ Plugin \} from "@opencode\/plugin"/);
   assert.match(runtime, /export default Plugin\.define\(/);
