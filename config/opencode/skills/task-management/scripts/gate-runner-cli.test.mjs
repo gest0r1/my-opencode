@@ -1081,3 +1081,26 @@ test('a later RUN over the same tree reuses the gate commands an earlier RUN pas
     assert.equal(second.reused_from, first.evidence);
   } finally { process.env.PATH = oldPath; }
 });
+
+test('nested ignored local config change invalidates actual cached PASS in same runner', async t => {
+  const fx = await diagnosticFixture(); t.after(() => rm(fx.root,{recursive:true,force:true}));
+  const oldPath=process.env.PATH;
+  try {
+    await writeFile(path.join(fx.root,'.gitignore'),'node_modules/\n.tmp/\n.local-config/\n');
+    await mkdir(path.join(fx.root,'.local-config'));
+    await writeFile(path.join(fx.root,'.local-config/mode.txt'),'good');
+    await writeFile(path.join(fx.root,'node_modules/pnpm/bin/pnpm.cjs'),`#!/usr/bin/env node
+const fs=require('node:fs');fs.appendFileSync('.tmp/review-calls','called\\n');
+if(fs.readFileSync('.local-config/mode.txt','utf8')==='bad')process.exit(17);
+`,{mode:0o755});
+    process.env.PATH=fx.bin+':'+oldPath;
+    const first=run(fx.root,fx.args);assert.equal(first.status,0,first.stderr);
+    await writeFile(path.join(fx.root,'.local-config/mode.txt'),'bad');
+    const second=run(fx.root,fx.args);
+    const fresh=run(fx.root,[...fx.args,'--no-reuse']);
+    console.log('REPRO nested ignored input',JSON.stringify({first:JSON.parse(first.stdout),second:second.stdout,exit:second.status,noReuseExit:fresh.status}));
+    assert.notEqual(fresh.status,0,'control: uncached command must fail on bad local input');
+    assert.notEqual(second.status,0,'changed input makes the actual command fail; stale PASS must not be reused');
+  } finally {process.env.PATH=oldPath;}
+});
+
