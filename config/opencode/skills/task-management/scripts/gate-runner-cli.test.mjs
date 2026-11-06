@@ -403,10 +403,24 @@ console.log('database=' + process.env.DATABASE_URL);
 if (fs.existsSync('.tmp/sleep')) setInterval(() => {}, 1000);
 else if (fs.existsSync('.tmp/fail')) { console.error('FAIL live invariant'); process.exit(1); }
 `, { mode: 0o755 });
+  // The same project-owned validateOnly adapter is required by live PLAN and RUN.
+  // It sees a single phase-aware lock, no DB credentials or numbered attempt.
+  await mkdir(path.join(fx.root, 'scripts'), { recursive: true });
+  await writeFile(path.join(fx.root, 'scripts/live-preflight.mjs'), `import fs from 'node:fs';
+const files = fs.readdirSync('.tmp/pipelines/.runtime-locks').filter(n => n.endsWith('.lock'));
+if (process.argv[2] !== '--pipeline-preflight' || files.length !== 1) process.exit(41);
+const lock = JSON.parse(fs.readFileSync('.tmp/pipelines/.runtime-locks/' + files[0], 'utf8'));
+if (!['run_preflight', 'plan_probe'].includes(lock.phase) || lock.pid !== process.ppid ||
+    process.env.DATABASE_URL || process.env.LIVE_PG_TEST ||
+    process.env.PIPELINE_GATE_ATTEMPT || process.env.PIPELINE_SCRATCH_DIR) process.exit(42);
+`);
   const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
   const state = JSON.parse(await readFile(statePath, 'utf8'));
   const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
-  manifest.gate_testing.default.build.live_postgres = { image: `postgres:16@sha256:${'a'.repeat(64)}`, command_indexes: [0, 1] };
+  manifest.gate_testing.default.build.live_postgres = {
+    image: `postgres:16@sha256:${'a'.repeat(64)}`, command_indexes: [0, 1],
+    preflight_command: 'node scripts/live-preflight.mjs --pipeline-preflight',
+  };
   const content = JSON.stringify(manifest); state.manifest_sha256 = sha256(content);
   await writeFile(state.manifest_file, content); await writeFile(statePath, JSON.stringify(state));
 }
