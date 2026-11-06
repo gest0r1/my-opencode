@@ -574,6 +574,70 @@ async function main(): Promise<void> {
     probe = { head_sha: await requireCleanCheckout(), base_sha: manifest.git_setup?.base_sha ?? null };
   }
 
+  // One held RUN lane lock covers the cheap preflight and all ensuing gate
+  // work. A failing preflight does not allocate a numbered attempt or scratch.
+  const gateLock = `gate:${runId}:${pipelineId}:${gate}`;
+  const runtimeGate = RUNTIME_GATE.test(gate);
+  const releaseLocks = [...(runtimeGate ? pipeline.runtime_locks ?? [] : []), gateLock];
+  const unlock = await acquireGateLocks(stateRoot, runId, gateLock, runtimeGate ? releaseLocks : []);
+  let unlocked = false;
+  const release = async () => {
+    if (unlocked) return;
+    unlocked = true;
+    await unlock();
+  };
+  try {
+    const liveConfig = config?.live_postgres;
+    if (!advisory && liveConfig && liveIndexes(config).length) {
+      if (!liveConfig.preflight_command) throw new GateRunnerError(
+        'RUN_LIVE_PREFLIGHT_REQUIRED: freeze live_postgres.preflight_command before RUN');
+      // Use existing heavy->live order for both phases. The lock is visible
+      // to the project before its validateOnly adapter runs, but no real PG exists.
+      const heavyPreflight = await acquireHeavySlot({ run_id: runId, pipeline_id: pipelineId, gate });
+      let livePreflightSlot: { release: () => Promise<void> } | undefined;
+      let phaseLock: { release: () => Promise<unknown> } | undefined;
+      try {
+        livePreflightSlot = await acquireLiveSlot({ run_id: runId, pipeline_id: pipelineId, gate });
+        const before = await runInvocation('git', ['rev-parse', 'HEAD'], process.cwd(), gitReadEnv({}), 30);
+        if (before.exit_code !== 0 || !SHA.test(before.stdout.trim())) {
+          throw new GateRunnerError('RUN_LIVE_PREFLIGHT_HEAD_UNAVAILABLE');
+        }
+        if (!runtimeGate) {
+          phaseLock = await acquireLockFiles(join(resolve(stateRoot), '.runtime-locks'), [{
+            file: sha256(gateLock) + '.lock',
+            record: {
+              lock: gateLock, run_id: runId, pipeline_id: pipelineId, gate,
+              profile: pipeline.profile, phase: 'run_preflight',
+              manifest_file: state.manifest_file, manifest_sha256: state.manifest_sha256,
+              head_sha: before.stdout.trim(), candidate_sha: candidateSha ?? null,
+            },
+          }]);
+        }
+        await livePreflight(liveConfig.preflight_command, {
+          cwd: process.cwd(), runId, pipelineId, gate, phase: 'run_preflight',
+          candidateSha,
+        });
+        const currentState = JSON.parse(await readFile(stateFile, 'utf8')) as State;
+        if (currentState.run_id !== runId || !['approved', 'in_progress'].includes(currentState.status) ||
+            currentState.manifest_sha256 !== state.manifest_sha256 ||
+            currentState.manifest_file !== state.manifest_file ||
+            sha256(await readFile(state.manifest_file, 'utf8')) !== state.manifest_sha256) {
+          throw new GateRunnerError('RUN_LIVE_PREFLIGHT_STATE_CHANGED');
+        }
+        const after = await runInvocation('git', ['rev-parse', 'HEAD'], process.cwd(), gitReadEnv({}), 30);
+        if (after.exit_code !== 0 || after.stdout.trim() !== before.stdout.trim()) {
+          throw new GateRunnerError('RUN_LIVE_PREFLIGHT_HEAD_CHANGED');
+        }
+        if (['candidate', 'deployed-service'].includes(config?.input_kind) &&
+            await loadDeclaredCandidate(state.manifest_file, manifest, state.manifest_sha256) !== candidateSha) {
+          throw new GateRunnerError('RUN_LIVE_PREFLIGHT_CANDIDATE_CHANGED');
+        }
+      } finally {
+        try { await phaseLock?.release(); }
+        finally { try { await livePreflightSlot?.release(); } finally { await heavyPreflight.release(); } }
+      }
+    }
+
   const evidenceSuffix = workItemId ? `-${sha256(`${baseline?.stage ?? ''}:${workItemId}`).slice(0, 16)}`
     : baseProbe ? '-base-probe'
       : coordinator ? '-coordinator'
@@ -656,10 +720,7 @@ async function main(): Promise<void> {
   const inputIdentity = snapshot?.digest ? sha256(JSON.stringify([snapshot.digest, state.manifest_sha256, baselineSha ?? null, environmentDigest])) : null;
   const fingerprint = inputIdentity ? sha256(JSON.stringify([inputIdentity, invocations])) : null;
   const ledgerFile = join(resolve(stateRoot), runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-attempts.json`);
-  const gateLock = `gate:${runId}:${pipelineId}:${gate}`;
-  const runtimeGate = RUNTIME_GATE.test(gate);
-  const releaseLocks = [...(runtimeGate ? pipeline.runtime_locks ?? [] : []), gateLock];
-  const release = await acquireGateLocks(stateRoot, runId, gateLock, runtimeGate ? releaseLocks : []);
+  // The gate lock was acquired before RUN preflight and remains held here.
   let ledger: any = { input_identity: inputIdentity, attempts: {} };
   let previousHypotheses: string[] = [];
   try {
@@ -951,6 +1012,7 @@ async function main(): Promise<void> {
   if (failure) throw failure;
   console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: workItemId ?? null, candidate_sha: candidateSha ?? null, evidence: evidenceFile,
     heavy_slot_wait_ms: slotWaitMs, selection_reason: selectionReason, commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused_from: reuse?.path ?? null }));
+  } finally { await release(); }
 }
 
 main().catch((error: unknown) => {
