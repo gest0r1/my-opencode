@@ -286,7 +286,7 @@ async function livePreflight(command: string, identity: {
     PGPASSWORD: undefined, PGDATABASE: undefined,
   }, 60);
   if (result.exit_code !== 0) {
-    throw new GateRunnerError('LIVE_PREFLIGHT_FAILED: phase=' + identity.phase + ' exit=' +
+    throw new GateRunnerError((identity.phase === 'plan_probe' ? 'PLAN_LIVE_PREFLIGHT_FAILED' : 'RUN_LIVE_PREFLIGHT_FAILED') + ': phase=' + identity.phase + ' exit=' +
       result.exit_code + ' ' + redact(result.stderr).slice(0, 500));
   }
 }
