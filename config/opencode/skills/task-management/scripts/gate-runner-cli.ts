@@ -259,6 +259,38 @@ async function requireCleanCheckout(): Promise<string> {
   return head.stdout.trim();
 }
 
+// PLAN and RUN use the same stateless validateOnly command. The caller owns
+// phase-aware locks, provenance checks and lifecycle; this helper only validates
+// one frozen repository-local command without a DB or expensive test collection.
+async function livePreflight(command: string, identity: {
+  cwd: string; runId: string; pipelineId: string; gate: string;
+  phase: 'plan_probe' | 'run_preflight'; candidateSha?: string;
+}): Promise<void> {
+  const tokens = tokenizeCommand(command);
+  const reason = preflightPolicyError(tokens);
+  if (reason) throw new GateRunnerError(reason);
+  const script = tokens[0] === 'node' ? tokens[1] : tokens[0] === 'pnpm' ? tokens[3] : tokens[4];
+  const scriptReal = await realpath(resolve(identity.cwd, script));
+  const workspaceReal = await realpath(identity.cwd);
+  if (!scriptReal.startsWith(workspaceReal + sep) ||
+      relative(workspaceReal, scriptReal).startsWith('..')) {
+    throw new GateRunnerError('LIVE_PREFLIGHT_SCRIPT_ESCAPE: script is outside checkout');
+  }
+  const result = await runInvocation(tokens[0], tokens.slice(1), identity.cwd, {
+    PIPELINE_RUN_ID: identity.runId, PIPELINE_ID: identity.pipelineId, PIPELINE_GATE: identity.gate,
+    PIPELINE_GATE_PHASE: identity.phase,
+    PIPELINE_GATE_ATTEMPT: undefined, PIPELINE_SCRATCH_DIR: undefined,
+    CANDIDATE_SHA: identity.candidateSha, PIPELINE_DEPLOY_TARGET: undefined,
+    DATABASE_URL: undefined, LIVE_PG_TEST: undefined, LIVE_PG_CONTOUR: undefined,
+    PGHOST: undefined, PGPORT: undefined, PGUSER: undefined,
+    PGPASSWORD: undefined, PGDATABASE: undefined,
+  }, 60);
+  if (result.exit_code !== 0) {
+    throw new GateRunnerError('LIVE_PREFLIGHT_FAILED: phase=' + identity.phase + ' exit=' +
+      result.exit_code + ' ' + redact(result.stderr).slice(0, 500));
+  }
+}
+
 // PLAN probe: stateless and provenance-bound, without creating a RUN state.json.
 // Live profiles hold one phase-aware runtime lock and validate cheaply before
 // allocating an attempt, container, scratch directory or running expensive suites.
@@ -321,30 +353,9 @@ async function planProbe(args: string[]): Promise<void> {
           candidate_sha: null,
         },
       }]);
-      const command = config.live_postgres.preflight_command;
-      const tokens = tokenizeCommand(command);
-      const policyError = preflightPolicyError(tokens);
-      if (policyError) throw new GateRunnerError(policyError);
-      const script = tokens[0] === 'node' ? tokens[1] : tokens[0] === 'pnpm' ? tokens[3] : tokens[4];
-      const scriptReal = await realpath(resolve(process.cwd(), script));
-      const workspaceReal = await realpath(process.cwd());
-      if (!scriptReal.startsWith(workspaceReal + sep) || relative(workspaceReal, scriptReal).startsWith('..')) {
-        throw new GateRunnerError('PLAN_LIVE_PREFLIGHT_SCRIPT_ESCAPE: script is outside checkout');
-      }
-      // Inherited CANDIDATE_SHA and an old attempt must not contaminate the stateless PLAN.
-      const result = await runInvocation(tokens[0], tokens.slice(1), process.cwd(), {
-        PIPELINE_RUN_ID: manifest.run_id, PIPELINE_ID: pipelineId, PIPELINE_GATE: gate,
-        PIPELINE_GATE_ATTEMPT: undefined, PIPELINE_SCRATCH_DIR: undefined,
-        CANDIDATE_SHA: undefined, PIPELINE_DEPLOY_TARGET: undefined,
-        // validateOnly never needs a live database connection or inherited
-        // credentials; prevent an outer shell from selecting another contour.
-        DATABASE_URL: undefined, LIVE_PG_TEST: undefined, LIVE_PG_CONTOUR: undefined,
-        PGHOST: undefined, PGPORT: undefined, PGUSER: undefined,
-        PGPASSWORD: undefined, PGDATABASE: undefined,
-      }, 60);
-      if (result.exit_code !== 0) {
-        throw new GateRunnerError('PLAN_LIVE_PREFLIGHT_FAILED: exit=' + result.exit_code + ' ' + redact(result.stderr).slice(0, 500));
-      }
+      await livePreflight(config.live_postgres.preflight_command, {
+        cwd: process.cwd(), runId: manifest.run_id, pipelineId, gate, phase: 'plan_probe',
+      });
       preflightStatus = 'PASS';
     }
 
