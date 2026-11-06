@@ -1142,6 +1142,10 @@ test('RUN preflight rejects before expensive commands or Docker',async t=>{
     assert.notEqual(result.status,0,'failing lifecycle preflight must block RUN before commands');
     assert.equal(preflightCalled,true);assert.equal(expensiveCalled,false);assert.equal(dockerCalled,false);
     await assert.rejects(access(path.join(fx.stateRoot, fx.runId, 'gates/app-build.json')), 'preflight failure cannot allocate an attempt');
+    const advisory = run(fx.root, [...fx.args, '--advisory']);
+    assert.notEqual(advisory.status, 0, 'advisory RUN must use the same lifecycle preflight');
+    await assert.rejects(access(path.join(fx.root, '.tmp/expensive-called')));
+    await assert.rejects(access(path.join(fx.root, '.tmp/docker.log')));
     await assert.rejects(access(path.join(fx.stateRoot, '.gate-locks', sha256('gate:' + fx.runId + ':app:build') + '.lock')));
     await assert.rejects(access(path.join(fx.stateRoot, '.runtime-locks', sha256('gate:' + fx.runId + ':app:build') + '.lock')));
   } finally {process.env.PATH=oldPath;}
