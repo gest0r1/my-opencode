@@ -1,0 +1,193 @@
+import assert from 'node:assert/strict';
+import { access, mkdir, mkdtemp, readFile, writeFile, unlink, symlink, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync, spawn } from 'node:child_process';
+import test from 'node:test';
+
+// These tests drive in-place gates through files in the checkout's .tmp; snapshot gates have their own tests.
+process.env.PIPELINE_GATE_SNAPSHOT ??= '0';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const RUNNER = path.join(HERE, 'gate-runner-cli.ts');
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function run(cwd, args) {
+  const env = { ...process.env };
+  // NODE_PATH only lets this test worker resolve the external tsx install. Gate child fixtures use
+  // built-ins/project dependencies; do not make that loader-only path part of their runtime identity.
+  delete env.NODE_PATH;
+  return spawnSync('npx', ['--yes', 'tsx', RUNNER, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env,
+  });
+}
+
+async function makeRun(command, gate = 'build') {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'gate-runner-'));
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const runId = 'gate-run';
+  const manifest = {
+    schema_version: 1,
+    run_id: runId,
+    pipelines: [{ id: 'app', stages: [gate], profile: 'default' }],
+    gate_profiles: { default: { [gate]: [command] } },
+  };
+  const manifestFile = path.join(root, 'manifest.json');
+  const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`;
+  await writeFile(manifestFile, manifestContent, 'utf8');
+  await mkdir(path.join(stateRoot, runId), { recursive: true });
+  await writeFile(
+    path.join(stateRoot, runId, 'state.json'),
+    `${JSON.stringify({
+      run_id: runId,
+      status: 'approved',
+      manifest_file: manifestFile,
+      manifest_sha256: sha256(manifestContent),
+    }, null, 2)}\n`,
+    'utf8',
+  );
+  return { root, stateRoot, runId };
+}
+
+
+async function diagnosticFixture() {
+  const fx = await makeRun('pnpm exec vitest run --config vitest.unit.ts --passWithNoTests=false');
+  await mkdir(path.join(fx.root, 'bin'));
+  await mkdir(path.join(fx.root, 'src'));
+  await mkdir(path.join(fx.root, 'node_modules/pnpm/bin'), { recursive: true });
+  await mkdir(path.join(fx.root, 'node_modules/vitest/bin'), { recursive: true });
+  await mkdir(path.join(fx.root, 'node_modules/.bin'), { recursive: true });
+  await writeFile(path.join(fx.root, 'src/orders.ts'), 'initial\n');
+  await writeFile(path.join(fx.root, 'src/web.ts'), 'initial\n');
+  await writeFile(path.join(fx.root, '.gitignore'), 'node_modules/\n');
+  await writeFile(path.join(fx.root, 'package.json'), JSON.stringify({ name: 'gate-fixture', packageManager: 'pnpm@1.0.0' }));
+  await writeFile(path.join(fx.root, 'pnpm-lock.yaml'), 'lockfileVersion: "9.0"\n');
+  await writeFile(path.join(fx.root, 'node_modules/pnpm/package.json'), JSON.stringify({ name: 'pnpm', version: '1.0.0' }));
+  await writeFile(path.join(fx.root, 'node_modules/vitest/package.json'), JSON.stringify({ name: 'vitest', version: '1.0.0' }));
+  await writeFile(path.join(fx.root, 'node_modules/vitest/bin/vitest.mjs'), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
+  await symlink('../vitest/bin/vitest.mjs', path.join(fx.root, 'node_modules/.bin/vitest'));
+  await writeFile(path.join(fx.root, 'node_modules/pnpm/bin/pnpm.cjs'), `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.appendFileSync('.tmp/calls.log', JSON.stringify(process.argv.slice(2)) + '\\n');
+if (fs.existsSync('.tmp/fail')) { console.error('FAIL orders invariant'); process.exit(1); }
+`, { mode: 0o755 });
+  await symlink('../node_modules/pnpm/bin/pnpm.cjs', path.join(fx.root, 'bin/pnpm'));
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+  await unlink(state.manifest_file);
+  state.manifest_file = path.join(fx.stateRoot, fx.runId, 'manifest.json');
+  const git = (...args) => spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
+  assert.equal(git('init').status, 0);
+  git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
+  git('add', '.gitignore', 'src', 'bin', 'package.json', 'pnpm-lock.yaml'); assert.equal(git('commit', '-m', 'base').status, 0);
+  manifest.git_setup = { base_sha: git('rev-parse', 'HEAD').stdout.trim() };
+  manifest.gate_profiles.default.build.push('pnpm exec vitest run --config vitest.web.ts --passWithNoTests=false');
+  manifest.gate_testing = { default: { build: { impact_groups: [
+    { inputs: ['src/orders.ts'], command_index: 0, test_files: ['test/orders.test.ts'] },
+    { inputs: ['src/web.ts'], command_index: 1 },
+  ] } } };
+  const content = JSON.stringify(manifest);
+  state.manifest_sha256 = sha256(content);
+  await writeFile(state.manifest_file, content); await writeFile(statePath, JSON.stringify(state));
+  await writeFile(path.join(fx.root, 'src/orders.ts'), 'changed\n');
+  return { ...fx, args: [fx.runId, 'app', 'build', '--state-root', fx.stateRoot], bin: path.join(fx.root, 'bin') };
+}
+
+
+async function attachPostgres(fx) {
+  await writeFile(path.join(fx.bin, 'docker'), `#!/usr/bin/env node
+const fs = require('node:fs'); const args = process.argv.slice(2);
+fs.appendFileSync('.tmp/docker.log', JSON.stringify(args) + '\\n');
+const state = '.tmp/docker-state.json';
+if (args[0] === 'context') console.log('unix:///var/run/docker.sock');
+if (args[0] === 'create') { fs.writeFileSync(state, JSON.stringify({owner: args[args.indexOf('--label') + 1].split('=')[1]})); console.log('b'.repeat(64)); }
+if (args[0] === 'port') console.log('127.0.0.1:55432');
+if (args[0] === 'inspect') console.log(JSON.parse(fs.readFileSync(state)).owner);
+if (args[0] === 'rm') fs.unlinkSync(state);
+`, { mode: 0o755 });
+  await writeFile(path.join(fx.bin, 'pnpm'), `#!/usr/bin/env node
+const fs = require('node:fs');
+if (!process.env.LIVE_PG_TEST || !process.env.DATABASE_URL?.includes('@127.0.0.1:55432/pipeline_live')) process.exit(2);
+fs.writeFileSync('.tmp/test-started', 'yes');
+console.log('database=' + process.env.DATABASE_URL);
+if (fs.existsSync('.tmp/sleep')) setInterval(() => {}, 1000);
+else if (fs.existsSync('.tmp/fail')) { console.error('FAIL live invariant'); process.exit(1); }
+`, { mode: 0o755 });
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+  manifest.gate_testing.default.build.live_postgres = { image: `postgres:16@sha256:${'a'.repeat(64)}`, command_indexes: [0, 1] };
+  const content = JSON.stringify(manifest); state.manifest_sha256 = sha256(content);
+  await writeFile(state.manifest_file, content); await writeFile(statePath, JSON.stringify(state));
+}
+
+
+test('REVIEW ignored nested local input must invalidate a cached PASS', async t => {
+  const fx = await diagnosticFixture(); t.after(() => rm(fx.root,{recursive:true,force:true}));
+  const oldPath=process.env.PATH;
+  try {
+    await writeFile(path.join(fx.root,'.gitignore'),'node_modules/\n.tmp/\n.local-config/\n');
+    await mkdir(path.join(fx.root,'.local-config'));
+    await writeFile(path.join(fx.root,'.local-config/mode.txt'),'good');
+    await writeFile(path.join(fx.root,'node_modules/pnpm/bin/pnpm.cjs'),`#!/usr/bin/env node
+const fs=require('node:fs');fs.appendFileSync('.tmp/review-calls','called\\n');
+if(fs.readFileSync('.local-config/mode.txt','utf8')==='bad')process.exit(17);
+`,{mode:0o755});
+    process.env.PATH=fx.bin+':'+oldPath;
+    const first=run(fx.root,fx.args);assert.equal(first.status,0,first.stderr);
+    await writeFile(path.join(fx.root,'.local-config/mode.txt'),'bad');
+    const second=run(fx.root,fx.args);
+    const fresh=run(fx.root,[...fx.args,'--no-reuse']);
+    console.log('REPRO nested ignored input',JSON.stringify({first:JSON.parse(first.stdout),second:second.stdout,exit:second.status,noReuseExit:fresh.status}));
+    assert.notEqual(fresh.status,0,'control: uncached command must fail on bad local input');
+    assert.notEqual(second.status,0,'changed input makes the actual command fail; stale PASS must not be reused');
+  } finally {process.env.PATH=oldPath;}
+});
+
+test('REVIEW RUN lifecycle preflight must reject before expensive commands and Docker',async t=>{
+  const fx=await diagnosticFixture();t.after(()=>rm(fx.root,{recursive:true,force:true}));await attachPostgres(fx);
+  const statePath=path.join(fx.stateRoot,fx.runId,'state.json');
+  const state=JSON.parse(await readFile(statePath,'utf8'));
+  const manifest=JSON.parse(await readFile(state.manifest_file,'utf8'));
+  manifest.gate_testing.default.build.live_postgres.command_indexes=[1];
+  manifest.gate_testing.default.build.live_postgres.preflight_command='node scripts/live-preflight.mjs --pipeline-preflight';
+  await mkdir(path.join(fx.root,'scripts'));
+  await writeFile(path.join(fx.root,'scripts/live-preflight.mjs'),"import fs from 'node:fs';fs.writeFileSync('.tmp/preflight-called','yes');process.exit(41);\n");
+  await writeFile(path.join(fx.bin,'pnpm'),"#!/usr/bin/env node\nrequire('node:fs').appendFileSync('.tmp/expensive-called','called\\n');\n",{mode:0o755});
+  state.status='in_progress';const raw=JSON.stringify(manifest);state.manifest_sha256=sha256(raw);
+  await writeFile(state.manifest_file,raw);await writeFile(statePath,JSON.stringify(state));
+  const oldPath=process.env.PATH;
+  try {
+    process.env.PATH=fx.bin+':'+oldPath;
+    const result=run(fx.root,fx.args);
+    let preflightCalled=true;try{await access(path.join(fx.root,'.tmp/preflight-called'));}catch{preflightCalled=false;}
+    let expensiveCalled=true;try{await access(path.join(fx.root,'.tmp/expensive-called'));}catch{expensiveCalled=false;}
+    let dockerCalled=true;try{await access(path.join(fx.root,'.tmp/docker.log'));}catch{dockerCalled=false;}
+    console.log('REPRO RUN preflight',JSON.stringify({exit:result.status,preflightCalled,expensiveCalled,dockerCalled,stderr:result.stderr}));
+    assert.notEqual(result.status,0,'failing lifecycle preflight must block RUN before commands');
+    assert.equal(preflightCalled,true);assert.equal(expensiveCalled,false);assert.equal(dockerCalled,false);
+  } finally {process.env.PATH=oldPath;}
+});
+
+test('REVIEW requested SHA in an unrelated status field must not prove installed SHA',async t=>{
+  const {verifyDeployedServiceGate}=await import('./dev-deploy-cli.ts');
+  const root=await mkdtemp(path.join(os.tmpdir(),'review-service-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const expected='a'.repeat(40),actual='b'.repeat(40),startedAt='2026-11-06T00:00:00.000Z';
+  await mkdir(path.join(root,'deploy'));await mkdir(path.join(root,'state'));
+  const statusFile=path.join(root,'status.json');
+  await writeFile(statusFile,JSON.stringify({current:{sha:actual},requested_sha:expected}));
+  await writeFile(path.join(root,'deploy/app-deploy.json'),JSON.stringify({status:'PASS',run_id:'run',pipeline_id:'app',stage:'deploy',target:'svd1',candidate_sha:expected}));
+  await writeFile(path.join(root,'state/svd1.json'),JSON.stringify({key:'svd1',sha:expected,exit_code:0,finished_at:'2026-11-06T00:01:00.000Z',status_file:statusFile}));
+  const previous=process.env.OPENCODE_DEPLOY_STATE_DIR;process.env.OPENCODE_DEPLOY_STATE_DIR=path.join(root,'state');
+  try {
+    await assert.rejects(async()=>{const result=await verifyDeployedServiceGate({artifactRoot:root,runId:'run',pipelineId:'app',stage:'deploy',target:'svd1',candidateSha:expected,startedAt});console.log('REPRO wrong installed status accepted',JSON.stringify(result));});
+  } finally {if(previous===undefined)delete process.env.OPENCODE_DEPLOY_STATE_DIR;else process.env.OPENCODE_DEPLOY_STATE_DIR=previous;}
+});

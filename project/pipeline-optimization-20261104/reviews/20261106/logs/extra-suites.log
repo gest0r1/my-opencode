@@ -1,0 +1,62 @@
+✔ accepts multiple current-run planning files, including nested drift/research (10.538101ms)
+✔ rejects traversal, absolute, foreign-run and non-planning destinations (3.679335ms)
+✔ does not authorize reserved machine-owned planning evidence (3.361201ms)
+✔ rejects existing parent or destination symlinks and non-directory ancestors (5.04273ms)
+✔ dev_deploy evidence proves the candidate itself was installed after the stage started (1012.543641ms)
+✔ a full gate runs on a snapshot of the working tree and leaves the checkout untouched (444.049299ms)
+✔ a snapshot failure reached by changes made meanwhile reruns on a fresh snapshot instead of standing (521.470489ms)
+✔ a snapshot failure stands when nothing changed meanwhile reaches the failed command (392.207054ms)
+✖ a gate that passed on an earlier snapshot repeats only the commands later changes reach (809.715471ms)
+✔ the lane proof leaves generated files out and a reservation leaves them free (4.509247ms)
+✔ a snapshot links the checkout dependency trees and permission bits do not change the source digest (476.368737ms)
+✔ --in-place runs the gate in the checkout without an environment prefix (439.145365ms)
+✔ technical revision retains folder and approval until actual implementation start (2047.143873ms)
+✔ owner-contract-changing revision does not carry prior approval (1071.066095ms)
+✔ final-manifest approval rejects wrong subject or hash before state mutation (1950.73622ms)
+✔ final-manifest approval accepts a short explicit response without optional message correlation (612.161513ms)
+✔ new planned run cannot approve without an explicit audit descriptor (549.527125ms)
+✔ legacy approved and in-progress states without approval record validate without backfill (1114.034468ms)
+✔ plan-start rejects a mismatched final-manifest hash before init creates state (293.178627ms)
+✔ owner can add a runtime unit between stages and dispatch it with immutable evidence (1486.380956ms)
+✔ owner-amend-apply output is accepted by git verify and stays exact-path bounded (1345.775037ms)
+✔ reuse export drops sensitive content and keeps comparable measurements (2.52115ms)
+✔ gate timeline summarizes reused, interrupted and executed gate runs (0.822029ms)
+✔ agent reuse, background children and runtime changes are reported apart from gate reuse (0.223998ms)
+✔ token and cost usage is summed per role and model from per-session deltas (0.304388ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 24
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14965.874869
+
+✖ failing tests:
+
+test at config/opencode/skills/task-management/scripts/gate-snapshot.test.mjs:128:1
+✖ a gate that passed on an earlier snapshot repeats only the commands later changes reach (809.715471ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + undefined
+  - {
+  -   changed_paths: [
+  -     'src/other.txt'
+  -   ],
+  -   commands: [
+  -     0
+  -   ],
+  -   from_commit: '0c996156a96b92991d1e20493f48b79da54c2f98'
+  - }
+  
+      at TestContext.<anonymous> (file:///workspace/scratch/33c68a33a56d/review-20261106/my-opencode/config/opencode/skills/task-management/scripts/gate-snapshot.test.mjs:141:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: { from_commit: '0c996156a96b92991d1e20493f48b79da54c2f98', changed_paths: [ 'src/other.txt' ], commands: [ 0 ] },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
