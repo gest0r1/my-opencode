@@ -1118,3 +1118,32 @@ if(fs.readFileSync('.local-config/mode.txt','utf8')==='bad')process.exit(17);
   } finally {process.env.PATH=oldPath;}
 });
 
+
+test('RUN preflight rejects before expensive commands or Docker',async t=>{
+  const fx=await diagnosticFixture();t.after(()=>rm(fx.root,{recursive:true,force:true}));await attachPostgres(fx);
+  const statePath=path.join(fx.stateRoot,fx.runId,'state.json');
+  const state=JSON.parse(await readFile(statePath,'utf8'));
+  const manifest=JSON.parse(await readFile(state.manifest_file,'utf8'));
+  manifest.gate_testing.default.build.live_postgres.command_indexes=[1];
+  manifest.gate_testing.default.build.live_postgres.preflight_command='node scripts/live-preflight.mjs --pipeline-preflight';
+  await mkdir(path.join(fx.root,'scripts'));
+  await writeFile(path.join(fx.root,'scripts/live-preflight.mjs'),"import fs from 'node:fs';fs.writeFileSync('.tmp/preflight-called','yes');process.exit(41);\n");
+  await writeFile(path.join(fx.bin,'pnpm'),"#!/usr/bin/env node\nrequire('node:fs').appendFileSync('.tmp/expensive-called','called\\n');\n",{mode:0o755});
+  state.status='in_progress';const raw=JSON.stringify(manifest);state.manifest_sha256=sha256(raw);
+  await writeFile(state.manifest_file,raw);await writeFile(statePath,JSON.stringify(state));
+  const oldPath=process.env.PATH;
+  try {
+    process.env.PATH=fx.bin+':'+oldPath;
+    const result=run(fx.root,fx.args);
+    let preflightCalled=true;try{await access(path.join(fx.root,'.tmp/preflight-called'));}catch{preflightCalled=false;}
+    let expensiveCalled=true;try{await access(path.join(fx.root,'.tmp/expensive-called'));}catch{expensiveCalled=false;}
+    let dockerCalled=true;try{await access(path.join(fx.root,'.tmp/docker.log'));}catch{dockerCalled=false;}
+    console.log('REPRO RUN preflight',JSON.stringify({exit:result.status,preflightCalled,expensiveCalled,dockerCalled,stderr:result.stderr}));
+    assert.notEqual(result.status,0,'failing lifecycle preflight must block RUN before commands');
+    assert.equal(preflightCalled,true);assert.equal(expensiveCalled,false);assert.equal(dockerCalled,false);
+    await assert.rejects(access(path.join(fx.stateRoot, fx.runId, 'gates/app-build.json')), 'preflight failure cannot allocate an attempt');
+    await assert.rejects(access(path.join(fx.stateRoot, '.gate-locks', sha256('gate:' + fx.runId + ':app:build') + '.lock')));
+    await assert.rejects(access(path.join(fx.stateRoot, '.runtime-locks', sha256('gate:' + fx.runId + ':app:build') + '.lock')));
+  } finally {process.env.PATH=oldPath;}
+});
+
