@@ -23,7 +23,11 @@ I created and re-read an **unreferenced Git tree object** in the OpenChamber for
 - Validation: GitHub recursive tree read succeeded, `truncated=false`, 8,089 file/symlink paths, six forbidden workflows absent, fork-only `packages/ui/src/lib/exportSession.ts` blob retained as `0c2e520c27adedf364ad454891d55378cf5b8be7`.
 - No commit or branch ref was created or moved in `openchamber-ru` by this step; no workflow started. This Git tree is a reusable immutable **partial merge basis**, not an installed upstream update.
 
-This work can accelerate conflict resolution in a Bun-equipped isolated checkout. Source integration stays **NOT DONE** until the 98 paths have real three-way resolutions, compatible locks/pins and required tests. Publishing the staged tree as-is would silently discard fork behavior.
+A later, also **unreferenced**, tree `bdacc1ececfa446036e17c9edfd3f4d9ee78e7b7` builds on the above candidate and auto-merges exactly **one** non-overlapping file: `packages/ui/src/lib/i18n/messages/third-party-integrations.i18n.test.ts` (blob `7a1c9e850bfe679c3ac2ebbc581127edf773f875`). The conservative helper is [merge-three-way-conservative.mjs](handoff-assets/merge-three-way-conservative.mjs), verified with four small V8 unit examples, **not** native Git `merge-file` and not Bun validation. That leaves **97** both-modified paths unresolved in the latest staged tree. GitHub recursive tree read: `truncated=false`, all six forbidden workflows still absent; no branch/commit movement.
+
+Native status and actual compatibility fact: upstream `packages/electron/package.json` pins `opencodeCli.version=2.2.5` and upstream UI/web/vscode package manifests pin `@opencode/client`/`@opencode/schema=2.2.5` (where declared). Upstream `packages/web/server/lib/opencode/compatibility.js` raises `MINIMUM_OPENCODE_VERSION` from our `2.1.0` to `2.2.4` for compaction.buffer's percentage support. Its `bun.lock` must remain paired with these exact dependencies, and fork CLI/plugin/distribution pins must be synchronized before ANY integration acceptance.
+
+This work can accelerate conflict resolution in a Bun-equipped isolated checkout. Source integration stays **NOT DONE** until those 97 paths have real three-way resolutions, compatible locks/pins and required tests. Publishing the staged tree as-is would silently discard fork behavior.
 
 ## Conflict decisions reserved for source-level review
 
