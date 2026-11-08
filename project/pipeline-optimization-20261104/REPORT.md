@@ -1,39 +1,75 @@
-# Pipeline optimization — current status (2026-11-06)
+# Итоговая приёмка pipeline optimization — 2026-11-08
 
-**Source fixes F1–F5 prepared; independent native retest NOT RUN. Upstream OpenChamber/OpenCode integration NOT DONE (unreferenced partial merge-tree only).** No release, main merge, install or production change. This document is the **only current snapshot**; historical snapshots are in `runs/`, Git history and [20261106 REVIEW](reviews/20261106/REVIEW.md). Older baseline PASS is not acceptance of the changed HEAD.
+**Завершено в границе серверного обновления и передачи владельцу на рабочий тест. Серверную накатку точной пары SHA ниже подтверждаю.** Это не выпуск Windows-дистрибутива и не заявление об уже выполненном обновлении production.
 
-## Canonical inputs
+Реализацию исправлений текущего запуска выполняла Luna; root провёл ревью, независимые проверки, сборку, установку пакета и проверку настоящего движка. Main, рабочие сервисы, активные продуктовые RUN и production-данные не менялись. Платные Actions не запускались.
 
-| Repo | Initial reviewed source | Current source checkpoint before this report | Base main |
-|---|---|---|---|
-| [my-opencode feature](https://github.com/gest0r1/my-opencode/tree/feature/pipeline-optimization-20261104) | `891a5c53d0fd3325e208402cf48fee5cdddc8c55` (review; subsequent review-docs changed HEAD) | `574062d585fb487d43b9cbb302126bbe15153a9e` | `c58f452047df3806ea6e946d1909b075344bc069` |
-| [openchamber-ru feature](https://github.com/gest0r1/openchamber-ru/tree/feature/pipeline-optimization-20261104) | `06afd56dffe3e0fc0c2863d0017ae243b037cc1b` | same — no source edits in this implementation run | `f9521f168c894cb17dc60ba4f929d4df0722e263` |
+## Принятые исходники
 
-Current HEAD **after** REPORT/docs commits must be read from the live feature branch. The code above was edited only in my-opencode; OpenChamber source, Sevami, main, production, managed deployment and paid Actions were not touched. No foreign worktrees, processes or locks have been removed.
+| Компонент | Точная версия / SHA |
+|---|---|
+| my-opencode, проверенный код | `338c26993178f3d681eb3f1c86e17357c63233de` |
+| openchamber-ru, проверенный итог | `b236258326deaf3541956b8a9cd9bb5aec68da5b` |
+| Ветки | `feature/pipeline-optimization-20261104` в обоих репозиториях |
+| Upstream OpenChamber | v2.6.1, `ce853f415704d1bfe8d076a5cfb2caabac00fffd`; включён настоящим merge с двумя родителями |
+| OpenCode CLI / plugin / client / schema / protocol | 2.2.5 |
+| Окружение приёмки | Node 24.22.1, Bun 1.4.4, tsx 4.23.15 |
 
-## Defect matrix — source and test are different statuses
+После публикации исходники перечитаны из GitHub: все **8093** файла OpenChamber соответствуют локальным Git blob SHA. Все **456** файлов исходной принятой ветки my-opencode также совпали; дальнейший commit отчёта меняет только документацию и журналы.
 
-| Finding | Root cause and implemented source correction | Regression source | Test status on changed HEAD |
-|---|---|---|---|
-| **F1 P1 — nested ignored input causes stale PASS** | `gate-snapshot.mjs`: Git `--directory` entries are expanded **only for non-generated ignored directories**, bounded at 256 dirs/8192 files, canonical sorted set shared by snapshot copy and reuse digest. Unsupported/outside-checkout or symlink inputs reject optimization instead of disappearing. Unchanged valid pnpm reuse preserved. | `gate-snapshot-inputs.test.mjs`, `gate-reuse-identity.test.mjs`, `gate-snapshot.test.mjs`, actual `gate-runner-cli.test.mjs` negative source reproduction. | **NOT RUN** after source fix |
-| **F2 P1 — RUN starts expensive commands before lifecycle preflight** | `gate-runner-cli.ts`: PLAN and RUN use one `livePreflight` with `--pipeline-preflight`. RUN preflight holds existing gate lock, phase-marked runtime lock and heavy→live slot; it executes before allocating a gate attempt, snapshot, expensive command or Docker. RUN state, manifest SHA, HEAD and declared candidate revalidated after precheck. Advisory live RUN also checked. Pure gates retain their earlier late-lock timing. PLAN stays stateless with candidate null. | `gate-runner-cli.test.mjs` (native negative repro, no attempt/Docker, advisory); existing PLAN live and real live gate suites. | **NOT RUN** after source fix |
-| **F3 P1 — SHA substring is treated as installed identity** | `dev-deploy-cli.ts`: shared `currentContourSha` for `record` and service verifier. Requires exact current top-level `status.sha`, rejects missing/malformed/ambiguous and contradictory `current.sha`; no use of requested/history/message SHA. Missing status file rejects install. Actual root-owned producer remains unchanged, its adapter contract is documented in `scripts/setup-opencode-deploy-sudo.sh`. | `dev-deploy-cli.test.mjs` (current good/bad, requested SHA, ambiguity, missing file, target), prior review reproduction. | **NOT RUN** after source fix |
-| **F4 P2 — false failing renamed producer fixture** | `gate-testing-policy.test.mjs`: full rename of profile/testing keys and strict orphan-owner negative control; policy source not weakened. | Existing policy suite. | **NOT RUN** after test fix |
-| **F5 P2 — snapshot test lacks verifiable local tool** | `gate-snapshot.test.mjs::snapshotFixture`: bounded exact `pnpm@1.0.0`, project-root `node_modules/.bin/vitest`, package metadata/manager executable, fixture-only inherited NODE_PATH removal (not production environment override). Added real nested ignored file snapshot assertion. | Existing snapshot suite + new nested scenario. | **NOT RUN** after test fix |
-| **F6 P2 — current report contradicts historical blocks** | Replaced REPORT with **one current status**; old versions remain in Git, `runs/`. Updated links/testing handoff. | Verify source SHA and document links. | Remote file read/commit PASS |
+## Что Luna завершила
 
-## Test evidence
+1. В `packages/web/server/index.js` восстановлен существующий upstream lifecycle `prWatchRuntime` и `mergeFollowRuntime`: создание, запуск PR watcher, передача в tracked-items/control/routes и штатная остановка. Раньше пакет собирался, но настоящий запуск завершался с ReferenceError.
+2. Стандартный Oxlint `no-undef` подключён к этому серверному entrypoint через действующий web lint. Разрешены Node globals и конкретные Node Web APIs; весь browser environment не включён. Отрицательный повтор на исходном сломанном файле воспроизводимо обнаруживает обе потерянные переменные.
+3. Тест загрузки локали больше не считает 20 коротких timer ticks. Он ожидает наблюдаемое изменение store через подписку с ограниченным дедлайном и cleanup. Production store не менялся; проверки переводов не ослаблены.
+4. Проверка настоящим OpenCode подтвердила native auto-discovery отдельных файлов из `config/opencode/plugins/`. `pipeline-runtime` и `github-handoff` стали `active`. Дополнительный package adapter не добавляли: первоначальная попытка явно прописать file URI была неверной конфигурацией тестового стенда, а не дефектом дистрибутива.
 
-- **Actual review on old source `891a5c53...`:** 158 PASS / 3 FAIL / 1 SKIP in initial 162 tests, one environment loader FAIL later separately PASS. Remaining F4/F5 were fixture FAIL; three extra native negative reproductions F1–F3 demonstrated the faults. These are historical inputs, not current results. See [REVIEW.md](reviews/20261106/REVIEW.md) and archived native logs.
-- **Current development source:** GitHub source commits/compare verified; JS parser via V8 (imports removed **only for parsing**) **6/6 PASS** for F1 policy/fixture modules. One native Git fixture verified that `git ls-files --others --ignored --directory` collapses an ignored directory and targeted `git ls-files` expands it. This checks Git semantics, **not** the updated project Node tests.
-- **Full native Node/tsx, Bun, OpenCode SDK and Docker/PG:** **NOT RUN** on this changed HEAD; repository-independent container currently has Node 22.16.0, no Bun, no pinned source checkout or authenticated GitHub remote clone. Do not claim any full suite PASS or measured speed gain. Source-ready ≠ reviewed ≠ tested ≠ integration-ready.
+## Независимые результаты
 
-## Upstream/pins — separate unfinished stage
+| Проверка | Результат | Журнал |
+|---|---|---|
+| Все 50 отслеживаемых файлов pipeline tests | **450 сценариев: 448 PASS, 0 FAIL, 2 SKIP**, один полный прогон | [pipeline](reviews/20261108/pipeline.log), [команда и длительность](reviews/20261108/pipeline-result.json) |
+| OpenChamber `check:changed` | **PASS**: типы 3914 файлов/7 проектов, Electron syntax, lint всех пакетов, dead code, anti-slop | [gate](reviews/20261108/check-final.log) |
+| 10 затронутых серверных Vitest файлов | **195/195 PASS** | [server](reviews/20261108/server-tests.log) |
+| 10 изолированных UI/export/projection/i18n файлов | **124/124 PASS**, итоговый повтор после исправления fixture | [UI](reviews/20261108/ui-final.log) |
+| Release authorization/workflow/reuse | **10/10 PASS**, fork release policy PASS | [release](reviews/20261108/release-tests.log) |
+| 9 installer/scope shell suites | PASS | [installer](reviews/20261108/installer-shell.log) |
+| Python standard installer, runtime user, Node floor | PASS | [Python](reviews/20261108/installer-python.log) |
+| Межрепозиторные pins | PASS: OpenCode 2.2.5 / OpenChamber 2.6.1 | [pins](reviews/20261108/pins.log) |
+| SDK build и production web build/service worker | PASS, web build 2m44s | [SDK](reviews/20261108/sdk-build.log), [build summary](reviews/20261108/build-summary.log) |
+| Собранный web package, изолированная установка | PASS; CLI 2.6.1, 2677 файлов, архив 19030023 байта | [package](reviews/20261108/package-summary.log) |
+| Настоящий packaged server + managed OpenCode 2.2.5 | **HTTP 200**, health: `isOpenCodeReady=true`, `openCodeRunning=true`, `lastOpenCodeError=null`; штатное завершение | [runtime result](reviews/20261108/server-ready-result.json) |
+| Нативная загрузка наших plugins движком | **active** для pipeline-runtime и github-handoff; запрос через серверный proxy | [plugin result](reviews/20261108/native-plugin-accepted.json) |
 
-Upstream tags verified via official GitHub tag refs 2026-11-06: OpenChamber `v2.6.1@ce853f415704d1bfe8d076a5cfb2caabac00fffd`; OpenCode `v2.2.5@9bbb8ce18c80f099e0e448775f59d965ead40a21`. Fork common base is `c4919abc1e7a0a3beeaa126666487806bf79cfe0`. Existing three-way inventory: **98 both-modified** text, **80 clean**, **18 conflict files/29 regions**, **6 delete/modify**. A **non-referenced partial GitData staging tree** was created, preserving 132 fork-only paths, six deleted workflows, and one conservatively non-overlapping merged file. Latest unreferenced tree `bdacc1ececfa446036e17c9edfd3f4d9ee78e7b7` still leaves **97 both-modified paths unresolved**. The tree retains the upstream versions for those unresolved paths and MUST NOT become a branch or installed source. Upstream Bun lock blob `2eb5813b...` is present in that unpublished tree but **never validated/installed**. No merge commit/two-parent ancestry, target pins in actual feature branches, nor tests were published; see [UPSTREAM_PREPARATION.md](UPSTREAM_PREPARATION.md). In OpenChamber, `AGENTS.md` requires `bun run check:changed` **before source commit**, which is not available here. Exact target package integrity cannot be guessed. Do not restore deleted workflow triggers or consume paid Actions.
+Два SKIP — настоящий Docker/PG (Docker отсутствует) и проверка PID-reuse через procfs (PID namespace этого стенда не совпадает с procfs). Обычная Linux-проверка сохранена. Живой Docker/PG, Windows packaging/signing, systemd activation и откат на настоящем рабочем сервере не объявлены проверенными. Полный web-набор не объявляется зелёным: предыдущая попытка зависла в неизменённом upstream gatekeeper. Согласно указанию владельца неизменённый upstream принимается за рабочую основу; затронутые серверные сценарии проверены отдельно.
 
-## Next single action
+LLM/provider-запросы в runtime smoke не отправлялись, пользовательские credentials не использовались. Каталог внешних моделей в изолированном стенде мог быть недоступен по DNS; это не мешало health, загрузке plugins и проверке локальных API.
 
-**Independent testing on an isolated exact feature HEAD**. Run the updated F1/F2/F3 native regressions and F4/F5 fixtures before advancing; full commands in [TESTING_HANDOFF.md](TESTING_HANDOFF.md) and [20261106 review test list](reviews/20261106/TEST_COMMANDS.md). Return exact exit codes, durations, loaded pin versions, and logs. Then resolve upstream conflicts in an isolated Bun-supported checkout, test and regenerate both repos' pins before source publication and integration acceptance.
+## Соответствие исходному ТЗ
 
-**Final disposition: «Исправления подготовлены частично; требуется ревью и тестирование ChatGPT».** Source-only fixes F1–F5 published on feature; OpenChamber upstream/pins and final installed-runtime tests remain open.
+| Этап | Что принято |
+|---|---|
+| 0–1: исходные точки и аудит | Ветки/SHA, карта решений и проверяемые журналы сохранены |
+| 2: ContextScout | Широкий planning/** scope, запрет machine artifacts, повторная установка и path checks проходят |
+| 3: upstream/pins | Upstream 2.6.1 интегрирован; pins/lock OpenCode 2.2.5 согласованы |
+| 4: tool timing | Сохранены происхождение времени, unknown/zero, running/interrupted, child sessions и next-call gaps; native Bun tests проходят |
+| 5: approvals / PLAN | Предмет/hash согласования, отдельное явное намерение RUN, probe/preflight и carried findings проверены |
+| 6: prep/DAG/gates | Именованные потребители prep, порядок/циклы зависимостей, tree/candidate/build-output/service identity проверены |
+| 7: selection/reuse/live lifecycle | Нет устаревшего PASS после изменения ignored input или toolchain; focus не заменяет final; preflight/locks/cleanup проходят |
+| 8: wake/recovery | Event/restart/unknown lease сценарии проходят; plugin реально активирован OpenCode 2.2.5 |
+| 9: связность/дубли | Существующие runner/state/evidence owners сохранены; лишний adapter не добавлен, retired role/workflows не возвращены |
+| 10: передача | Точная совместимая пара, сборка, установка пакета, настоящий startup, инструкции накатки и возврата |
+
+## Проверенные оптимизации и предел измерений
+
+В исполняемых regression fixtures первая проверка выполняет две команды, неизменённый повтор — ноль; после изменения входов выполняются обе. При частичном reuse выполняется одна команда и переиспользуется одна. Это доказательство выбора/reuse и сохранённого покрытия, **не процент ускорения продуктового RUN**.
+
+Экономия времени/токенов на рабочих RUN пока не измерена. Четыре отслеживаемых prompt-файла выросли с 138746 до 144185 байт (+3,9%); уменьшение контекста или стоимости по этому признаку не заявляется. После накатки остаётся измерить реальный эффект и приемлемость трактовки задач владельцем.
+
+В предыдущей работе также подтверждены: исправление планирования по milestone (`readdir`), bound candidate/build-output/service proof, согласованные approved model tests и удалённый StageOrchestrator, 554 RU перевода/placeholder fixes, удаление 77 неиспользуемых RU ключей и трёх unused imports. Новый запуск не подменял эти функции; они повторно прошли checks на опубликованных исходниках.
+
+## Накатка
+
+[ROLLOUT.md](ROLLOUT.md) содержит точные команды. Используется явный `source` mode: нового release bundle для этой feature нет. Сборка выполняется из неизменяемого принятого SHA, сохраняются текущие bind host/port и target для возврата. Пробный архив имеет SHA-256 `d8b1b0f8669866886fe360a49534c4f25f7cb71c6701301187e1b6d7e776c5eb`; это локальное test evidence, не опубликованный release manifest.
+
+Код готов к серверной накатке и рабочему тесту владельца. Merge в main, релиз Windows и фактический deploy не выполнялись.

@@ -1,0 +1,23 @@
+packed 2.58KB server/proxy-headers.test.js
+packed 5.15KB server/sse-routes.test.js
+
+/workspace/scratch/33c68a33a56d/final-20261108/package/openchamber-web-2.6.1.tgz
+
+Total files: 2677
+Shasum: dbe1e4947206eeb5469891f519de91d8223394c4
+Integrity: sha512-h+fHv36ErmH5z[...]ToCRvX98RjRCA==
+Unpacked size: 74.61MB
+Packed size: 19.0MB
+bun add v1.4.4 (38afee6c8)
+Resolving dependencies
+Resolved, downloaded and extracted [745]
+Saved lockfile
+
+installed @openchamber/web@/workspace/scratch/33c68a33a56d/final-20261108/package/openchamber-web-2.6.1.tgz with binaries:
+ - openchamber
+
+184 packages installed [12.21s]
+
+warn: To run "openchamber", add the global bin folder to $PATH:
+
+/workspace/scratch/33c68a33a56d/final-20261108/package-install/bin

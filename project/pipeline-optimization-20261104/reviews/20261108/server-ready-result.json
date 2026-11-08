@@ -1,0 +1,1 @@
+{"mode": "native managed OpenCode2.2.5 with empty isolated HOME", "ui_http": 200, "health": {"status": "ok", "openchamberVersion": "2.6.1", "openCodeRunning": true, "isOpenCodeReady": true, "lastOpenCodeError": null}, "html_bytes": 32745, "process_exit": null, "elapsed_seconds": 2.1252341800000067}
