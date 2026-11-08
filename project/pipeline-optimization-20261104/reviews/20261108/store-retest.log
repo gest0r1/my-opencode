@@ -1,0 +1,11 @@
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/lib/i18n/store.test.ts:
+(pass) i18n store > retries loading the active locale when it is not cached [43.22ms]
+(pass) i18n store > loads Russian translations for existing and upstream keys [28.44ms]
+(pass) i18n store > loads the french dictionary [34.13ms]
+
+ 3 pass
+ 0 fail
+ 5 expect() calls
+Ran 3 tests across 1 file. [360.00ms]

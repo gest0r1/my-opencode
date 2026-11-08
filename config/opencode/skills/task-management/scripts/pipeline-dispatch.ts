@@ -8,7 +8,7 @@ import { validateOwnerAmendmentEvidence } from './owner-amendment-policy.ts';
 import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 import { sourceInventory } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
-import { planProbeCommandsSha256 } from './manifest-v2-policy.mjs';
+import { planProbeMatches } from './manifest-v2-policy.mjs';
 import { laneReservations, leaseConflict, readLeases, readStagePaths, sameDispatch } from './dispatch-leases.mjs';
 
 const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
@@ -122,8 +122,9 @@ async function requireBaseProbe(root: string, run: string, manifestFile: string,
     for (const id of sharing) {
       try {
         const probe = JSON.parse(await readFile(join(dirname(manifestFile), 'planning', 'probes', `${id}-${gate}.json`), 'utf8'));
-        if (probe?.kind !== 'plan_probe' || probe.run_id !== run || probe.profile !== pipeline.profile || probe.gate !== gate ||
-            !Array.isArray(commands) || probe.commands_sha256 !== planProbeCommandsSha256(commands)) continue;
+        if (!Array.isArray(commands) || !planProbeMatches(probe, manifest, {
+          pipeline_id: pipeline.id, profile: pipeline.profile, gate, commands,
+        })) continue;
         if (probe.status === 'FAIL') statuses.push('FAIL');
         else if (probe.status === 'PASS' && cleanHeadIs(root, effectiveScope, probe.head_sha)) statuses.push('PASS');
       } catch {}

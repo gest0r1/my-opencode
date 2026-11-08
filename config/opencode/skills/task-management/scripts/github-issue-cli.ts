@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { isPublishableStoryReview } from './manifest-v2-policy.mjs';
 
 const ISSUE_NUMBER = /^[1-9][0-9]*$/;
 
@@ -394,8 +395,10 @@ export async function publishPlanningArtifacts(
   const storyReview = storyGateKey
     ? await readFrozenArtifact(runRoot, readiness.gates?.[storyGateKey]?.review, 'full Story review')
     : undefined;
-  if (storyReview && (!/status:\s*ready/i.test(storyReview.content) ||
-      !/review_scope:\s*full/i.test(storyReview.content))) {
+  if (storyReview && !isPublishableStoryReview(storyReview.content, {
+    runRoot, gate: storyGateKey, reviewSha256: readiness.gates?.[storyGateKey]?.review?.sha256,
+    carriedFindings: readiness.carried_findings ?? [],
+  })) {
     throw new GitHubIssueCliError('STORY_REVIEW_NOT_FULL_READY: cannot publish unreviewed Story');
   }
   let published = 0;

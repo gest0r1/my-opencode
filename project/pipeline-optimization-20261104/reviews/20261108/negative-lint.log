@@ -1,0 +1,14 @@
+negative-index.js:2368:3: error eslint(no-undef): 'mergeFollowRuntime' is not defined. help: Either define 'mergeFollowRuntime' or remove the reference to it. If 'mergeFollowRuntime' is a global variable, add it to the 'globals' configuration.
+negative-index.js:3107:5: error eslint(no-undef): 'mergeFollowRuntime' is not defined. help: Either define 'mergeFollowRuntime' or remove the reference to it. If 'mergeFollowRuntime' is a global variable, add it to the 'globals' configuration.
+negative-index.js:2301:12: error eslint(no-undef): 'prWatchRuntime' is not defined. help: Either define 'prWatchRuntime' or remove the reference to it. If 'prWatchRuntime' is a global variable, add it to the 'globals' configuration.
+negative-index.js:2366:3: error eslint(no-undef): 'prWatchRuntime' is not defined. help: Either define 'prWatchRuntime' or remove the reference to it. If 'prWatchRuntime' is a global variable, add it to the 'globals' configuration.
+negative-index.js:3105:5: error eslint(no-undef): 'prWatchRuntime' is not defined. help: Either define 'prWatchRuntime' or remove the reference to it. If 'prWatchRuntime' is a global variable, add it to the 'globals' configuration.
+negative-index.js:9:17: warning eslint(no-unused-vars): Identifier 'spawnSync' is imported but never used. help: Consider removing this import.
+negative-index.js:12:8: warning eslint(no-unused-vars): Identifier 'net' is imported but never used. help: Consider removing this import.
+negative-index.js:130:10: warning eslint(no-unused-vars): Identifier 'createPrWatchRuntime' is imported but never used. help: Consider removing this import.
+negative-index.js:131:10: warning eslint(no-unused-vars): Identifier 'createMergeFollowRuntime' is imported but never used. help: Consider removing this import.
+negative-index.js:390:7: warning eslint(no-unused-vars): Variable 'createTimeoutSignal' is declared but never used. Unused variables should start with a '_'. help: Consider removing this declaration.
+negative-index.js:391:7: warning eslint(no-unused-vars): Variable 'formatProjectLabel' is declared but never used. Unused variables should start with a '_'. help: Consider removing this declaration.
+negative-index.js:395:7: warning eslint(no-unused-vars): Variable 'extractTextFromParts' is declared but never used. Unused variables should start with a '_'. help: Consider removing this declaration.
+negative-index.js:1925:7: warning eslint(no-unused-vars): Variable 'waitForAgentPresence' is declared but never used. Unused variables should start with a '_'. help: Consider removing this declaration.
+exit_code=1

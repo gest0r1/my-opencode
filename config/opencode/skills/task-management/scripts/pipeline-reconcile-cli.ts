@@ -122,7 +122,8 @@ export async function revisePlan(stateRoot: string, run: string, evidencePath: s
   return locked(c.root, async () => {
     const { root, manifest, state, manifestHash } = await context(stateRoot, run);
     if (implementationStarted(state, manifest)) throw Error('IMPLEMENTATION_STARTED: incompatible replan requires a new run');
-    const evidence = JSON.parse(await readFile(evidencePath, 'utf8'));
+    const evidenceRaw = await readFile(evidencePath, 'utf8');
+    const evidence = JSON.parse(evidenceRaw);
     if (evidence.manifest_sha256 !== manifestHash || typeof evidence.owner_contract_changed !== 'boolean' ||
         !Array.isArray(evidence.affected_gates) || !evidence.reason) throw Error('REVISION_EVIDENCE_REQUIRED');
     for (const gate of evidence.affected_gates) {
@@ -132,7 +133,21 @@ export async function revisePlan(stateRoot: string, run: string, evidencePath: s
     }
     // Retain the current folder and useful artifacts; invalidated gates cannot pass
     // preflight. No old story versions or effective runtime state survive as valid.
-    const revision = { ...evidence, previous_approval: state?.status === 'approved' || state?.status === 'in_progress',
+    const previousApproval = state?.status === 'approved' || state?.status === 'in_progress';
+    const evidenceRelative = relative(root, resolve(evidencePath));
+    const carriesApproval = previousApproval && evidence.owner_contract_changed === false && state?.approval_record &&
+      !evidenceRelative.startsWith('..') && resolve(evidencePath).startsWith(resolve(root) + '/');
+    const revision = { ...evidence, previous_approval: previousApproval,
+      ...(carriesApproval ? {
+        approval_carry: {
+          ...state.approval_record,
+          current_manifest_sha256: state.manifest_sha256,
+          revision_evidence_path: evidenceRelative,
+          revision_evidence_sha256: digest(evidenceRaw),
+          revision_reviewed_manifest_sha256: evidence.manifest_sha256,
+        },
+        approval_outbox: state.github_outbox,
+      } : {}),
       recorded_at: new Date().toISOString() };
     await json(join(root, 'planning/revision.json'), revision);
     await appendFile(join(root, 'planning/revisions.jsonl'), JSON.stringify(revision) + '\n');

@@ -1,0 +1,3 @@
+PASS: V2 installer contract is incremental, ref-pinned, atomic and v2-only
+PASS: permanent runtime-user install contract
+PASS: runtime floors retain compatible Node, select the existing bootstrap, and stop core early

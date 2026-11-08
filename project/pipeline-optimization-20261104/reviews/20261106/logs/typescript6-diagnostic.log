@@ -1,0 +1,82 @@
+config/opencode/plugins/pipeline-runtime.ts(423,54): error TS2352: Conversion of type 'RegistryEntry' to type 'RuntimeContext' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'RegistryEntry' is missing the following properties from type 'RuntimeContext': nonce, prepared_at, expires_at, parent_session_id, and 4 more.
+config/opencode/plugins/pipeline-runtime.ts(613,128): error TS2339: Property 'research_agents' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(622,40): error TS2339: Property 'role' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(625,39): error TS2339: Property 'work_item_id' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(628,81): error TS2339: Property 'work_item_id' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(631,101): error TS2339: Property 'work_item_id' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(633,58): error TS2339: Property 'run_id' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(633,71): error TS2339: Property 'pipeline_id' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(633,89): error TS2339: Property 'stage' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(633,101): error TS2339: Property 'work_item_id' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(633,120): error TS2339: Property 'role' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(634,60): error TS2339: Property 'run_id' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(635,52): error TS2339: Property 'run_id' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(635,82): error TS2352: Conversion of type 'RegistryEntry' to type 'RuntimeContext' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'RegistryEntry' is missing the following properties from type 'RuntimeContext': nonce, prepared_at, expires_at, parent_session_id, and 4 more.
+config/opencode/plugins/pipeline-runtime.ts(635,119): error TS2352: Conversion of type '{ run_id: string; pipeline_id: string; stage: string; executor: any; role: string; work_item_id: string; work_item_path: any; work_item_sha256: any; authoritative_paths: any[]; review_work_items: { ...; }[]; ... 16 more ...; marker: string; }' to type 'RuntimeContext' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ run_id: string; pipeline_id: string; stage: string; executor: any; role: string; work_item_id: string; work_item_path: any; work_item_sha256: any; authoritative_paths: any[]; review_work_items: { ...; }[]; ... 16 more ...; marker: string; }' is missing the following properties from type 'RuntimeContext': nonce, prepared_at, expires_at, parent_session_id, and 4 more.
+config/opencode/plugins/pipeline-runtime.ts(641,54): error TS2339: Property 'role' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(643,36): error TS2339: Property 'no_session_reuse' does not exist on type 'unknown'.
+config/opencode/plugins/pipeline-runtime.ts(702,82): error TS2352: Conversion of type 'RegistryEntry' to type 'RuntimeContext' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'RegistryEntry' is missing the following properties from type 'RuntimeContext': nonce, prepared_at, expires_at, parent_session_id, and 4 more.
+config/opencode/plugins/pipeline-runtime.ts(702,119): error TS2352: Conversion of type '{ run_id: string; pipeline_id: string; stage: string; executor: any; role: string; work_item_id: string; work_item_path: any; work_item_sha256: any; authoritative_paths: any[]; review_work_items: { ...; }[]; ... 16 more ...; marker: string; }' to type 'RuntimeContext' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ run_id: string; pipeline_id: string; stage: string; executor: any; role: string; work_item_id: string; work_item_path: any; work_item_sha256: any; authoritative_paths: any[]; review_work_items: { ...; }[]; ... 16 more ...; marker: string; }' is missing the following properties from type 'RuntimeContext': nonce, prepared_at, expires_at, parent_session_id, and 4 more.
+config/opencode/plugins/pipeline-runtime.ts(767,47): error TS2352: Conversion of type 'RegistryEntry' to type 'RuntimeContext' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'RegistryEntry' is missing the following properties from type 'RuntimeContext': nonce, prepared_at, expires_at, parent_session_id, and 4 more.
+config/opencode/plugins/pipeline-runtime.ts(883,88): error TS2352: Conversion of type 'RegistryEntry' to type 'RuntimeContext' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'RegistryEntry' is missing the following properties from type 'RuntimeContext': nonce, prepared_at, expires_at, parent_session_id, and 4 more.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(19,8): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../types/pipeline-state.js'?
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(857,69): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(982,18): error TS2339: Property 'stage_order' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(982,104): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(983,34): error TS2339: Property 'stage_order' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(984,21): error TS2339: Property 'stages' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(984,105): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1024,60): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1041,82): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1044,54): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1052,34): error TS2339: Property 'stage_order' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1053,20): error TS2339: Property 'stages' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1053,85): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1063,70): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1069,56): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1072,88): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1075,104): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1085,45): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1089,45): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1093,56): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1119,42): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1120,44): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1120,64): error TS2339: Property 'issue_numbers' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1123,39): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1123,78): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1125,29): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1126,35): error TS2339: Property 'issue_numbers' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1128,27): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1146,87): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1146,100): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1342,20): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1342,103): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1343,16): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1471,36): error TS2339: Property 'stage_order' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1472,77): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1474,34): error TS2339: Property 'stages' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1481,49): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(1815,114): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2280,77): error TS2339: Property 'stages' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2280,97): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2576,59): error TS2339: Property 'stage_order' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2576,95): error TS2339: Property 'stages' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2583,65): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2586,28): error TS2339: Property 'stage_order' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2587,32): error TS2339: Property 'stages' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2593,28): error TS2339: Property 'depends_on' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2593,69): error TS2339: Property 'depends_on' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2594,28): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2594,57): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2610,31): error TS2339: Property 'id' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2610,47): error TS2339: Property 'status' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2611,34): error TS2339: Property 'stage_order' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2612,32): error TS2339: Property 'stages' does not exist on type 'unknown'.
+config/opencode/skills/task-management/scripts/stage-cli-core.ts(2617,76): error TS2339: Property 'id' does not exist on type 'unknown'.

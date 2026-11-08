@@ -1,0 +1,84 @@
+Retired previous distribution agent: /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents/code/CoderAgent.md
+Retired previous distribution agent: /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents/custom/renamed.md
+Retired 2 previous distribution agent definitions.
+Installed 3 managed agents into /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents
+Retired previous distribution agent: /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents/CoderAgent.md
+Retired previous distribution agent: /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents/CopyWriter.md
+Retired previous distribution agent: /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents/PrimaryAgent.md
+Retired 3 previous distribution agent definitions.
+Installed 3 managed agents into /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents
+Retired previous distribution agent: /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents/CoderAgent.md
+Retired previous distribution agent: /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents/CopyWriter.md
+Retired previous distribution agent: /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents/PrimaryAgent.md
+Retired 3 previous distribution agent definitions.
+Kept 1 user-chosen agent colours
+Installed 3 managed agents into /tmp/tmp.ciWM12AtFB/home/.config/opencode/agents
+PASS: flat canonical agent IDs, managed copy replacement, repeat install, kept agent colour
+Normalized permission resource: CoderAgent.md contextscout -> ContextScout
+Removed invalid subagent allow: CoderAgent.md -> build (primary)
+Moved permission catch-all before specifics: CoderAgent.md permission.task
+Moved permission catch-all before specifics: CoderAgent.md permission.edit
+Normalized permission resource: CoderAgent.md .opencode/skills/context7/** -> $HOME/.config/opencode/skills/context7/**
+Moved permission catch-all before specifics: CoderAgent.md permission.read
+Normalized permission resource: CoderAgent.md npx tsx /root/.config/opencode/skills/task-management/scripts/stage-cli.ts* -> npx tsx $HOME/.config/opencode/skills/task-management/scripts/stage-cli.ts*
+Moved permission catch-all before specifics: CoderAgent.md permission.bash
+Removed invalid config subagent allow: PrimaryManager -> build (primary)
+Agent permission normalization complete: agents=5 managed=4 markdown_changed=1 config_changes=5
+Retired 0 previous distribution agent definitions.
+Moved permission catch-all before specifics: build.md permission.external_directory
+Agent permission normalization complete: agents=41 managed=41 markdown_changed=1 config_changes=0
+Installed 41 managed agents into /tmp/tmp.QStMuLUIXX/real/agents
+PASS: all managed agents deny-or-ask on secrets, .git and node_modules
+PASS: effects, catch-all precedence, managed ownership, delegation aliases, trusted skill paths and protected edit policy normalized
+PASS: every bootstrap refreshes config; unchanged binary is reused
+PASS: incremental V2 execution keeps binary/config/runtime/service updates independent
+PASS: native activation uses only permanent user-runtime rollback and embedded-terminal defer
+PASS: immutable OpenChamber runtime, binary rollback and bounded retention
+PASS: dependencies are locked, bounded, logged and cancellable
+PASS: dependency timeout preserves active config/skills/binary and removes staging trees
+Retired 0 previous distribution agent definitions.
+Installed 41 managed agents into /tmp/tmp.EUZMuvIG0g/agents
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/ADRManager.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/AgentGenerator.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/ArchitectureAnalyzer.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/BatchExecutor.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/BuildAgent.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/CodeReviewer.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/CoderAgent.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/CommandCreator.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/Context Retriever.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/ContextManager.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/ContextOrganizer.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/ContextScout.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/ContractManager.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/DocWriter.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/DomainAnalyzer.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/ExternalScout.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/FindingsReviewer.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/GateRunner.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/Image Specialist.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/OpenAgent.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/OpenCoder.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/OpenCopywriter.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/OpenDataAnalyst.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/OpenDevopsSpecialist.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/OpenFrontendSpecialist.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/OpenRepoManager.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/OpenStageOrchestrator.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/OpenSystemBuilder.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/OpenTechnicalWriter.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/PrioritizationEngine.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/QuickReviewer.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/SeniorStoryReviewer.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/SeniorTechnicalPlanReviewer.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/Simple Responder.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/StoryMapper.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/TaskManager.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/TestEngineer.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/WebResearcher.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/WorkflowDesigner.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/build.md
+Retired previous distribution agent: /tmp/tmp.EUZMuvIG0g/agents/title.md
+Retired 41 previous distribution agent definitions.
+Installed 41 managed agents into /tmp/tmp.EUZMuvIG0g/agents
+PASS: repeated managed agent install preserves ContextScout planning subtree

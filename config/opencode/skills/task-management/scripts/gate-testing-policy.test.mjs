@@ -59,6 +59,114 @@ test('frozen test/resource contracts reject privilege flags, mutable images and 
   }
 });
 
+test('frozen input kind enforces tree-before-publish and exact candidate/service ordering', () => {
+  const manifest = (kind, stages, executors, gate = 'check') => ({
+    gate_profiles: { local: { [gate]: ['pnpm exec tsc --noEmit'] } },
+    gate_testing: { local: { [gate]: { input_kind: kind } } },
+    pipelines: [{ id: 'delivery', profile: 'local', stages, executors }],
+  });
+  const tree = manifest('tree', ['check', 'publish'], { check: 'local_gate', publish: 'git_publish' });
+  assert.doesNotThrow(() => validateGateTesting(tree));
+  assert.throws(
+    () => validateGateTesting(manifest('tree', ['publish', 'check'], { publish: 'git_publish', check: 'local_gate' })),
+    /GATE_TREE_AFTER_PUBLISH/,
+  );
+  assert.throws(
+    () => validateGateTesting(manifest('candidate', ['check', 'verify'], { check: 'local_gate', verify: 'git_verify' })),
+    /GATE_CANDIDATE_BEFORE_VERIFY/,
+  );
+  assert.throws(() => validateGateTesting(manifest('candidate', ['verify', 'check'], { verify: 'git_verify', check: 'local_gate' })), /GATE_CANDIDATE_BEFORE_PUBLISH/);
+  const candidate = manifest('candidate', ['verify', 'publish', 'release-candidate'], { verify: 'git_verify', publish: 'git_publish', 'release-candidate': 'local_gate' }, 'release-candidate');
+  assert.throws(() => validateGateTesting(candidate), /GATE_CANDIDATE_UNBOUND/);
+  candidate.gate_profiles.local['release-candidate'] = ['bash verify.sh {candidate_sha}'];
+  assert.doesNotThrow(() => validateGateTesting(candidate));
+  assert.equal(isPrePublishGate(manifest('candidate', ['verify', 'check', 'publish'], { verify: 'git_verify', check: 'local_gate', publish: 'git_publish' }), 'local', 'check'), false,
+    'candidate gate must not be a clean-tree PLAN probe');
+  assert.throws(
+    () => validateGateTesting(manifest('deployed-service', ['check', 'deploy'], { check: 'local_gate', deploy: 'dev_deploy' })),
+    /GATE_SERVICE_BEFORE_DEPLOY/,
+  );
+  assert.doesNotThrow(() => validateGateTesting(manifest('deployed-service', ['deploy', 'check'], { deploy: 'dev_deploy', check: 'local_gate' })));
+  assert.throws(
+    () => validateGateTesting(manifest('build-output', ['check'], { check: 'local_gate' })),
+    /GATE_BUILD_OUTPUT_INVALID/,
+  );
+});
+
+test('build-output requires an earlier materializing tree gate and immutable artifact input', () => {
+  const manifest = {
+    pipelines: [{ id: 'app', profile: 'local',
+      stages: ['assemble', 'verify', 'publish', 'inspect'],
+      executors: { assemble: 'local_gate', verify: 'git_verify', publish: 'git_publish', inspect: 'local_gate' } }],
+    gate_profiles: { local: {
+      assemble: ['npm run build'], inspect: ['npm test -- {artifact_path}'],
+    } },
+    gate_testing: { local: {
+      assemble: { input_kind: 'tree', artifact_output: { path: 'dist/bundle.tgz' } },
+      inspect: { input_kind: 'build-output', build_output: { producer_gate: 'assemble' } },
+    } },
+  };
+  assert.doesNotThrow(() => validateGateTesting(manifest));
+  assert.equal(isPrePublishGate(manifest, 'local', 'assemble'), false,
+    'materialized build output must run in RUN, not as PLAN clean-tree probe');
+  assert.equal(isPrePublishGate(manifest, 'local', 'inspect'), false);
+  const renamed = JSON.parse(JSON.stringify(manifest));
+  renamed.pipelines[0].stages[0] = 'release-assemble';
+  renamed.pipelines[0].executors['release-assemble'] = 'local_gate';
+  delete renamed.pipelines[0].executors.assemble;
+  renamed.gate_profiles.local['release-assemble'] = renamed.gate_profiles.local.assemble;
+  renamed.gate_testing.local['release-assemble'] = renamed.gate_testing.local.assemble;
+  delete renamed.gate_profiles.local.assemble;
+  delete renamed.gate_testing.local.assemble;
+  renamed.gate_testing.local.inspect.build_output.producer_gate = 'release-assemble';
+  assert.doesNotThrow(() => validateGateTesting(renamed), 'producer semantics must not depend on its name');
+  const orphaned = JSON.parse(JSON.stringify(renamed));
+  orphaned.gate_testing.local.assemble = { input_kind: 'tree' };
+  orphaned.gate_profiles.local.assemble = ['npm run build'];
+  assert.throws(() => validateGateTesting(orphaned), /GATE_INPUT_OWNER_INVALID/, 'an orphan gate must still be rejected');
+  const broken = mutator => {
+    const copy = JSON.parse(JSON.stringify(manifest));
+    mutator(copy);
+    return copy;
+  };
+  assert.throws(() => validateGateTesting(broken(m => {
+    m.gate_testing.local.assemble.artifact_output.path = 'src/unstable.tgz';
+  })), /GATE_BUILD_OUTPUT_PRODUCER_INVALID/);
+  assert.throws(() => validateGateTesting(broken(m => {
+    m.gate_testing.local.assemble.artifact_output.path = '../../outside';
+  })), /GATE_BUILD_OUTPUT_PRODUCER_INVALID/);
+  assert.throws(() => validateGateTesting(broken(m => {
+    m.pipelines[0].stages = ['inspect', 'assemble', 'verify', 'publish'];
+  })), /GATE_BUILD_OUTPUT_PRODUCER_MISSING/);
+  assert.throws(() => validateGateTesting(broken(m => {
+    m.gate_profiles.local.inspect = ['npm test'];
+  })), /GATE_BUILD_OUTPUT_INVALID/);
+  assert.throws(() => validateGateTesting(broken(m => {
+    m.gate_testing.local.inspect.build_output.producer_gate = 'other';
+  })), /GATE_BUILD_OUTPUT_PRODUCER_MISSING/);
+});
+
+test('live PostgreSQL preflight freezes only safe, explicit validateOnly repository scripts', () => {
+  const image = 'postgres:16@sha256:' + 'a'.repeat(64);
+  const build = command => ({ gate_profiles: { local: { check: ['pnpm exec vitest run --config vitest.live.ts'] } },
+    gate_testing: { local: { check: { live_postgres: {
+      image, command_indexes: [0], preflight_command: command,
+    } } } } });
+  for (const command of [
+    'node scripts/testing/preflight.mjs --pipeline-preflight',
+    'pnpm exec tsx scripts/testing/preflight.ts --pipeline-preflight',
+    'corepack pnpm exec tsx scripts/testing/preflight.ts --pipeline-preflight',
+  ]) assert.doesNotThrow(() => validateGateTesting(build(command)));
+  for (const command of [
+    'node -e process.exit(0) --pipeline-preflight',
+    'node ../outside.js --pipeline-preflight',
+    'node scripts/testing/preflight.mjs',
+    'pnpm exec tsx /tmp/evil.ts --pipeline-preflight',
+    'pnpm exec tsx scripts/testing/preflight.ts --pipeline-preflight && touch x',
+    'bash scripts/testing/preflight.sh --pipeline-preflight',
+  ]) assert.throws(() => validateGateTesting(build(command)), /GATE_TESTING_PREFLIGHT_INVALID/, command);
+});
+
 function fakeDocker({ startFails = false, badOwner = false, readinessFails = false } = {}) {
   const calls = []; let owner;
   const invoke = async (exe, args, env) => {
@@ -205,4 +313,15 @@ test('pre-publish release and install gates may hold test resources; post-publis
   assert.throws(() => validateGateTesting({ ...post, gate_testing: { release: { 'release-parity': { timeout_seconds: 60 } } } }), /test resources cannot wrap deployment gates/);
   const deploy = manifest(['dev-install'], { 'dev-install': 'local_gate' });
   assert.equal(isPrePublishGate({ ...deploy, gate_profiles: { release: { 'dev-deploy': ['x'] } } }, 'release', 'dev-deploy'), false);
+});
+
+test('post-deploy input classification is accepted without enabling deployment test resources', () => {
+  const manifest = {
+    pipelines: [{ id: 'app', profile: 'local', stages: ['deploy', 'smoke'], executors: { deploy: 'dev_deploy', smoke: 'local_gate' } }],
+    gate_profiles: { local: { smoke: ['curl http://localhost/health'] } },
+    gate_testing: { local: { smoke: { input_kind: 'deployed-service' } } },
+  };
+  assert.doesNotThrow(() => validateGateTesting(manifest));
+  manifest.gate_testing.local.smoke.live_postgres = { image, command_indexes: [0] };
+  assert.throws(() => validateGateTesting(manifest), /test resources cannot wrap deployment gates/);
 });

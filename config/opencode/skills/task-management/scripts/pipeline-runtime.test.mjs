@@ -8,9 +8,11 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import runtime from '../../../plugins/pipeline-runtime.ts';
 import { dispatchPacket } from './pipeline-dispatch.ts';
+import { computeRunnable } from './stage-cli-core.ts';
+import { withApprovalArgs } from './test-approval-args.mjs';
 const STAGE_CLI = fileURLToPath(new URL('./stage-cli.ts', import.meta.url));
 function run(cwd, args) {
- const result = spawnSync('npx',['--yes','tsx',STAGE_CLI,...args], {cwd,encoding:'utf8',env:process.env});
+ const result = spawnSync('npx',['--yes','tsx',STAGE_CLI,...withApprovalArgs(cwd,args)], {cwd,encoding:'utf8',env:process.env});
  assert.equal(result.status,0,result.stderr); return result;
 }
 async function tempProject() {
@@ -512,6 +514,163 @@ test('after a restart the session that drives the RUN CLI is woken without a new
   }
 });
 
+test('a settled background child wakes its parent without any parent execution event', async () => {
+  const previousCwd = process.cwd(), root = await tempProject();
+  const previousDelay = process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS = '15';
+  try {
+    const runDir = path.join(root, '.tmp/pipelines/child-wake-run');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(path.join(runDir, 'state.json'), JSON.stringify({
+      status: 'in_progress',
+      pipelines: { p: { status: 'in_progress', stages: { implementation: { status: 'in_progress' } } } },
+    }));
+    const hooks = {}, synthetic = [];
+    let resolveChild;
+    const childDone = new Promise(resolve => { resolveChild = resolve; });
+    await runtime.setup({
+      location: { directory: root },
+      tool: { hook: async (name, callback) => { hooks[name] = callback; }, transform: async fn => fn({ add: () => {} }) },
+      session: {
+        hook: async () => {},
+        get: async () => ({ data: {} }),
+        wait: async ({ sessionID }) => {
+          assert.equal(sessionID, 'child-background');
+          await childDone;
+        },
+        synthetic: async input => { synthetic.push(input); },
+      },
+    });
+    process.chdir(root);
+    await hooks['execute.before']({
+      tool: 'subagent', sessionID: 'orch', id: 'gate',
+      input: { agent: 'GateRunner', prompt: 'Run: gate-runner-cli.ts child-wake-run p fail-fast' },
+    });
+    const { writeLease, readLeases } = await import('./dispatch-leases.mjs');
+    writeLease(runDir, {
+      run_id: 'child-wake-run', pipeline_id: 'p', stage: 'implementation',
+      work_item_id: 'wi-1', role: 'CoderAgent', writes: true,
+      parent_session_id: 'orch', child_session_id: 'child-background', scope: ['src/**'],
+    });
+    await hooks['execute.after']({
+      tool: 'subagent', status: 'completed', sessionID: 'orch', id: 'bg',
+      input: { background: true },
+      result: { content: 'working in the background (sessionID: child-background)' },
+    });
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.equal(synthetic.length, 0, 'unfinished child must not resume parent');
+    assert.equal(readLeases(runDir).length, 1);
+    resolveChild();
+    // Deliberately never emit session.execution.succeeded for the parent.
+    await new Promise(resolve => setTimeout(resolve, 120));
+    assert.equal(readLeases(runDir).length, 0, 'resolved wait releases the child lease');
+    assert.equal(synthetic.length, 1, 'child completion schedules one parent wake');
+    assert.match(synthetic[0].text, /child-wake-run/);
+  } finally {
+    if (previousDelay === undefined) delete process.env.PIPELINE_WAKE_DELAY_MS;
+    else process.env.PIPELINE_WAKE_DELAY_MS = previousDelay;
+    process.chdir(previousCwd);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('failed automatic wake is retried and only a delivered wake consumes the fingerprint', async () => {
+  const previousCwd = process.cwd(), root = await tempProject();
+  const previousDelay = process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS = '15';
+  try {
+    const runDir = path.join(root, '.tmp/pipelines/wake-retry-run');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(path.join(runDir, 'state.json'), JSON.stringify({ status: 'in_progress', pipelines: {} }));
+    const hooks = {};
+    let attempts = 0, delivered = 0;
+    await runtime.setup({
+      location: { directory: root },
+      tool: { hook: async (name, callback) => { hooks[name] = callback; }, transform: async fn => fn({ add: () => {} }) },
+      session: {
+        hook: async () => {},
+        get: async () => ({ data: {} }),
+        wait: async () => {},
+        synthetic: async () => {
+          attempts++;
+          if (attempts === 1) throw new Error('temporary transport failure');
+          delivered++;
+        },
+      },
+    });
+    process.chdir(root);
+    await hooks['execute.before']({
+      tool: 'subagent', sessionID: 'orch', id: 'gate',
+      input: { agent: 'GateRunner', prompt: 'Run: gate-runner-cli.ts wake-retry-run p fail-fast' },
+    });
+    await hooks['execute.after']({
+      tool: 'subagent', status: 'completed', sessionID: 'orch', id: 'bg',
+      input: { background: true },
+      result: { content: 'working in the background (sessionID: completed-child)' },
+    });
+    await new Promise(resolve => setTimeout(resolve, 160));
+    assert.equal(attempts, 2, 'failed synthetic must not permanently suppress the next attempt');
+    assert.equal(delivered, 1);
+    const log = await readFile(path.join(runDir, 'reuse-metrics/events.jsonl'), 'utf8');
+    assert.match(log, /orchestrator_wake_failed/);
+    assert.match(log, /orchestrator_wake/);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(attempts, 2, 'successful delivery is deduplicated');
+  } finally {
+    if (previousDelay === undefined) delete process.env.PIPELINE_WAKE_DELAY_MS;
+    else process.env.PIPELINE_WAKE_DELAY_MS = previousDelay;
+    process.chdir(previousCwd);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a PLAN prompt containing an example RUN command cannot trigger an automatic wake', async () => {
+  const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='10';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/wake-run'); await mkdir(runDir,{recursive:true});
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{}}));
+    const sessionHooks={}, synthetic=[]; let push;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async()=>{},transform:async fn=>fn({add:()=>{}})},
+      event:{subscribe:()=>events}, session:{hook:async(name,fn)=>{sessionHooks[name]=fn;},get:async()=>({data:{}}),wait:async()=>{},synthetic:async input=>{synthetic.push(input);}}});
+    sessionHooks.prompt({sessionID:'orch',prompt:{text:'/pipeline-plan wake-run\nExample after approval: /pipeline-run wake-run'}});
+    await new Promise(resolve=>setTimeout(resolve,5));
+    push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,60));
+    assert.equal(synthetic.length,0);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('an owner checkpoint does not suppress a wake for an independent queued pipeline', async () => {
+  const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='10';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/wake-lanes'); await mkdir(runDir,{recursive:true});
+    const manifestPath=path.join(runDir,'manifest.json');
+    await writeFile(manifestPath,JSON.stringify({pipelines:[{id:'waiting',executors:{accept:'owner_acceptance'}},{id:'work',executors:{build:'agent'}}]}));
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({run_id:'wake-lanes',status:'in_progress',manifest_file:manifestPath,pipelines:{
+      waiting:{id:'waiting',status:'in_progress',stage_order:['accept'],stages:{accept:{status:'in_progress'}}},
+      work:{id:'work',status:'approved',stage_order:['build'],stages:{build:{status:'pending'}}},
+    }}));
+    assert.deepEqual(computeRunnable(JSON.parse(await readFile(path.join(runDir,'state.json'),'utf8'))), [{pipeline_id:'work',stage:'build'}]);
+    const sessionHooks={}, synthetic=[]; let push;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async()=>{},transform:async fn=>fn({add:()=>{}})},
+      event:{subscribe:()=>events},session:{hook:async(name,fn)=>{sessionHooks[name]=fn;},get:async()=>({data:{}}),wait:async()=>{},synthetic:async input=>{synthetic.push(input);}}});
+    sessionHooks.prompt({sessionID:'orch',prompt:{text:'/pipeline-run wake-lanes'}});
+    await new Promise(resolve=>setTimeout(resolve,5)); push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,60));
+    assert.equal(synthetic.length,1); assert.match(synthetic[0].text,/stage-cli next wake-lanes/);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
 test('an OpenStage turn that ends with nothing running is woken once', async () => {
   const previousCwd=process.cwd(), root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
   process.env.PIPELINE_WAKE_DELAY_MS='10';
@@ -635,6 +794,39 @@ test('waves start independent work items together and hold back dependents and p
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });
 
+test('detached child lease survives a dead parent until the stage is proven complete', async () => {
+  const root = await tempProject();
+  try {
+    const runDir = path.join(root, '.tmp/pipelines/orphan-run');
+    await mkdir(runDir, { recursive: true });
+    const { writeLease, readLeases, leaseConflict } = await import('./dispatch-leases.mjs');
+    const entry = { run_id: 'orphan-run', pipeline_id: 'p', stage: 'implementation',
+      work_item_id: 'w1', role: 'CoderAgent', writes: true, scope: ['src/**'],
+      parent_session_id: 'old-parent', child_session_id: 'still-running-child' };
+    const running = { pipelines: { p: { stages: { implementation: { status: 'in_progress' } } } } };
+    writeLease(runDir, entry);
+    const afterRestart = readLeases(runDir, { alive: () => false, state: running });
+    assert.equal(afterRestart.length, 1, 'a dead parent is not evidence of child completion');
+    assert.ok(leaseConflict(afterRestart,
+      { pipeline_id: 'p', stage: 'implementation', work_item_id: 'w2' }, ['src/file.ts']),
+      'the orphaned writer still reserves overlapping paths');
+
+    // A crash before an acknowledgement leaves only parent_session_id; that
+    // reservation must also survive because the child may already be writing.
+    writeLease(runDir, { ...entry, work_item_id: 'before-ack', child_session_id: undefined });
+    assert.equal(readLeases(runDir, { alive: () => false, state: running }).length, 2);
+    // An old legacy lease with no parent or child correlation can still be
+    // pruned on a dead owner without blocking unrelated source lanes.
+    writeLease(runDir, { ...entry, work_item_id: 'legacy',
+      parent_session_id: undefined, child_session_id: undefined });
+    assert.equal(readLeases(runDir, { alive: () => false, state: running }).length, 2);
+
+    const completed = { pipelines: { p: { stages: { implementation: { status: 'completed' } } } } };
+    assert.equal(readLeases(runDir, { alive: () => false, state: completed }).length, 0,
+      'authoritative stage completion is sufficient to release the old lease');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('a gate passed on a tree snapshot completes only while the lane files still match that snapshot', async () => {
  const previousCwd = process.cwd(), root = await tempProject();
  try {
@@ -716,7 +908,91 @@ test('a lane in its gate or review reserves its planned files, not shared runtim
  } finally { process.chdir(previousCwd); await rm(root,{recursive:true,force:true}); }
 });
 
-test('wake prunes stale leases of its parent: gone child, foreground lease; a running child keeps the session asleep', async () => {
+test('wake re-probes an unknown child and releases its lease only after a later resolved wait', async () => {
+  const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='15';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/reprobe-run'); await mkdir(runDir,{recursive:true});
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{p:{status:'in_progress',stages:{implementation:{status:'in_progress'}}}}}));
+    const hooks={}, synthetic=[]; let push, probes=0;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},event:{subscribe:()=>events},
+      session:{hook:async()=>{},get:async()=>({data:{}}),wait:async()=>{ if (++probes === 1) throw Error('transport unavailable'); },synthetic:async value=>{synthetic.push(value);}}});
+    await hooks['execute.before']({tool:'subagent',sessionID:'orch',id:'gate',input:{agent:'GateRunner',prompt:'Run: gate-runner-cli.ts reprobe-run p fail-fast'}});
+    const { writeLease, readLeases }=await import('./dispatch-leases.mjs');
+    writeLease(runDir,{run_id:'reprobe-run',pipeline_id:'p',stage:'implementation',work_item_id:'wi-1',role:'CoderAgent',scope:['src/**'],parent_session_id:'orch',child_session_id:'child'});
+    await new Promise(resolve=>setTimeout(resolve,5)); push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,120));
+    assert.equal(probes,2); assert.equal(readLeases(runDir).length,0); assert.equal(synthetic.length,1);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('repeated unknown child health is bounded, diagnosed and leaves its lease intact', async () => {
+  const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='15';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/unknown-run'); await mkdir(runDir,{recursive:true});
+    await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{p:{status:'in_progress',stages:{implementation:{status:'in_progress'}}}}}));
+    const hooks={}, synthetic=[]; let push, probes=0;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},event:{subscribe:()=>events},
+      session:{hook:async()=>{},get:async()=>({data:{}}),wait:async()=>{ probes++; throw Error('unavailable'); },synthetic:async value=>{synthetic.push(value);}}});
+    await hooks['execute.before']({tool:'subagent',sessionID:'orch',id:'gate',input:{agent:'GateRunner',prompt:'Run: gate-runner-cli.ts unknown-run p fail-fast'}});
+    const { writeLease, readLeases }=await import('./dispatch-leases.mjs');
+    writeLease(runDir,{run_id:'unknown-run',pipeline_id:'p',stage:'implementation',work_item_id:'wi-1',role:'CoderAgent',scope:['src/**'],parent_session_id:'orch',child_session_id:'child'});
+    await new Promise(resolve=>setTimeout(resolve,5)); push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,180));
+    assert.equal(probes,4); assert.equal(readLeases(runDir).length,1); assert.equal(synthetic.length,1);
+    assert.match(synthetic[0].text,/remains unknown.*lease is retained.*do not redispatch/s);
+    const log=await readFile(path.join(runDir,'reuse-metrics/events.jsonl'),'utf8');
+    assert.match(log,/child_liveness_unresolved/);
+    push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(synthetic.length,1,'repeated event does not repeat the notice');
+    let pushAfterRestart; const hooksAfterRestart={};
+    const restartEvents={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{pushAfterRestart=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooksAfterRestart[name]=fn;},transform:async fn=>fn({add:()=>{}})},event:{subscribe:()=>restartEvents},
+      session:{hook:async()=>{},get:async()=>({data:{}}),wait:async()=>{ throw Error('unavailable'); },synthetic:async value=>{synthetic.push(value);}}});
+    await hooksAfterRestart['execute.before']({tool:'subagent',sessionID:'orch',id:'gate2',input:{agent:'GateRunner',prompt:'Run: gate-runner-cli.ts unknown-run p fail-fast'}});
+    await new Promise(resolve=>setTimeout(resolve,5)); pushAfterRestart({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,180));
+    assert.equal(synthetic.length,1,'persisted notice prevents duplicates after restart');
+    assert.equal(readLeases(runDir).length,1);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('exhausted unknown child and newly runnable independent work produce one parent message', async () => {
+  const root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
+  process.env.PIPELINE_WAKE_DELAY_MS='15';
+  try {
+    const runDir=path.join(root,'.tmp/pipelines/combined-run'); await mkdir(runDir,{recursive:true});
+    const statePath=path.join(runDir,'state.json');
+    const state={run_id:'combined-run',status:'in_progress',pipelines:{p:{status:'in_progress',stage_order:['implementation'],stages:{implementation:{status:'in_progress'}}}}};
+    await writeFile(statePath,JSON.stringify(state));
+    const hooks={}, synthetic=[]; let push, probes=0;
+    const events={[Symbol.asyncIterator](){return {next:()=>new Promise(resolve=>{push=value=>resolve({value,done:false});})};}};
+    await runtime.setup({location:{directory:root},tool:{hook:async(name,fn)=>{hooks[name]=fn;},transform:async fn=>fn({add:()=>{}})},event:{subscribe:()=>events},
+      session:{hook:async()=>{},get:async()=>({data:{}}),wait:async()=>{ if (++probes===3) { state.pipelines.q={status:'approved',stage_order:['build'],stages:{build:{status:'pending'}}}; await writeFile(statePath,JSON.stringify(state)); } throw Error('unavailable'); },synthetic:async value=>{synthetic.push(value);}}});
+    await hooks['execute.before']({tool:'subagent',sessionID:'orch',id:'gate',input:{agent:'GateRunner',prompt:'Run: gate-runner-cli.ts combined-run p fail-fast'}});
+    const { writeLease, readLeases }=await import('./dispatch-leases.mjs');
+    writeLease(runDir,{run_id:'combined-run',pipeline_id:'p',stage:'implementation',work_item_id:'wi-1',role:'CoderAgent',scope:['src/**'],parent_session_id:'orch',child_session_id:'child'});
+    await new Promise(resolve=>setTimeout(resolve,5)); push({type:'session.execution.succeeded',data:{sessionID:'orch'}});
+    await new Promise(resolve=>setTimeout(resolve,180));
+    assert.equal(probes,4); assert.equal(synthetic.length,1); assert.match(synthetic[0].text,/remains unknown.*independently runnable/s);
+    assert.equal(readLeases(runDir).length,1);
+  } finally {
+    if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('wake keeps unknown child leases, releases proven idle children and clears foreground leases', async () => {
   const previousCwd=process.cwd(), root=await tempProject(), previousDelay=process.env.PIPELINE_WAKE_DELAY_MS;
   process.env.PIPELINE_WAKE_DELAY_MS='10';
   try {
@@ -739,13 +1015,18 @@ test('wake prunes stale leases of its parent: gone child, foreground lease; a ru
     assert.equal(readLeases(runDir).length,1);
     waits.c1=()=>Promise.reject(new Error('gone'));
     await idle();
-    assert.equal(synthetic.length,1,'gone child: lease removed, one wake');
+    assert.equal(synthetic.length,1,'exhausted unknown probes report liveness without assuming completion');
+    assert.match(synthetic[0].text,/remains unknown/);
+    assert.equal(readLeases(runDir).length,1);
+    waits.c1=()=>Promise.resolve();
+    await idle();
+    assert.equal(synthetic.length,2,'resolved wait proves idle: lease removed, one wake');
     assert.equal(readLeases(runDir).length,0);
     writeLease(runDir,{...base,work_item_id:'wi-2'});
     await writeFile(path.join(runDir,'state.json'),JSON.stringify({status:'in_progress',pipelines:{p:{status:'in_progress',stages:{implementation:{status:'in_progress'},review:{status:'pending'}}}}}));
     await idle();
     assert.equal(readLeases(runDir).length,0,'foreground lease removed');
-    assert.equal(synthetic.length,2);
+    assert.equal(synthetic.length,3);
   } finally {
     if (previousDelay===undefined) delete process.env.PIPELINE_WAKE_DELAY_MS; else process.env.PIPELINE_WAKE_DELAY_MS=previousDelay;
     process.chdir(previousCwd); await rm(root,{recursive:true,force:true});

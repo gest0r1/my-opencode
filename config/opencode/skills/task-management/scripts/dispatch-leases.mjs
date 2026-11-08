@@ -59,8 +59,11 @@ export function removeLease(runRoot, identity) {
   rmSync(join(leaseDir(runRoot), leaseName(identity)), { force: true });
 }
 
-// Live leases only: a lease whose owning OpenCode process is gone (restart, crash) or whose stage
-// is already completed is dropped, since its worker cannot still be writing.
+// A completed stage releases its lease. A missing owner process releases only a legacy
+// lease with neither parent-session nor child-session evidence: a dispatch can crash
+// between reservation and child acknowledgement, and detached children can survive
+// the parent restart. The runtime's bounded unknown-child probe retains these
+// reservations until a successful wait, explicit owner action, or completed stage.
 export function readLeases(runRoot, { alive = ownerAlive, state } = {}) {
   let names = [];
   try { names = readdirSync(leaseDir(runRoot)).filter(name => name.endsWith('.json')); } catch { return []; }
@@ -70,7 +73,11 @@ export function readLeases(runRoot, { alive = ownerAlive, state } = {}) {
     let lease;
     try { lease = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }
     const finished = state?.pipelines?.[lease.pipeline_id]?.stages?.[lease.stage]?.status === 'completed';
-    if (!alive(lease.owner_pid, lease.owner_pid_start) || finished) { rmSync(file, { force: true }); continue; }
+    const ownerGone = !alive(lease.owner_pid, lease.owner_pid_start);
+    if (finished || (ownerGone && !lease.parent_session_id && !lease.child_session_id)) {
+      rmSync(file, { force: true });
+      continue;
+    }
     leases.push(lease);
   }
   return leases;
