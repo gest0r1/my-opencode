@@ -1,0 +1,31 @@
+$ node scripts/check-changed.mjs --base "ce853f415704d1bfe8d076a5cfb2caabac00fffd"
+Base ce853f415; 177 changed source file(s).
+
+▶ type-check
+$ bun run opencode:pins && bun check -b && bun run --cwd packages/electron type-check
+$ node scripts/check-opencode-pins.mjs
+PASS: OpenChamber OpenCode pins 2.2.5
+✓ No type errors in 3,914 files across 7 projects [4.14s]
+$ node --check ./entry.mjs && node --check ./early-startup.mjs && node --check ./main.mjs && node --check ./preload.mjs && node --check ./browser-panel-preload.cjs
+
+▶ lint
+$ bun run --filter '*' lint
+@openchamber/sdk lint: Exited with code 0
+@openchamber/mobile lint: Exited with code 0
+@openchamber/web lint: Exited with code 0
+@openchamber/electron lint: Exited with code 0
+@openchamber/ui lint: src/components/inline-picker/useTextareaInlinePicker.tsx:47:3: warning react-hooks(exhaustive-deps): React Hook useEffect contains a call to setState. Without a list of dependencies, this can lead to an infinite chain of updates. help: Consider adding an empty list of dependencies to make it clear which values are intended to be stable.
+@openchamber/ui lint: Exited with code 0
+openchamber lint: Exited with code 0
+
+▶ dead code
+$ bunx knip@5.80.0 --include files,exports,nsExports,types,nsTypes,enumMembers,duplicates
+Configuration hints (3)
+*.{js,cjs,mjs,ts}   packages/mobile  knip.json  Refine project pattern (no matches)
+fix-deprecation.js                   knip.json  Remove redundant entry pattern     
+bin/cli.js          packages/web     knip.json  Remove redundant entry pattern     
+
+▶ anti-slop ratchet
+  No new findings.
+
+✓ All checks passed.

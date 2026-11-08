@@ -1,0 +1,19 @@
+✔ V2 release uses x64 targets, direct uploads and guarded publication (2.015637ms)
+✔ Windows keeps directory selection and desktop shortcuts (0.426412ms)
+✔ Android signing blockers leave independent builds runnable and uploads remain drafts (0.578672ms)
+✔ publication requires successful release creation and every platform dependency (4.821019ms)
+✔ release authorization handles draft through the executable workflow (441.869183ms)
+✔ release authorization handles published through the executable workflow (303.907502ms)
+✔ release authorization handles missing through the executable workflow (274.271767ms)
+✔ release authorization handles unavailable through the executable workflow (201.927158ms)
+✔ a fork release x.y.z.n keeps packages on the upstream version and tags the fork number (639.367584ms)
+✔ release package reuse binds source, fingerprint, version and immutable asset identity (3.110317ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2167.97605
+fork release policy: PASS
