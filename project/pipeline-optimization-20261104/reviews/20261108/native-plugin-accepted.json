@@ -1,0 +1,30 @@
+{
+  "api_status": 200,
+  "pipeline_plugin": {
+    "id": "pipeline-runtime",
+    "source": {
+      "type": "local",
+      "path": "/workspace/scratch/33c68a33a56d/final-20261108/plugin-auto-home/config/opencode/plugins/pipeline-runtime.ts"
+    },
+    "features": {
+      "server": true
+    },
+    "state": {
+      "status": "active"
+    }
+  },
+  "elapsed_seconds": 3.2798385189998953,
+  "github_handoff": {
+    "id": "github-handoff",
+    "source": {
+      "type": "local",
+      "path": "/workspace/scratch/33c68a33a56d/final-20261108/plugin-auto-home/config/opencode/plugins/github-handoff.ts"
+    },
+    "features": {
+      "server": true
+    },
+    "state": {
+      "status": "active"
+    }
+  }
+}

@@ -1,6 +1,94 @@
 # Frozen local test contract
 
 `gate_profiles[profile][gate]` remains the complete authoritative command array.
+
+## Stateless PLAN live-gate preflight
+
+A PLAN probe is not a RUN. It never creates or simulates `state.json` and never
+imports a published `candidate.json`, `CANDIDATE_SHA` or a production contour.
+For a `local_gate` with `gate_testing[profile][gate].live_postgres`, freeze an
+**explicit** `live_postgres.preflight_command`:
+
+```json
+{
+  "live_postgres": {
+  "image": "postgres:16@sha256:<actual 64-hex digest>",
+  "command_indexes": [0],
+  "preflight_command": "pnpm exec tsx scripts/testing/live-pg-preflight.ts --pipeline-preflight"
+  }
+}
+```
+
+The preflight command is a repository-local `node <script.js>` or
+`pnpm exec tsx <script.ts>` (also `corepack pnpm exec tsx`) ending with
+`--pipeline-preflight`, without shell composition or arbitrary flags. Its
+`validateOnly` mode must use the project's **same** phase-aware evidence resolver
+as its live runner, return nonzero on unresolvable/ambiguous runtime or input, and
+not create evidence, allocate resources or touch production. This is a contract
+for the consumer; the generic runner does not implement project-specific adapters.
+
+The runner checks a clean git checkout, then holds the existing machine heavy
+and live slots in their established acquisition order. It creates **one**
+`.tmp/pipelines/.runtime-locks` gate lock with PID/PID-start, `phase=plan_probe`,
+absolute canonical `manifest_file` under `.tmp/pipelines/<run-id>/`,
+`manifest_sha256` of the **raw** draft bytes, `head_sha` and `input_digest`.
+The digest is SHA-256(JSON.stringify([
+`"plan-probe-input-v1"`, lowercase HEAD SHA, commandsDigest(frozen commands),
+{ image, command_indexes, preflight_command }
+])). The `manifest_sha256` is audit provenance and may change while PLAN edits
+unrelated frozen sections; it does not independently invalidate a probe. The
+HEAD, commands and resource contract do invalidate it.
+
+While the lock is held, run the cheap validator **before** allocating a gate
+attempt/scratch directory or running Docker/expensive test commands. On nonzero
+validation or missing preflight the runner writes `status=BLOCKED`,
+`attempt=null`, `preflight_status=FAIL` and no command PASS. On success it
+runs the original frozen gate, records `phase`, raw manifest SHA, input digest,
+`candidate_sha=null`, cleanup outcome and exits without leaving phase locks.
+The existing project live resource lifecycle remains authoritative; cleanup
+failures turn the result into BLOCKED.
+
+For PLAN acceptance a live probe must bind the exact pipeline (no cross-pipeline
+reuse), its frozen HEAD, commands and resource contract, with successful
+`preflight_status`. Legacy non-live probe behavior is unchanged. Existing RUN
+state/candidate resolution remains unchanged. This source contract requires a
+separate actual-adapter integration test; generic fake-Docker PASS cannot verify
+a consumer's phase resolver.
+
+### Deployed-service provenance
+
+For a frozen `input_kind: "deployed-service"` local gate, the existing
+`gate-runner-cli.ts` requires the preceding `dev_deploy` stage to be
+`completed`, the exact published candidate from `candidate.json` (including
+run/branch/manifest/remote SHA checks), and the existing
+`dev-deploy-cli.ts` proof. Its verifier reads the root-owned current target
+record from `OPENCODE_DEPLOY_STATE_DIR` (default:
+`/var/lib/opencode/deploy-targets`), checks the target key, installed candidate
+SHA, successful install and installed timestamp after stage start, plus a
+candidate-referencing service status file. **Only then** can the smoke commands
+run. It passes the verified contour key as `PIPELINE_DEPLOY_TARGET` and rechecks
+candidate and contour identity before accepting their PASS result. The gate evidence records `deployed_service` provenance; it does not
+deploy, modify the target, or create a second installation store.
+
+The target state is a read-only point-in-time observation; if the target changes
+during the smoke, external services may change independently. Do not describe
+this as a cryptographic attestation or as a production deployment test.
+
+## Declared gate input (new PLANs)
+
+A local gate may freeze `gate_testing[profile][gate].input_kind`, which is
+validated by the existing gate policy rather than a second executor:
+
+- `tree`: test/check the working tree; the local gate must be **before** `git_publish` and cannot require `{candidate_sha}`.
+- `candidate`: must follow `git_verify` and the `git_publish` producer; every frozen command includes `{candidate_sha}`. The runner checks the canonical publish evidence for the same run, frozen manifest, branch and matching candidate/remote SHA before substitution. This establishes the identity passed to a command, not that a command actually verifies the candidate correctly.
+- `deployed-service`: must follow `dev_deploy`, never a PLAN probe.
+- `build-output`: consumes an exact artifact emitted by a **preceding** `local_gate` in the same pipeline. Declare `input_kind: "tree", artifact_output: { "path": "dist/bundle.tgz" }` on the producer gate, and `input_kind: "build-output", build_output: { "producer_gate": "assemble" }` on the consumer. Each consumer command includes `{artifact_path}`. Output paths must be exact files in `dist/` or `build/` (not arbitrary source/working paths). Producer commands run **in place** in RUN; PLAN clean-tree probes cannot produce this artifact. The existing runner writes the successful producer's run/pipeline/manifest/source digest and artifact SHA-256 to its normal gate evidence. Consumer requires the producer stage `completed`, verifies those fields and current file bytes **before and after** its commands, and refuses cached PASS for either producing or consuming gates. No separate artifact cache, implicit build, or post-publish source mutation is permitted. Output persistence follows the checkout's local build lifecycle, so a missing or cleaned artifact forces a fresh build instead of a false PASS.
+
+Existing frozen manifests that omit `input_kind` retain their previous behavior.
+This declaration does not replace `git_verify`, runner snapshot identity, SHA checks,
+or a final full gate. Mark tree-only expensive suites before publish; post-publish
+candidate checks must verify the same committed candidate, not a mutable checkout.
+
 The optional `gate_testing[profile][gate]` adds diagnostic impact groups and
 managed PostgreSQL resources. Validation and selection are implemented once in
 `scripts/gate-testing-policy.mjs`; lifecycle and evidence belong to the existing
@@ -147,8 +235,7 @@ clock, competes for CPU and memory, and reports other workers' half-finished edi
   When a change impacts only coordinator commands, the worker check runs nothing and its
   evidence names them in `deferred_to_coordinator`; the coordinator check
   (`--advisory --coordinator`) before a review and the final complete gate run them.
-- Reuse is per command: a command that already passed on the identical tree, manifest, gate and
-  environment is not run again (`commands_reused`), in advisory and authoritative runs alike.
+- Reuse is per command for **source-only evidence**: an already passing command with proven identical source, toolchain and environment may be reused (`commands_reused`) in advisory and authoritative runs. Commands backed by a disposable `live_postgres` container, `artifact_output` producers and `input_kind: build-output` / `input_kind: deployed-service` consumers are **always executed** for each gate attempt: earlier PASS does not prove the new database/service state. Unrelated pure commands in the same gate may still be reused. Local ignored files copied into a gate snapshot, and local nontracked configuration files that an in-place fallback can read, are hashed into the aggregate reuse identity. The runner rejects reuse if that input set changes during the attempt; it does not persist the contents. If snapshot copying fails, it falls back to in-place validation instead of silently omitting the input.
 - `parallel_groups` lists 2–3 consecutive frozen indexes that may run at the same time, so a
   group is one step of the frozen order. Neighbouring selected members run concurrently;
   everything else runs alone in frozen order. Live-PostgreSQL commands never join a group, and two

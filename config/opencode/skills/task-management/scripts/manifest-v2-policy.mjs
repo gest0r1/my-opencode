@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { accessSync, constants, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { validateGateTesting, resolveGateTesting, commandsDigest, isPrePublishGate } from './gate-testing-policy.mjs';
+import { planProbeInputDigest } from './plan-probe-identity.mjs';
 import { validateGenerators } from './generator-cli.mjs';
 
 export class ManifestV2PolicyError extends Error {}
@@ -246,6 +247,42 @@ function validatePlanningInputs(manifest) {
   }
 }
 
+// Keep PLAN's frozen evidence acceptance and GitHub publication identical.
+// A carried technical finding is accepted only when the machine-owned plan-review
+// ledger binds its final review and carry event to the same immutable SHA-256.
+export function isPublishableStoryReview(content, { runRoot, gate, reviewSha256, carriedFindings = [] } = {}) {
+  if (typeof content !== 'string' || !content.trim()) return false;
+  let status;
+  let scope;
+  try {
+    const parsed = JSON.parse(content);
+    status = parsed?.status;
+    scope = parsed?.review_scope;
+  } catch {
+    const field = name => content.split(/\r?\n/).map(line => line.replace(/[\`*]/g, '').trim())
+      .map(line => new RegExp('^' + name + '\\s*:\\s*(ready|needs_revision|blocked|full|delta)\\b', 'i').exec(line)?.[1])
+      .find(Boolean);
+    status = field('status');
+    scope = field('review_scope');
+  }
+  const readyFull = String(status).toLowerCase() === 'ready' && String(scope).toLowerCase() === 'full';
+  if (!runRoot || !gate || !SHA256.test(String(reviewSha256 ?? ''))) return readyFull;
+  const ledgerFile = join(runRoot, 'planning', 'review-ledger.json');
+  if (!exists(ledgerFile)) return readyFull; // Legacy plans without a ledger.
+  let ledger;
+  try { ledger = JSON.parse(readFileSync(ledgerFile, 'utf8')); }
+  catch { return false; } // A corrupt existing ledger must never fall back to legacy.
+  if (ledger.run_id !== basename(runRoot) || !Array.isArray(ledger.entries)) return false;
+  const entries = ledger.entries.filter(entry => entry?.gate === gate);
+  const reviews = entries.filter(entry => entry.kind === 'review');
+  const last = reviews.at(-1);
+  if (!last || last.sha256 !== reviewSha256) return false;
+  if (readyFull) return last.status === 'ready' && last.scope === 'full' && !last.owner_decision;
+  if (String(status).toLowerCase() !== 'needs_revision' || last.status !== 'needs_revision' || last.owner_decision) return false;
+  const carried = entries.find(entry => entry.kind === 'carry' && entry.review_sha256 === last.sha256);
+  return Boolean(carried && carriedFindings.some(item => item.sha256 === carried.sha256));
+}
+
 function validatePlanningReadiness(manifest, root) {
   const readiness = manifest.planning_readiness;
   if (!readiness || typeof readiness !== 'object' || readiness.design_freeze !== true) {
@@ -278,7 +315,18 @@ function validatePlanningReadiness(manifest, root) {
       throw new ManifestV2PolicyError(`ready planning gate cannot retain blocking_decision_ids: ${gate}`);
     }
     readFrozenArtifact(root, record.artifact, `planning_readiness.gates.${gate}.artifact`);
-    if (record.review !== undefined) {
+    if (/stor/i.test(gate)) {
+      if (record.review === undefined) {
+        throw new ManifestV2PolicyError('STORY_REVIEW_NOT_FULL_READY: missing frozen full Story review');
+      }
+      const reviewPath = readFrozenArtifact(root, record.review, `planning_readiness.gates.${gate}.review`);
+      if (!isPublishableStoryReview(readFileSync(reviewPath, 'utf8'), {
+        runRoot: root, gate, reviewSha256: record.review.sha256,
+        carriedFindings: readiness.carried_findings ?? [],
+      })) {
+        throw new ManifestV2PolicyError('STORY_REVIEW_NOT_FULL_READY: full ready Story review required before PLAN approval');
+      }
+    } else if (record.review !== undefined) {
       readFrozenArtifact(root, record.review, `planning_readiness.gates.${gate}.review`);
     }
   }
@@ -394,9 +442,9 @@ function assertWorkItemOrder(manifest, records) {
 
 const TEST_REWORK_ACTIONS = new Set(['update', 'split', 'rewrite', 'add', 'move_setup', 'remove']);
 
-// `test_rework[]` freezes tests the run must rework before source lanes start (inventories, pins,
-// near-limit or cold-import tests). They form the `test_preparation` lane that every other lane
-// with an agent stage depends on, so RUN starts there and test time limits never rise.
+// test_rework[] owns existing test changes. Only source pipelines that consume a specific
+// prep result must wait for it; unrelated lanes remain runnable. Legacy frozen manifests
+// without required_by preserve the old all-source dependency contract.
 export function validateTestRework(manifest) {
   const pipelines = manifest.pipelines ?? [];
   const lanes = pipelines.filter((pipeline) => pipeline.test_preparation !== undefined);
@@ -433,13 +481,31 @@ export function validateTestRework(manifest) {
     if (!owner || owner.test_preparation !== true) {
       throw new ManifestV2PolicyError(`TEST_REWORK_WORK_ITEM_INVALID: ${entry.id} work_item_id must be a frozen work item of a test_preparation pipeline`);
     }
+    const consumers = entry.required_by;
+    if (consumers !== undefined) {
+      if (!Array.isArray(consumers) || new Set(consumers).size !== consumers.length ||
+          consumers.some(id => typeof id !== 'string' || !pipelines.some(p => p.id === id && p.id !== owner.id && p.test_preparation !== true))) {
+        throw new ManifestV2PolicyError(`TEST_REWORK_CONSUMERS_INVALID: ${entry.id} required_by must name distinct, existing non-prep pipeline IDs`);
+      }
+      for (const consumer of consumers) {
+        if (!dependencyReachable(pipelines, consumer, owner.id)) {
+          throw new ManifestV2PolicyError(`TEST_REWORK_DEPENDENCY_MISSING: ${consumer} needs ${owner.id} for ${entry.id}`);
+        }
+      }
+    }
   }
   for (const lane of prep) {
     if (lane.deployable !== false) throw new ManifestV2PolicyError(`TEST_REWORK_LANE_DEPLOYABLE: ${lane.id} test_preparation pipeline must declare deployable=false`);
+    // Existing frozen manifests (no explicit consumers) keep their original
+    // start order. New PLANs declare required_by for every test_rework item,
+    // including [] if prep has no blocked consumer.
+    const legacy = entries.some(entry => entry.required_by === undefined &&
+      workItems.get(entry.work_item_id)?.pipeline_id === lane.id);
+    if (!legacy) continue;
     for (const other of pipelines) {
       if (other.test_preparation === true || !Object.values(other.executors ?? {}).includes('agent')) continue;
       if (!dependencyReachable(pipelines, other.id, lane.id)) {
-        throw new ManifestV2PolicyError(`TEST_REWORK_LANE_NOT_FIRST: ${other.id} must depend (directly or transitively) on test_preparation pipeline ${lane.id}`);
+        throw new ManifestV2PolicyError(`TEST_REWORK_LANE_NOT_FIRST: ${other.id} must depend (directly or transitively) on legacy test_preparation pipeline ${lane.id}`);
       }
     }
   }
@@ -473,9 +539,21 @@ function readPlanProbe(runDirectory, pipelineId, gate) {
 }
 
 export function planProbeMatches(probe, manifest, { pipeline_id, profile, gate, commands }) {
-  return probe?.kind === 'plan_probe' && probe.run_id === manifest.run_id && probe.profile === profile && probe.gate === gate &&
+  const common = probe?.kind === 'plan_probe' && probe.run_id === manifest.run_id && probe.profile === profile && probe.gate === gate &&
     typeof probe.pipeline_id === 'string' && (manifest.pipelines ?? []).some((p) => p.id === probe.pipeline_id && p.profile === profile) &&
     probe.commands_sha256 === planProbeCommandsSha256(commands);
+  if (!common) return false;
+  const resource = manifest.gate_testing?.[profile]?.[gate]?.live_postgres;
+  if (!resource) return true; // Historical non-live probes retain their existing cross-lane contract.
+  // Live adapters derive owner and phase from the held gate runtime lock; evidence
+  // from another pipeline, another baseline HEAD, or a RUN cannot fulfill this PLAN.
+  const expectedHead = manifest.preserved_baseline?.head_sha ?? manifest.git_setup?.base_sha;
+  if (!SHA.test(expectedHead ?? '') || probe.pipeline_id !== pipeline_id ||
+      probe.phase !== 'plan_probe' || probe.candidate_sha !== null || probe.preflight_status !== 'PASS' ||
+      !SHA256.test(probe.manifest_sha256 ?? '') ||
+      String(probe.head_sha).toLowerCase() !== String(expectedHead).toLowerCase()) return false;
+  try { return probe.input_digest === planProbeInputDigest(commands, resource, probe.head_sha); }
+  catch { return false; }
 }
 
 // A baseline_repair item of the profile lets a red base through: PLAN assigned the failing suites to it.

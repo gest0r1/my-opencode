@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -19,10 +19,22 @@ async function snapshotFixture(script) {
   const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
   await mkdir(path.join(root, 'src'), { recursive: true });
   await mkdir(path.join(root, 'bin'));
-  await writeFile(path.join(root, '.gitignore'), '.tmp/\n.env*\n.snapshots/\n.locks/\n');
+  await writeFile(path.join(root, '.gitignore'), '.tmp/\n.env*\n.local-config/\n.snapshots/\n.locks/\nnode_modules/\n');
   await writeFile(path.join(root, 'src/value.txt'), 'base\n');
   await writeFile(path.join(root, 'src/other.txt'), 'base\n');
-  await writeFile(path.join(root, 'bin/pnpm'), `#!/usr/bin/env node\n${script}\n`, { mode: 0o755 });
+  // Reuse identity requires a real bounded project manager route, not merely a
+  // fake PATH binary: exact packageManager, manager package and local vitest.
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'snapshot-fixture', packageManager: 'pnpm@1.0.0' }));
+  await writeFile(path.join(root, 'pnpm-lock.yaml'), 'lockfileVersion: "9.0"\n');
+  await mkdir(path.join(root, 'node_modules/pnpm/bin'), { recursive: true });
+  await mkdir(path.join(root, 'node_modules/vitest/bin'), { recursive: true });
+  await mkdir(path.join(root, 'node_modules/.bin'), { recursive: true });
+  await writeFile(path.join(root, 'node_modules/pnpm/package.json'), JSON.stringify({ name: 'pnpm', version: '1.0.0' }));
+  await writeFile(path.join(root, 'node_modules/vitest/package.json'), JSON.stringify({ name: 'vitest', version: '1.0.0' }));
+  await writeFile(path.join(root, 'node_modules/vitest/bin/vitest.mjs'), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
+  await writeFile(path.join(root, 'node_modules/pnpm/bin/pnpm.cjs'), `#!/usr/bin/env node\nif (process.argv[2] === '--version') { console.log('1.0.0'); process.exit(0); }\n${script}\n`, { mode: 0o755 });
+  await symlink('../node_modules/pnpm/bin/pnpm.cjs', path.join(root, 'bin/pnpm'));
+  await symlink('../vitest/bin/vitest.mjs', path.join(root, 'node_modules/.bin/vitest'));
   assert.equal(git('init').status, 0);
   git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
   git('add', '.'); assert.equal(git('commit', '-m', 'base').status, 0);
@@ -44,11 +56,17 @@ async function snapshotFixture(script) {
   const manifestFile = path.join(stateRoot, runId, 'manifest.json');
   await writeFile(manifestFile, content);
   await writeFile(path.join(stateRoot, runId, 'state.json'), JSON.stringify({ run_id: runId, status: 'in_progress', manifest_file: manifestFile, manifest_sha256: sha256(content) }));
-  const snapshots = path.join(root, '.snapshots');
-  const runGate = ({ reuse = false } = {}) => spawnSync('npx', ['--yes', 'tsx', RUNNER, runId, 'app', 'build', '--state-root', stateRoot, ...(reuse ? [] : ['--no-reuse'])], {
-    cwd: root, encoding: 'utf8',
-    env: { ...process.env, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`, PIPELINE_GATE_SNAPSHOT: '1', PIPELINE_SNAPSHOT_DIR: snapshots, ORIGINAL_ROOT: root, PIPELINE_HEAVY_LOCK_DIR: path.join(root, '.locks') },
-  });
+  const snapshots = path.join(root, '.tmp', 'snapshots');
+  const runGate = ({ reuse = false } = {}) => {
+    const env = { ...process.env, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`, PIPELINE_GATE_SNAPSHOT: '1',
+      PIPELINE_SNAPSHOT_DIR: snapshots, ORIGINAL_ROOT: root, PIPELINE_HEAVY_LOCK_DIR: path.join(root, '.tmp', 'locks') };
+    // NODE_PATH was supplied by the review runner loader, not by this
+    // project's actual gate environment. Do not leak its untracked tool path.
+    delete env.NODE_PATH;
+    return spawnSync('npx', ['--yes', 'tsx', RUNNER, runId, 'app', 'build', '--state-root', stateRoot, ...(reuse ? [] : ['--no-reuse'])], {
+      cwd: root, encoding: 'utf8', env,
+    });
+  };
   return { root, stateRoot, runId, git, runGate, evidence: async () => JSON.parse(await readFile(path.join(stateRoot, runId, 'gates/app-build.json'), 'utf8')) };
 }
 
@@ -57,11 +75,14 @@ test('a full gate runs on a snapshot of the working tree and leaves the checkout
 const fs = require('node:fs'); const path = require('node:path');
 fs.appendFileSync(path.join(process.env.PIPELINE_SCRATCH_DIR, 'seen.jsonl'), JSON.stringify({ cwd: process.cwd(),
   value: fs.readFileSync('src/value.txt', 'utf8'), added: fs.existsSync('src/added.txt'), env: fs.existsSync('.env.local'),
+  nested: fs.readFileSync('.local-config/nested/mode.txt', 'utf8'),
   state: fs.existsSync('.tmp/pipelines/snap-run/state.json') }) + '\\n');`);
   try {
     await writeFile(path.join(fx.root, 'src/value.txt'), 'uncommitted\n');
     await writeFile(path.join(fx.root, 'src/added.txt'), 'new\n');
     await writeFile(path.join(fx.root, '.env.local'), 'LOCAL=1\n');
+    await mkdir(path.join(fx.root, '.local-config/nested'), { recursive: true });
+    await writeFile(path.join(fx.root, '.local-config/nested/mode.txt'), 'snapshot-visible');
     const statusBefore = fx.git('status', '--porcelain').stdout;
     const result = fx.runGate();
     assert.equal(result.status, 0, result.stderr);
@@ -73,7 +94,7 @@ fs.appendFileSync(path.join(process.env.PIPELINE_SCRATCH_DIR, 'seen.jsonl'), JSO
     assert.equal(seen.length, 2);
     for (const entry of seen) {
       assert.notEqual(entry.cwd, fx.root);
-      assert.deepEqual({ ...entry, cwd: undefined }, { cwd: undefined, value: 'uncommitted\n', added: true, env: true, state: true });
+      assert.deepEqual({ ...entry, cwd: undefined }, { cwd: undefined, value: 'uncommitted\n', added: true, env: true, nested: 'snapshot-visible', state: true });
     }
     await assert.rejects(access(seen[0].cwd));
     assert.equal(fx.git('status', '--porcelain').stdout, statusBefore);

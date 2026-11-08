@@ -8,22 +8,23 @@ import { join } from 'node:path';
 import { processAlive } from './runtime-locks.mjs';
 
 export const WAKE_MARKER = '<pipeline_wake/>';
-export const RUN_PROMPT = /\/pip(?:e)?line-run\s+([A-Za-z0-9._-]+)/;
+export const RUN_PROMPT = /^\s*\/pip(?:e)?line-run[ \t]+([A-Za-z0-9._-]+)(?=[ \t\r\n]|$)([^\r\n]*)/;
 
 export function wakeText(runId) {
-  return `${WAKE_MARKER} Automatic pipeline wake: your last turn ended while RUN \`${runId}\` is active, no child, worker lease or gate is running and no owner checkpoint is open. Run \`stage-cli next ${runId} --json\` and continue under pipeline-run rules. If you are genuinely waiting for the owner, say so in one line and stop.`;
+  return `${WAKE_MARKER} Automatic pipeline wake: your last turn ended while RUN \`${runId}\` is active. Run \`stage-cli next ${runId} --json\` and continue runnable independent work under pipeline-run rules. Respect existing children, leases, gates and owner checkpoints; do not duplicate work.`;
 }
 
-export function wakeDecision({ stateRaw, manifest, pendingChildren = 0, runningWork = 0, lastFingerprint = null }) {
-  if (pendingChildren > 0) return { wake: false, reason: 'child_running' };
+export function wakeDecision({ stateRaw, manifest, pendingChildren = 0, runningWork = 0, runnableCount = null, lastFingerprint = null }) {
+  const independentRunnable = Number.isInteger(runnableCount) && runnableCount > 0;
+  if (pendingChildren > 0 && !independentRunnable) return { wake: false, reason: 'child_running' };
   // Leases and gate locks are files with a live owner: they survive an OpenCode restart and a child the
   // runtime did not see start, and they are what `stage-cli waves` reports as running.
-  if (runningWork > 0) return { wake: false, reason: 'work_running' };
+  if (runningWork > 0 && !independentRunnable) return { wake: false, reason: 'work_running' };
   if (!stateRaw) return { wake: false, reason: 'no_state' };
   let state;
   try { state = JSON.parse(stateRaw); } catch { return { wake: false, reason: 'state_unreadable' }; }
   if (state.status !== 'in_progress') return { wake: false, reason: `run_${state.status ?? 'unknown'}` };
-  if (/"awaiting_owner_(?:clarification|approval)"/.test(stateRaw)) return { wake: false, reason: 'owner_checkpoint' };
+  if (!independentRunnable && /"awaiting_owner_(?:clarification|approval)"/.test(stateRaw)) return { wake: false, reason: 'owner_checkpoint' };
   // A blocked or failed lane waits for its owner decision; the RUN keeps every other lane going, so
   // only a RUN where no open lane is left unblocked stays asleep.
   let stopped = null; let open = 0;
@@ -32,13 +33,33 @@ export function wakeDecision({ stateRaw, manifest, pendingChildren = 0, runningW
     let blocked = ['blocked', 'failed'].includes(pipeline?.status) ? `pipeline_${pipeline.status}` : null;
     for (const [stage, runtime] of Object.entries(pipeline?.stages ?? {})) {
       if (['blocked', 'failed'].includes(runtime?.status)) blocked ??= `stage_${runtime.status}`;
-      if (runtime?.status === 'in_progress' && executors[stage] === 'owner_acceptance') return { wake: false, reason: 'owner_acceptance' };
+      if (runtime?.status === 'in_progress' && executors[stage] === 'owner_acceptance' && !independentRunnable) return { wake: false, reason: 'owner_acceptance' };
     }
     if (blocked) stopped ??= blocked;
     else if (!['completed', 'ready', 'release_ready'].includes(pipeline?.status)) open += 1;
   }
-  if (stopped && open === 0) return { wake: false, reason: stopped };
-  const fingerprint = createHash('sha256').update(stateRaw).digest('hex');
+  if (stopped && open === 0 && !independentRunnable) return { wake: false, reason: stopped };
+  // Fingerprint only scheduling/decision facts. updated_at, GitHub audit outbox,
+  // scope probes and diagnostics can change without any runnable progress; hashing
+  // raw state causes a new synthetic wake for each such maintenance write.
+  const scheduling = {
+    run_id: state.run_id,
+    status: state.status,
+    // Scheduler availability can change when a child/lease settles without
+    // a new state.json write. Do not dedupe away that legitimate wake.
+    runnable_count: Number.isInteger(runnableCount) ? runnableCount : null,
+    active_work: pendingChildren > 0 || runningWork > 0,
+    superseded_by: state.superseded_by,
+    deferred_decisions: (state.deferred_decisions ?? []).map(item => [item.id, item.status]),
+    pipelines: Object.entries(state.pipelines ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, pipeline]) => [
+      id, pipeline.status, pipeline.current_stage,
+      Object.entries(pipeline.stages ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([stage, runtime]) => [
+        stage, runtime.status, runtime.technical_fix_cycles, runtime.architecture_review_due,
+        runtime.class_review_due, runtime.runtime_replans?.at(-1)?.status,
+      ]),
+    ]),
+  };
+  const fingerprint = createHash('sha256').update(JSON.stringify(scheduling)).digest('hex');
   if (fingerprint === lastFingerprint) return { wake: false, reason: 'no_progress_since_last_wake' };
   return { wake: true, reason: 'stalled', fingerprint };
 }

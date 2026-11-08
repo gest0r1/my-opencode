@@ -1,0 +1,46 @@
+Retired 0 previous distribution agent definitions.
+Installed 41 managed agents into /tmp/tmp.hIGL6O7zqR/agents
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/ADRManager.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/AgentGenerator.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/ArchitectureAnalyzer.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/BatchExecutor.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/BuildAgent.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/CodeReviewer.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/CoderAgent.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/CommandCreator.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/Context Retriever.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/ContextManager.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/ContextOrganizer.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/ContextScout.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/ContractManager.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/DocWriter.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/DomainAnalyzer.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/ExternalScout.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/FindingsReviewer.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/GateRunner.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/Image Specialist.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/OpenAgent.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/OpenCoder.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/OpenCopywriter.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/OpenDataAnalyst.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/OpenDevopsSpecialist.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/OpenFrontendSpecialist.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/OpenRepoManager.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/OpenStageOrchestrator.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/OpenSystemBuilder.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/OpenTechnicalWriter.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/PrioritizationEngine.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/QuickReviewer.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/SeniorStoryReviewer.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/SeniorTechnicalPlanReviewer.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/Simple Responder.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/StoryMapper.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/TaskManager.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/TestEngineer.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/WebResearcher.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/WorkflowDesigner.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/build.md
+Retired previous distribution agent: /tmp/tmp.hIGL6O7zqR/agents/title.md
+Retired 41 previous distribution agent definitions.
+Installed 41 managed agents into /tmp/tmp.hIGL6O7zqR/agents
+PASS: repeated managed agent install preserves ContextScout planning subtree

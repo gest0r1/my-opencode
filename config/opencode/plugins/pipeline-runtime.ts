@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url"
 import { assertPipelineCapabilities } from "../skills/task-management/scripts/capability-preflight.mjs"
 import { RUN_PROMPT, WAKE_MARKER, runningGates, wakeDecision, wakeText } from "../skills/task-management/scripts/orchestrator-wake.mjs"
 import { readLeases, removeLease, updateLease, writeLease } from "../skills/task-management/scripts/dispatch-leases.mjs"
+import { processAlive } from "../skills/task-management/scripts/runtime-locks.mjs"
+import { computeRunnable } from "../skills/task-management/scripts/stage-cli-core.ts"
 
 const ELIGIBLE_ROLES = new Set([
   "CoderAgent", "TestEngineer", "BuildAgent",
@@ -400,17 +402,17 @@ export default Plugin.define({
     // Background children: registry entries wait in "background" until the child session is idle.
     const childIdle = async (sessionID: string, timeoutMs?: number): Promise<boolean> => {
       const wait = (plugin.session as any).wait
-      if (typeof wait !== "function") return true
+      if (typeof wait !== "function") return false // no authoritative completion signal
       const done = Promise.resolve(wait({ sessionID })).then(() => true, () => false)
       if (timeoutMs === undefined) return done
       return Promise.race([done, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))])
     }
-    // idle: wait resolved; running: still pending at the timeout; gone: wait rejected or the session is missing.
+    // Only a resolved wait proves idle; failure to inspect or wait is unknown, never a completed child.
     const probeChild = async (sessionID: string): Promise<"idle" | "running" | "gone" | "unknown"> => {
       const wait = (plugin.session as any).wait
       if (typeof wait !== "function") return "unknown"
-      try { await plugin.session.get({ sessionID: sessionID as any }) } catch { return "gone" }
-      const outcome = Promise.resolve(wait({ sessionID })).then(() => "idle" as const, () => "gone" as const)
+      try { await plugin.session.get({ sessionID: sessionID as any }) } catch { return "unknown" } // transient/read/location failure is not completion
+      const outcome = Promise.resolve(wait({ sessionID })).then(() => "idle" as const, () => "unknown" as const)
       let timer: ReturnType<typeof setTimeout> | undefined
       const result = await Promise.race([outcome, new Promise<"running">((resolve) => { timer = setTimeout(() => resolve("running"), CHILD_IDLE_PROBE_MS) })])
       clearTimeout(timer)
@@ -434,10 +436,24 @@ export default Plugin.define({
     const pendingChildren = new Map<string, Set<string>>()
     const lastWake = new Map<string, string>()
     const wakeTimers = new Map<string, ReturnType<typeof setTimeout>>()
+    const unknownProbes = new Map<string, number>()
+    const wakeInFlight = new Set<string>()
+    const wakeFailures = new Map<string, { fingerprint: string; attempts: number }>()
+    const unresolvedNoticeInFlight = new Set<string>()
     const trackChild = (parentID: string, childID: string) => {
       const set = pendingChildren.get(parentID) ?? new Set<string>()
+      if (set.has(childID)) return // one authoritative waiter per background child
       set.add(childID); pendingChildren.set(parentID, set)
-      void childIdle(childID).then(() => { set.delete(childID) })
+      void childIdle(childID).then(idle => {
+        if (!idle) return // unknown completion retains lease and pending child
+        set.delete(childID)
+        // A child's completion need not emit session.execution.succeeded for its
+        // idle parent. Reconcile leases and wake independently of parent events.
+        if (!orchestratorRun.has(parentID)) return
+        const previous = wakeTimers.get(parentID)
+        if (previous) clearTimeout(previous)
+        wakeTimers.set(parentID, setTimeout(() => { void checkWake(parentID) }, wakeDelayMs()))
+      }).catch(() => {})
     }
     const checkWake = async (sessionID: string) => {
       wakeTimers.delete(sessionID)
@@ -452,23 +468,69 @@ export default Plugin.define({
       try { state = JSON.parse(stateRaw) } catch {}
       // The orchestrator's turn ended: its foreground children are done, and a force-stopped background
       // worker must not hold its lease forever.
+      const unknownChildren: any[] = []
+      let noticeDelivered = false
       for (const lease of readLeases(runRoot(root, runID), { state })) {
         if (lease.parent_session_id !== sessionID) continue
-        let health: "idle" | "running" | "gone" | "unknown" = "gone"
+        // A lease without child_session_id can be in the reservation->ack crash window.
+        // After the owning process dies, a resumed parent must not infer completion.
+        let health: "idle" | "running" | "gone" | "unknown" =
+          !lease.child_session_id && !processAlive(lease.owner_pid, lease.owner_pid_start) ? "unknown" : "idle"
         if (lease.child_session_id) health = await probeChild(String(lease.child_session_id))
-        if (health === "running" || health === "unknown") continue
+        if (health === "unknown") { unknownChildren.push(lease); continue }
+        if (health === "running") continue
         if (lease.child_session_id) await settleBackground(runID, identity(lease as RuntimeContext), String(lease.child_session_id), health === "idle")
+        if (lease.child_session_id) pendingChildren.get(sessionID)?.delete(String(lease.child_session_id))
         removeLease(runRoot(root, runID), lease)
       }
+      if (unknownChildren.length) {
+        const count = (unknownProbes.get(sessionID) ?? 0) + 1
+        unknownProbes.set(sessionID, count)
+        if (count <= 3) wakeTimers.set(sessionID, setTimeout(() => { void checkWake(sessionID) }, Math.min(wakeDelayMs(), 5_000)))
+        else {
+          const key = sha256(JSON.stringify(unknownChildren.map(lease => [lease.child_session_id, lease.pipeline_id, lease.stage, lease.work_item_id, lease.created_at]).sort()))
+          const file = metricsFile(root, runID)
+          let alreadyNotified = false
+          try { alreadyNotified = fs.readFileSync(file, 'utf8').split('\n').some(line => { try { const item = JSON.parse(line); return item.event === 'child_liveness_unresolved' && item.notice_key === key } catch { return false } }) } catch {}
+          if (!alreadyNotified && !unresolvedNoticeInFlight.has(key)) {
+            unresolvedNoticeInFlight.add(key)
+            try {
+              await (plugin.session as any).synthetic({ sessionID, text: `Child session liveness for RUN \`${runID}\` remains unknown after repeated checks. Its lease is retained: do not redispatch that work or assume the child is gone. Check the existing session and continue any independently runnable work.`, description: 'pipeline child liveness unknown', delivery: 'queue', resume: true })
+              noticeDelivered = true
+              appendJsonLine(file, { timestamp: new Date().toISOString(), event: "child_liveness_unresolved", run_id: runID, session_id: sessionID, probes: count, notice_key: key })
+            } catch (error) {
+              appendJsonLine(file, { timestamp: new Date().toISOString(), event: "child_liveness_notice_failed", run_id: runID, session_id: sessionID, error: String((error as Error)?.message ?? error) })
+            } finally { unresolvedNoticeInFlight.delete(key) }
+          }
+        }
+      } else unknownProbes.delete(sessionID)
       const runningWork = readLeases(runRoot(root, runID), { state }).length + runningGates(path.join(root, ".tmp/pipelines"), runID)
-      const decision = wakeDecision({ stateRaw, manifest, pendingChildren: pendingChildren.get(sessionID)?.size ?? 0, runningWork, lastFingerprint: lastWake.get(sessionID) ?? null })
+      let runnableCount: number | null = null
+      try { if (state) runnableCount = computeRunnable(state).length } catch {}
+      const decision = wakeDecision({ stateRaw, manifest, runnableCount, pendingChildren: pendingChildren.get(sessionID)?.size ?? 0, runningWork, lastFingerprint: lastWake.get(sessionID) ?? null })
       if (!decision.wake) return
-      lastWake.set(sessionID, decision.fingerprint)
-      appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake", run_id: runID, session_id: sessionID })
+      if (noticeDelivered) {
+        lastWake.set(sessionID, decision.fingerprint) // a separate successful notice resumed the parent
+        return
+      }
+      if (wakeInFlight.has(sessionID)) return
+      wakeInFlight.add(sessionID)
       try {
         await (plugin.session as any).synthetic({ sessionID, text: wakeText(runID), description: "pipeline wake", delivery: "queue", resume: true })
+        lastWake.set(sessionID, decision.fingerprint)
+        wakeFailures.delete(sessionID)
+        appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake", run_id: runID, session_id: sessionID })
       } catch (error) {
-        appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake_failed", run_id: runID, error: String((error as Error)?.message ?? error) })
+        const previous = wakeFailures.get(sessionID)
+        const count = previous?.fingerprint === decision.fingerprint ? previous.attempts + 1 : 1
+        wakeFailures.set(sessionID, { fingerprint: decision.fingerprint, attempts: count })
+        appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "orchestrator_wake_failed", run_id: runID, session_id: sessionID,
+          attempts: count, error: String((error as Error)?.message ?? error) })
+        // A rejected synthetic message was NOT delivered: retry only a bounded
+        // number of times. Failed delivery must not poison lastWake.
+        if (count <= 3) wakeTimers.set(sessionID, setTimeout(() => { void checkWake(sessionID) }, wakeDelayMs()))
+      } finally {
+        wakeInFlight.delete(sessionID)
       }
     }
     void (async () => {
@@ -481,6 +543,8 @@ export default Plugin.define({
             if (!sessionID || !orchestratorRun.has(sessionID)) continue
             const type = String((event as any)?.type ?? "")
             if (type === "session.execution.started") {
+              unknownProbes.delete(sessionID)
+              wakeFailures.delete(sessionID)
               const timer = wakeTimers.get(sessionID); if (timer) clearTimeout(timer); wakeTimers.delete(sessionID)
             } else if (type === "session.execution.succeeded") {
               const timer = wakeTimers.get(sessionID); if (timer) clearTimeout(timer)
@@ -499,13 +563,15 @@ export default Plugin.define({
     const parentFiles = new Map<string, Set<string>>()
     await plugin.session.hook("prompt", (event) => {
       const text = JSON.stringify(event.prompt)
-      const runID = RUN_PROMPT.exec(text)?.[1]
+      const prompt = typeof event.prompt === "string" ? event.prompt : (event.prompt as any)?.text
+      const invocation = typeof prompt === "string" ? RUN_PROMPT.exec(prompt) : null
+      const runID = invocation?.[1]
       if (runID) orchestratorRun.set(String(event.sessionID), runID)
       // An owner prompt reopens waking; our own wake does not.
       if (!text.includes(WAKE_MARKER)) lastWake.delete(String(event.sessionID))
-      if (/pipeline-run/.test(text)) {
+      if (invocation) {
         // Only the owner's invocation line counts; the expanded command body documents the flag in its usage template.
-        const optedOut = [...text.matchAll(/pip(?:e)?line-run\s+[A-Za-z0-9._-]+([^\\"]*)/g)].some((m) => /(?:^|\s)--no-session-reuse(?=\s|$)/.test(m[1]))
+        const optedOut = /(?:^|\s)--no-session-reuse(?=\s|$)/.test(invocation[2])
         const file = optionFile(String(event.sessionID)); ensureDir(path.dirname(file))
         fs.writeFileSync(file, JSON.stringify({ no_session_reuse: optedOut }))
       }

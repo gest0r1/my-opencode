@@ -5,7 +5,9 @@
 #   INSTALLER=install.sh                     path inside REPO_DIR
 #   ARGS=update --target dev --dev-key svd1  fixed installer arguments
 #   VERSION_FLAG=--version                   flag that receives the candidate SHA or tag
-#   STATUS_ARGS=status --target dev --dev-key svd1 --json   optional: installer status after the install
+#   STATUS_ARGS=status --target dev --dev-key svd1 --json   required for verified dev_deploy
+#     The installer status JSON must contain an exact top-level sha of the currently
+#     running commit (40 hex characters); desired/requested/history refs are not proof.
 # The runtime user may then run exactly: sudo -n /usr/local/sbin/opencode-deploy-target <key> <sha|tag>
 # After each install the helper records the outcome in /var/lib/opencode/deploy-targets/<key>.json
 # (and the status output in <key>.status.json), readable by the pipeline without sudo.

@@ -1,0 +1,10 @@
+$ vitest run server/lib/pr-watch/runtime.test.js server/lib/github/merge-follow.test.js server/lib/opencode/shutdown-runtime.test.js server/lib/notifications/telegram-watch.test.js server/lib/notifications/telegram-delivery.test.js server/lib/notifications/telegram-routes.test.js server/lib/opencode/session-activity.test.js server/lib/openchamber-control/service.test.js server/lib/openchamber-control/routes.test.js server/lib/openchamber-control/secret-request.test.js
+
+ RUN  v4.1.5 /workspace/scratch/33c68a33a56d/final-20261108/openchamber/packages/web
+
+
+ Test Files  10 passed (10)
+      Tests  195 passed (195)
+   Start at  18:00:54
+   Duration  4.50s (transform 2.29s, setup 2.44s, import 3.90s, tests 4.05s, environment 3ms)
+

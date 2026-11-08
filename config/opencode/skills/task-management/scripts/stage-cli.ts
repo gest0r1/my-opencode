@@ -8,7 +8,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { applyOwnerAmendment, runCli } from './stage-cli-core.ts';
+import { createHash } from 'node:crypto';
+import { applyOwnerAmendment, runCli, validateApprovalRecord } from './stage-cli-core.ts';
 import { prepareProjectTooling, restoreDependencies } from './project-tooling.mjs';
 import { preflightFile } from './manifest-preflight.mjs';
 import { freezeGateTesting } from './gate-testing-freeze.mjs';
@@ -365,20 +366,50 @@ const script = (name: string) => fileURLToPath(new URL(`./${name}`, import.meta.
 // and plan-start run the same CLIs in the same order, stop at the first failure and report every step.
 async function planSequence(command: 'plan-check' | 'plan-start', manifest: string | undefined, args: string[]): Promise<void> {
   const extra = args.slice(2);
-  if (!manifest || !(extra.length === 0 || (extra.length === 2 && extra[0] === '--state-root' && extra[1]))) {
-    throw new Error(`usage: stage-cli ${command} <manifest.json> [--state-root <path>]`);
+  const values = new Map<string, string>();
+  const allowed = new Set(['--state-root', '--approval-subject', '--approval-run-id', '--approval-manifest-sha256', '--approval-decision', '--owner-response', '--owner-message-id', '--owner-source-session']);
+  for (let i = 0; i < extra.length; i++) {
+    const key = extra[i];
+    if (!allowed.has(key) || !extra[i + 1] || extra[i + 1].startsWith('--') || values.has(key)) {
+      throw new Error(`usage: stage-cli ${command} <manifest.json> [--state-root <path>] [approval fields]`);
+    }
+    values.set(key, extra[++i]);
   }
-  const root = extra.length ? extra : [];
+  if (!manifest) {
+    throw new Error(`usage: stage-cli ${command} <manifest.json> [--state-root <path>] [approval fields]`);
+  }
+  const root = values.has('--state-root') ? ['--state-root', values.get('--state-root')!] : [];
+  const rawManifest = await readFile(resolve(manifest), 'utf8');
+  const manifestObject = JSON.parse(rawManifest);
+  const manifestSha = createHash('sha256').update(rawManifest).digest('hex');
+  const revisionPath = join(dirname(resolve(manifest)), 'planning/revision.json');
+  const revision = await readFile(revisionPath, 'utf8').then(JSON.parse).catch(() => undefined);
+  const technicalCarry = revision?.previous_approval === true && revision?.owner_contract_changed === false;
+  let approvalArgs: string[] = [];
+  if (command === 'plan-start' && !technicalCarry) {
+    const descriptor = {
+      subject: values.get('--approval-subject'), run_id: values.get('--approval-run-id'),
+      decision: values.get('--approval-decision'), shown_manifest_sha256: values.get('--approval-manifest-sha256'),
+      owner_response: values.get('--owner-response'), message_id: values.get('--owner-message-id'),
+      source_session: values.get('--owner-source-session'),
+    };
+    const checked = validateApprovalRecord(descriptor, manifestObject.run_id, manifestSha);
+    approvalArgs = ['--approval-subject', checked.subject, '--approval-run-id', checked.run_id,
+      '--approval-manifest-sha256', checked.shown_manifest_sha256, '--approval-decision', checked.decision,
+      '--owner-response', checked.owner_response,
+      ...(checked.message_id ? ['--owner-message-id', checked.message_id] : []),
+      ...(checked.source_session ? ['--owner-source-session', checked.source_session] : [])];
+  }
   const steps: Array<[string, string[]]> = [
     ['plan-run-preflight', [script('stage-cli.ts'), 'plan-run-preflight', manifest, '--environment', '--json']],
     ['adopt', [script('git-worktree-cli.ts'), 'adopt', manifest]],
     ['verify', [script('git-worktree-cli.ts'), 'verify', manifest]],
   ];
   if (command === 'plan-start') {
-    const runId = JSON.parse(await readFile(resolve(manifest), 'utf8')).run_id;
+    const runId = manifestObject.run_id;
     steps.push(
       ['init', [script('stage-cli.ts'), 'init', manifest, ...root, '--json']],
-      ['approve', [script('stage-cli.ts'), 'approve', runId, ...root, '--json']],
+      ...(technicalCarry ? [] : [['approve', [script('stage-cli.ts'), 'approve', runId, ...root, ...approvalArgs, '--json']] as [string, string[]]]),
       ['github-sync', [script('pipeline-github-sync.mjs'), 'sync', runId, ...root]],
       ['validate', [script('stage-cli.ts'), 'validate', runId, ...root, '--json']],
       ['next', [script('stage-cli.ts'), 'next', runId, ...root, '--json']],

@@ -1,0 +1,71 @@
+✔ build-output evidence proves exact source/run/producer/path/bytes and rejects stale output (15.563887ms)
+✔ artifact proof rejects outside paths, symlinks and missing regular outputs (3.074594ms)
+✔ the same resolved package-manager toolchain has a stable identity and changed bytes invalidate it (1062.366548ms)
+✔ ignored snapshot configuration changes invalidate otherwise identical toolchain identity (886.058924ms)
+✔ dependency symlink cycles are recorded without recursive traversal or disabling identity (425.5369ms)
+✔ unknown launcher routes return an explicit reuse-disabled reason without a digest (227.177183ms)
+✔ Corepack routing overrides and a conflicting devEngines pin fail closed for reuse (450.111559ms)
+✔ snapshot and reuse share the same ignored input files and include local untracked config (32.661582ms)
+✔ affected selection includes transitive consumers, prior failures and suite subsets (4.533953ms)
+✔ unmapped, security, dependency and uncertain changes run the full set (0.536549ms)
+✔ mapped schema, migration and configuration changes follow the frozen impact groups (0.28537ms)
+✔ frozen test/resource contracts reject privilege flags, mutable images and invalid filters (2.972971ms)
+✔ frozen input kind enforces tree-before-publish and exact candidate/service ordering (0.970122ms)
+✖ build-output requires an earlier materializing tree gate and immutable artifact input (1.194259ms)
+✔ live PostgreSQL preflight freezes only safe, explicit validateOnly repository scripts (1.112796ms)
+✔ live PostgreSQL has bounded privileges, loopback, private random credentials and owned cleanup (1.438518ms)
+✔ failed startup and interrupted readiness both remove only the verified owned container (4.962509ms)
+✔ cleanup refuses a resource with another owner label (0.522227ms)
+✔ one-line fresh Vitest reports yield failures automatically; stale reports never count (12.012939ms)
+﹣ real Docker smoke starts non-root PostgreSQL, applies test DDL and removes its container (0.151388ms) # SKIP
+✔ parallel groups are consecutive frozen steps; shared report files and live commands never share a batch (0.830692ms)
+✔ a change that impacts only coordinator commands is deferred, never silently empty (0.136035ms)
+✔ the reuse digest covers the whole tree while the scoped digest stays bound to the work item (62.942496ms)
+✔ pre-publish release and install gates may hold test resources; post-publish and deployment gates may not (0.479623ms)
+✔ post-deploy input classification is accepted without enabling deployment test resources (0.210557ms)
+✔ maintenance JSON writes do not trigger duplicate wakes (8.683827ms)
+✔ real stage completion and repair-cycle change allow a new wake (0.365411ms)
+✔ unchanged state wakes once when pending work becomes runnable after child completion (0.488687ms)
+✔ unknown/running children or owner checkpoints do not manufacture completion (0.279972ms)
+✔ a lane awaiting owner review does not suppress an independent open lane (0.437759ms)
+✔ PLAN live input digest freezes HEAD, gate command, image, indexes, cheap validator (1.85737ms)
+✔ PLAN manifest must be the physical file of one run, not alias/foreign/symlink (1.213299ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 30
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 3748.64327
+
+✖ failing tests:
+
+test at config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs:96:1
+✖ build-output requires an earlier materializing tree gate and immutable artifact input (1.194259ms)
+  AssertionError [ERR_ASSERTION]: Got unwanted exception: producer semantics must not depend on its name
+  Actual message: "GATE_INPUT_OWNER_INVALID: local/assemble must belong to a local_gate stage"
+      at TestContext.<anonymous> (file:///workspace/scratch/33c68a33a56d/review-20261106/my-opencode/config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs:120:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: Error: GATE_INPUT_OWNER_INVALID: local/assemble must belong to a local_gate stage
+        at validateGateTesting (file:///workspace/scratch/33c68a33a56d/review-20261106/my-opencode/config/opencode/skills/task-management/scripts/gate-testing-policy.mjs:117:17)
+        at file:///workspace/scratch/33c68a33a56d/review-20261106/my-opencode/config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs:120:29
+        at getActual (node:assert:611:5)
+        at strict.doesNotThrow (node:assert:779:32)
+        at TestContext.<anonymous> (file:///workspace/scratch/33c68a33a56d/review-20261106/my-opencode/config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs:120:10)
+        at Test.runInAsyncScope (node:async_hooks:227:14)
+        at Test.run (node:internal/test_runner/test:1402:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+        at Test.postRun (node:internal/test_runner/test:1542:19)
+        at Test.run (node:internal/test_runner/test:1467:12),
+    expected: undefined,
+    operator: 'doesNotThrow',
+    diff: 'simple'
+  }

@@ -1,0 +1,224 @@
+
+FILE packages/ui/src/lib/exportSession.timing.test.ts
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/lib/exportSession.timing.test.ts:
+(pass) per-call Markdown tool timing > exports a real millisecond interval and next-call start gap across assistant messages [26.69ms]
+(pass) per-call Markdown tool timing > does not invent a final duration for running, pending, error with missing timestamps or legacy [0.99ms]
+(pass) per-call Markdown tool timing > exports a running elapsed snapshot without claiming completion [0.46ms]
+(pass) per-call Markdown tool timing > does not turn a future start into a zero-duration snapshot [0.43ms]
+(pass) per-call Markdown tool timing > projects real wire timings through Markdown without treating fallbacks as measured [1.03ms]
+(pass) per-call Markdown tool timing > exports interruption as a censored observation rather than process completion [0.44ms]
+(pass) per-call Markdown tool timing > does not count projected fallback timestamps as measured endpoints [0.34ms]
+(pass) per-call Markdown tool timing > labels overlaps of parallel calls and preserves part ordering [1.10ms]
+(pass) per-call Markdown tool timing > separates child and grandchild timings from the main session, across prompts [1.13ms]
+(pass) per-call Markdown tool timing > invalid negative / out-of-range timestamps do not become negative durations or invalid dates [0.32ms]
+
+ 10 pass
+ 0 fail
+ 39 expect() calls
+Ran 10 tests across 1 file. [521.00ms]
+
+FILE packages/ui/src/lib/fullSessionExport.test.ts
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/lib/fullSessionExport.test.ts:
+(pass) full session export > discovers descendants from parentID pages instead of a UI tree [3.26ms]
+(pass) full session export > keeps healthy branches when one child history cannot be read [14.77ms]
+(pass) full session export > includes tool input, partial result, and error [0.85ms]
+
+ 3 pass
+ 0 fail
+ 11 expect() calls
+Ran 3 tests across 1 file. [615.00ms]
+
+FILE packages/ui/src/lib/opencode/projection.test.ts
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/lib/opencode/projection.test.ts:
+(pass) projectSession > lifts location onto the session and keeps optional fields absent [0.36ms]
+(pass) projectSession > an untitled session gets an empty title rather than undefined [0.12ms]
+(pass) projectMessage (assistant) > flattens the model ref and maps content to ordered parts with deterministic ids [0.88ms]
+(pass) projectMessage (assistant) > tool content becomes output text plus file attachments [0.20ms]
+(pass) projectMessage (assistant) > text parts of a completed message carry an end time, streaming ones do not [0.08ms]
+(pass) projectMessage (assistant) > text followed by a tool is sealed while the message is still open [0.25ms]
+(pass) projectToolPart > streaming input becomes a pending state with the raw argument text [0.10ms]
+(pass) projectToolPart > running state uses the run timestamp as start [0.06ms]
+(pass) projectToolPart > error state renders the structured error as text and keeps partial output [0.08ms]
+(pass) projectUserParts > text, files, and agent mentions become parts in that order [0.40ms]
+(pass) projectUserParts > an empty prompt text produces no text part [0.03ms]
+(pass) projectMessage (other roles) > every non-conversation message projects with its role and no parts [0.71ms]
+(pass) projectMessage (other roles) > an idle record keeps the error of a failed turn [0.07ms]
+(pass) mergeConfigDocuments > later documents win per key and record keys merge by name [0.17ms]
+(pass) mergeConfigDocuments > no documents yields an empty config [0.01ms]
+(pass) configModelIdentifier > keeps the identifier spelling of both served forms [0.23ms]
+(pass) configModelIdentifier > rejects malformed or incomplete selections [0.03ms]
+(pass) deniesAnyProvider > sees a provider.use deny in any layer, even when a later document has its own experimental block [0.14ms]
+(pass) deniesAnyProvider > an allow or a tool policy alone is no restriction [0.04ms]
+(pass) deniesAnyProvider > reads top-level policies, where OpenCode 2.0.29 serves them [0.02ms]
+(pass) integration policies > blocks a server or skill a deny names, with wildcards, and ignores other actions [0.44ms]
+(pass) integration policies > decides like OpenCode: documents reversed, the last matching statement wins [0.09ms]
+(pass) integration policies > reads top-level policies, where OpenCode 2.0.29 serves them [0.03ms]
+(pass) projectAgent > keys the agent by its wire id and keeps the wire name for display [0.09ms]
+
+ 24 pass
+ 0 fail
+ 68 expect() calls
+Ran 24 tests across 1 file. [49.00ms]
+
+FILE packages/ui/src/lib/runtime-fetch.test.ts
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/lib/runtime-fetch.test.ts:
+(pass) mobile runtime credentials cannot follow HTTP redirects through fetch or the bridge [50.17ms]
+(pass) buildRuntimeFetchUrl > preserves same-origin paths by default [0.07ms]
+(pass) buildRuntimeFetchUrl > resolves API/auth/health through configured runtime URL resolver [0.11ms]
+(pass) buildRuntimeFetchUrl > rewrites current-origin absolute API URLs only [0.11ms]
+(pass) addRuntimeProxyHeaders > bypasses the ngrok browser interstitial for official ngrok hosts [0.03ms]
+(pass) addRuntimeProxyHeaders > does not add proxy headers to non-ngrok or lookalike hosts [0.02ms]
+(pass) runtimeFetch transport contract > adds the ngrok bypass header to runtime requests [0.23ms]
+(pass) runtimeFetch transport contract > preserves bodies from actual SDK mutation requests on same-origin runtimes [3.68ms]
+(pass) runtimeFetch transport contract > preserves SDK-style Request method, JSON body, signal, path, query, and merges auth headers [0.80ms]
+(pass) runtimeFetch transport contract > attaches runtime auth to a request already addressed under a sub-path host [0.54ms]
+(pass) runtimeFetch transport contract > does not replace an existing Authorization header [0.31ms]
+(pass) runtimeFetch transport contract > resolves URLSearchParams query and auth for runtime asset fetches [0.48ms]
+(pass) runtimeFetch transport contract > does not attach runtime auth to non-runtime absolute URLs [0.38ms]
+(pass) runtimeFetch transport contract > attaches runtime auth to active runtime auth URLs [0.80ms]
+(pass) runtimeFetch read coalescing > coalesces concurrent identical GET reads into one fetch [41.21ms]
+(pass) runtimeFetch read coalescing > keeps reads for different directories apart [21.15ms]
+(pass) runtimeFetch read coalescing > does not coalesce non-GET, non-allowlisted, or signal-bearing requests [31.08ms]
+(pass) runtimeFetch header sanitization > isLatin1Safe returns true for Latin-1 strings [0.18ms]
+(pass) runtimeFetch header sanitization > isLatin1Safe returns false for strings with characters above U+00FF [0.03ms]
+(pass) runtimeFetch header sanitization > sanitizeHeadersForBrowser encodes non-Latin-1 values in object form [0.18ms]
+(pass) runtimeFetch header sanitization > sanitizeHeadersForBrowser encodes non-Latin-1 values in array form [0.05ms]
+(pass) runtimeFetch header sanitization > sanitizeHeadersForBrowser returns undefined when no encoding needed [0.02ms]
+(pass) runtimeFetch header sanitization > sanitizeHeadersForBrowser leaves Latin-1 directory hints unchanged [0.01ms]
+(pass) runtimeFetch header sanitization > sanitizeHeadersForBrowser encodes non-Latin-1 directory hints with marker [0.03ms]
+(pass) runtimeFetch header sanitization > sanitizeHeadersForBrowser returns undefined for empty/undefined input [0.04ms]
+(pass) runtimeFetch header sanitization > sanitizeHeadersForBrowser only encodes non-Latin-1 values, leaves Latin-1 unchanged [0.04ms]
+(pass) runtimeFetch header sanitization > runtimeFetch encodes directory request headers with marker [0.33ms]
+(pass) runtimeFetch addresses isolated spaces > leaves the path of a request that names a space directory as it is: the server reads the directory [1.04ms]
+(pass) runtimeFetch addresses isolated spaces > sends the caller directory option of a space as the directory header, and nothing for a host directory [1.05ms]
+(pass) runtimeFetch addresses isolated spaces > routes a rendered page answer to the session directory [0.31ms]
+(pass) runtimeFetch addresses isolated spaces > leaves a directory header the caller set itself, so a request naming two directories reaches the server as it is [0.33ms]
+(pass) runtimeFetch addresses isolated spaces > never rewrites a path, the older prefixed form included [0.29ms]
+
+ 32 pass
+ 0 fail
+ 97 expect() calls
+Ran 32 tests across 1 file. [357.00ms]
+
+FILE packages/ui/src/lib/i18n/store.test.ts
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/lib/i18n/store.test.ts:
+(pass) i18n store > retries loading the active locale when it is not cached [13.03ms]
+(pass) i18n store > loads Russian translations for existing and upstream keys [18.56ms]
+(pass) i18n store > loads the french dictionary [16.35ms]
+
+ 3 pass
+ 0 fail
+ 5 expect() calls
+Ran 3 tests across 1 file. [172.00ms]
+
+FILE packages/ui/src/lib/i18n/messages.test.ts
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/lib/i18n/messages.test.ts:
+(pass) i18n dictionaries > Zen labels are translated and preserve their value placeholders in every locale [0.34ms]
+(pass) i18n dictionaries > credits-used messages carry the amount and are translated in every locale [0.08ms]
+(pass) i18n dictionaries > repository links name either provider in every locale [0.05ms]
+(pass) i18n dictionaries > change families name their provider in every locale [4.62ms]
+(pass) i18n dictionaries > provider sentences keep {provider} and name no product in every locale [6.46ms]
+(pass) i18n dictionaries > anonymous transport has a translated read-only label in every locale [0.10ms]
+(pass) i18n dictionaries > double-paste settings copy is translated [0.07ms]
+(pass) i18n dictionaries > all locales stay in key parity with english [50.42ms]
+(pass) i18n dictionaries > all locales expose language label keys [0.13ms]
+(pass) i18n dictionaries > telemetry translations retain the numeric token placeholders [0.12ms]
+(pass) i18n dictionaries > all telemetry rows have translated explanations and compact labels [0.28ms]
+
+ 11 pass
+ 0 fail
+ 152497 expect() calls
+Ran 11 tests across 1 file. [445.00ms]
+
+FILE packages/ui/src/lib/i18n/messages/file-artifacts.i18n.test.ts
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/lib/i18n/messages/file-artifacts.i18n.test.ts:
+(pass) file artifact translations > provides every key in every supported locale, translated [0.29ms]
+
+ 1 pass
+ 0 fail
+ 703 expect() calls
+Ran 1 test across 1 file. [193.00ms]
+
+FILE packages/ui/src/lib/easter-eggs/lines.test.ts
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/lib/easter-eggs/lines.test.ts:
+(pass) calendar > names the occasions by local date [8.45ms]
+(pass) calendar > a celebration runs from the day before to the day after [15.23ms]
+(pass) calendar > moving holidays follow their own calendars [1.34ms]
+(pass) calendar > national days show only in their country [3.36ms]
+(pass) calendar > seasons start on the 1st and swap south of the equator [1.86ms]
+(pass) calendar > Friday evening runs from 18:00 to midnight [0.12ms]
+(pass) calendar > small hours start at midnight, deep night at 01:00, both end at 05:00 [0.12ms]
+(pass) lines > an occasion outranks the night for the draft heading [0.17ms]
+(pass) lines > an empty occasion list falls back to everyday lines [0.07ms]
+(pass) lines > a late push names its time, a Friday evening push gets the brave line [1.17ms]
+(pass) lines > about one block of reasoning in four gets a joke, the same one while it runs [3.43ms]
+(pass) lines > only a clear net deletion gets a line, in the right plural [7.36ms]
+(pass) every locale > has its own copy [0.13ms]
+(pass) every locale > en: placeholders are where the code fills them [0.20ms]
+(pass) every locale > de: placeholders are where the code fills them [0.05ms]
+(pass) every locale > fr: placeholders are where the code fills them [0.04ms]
+(pass) every locale > nl: placeholders are where the code fills them [0.03ms]
+(pass) every locale > zh-CN: placeholders are where the code fills them [0.03ms]
+(pass) every locale > zh-TW: placeholders are where the code fills them [0.12ms]
+(pass) every locale > uk: placeholders are where the code fills them [0.04ms]
+(pass) every locale > es: placeholders are where the code fills them [0.06ms]
+(pass) every locale > pt-BR: placeholders are where the code fills them [0.05ms]
+(pass) every locale > ko: placeholders are where the code fills them [0.04ms]
+(pass) every locale > pl: placeholders are where the code fills them [0.05ms]
+(pass) every locale > ja: placeholders are where the code fills them [0.04ms]
+(pass) every locale > tr: placeholders are where the code fills them [0.04ms]
+(pass) every locale > ar: placeholders are where the code fills them [0.04ms]
+(pass) every locale > he: placeholders are where the code fills them [0.03ms]
+
+ 28 pass
+ 0 fail
+ 781 expect() calls
+Ran 28 tests across 1 file. [82.00ms]
+
+FILE packages/ui/src/sync/__tests__/interrupted-turn-tools.test.ts
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/sync/__tests__/interrupted-turn-tools.test.ts:
+(pass) interruptedTurnToolParts (#2577) > settled session with unfinished message and running tool finalizes the part [0.53ms]
+(pass) interruptedTurnToolParts (#2577) > busy session is never marked (live work) [0.09ms]
+(pass) interruptedTurnToolParts (#2577) > an unknown status does not block a turn OpenCode recorded as stopped [0.04ms]
+(pass) interruptedTurnToolParts (#2577) > finished message is not an interruption (tail refresh reconciles it) [0.08ms]
+(pass) interruptedTurnToolParts (#2577) > pending form means the turn is waiting for input, not interrupted [0.04ms]
+(pass) interruptedTurnToolParts (#2577) > pending permission means the turn is waiting for input, not interrupted [0.03ms]
+(pass) interruptedTurnToolParts (#2577) > only active parts are finalized; completed parts are untouched [0.11ms]
+(pass) interruptedTurnToolParts (#2577) > unfinished assistant with no tools is completed as aborted [0.05ms]
+(pass) interruptedTurnToolParts (#2577) > a failed turn closes the message with the error OpenCode reported [0.04ms]
+(pass) interruptedTurnToolParts (#2577) > completed tools are untouched while the unfinished assistant is aborted [0.06ms]
+
+ 10 pass
+ 0 fail
+ 21 expect() calls
+Ran 10 tests across 1 file. [675.00ms]
+
+FILE packages/ui/src/lib/i18n/ru-coverage.test.ts
+bun test v1.4.4 (38afee6c8)
+
+packages/ui/src/lib/i18n/ru-coverage.test.ts:
+(pass) Russian i18n coverage > Russian dictionary stays in exact key parity with English [4.34ms]
+(pass) Russian i18n coverage > every non-technical English value is translated and placeholders are preserved [20.60ms]
+
+ 2 pass
+ 0 fail
+ 1 expect() calls
+Ran 2 tests across 1 file. [162.00ms]

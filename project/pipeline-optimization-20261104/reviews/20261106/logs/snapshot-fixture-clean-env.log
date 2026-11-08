@@ -1,0 +1,39 @@
+REVIEW snapshot no-reuse reason pnpm exec tool vitest has no project-root node_modules/.bin executable
+✖ a gate that passed on an earlier snapshot repeats only the commands later changes reach (1472.362151ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1554.888039
+
+✖ failing tests:
+
+test at config/opencode/skills/task-management/scripts/review-only-snapshot.test.mjs:128:1
+✖ a gate that passed on an earlier snapshot repeats only the commands later changes reach (1472.362151ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + undefined
+  - {
+  -   changed_paths: [
+  -     'src/other.txt'
+  -   ],
+  -   commands: [
+  -     0
+  -   ],
+  -   from_commit: '5ebcd1fb671a8bcf2490e201df14379dd69efd6d'
+  - }
+  
+      at TestContext.<anonymous> (file:///workspace/scratch/33c68a33a56d/review-20261106/my-opencode/config/opencode/skills/task-management/scripts/review-only-snapshot.test.mjs:142:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: { from_commit: '5ebcd1fb671a8bcf2490e201df14379dd69efd6d', changed_paths: [ 'src/other.txt' ], commands: [ 0 ] },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

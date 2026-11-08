@@ -7,7 +7,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { validateGateManifest } from './manifest-preflight.mjs';
-import { planProbeCommandsSha256, validatePlanProbes } from './manifest-v2-policy.mjs';
+import { planProbeCommandsSha256, planProbeMatches, validatePlanProbes } from './manifest-v2-policy.mjs';
+import { planProbeInputDigest } from './plan-probe-identity.mjs';
+import { withApprovalArgs } from './test-approval-args.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STAGE_CLI = path.join(HERE, 'stage-cli.ts');
@@ -90,12 +92,101 @@ async function fixture(runId = 'v2-run') {
 }
 
 function run(root, args) {
-  return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...args], {
+  const fixtureBin = path.join(root, '.fixture-bin');
+  return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...withApprovalArgs(root, args)], {
     cwd: root,
     encoding: 'utf8',
-    env: process.env,
+    env: { ...process.env, PATH: `${fixtureBin}${path.delimiter}${process.env.PATH ?? ''}` },
   });
 }
+
+test('PLAN live evidence requires the same pipeline, baseline HEAD, phase and preflight inputs', () => {
+  const commands = ['pnpm exec vitest run --config vitest.live.ts'];
+  const resource = { image: 'postgres:16@sha256:' + 'c'.repeat(64), command_indexes: [0],
+    preflight_command: 'node scripts/validate.mjs --pipeline-preflight' };
+  const head = 'a'.repeat(40);
+  const manifest = {
+    run_id: 'test-live', git_setup: { base_sha: head },
+    pipelines: [
+      { id: 'api', profile: 'local' }, { id: 'web', profile: 'local' },
+    ],
+    gate_testing: { local: { tests: { live_postgres: resource } } },
+  };
+  const target = { pipeline_id: 'api', profile: 'local', gate: 'tests', commands };
+  const probe = {
+    kind: 'plan_probe', phase: 'plan_probe', status: 'PASS', run_id: 'test-live',
+    pipeline_id: 'api', profile: 'local', gate: 'tests',
+    candidate_sha: null, preflight_status: 'PASS', manifest_sha256: 'b'.repeat(64),
+    commands_sha256: planProbeCommandsSha256(commands), head_sha: head,
+    input_digest: planProbeInputDigest(commands, resource, head),
+  };
+  assert.equal(planProbeMatches(probe, manifest, target), true);
+  for (const mutant of [
+    { pipeline_id: 'web' }, { phase: 'run' }, { candidate_sha: 'd'.repeat(40) },
+    { preflight_status: 'FAIL' }, { head_sha: 'd'.repeat(40) },
+    { input_digest: 'd'.repeat(64) }, { manifest_sha256: null },
+  ]) assert.equal(planProbeMatches({ ...probe, ...mutant }, manifest, target), false, JSON.stringify(mutant));
+  const changed = { ...manifest, gate_testing: { local: { tests: {
+    live_postgres: { ...resource, image: 'postgres:17@sha256:' + 'c'.repeat(64) },
+  } } } };
+  assert.equal(planProbeMatches(probe, changed, target), false);
+  const newBaseline = { ...manifest, git_setup: { base_sha: 'e'.repeat(40) } };
+  assert.equal(planProbeMatches(probe, newBaseline, target), false);
+});
+
+test('PLAN refuses a ready Story gate without a publishable final full review', async () => {
+  const fx = await fixture('story-full-approval-contract');
+  const story = await fx.frozen('stories/issue-123.md', '# story\n');
+  const badReview = await fx.frozen('reviews/story-review-1.md', 'status: ready\nreview_scope: delta\n');
+  fx.manifest.planning_readiness.required_gates.push('stories');
+  fx.manifest.planning_readiness.gates.stories = {
+    required: true, status: 'ready', artifact: story, review: badReview,
+    cycles: 1, blocking_decision_ids: [],
+  };
+
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /STORY_REVIEW_NOT_FULL_READY/,
+  );
+  const goodReview = await fx.frozen('reviews/story-review-2.md', 'status: ready\nreview_scope: full\n');
+  fx.manifest.planning_readiness.gates.stories.review = goodReview;
+  assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
+});
+
+test('PLAN and publication contract accept only an exact ledger-bound technical carry', async () => {
+  const fx = await fixture('story-carry-contract');
+  const story = await fx.frozen('stories/issue-123.md', '# existing story\n');
+  const review = await fx.frozen('reviews/story-review-4.md', 'status: needs_revision\nreview_scope: full\n');
+  const carry = await fx.frozen('planning/carried-story-findings.md', '# technical checks for RUN\n');
+  const ledger = {
+    schema: 1, run_id: fx.manifest.run_id,
+    entries: [
+      { kind: 'review', gate: 'stories', status: 'needs_revision', scope: 'full',
+        owner_decision: false, path: review.path, sha256: review.sha256, classes: ['test-only'], at: '2026-11-04T00:00:00Z' },
+      { kind: 'carry', gate: 'stories', path: carry.path, sha256: carry.sha256,
+        review_sha256: review.sha256, at: '2026-11-04T00:01:00Z' },
+    ],
+  };
+  await writeFile(path.join(fx.runRoot, 'planning', 'review-ledger.json'), JSON.stringify(ledger));
+  fx.manifest.planning_readiness.required_gates.push('stories');
+  fx.manifest.planning_readiness.gates.stories = { required: true, status: 'ready',
+    artifact: story, review, cycles: 4, blocking_decision_ids: [] };
+  fx.manifest.planning_readiness.carried_findings = [carry];
+  assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
+
+  fx.manifest.planning_readiness.carried_findings = [];
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /STORY_REVIEW_NOT_FULL_READY/,
+  );
+  fx.manifest.planning_readiness.carried_findings = [carry];
+  ledger.entries[0].owner_decision = true;
+  await writeFile(path.join(fx.runRoot, 'planning', 'review-ledger.json'), JSON.stringify(ledger));
+  assert.throws(
+    () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
+    /STORY_REVIEW_NOT_FULL_READY/,
+  );
+});
 
 test('schema v2 rejects a planning gate that is not literally ready', async () => {
   const fx = await fixture('v2-needs-revision');
@@ -1541,6 +1632,35 @@ test('PLAN rejects orphaned work items, missing dependencies, cycles and reverse
   }
 });
 
+test('PLAN allows independent source lanes beside prep and enforces only named prerequisites', async () => {
+  const fx = await fixture('v2-targeted-prep');
+  const file = 'tests/obsolete.test.ts';
+  fx.manifest.allowed_change_paths.push(file);
+  const prepItem = await fx.frozen('work-items/wi-prep.json', JSON.stringify({
+    id: 'wi-prep', pipeline_id: 'prep', stage: 'implementation', allowed_change_paths: [file],
+  }));
+  fx.manifest.work_items.push({ id: 'wi-prep', pipeline_id: 'prep', ...prepItem });
+  fx.manifest.pipelines.push({
+    id: 'prep', deployable: false, test_preparation: true,
+    stages: ['implementation', 'review'], executors: { implementation: 'agent', review: 'review' },
+    ready_after_stage: 'review', work_items: ['wi-prep'],
+    decision_ids: [], research_ids: [], contract_ids: [],
+  });
+  fx.manifest.test_rework = [{ id: 'obsolete-inventory', action: 'update', path: file,
+    reason: 'existing inventory expectation', work_item_id: 'wi-prep', required_by: [] }];
+  const validate = () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath });
+  assert.doesNotThrow(validate, 'independent app lane must not await unrelated prep');
+  fx.manifest.test_rework[0].required_by = ['app'];
+  assert.throws(validate, /TEST_REWORK_DEPENDENCY_MISSING/);
+  fx.manifest.pipelines[0].depends_on = ['prep'];
+  assert.doesNotThrow(validate);
+  fx.manifest.pipelines[0].depends_on = [];
+  delete fx.manifest.test_rework[0].required_by;
+  assert.throws(validate, /TEST_REWORK_LANE_NOT_FIRST/, 'frozen legacy entries keep blanket contract');
+  fx.manifest.test_rework[0].required_by = ['missing'];
+  assert.throws(validate, /TEST_REWORK_CONSUMERS_INVALID/);
+});
+
 test('schema v2 rejects parallel pipelines whose work items may change the same paths', async () => {
   const fx = await fixture('v2-parallel-scope');
   const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', allowed_change_paths: ['src/api/**', 'vitest.config.ts'] }));
@@ -1581,6 +1701,9 @@ test('PLAN rejects two work items of one pipeline that may change the same path 
 
 async function planProbeFixture(runId) {
   const fx = await fixture(runId);
+  const fixtureBin = path.join(fx.root, '.fixture-bin');
+  await mkdir(fixtureBin, { recursive: true });
+  await writeFile(path.join(fixtureBin, 'pnpm'), '#!/bin/sh\nprintf "11.17.0\\n"\n', { mode: 0o755 });
   fx.manifest.pipelines[0].stages.push('fast-tests');
   fx.manifest.pipelines[0].executors['fast-tests'] = 'local_gate';
   fx.manifest.pipelines[0].profile = 'default';

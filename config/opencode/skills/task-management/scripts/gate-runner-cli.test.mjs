@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, readFile, writeFile, unlink } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, writeFile, unlink, symlink, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,10 +18,14 @@ function sha256(value) {
 }
 
 function run(cwd, args) {
+  const env = { ...process.env };
+  // NODE_PATH only lets this test worker resolve the external tsx install. Gate child fixtures use
+  // built-ins/project dependencies; do not make that loader-only path part of their runtime identity.
+  delete env.NODE_PATH;
   return spawnSync('npx', ['--yes', 'tsx', RUNNER, ...args], {
     cwd,
     encoding: 'utf8',
-    env: process.env,
+    env,
   });
 }
 
@@ -75,6 +79,76 @@ test('runner executes an approved argv command without a shell and records evide
   assert.equal(evidence.heavy_slot, true);
 });
 
+test('materialized build-output gate consumes exact producer bytes and rejects stale artifact', async () => {
+  const fx = await makeRun('npm run build', 'assemble');
+  const root = fx.root;
+  const bin = path.join(root, 'bin');
+  const manifestFile = path.join(root, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  manifest.pipelines[0].stages = ['assemble', 'inspect'];
+  manifest.pipelines[0].executors = { assemble: 'local_gate', inspect: 'local_gate' };
+  manifest.gate_profiles.default.inspect = ['npm test -- {artifact_path}'];
+  manifest.gate_testing = { default: {
+    assemble: { input_kind: 'tree', artifact_output: { path: 'dist/bundle.tgz' } },
+    inspect: { input_kind: 'build-output', build_output: { producer_gate: 'assemble' } },
+  } };
+  const content = JSON.stringify(manifest);
+  await writeFile(manifestFile, content);
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.manifest_sha256 = sha256(content);
+  await writeFile(statePath, JSON.stringify(state));
+  await mkdir(bin);
+  await writeFile(path.join(bin, 'npm'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'run' && args[1] === 'build') {
+  fs.mkdirSync('dist', { recursive: true });
+  fs.writeFileSync('dist/bundle.tgz', 'artifact-v1');
+} else if (args[0] === 'test') {
+  if (!args.includes('dist/bundle.tgz') || fs.readFileSync('dist/bundle.tgz', 'utf8') !== 'artifact-v1') process.exit(3);
+  fs.writeFileSync('.tmp/consumer-called', 'yes');
+} else process.exit(5);
+`, { mode: 0o755 });
+  await writeFile(path.join(root, '.gitignore'), '.tmp/\ndist/\n');
+  const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  assert.equal(git('init').status, 0);
+  git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
+  assert.equal(git('add', 'manifest.json', '.gitignore', 'bin/npm').status, 0);
+  assert.equal(git('commit', '-m', 'build input').status, 0);
+  const oldPath = process.env.PATH;
+  const producerArgs = [fx.runId, 'app', 'assemble', '--state-root', fx.stateRoot];
+  const consumerArgs = [fx.runId, 'app', 'inspect', '--state-root', fx.stateRoot];
+  try {
+    process.env.PATH = `${bin}:${oldPath}`;
+    let result = run(root, consumerArgs);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /BUILD_OUTPUT_PRODUCER_NOT_COMPLETED/);
+
+    result = run(root, producerArgs);
+    assert.equal(result.status, 0, result.stderr);
+    const evidence = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(evidence.status, 'PASS');
+    assert.equal(evidence.build_output.artifact.path, 'dist/bundle.tgz');
+    assert.match(evidence.build_output.artifact.sha256, /^[a-f0-9]{64}$/);
+    state.pipelines = { app: { stages: { assemble: { status: 'completed' } } } };
+    await writeFile(statePath, JSON.stringify(state));
+
+    result = run(root, consumerArgs);
+    assert.equal(result.status, 0, result.stderr);
+    const checked = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(checked.status, 'PASS');
+    assert.equal(checked.build_output_input.artifact.sha256, evidence.build_output.artifact.sha256);
+
+    await writeFile(path.join(root, 'dist/bundle.tgz'), 'artifact-v2');
+    result = run(root, consumerArgs);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /BUILD_OUTPUT_ARTIFACT_CHANGED/);
+  } finally {
+    process.env.PATH = oldPath;
+  }
+});
+
 test('runner rejects shell composition before any command is executed', async () => {
   const fixture = await makeRun('bash -n check.sh; touch pwned');
   await writeFile(path.join(fixture.root, 'check.sh'), '#!/usr/bin/env bash\necho ok\n', 'utf8');
@@ -105,6 +179,33 @@ test('runtime candidate placeholder fails closed without published candidate evi
   ]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /candidate evidence is missing/);
+});
+
+test('declared candidate gate rejects missing, foreign and mismatched publish evidence', async () => {
+  const fx = await makeRun('bash scripts/verify.sh {candidate_sha}', 'release-candidate');
+  await mkdir(path.join(fx.root, 'scripts')); await writeFile(path.join(fx.root, 'scripts/verify.sh'), '#!/bin/sh\nexit 0\n');
+  const manifestFile = path.join(fx.root, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  manifest.pipelines[0].stages = ['verify', 'publish', 'release-candidate'];
+  manifest.pipelines[0].executors = { verify: 'git_verify', publish: 'git_publish', 'release-candidate': 'local_gate' };
+  manifest.git_setup = { branch: 'feature/test' };
+  manifest.gate_testing = { default: { 'release-candidate': { input_kind: 'candidate' } } };
+  const content = JSON.stringify(manifest); await writeFile(manifestFile, content);
+  const stateFile = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(stateFile, 'utf8')); state.manifest_sha256 = sha256(content); await writeFile(stateFile, JSON.stringify(state));
+  const args = [fx.runId, 'app', 'release-candidate', '--state-root', fx.stateRoot];
+  let result = run(fx.root, args);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /CANDIDATE_EVIDENCE_INVALID/);
+  const candidate = 'a'.repeat(40);
+  const evidence = { status: 'PASS', run_id: fx.runId, branch: 'feature/test', manifest_sha256: sha256(content), candidate_sha: candidate, remote_sha: candidate };
+  for (const invalid of [{ ...evidence, run_id: 'other' }, { ...evidence, remote_sha: 'b'.repeat(40) }, { ...evidence, status: 'FAIL' }, { ...evidence, manifest_sha256: 'c'.repeat(64) }]) {
+    await writeFile(path.join(fx.root, 'candidate.json'), JSON.stringify(invalid));
+    result = run(fx.root, args); assert.notEqual(result.status, 0); assert.match(result.stderr, /CANDIDATE_EVIDENCE_INVALID/);
+  }
+  await writeFile(path.join(fx.root, 'candidate.json'), JSON.stringify(evidence));
+  result = run(fx.root, args); assert.equal(result.status, 0, result.stderr);
+  const written = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+  assert.equal(written.candidate_sha, candidate);
 });
 
 
@@ -152,13 +253,24 @@ async function diagnosticFixture() {
   const fx = await makeRun('pnpm exec vitest run --config vitest.unit.ts --passWithNoTests=false');
   await mkdir(path.join(fx.root, 'bin'));
   await mkdir(path.join(fx.root, 'src'));
+  await mkdir(path.join(fx.root, 'node_modules/pnpm/bin'), { recursive: true });
+  await mkdir(path.join(fx.root, 'node_modules/vitest/bin'), { recursive: true });
+  await mkdir(path.join(fx.root, 'node_modules/.bin'), { recursive: true });
   await writeFile(path.join(fx.root, 'src/orders.ts'), 'initial\n');
   await writeFile(path.join(fx.root, 'src/web.ts'), 'initial\n');
-  await writeFile(path.join(fx.root, 'bin/pnpm'), `#!/usr/bin/env node
+  await writeFile(path.join(fx.root, '.gitignore'), 'node_modules/\n');
+  await writeFile(path.join(fx.root, 'package.json'), JSON.stringify({ name: 'gate-fixture', packageManager: 'pnpm@1.0.0' }));
+  await writeFile(path.join(fx.root, 'pnpm-lock.yaml'), 'lockfileVersion: "9.0"\n');
+  await writeFile(path.join(fx.root, 'node_modules/pnpm/package.json'), JSON.stringify({ name: 'pnpm', version: '1.0.0' }));
+  await writeFile(path.join(fx.root, 'node_modules/vitest/package.json'), JSON.stringify({ name: 'vitest', version: '1.0.0' }));
+  await writeFile(path.join(fx.root, 'node_modules/vitest/bin/vitest.mjs'), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
+  await symlink('../vitest/bin/vitest.mjs', path.join(fx.root, 'node_modules/.bin/vitest'));
+  await writeFile(path.join(fx.root, 'node_modules/pnpm/bin/pnpm.cjs'), `#!/usr/bin/env node
 const fs = require('node:fs');
 fs.appendFileSync('.tmp/calls.log', JSON.stringify(process.argv.slice(2)) + '\\n');
 if (fs.existsSync('.tmp/fail')) { console.error('FAIL orders invariant'); process.exit(1); }
 `, { mode: 0o755 });
+  await symlink('../node_modules/pnpm/bin/pnpm.cjs', path.join(fx.root, 'bin/pnpm'));
   const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
   const state = JSON.parse(await readFile(statePath, 'utf8'));
   const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
@@ -167,7 +279,7 @@ if (fs.existsSync('.tmp/fail')) { console.error('FAIL orders invariant'); proces
   const git = (...args) => spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
   assert.equal(git('init').status, 0);
   git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
-  git('add', 'src', 'bin'); assert.equal(git('commit', '-m', 'base').status, 0);
+  git('add', '.gitignore', 'src', 'bin', 'package.json', 'pnpm-lock.yaml'); assert.equal(git('commit', '-m', 'base').status, 0);
   manifest.git_setup = { base_sha: git('rev-parse', 'HEAD').stdout.trim() };
   manifest.gate_profiles.default.build.push('pnpm exec vitest run --config vitest.web.ts --passWithNoTests=false');
   manifest.gate_testing = { default: { build: { impact_groups: [
@@ -291,10 +403,24 @@ console.log('database=' + process.env.DATABASE_URL);
 if (fs.existsSync('.tmp/sleep')) setInterval(() => {}, 1000);
 else if (fs.existsSync('.tmp/fail')) { console.error('FAIL live invariant'); process.exit(1); }
 `, { mode: 0o755 });
+  // The same project-owned validateOnly adapter is required by live PLAN and RUN.
+  // It sees a single phase-aware lock, no DB credentials or numbered attempt.
+  await mkdir(path.join(fx.root, 'scripts'), { recursive: true });
+  await writeFile(path.join(fx.root, 'scripts/live-preflight.mjs'), `import fs from 'node:fs';
+const files = fs.readdirSync('.tmp/pipelines/.runtime-locks').filter(n => n.endsWith('.lock'));
+if (process.argv[2] !== '--pipeline-preflight' || files.length !== 1) process.exit(41);
+const lock = JSON.parse(fs.readFileSync('.tmp/pipelines/.runtime-locks/' + files[0], 'utf8'));
+if (!['run_preflight', 'plan_probe'].includes(lock.phase) || lock.pid !== process.ppid ||
+    process.env.DATABASE_URL || process.env.LIVE_PG_TEST ||
+    process.env.PIPELINE_GATE_ATTEMPT || process.env.PIPELINE_SCRATCH_DIR) process.exit(42);
+`);
   const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
   const state = JSON.parse(await readFile(statePath, 'utf8'));
   const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
-  manifest.gate_testing.default.build.live_postgres = { image: `postgres:16@sha256:${'a'.repeat(64)}`, command_indexes: [0, 1] };
+  manifest.gate_testing.default.build.live_postgres = {
+    image: `postgres:16@sha256:${'a'.repeat(64)}`, command_indexes: [0, 1],
+    preflight_command: 'node scripts/live-preflight.mjs --pipeline-preflight',
+  };
   const content = JSON.stringify(manifest); state.manifest_sha256 = sha256(content);
   await writeFile(state.manifest_file, content); await writeFile(statePath, JSON.stringify(state));
 }
@@ -316,6 +442,38 @@ test('runner provisions env and owned cleanup for both passing and failed live g
       const calls = (await readFile(path.join(fx.root, '.tmp/docker.log'), 'utf8')).trim().split('\n').map(JSON.parse);
       assert.equal(calls.at(-1)[0], 'rm'); assert.equal(calls.filter(call => call[0] === 'create').length, 1);
     } finally { process.env.PATH = oldPath; }
+  }
+});
+
+test('a second identical gate cannot reuse a prior disposable live PostgreSQL PASS', async () => {
+  const fx = await diagnosticFixture();
+  await attachPostgres(fx);
+  const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    const first = run(fx.root, fx.args);
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(JSON.parse(first.stdout).commands_run, 2);
+
+    // No source, dependency, test or command changes: only the disposable
+    // database/attempt is new. A previous PASS is not a proof of this attempt.
+    const second = run(fx.root, fx.args);
+    assert.equal(second.status, 0, second.stderr);
+    const output = JSON.parse(second.stdout);
+    assert.equal(output.commands_run, 2);
+    assert.equal(output.commands_reused, 0);
+    assert.equal(output.reused_from, null);
+    const evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.equal(evidence.cleanup_complete, true);
+    assert.equal(evidence.results.every(item => !item.reused_from), true);
+    const calls = (await readFile(path.join(fx.root, '.tmp/docker.log'), 'utf8'))
+      .trim().split('\n').map(JSON.parse);
+    assert.equal(calls.filter(call => call[0] === 'create').length, 2,
+      'every live attempt must own a newly created container');
+    assert.equal(calls.filter(call => call[0] === 'rm').length, 2,
+      'each container must be removed by its own attempt');
+  } finally {
+    process.env.PATH = oldPath;
   }
 });
 
@@ -399,6 +557,124 @@ test('a PASS on the identical tree is reused instead of rerun; any source change
     await writeFile(path.join(fx.root, 'src/web.ts'), 'changed again\n');
     result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
     output = JSON.parse(result.stdout); assert.equal(output.commands_run, 2); assert.equal(output.reused_from, null);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('ignored local snapshot configuration invalidates gate reuse without a tracked diff', async () => {
+  const fx = await diagnosticFixture();
+  const oldPath = process.env.PATH;
+  try {
+    await writeFile(path.join(fx.root, '.gitignore'), 'node_modules/\n.env.local\n');
+    await writeFile(path.join(fx.root, '.env.local'), 'FEATURE_FLAG=off\n');
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args);
+    assert.equal(result.status, 0, result.stderr);
+    const first = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.ok(first.environment_digest, first.reuse_disabled_reason);
+
+    result = run(fx.root, fx.args);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 0, 'unchanged ignored config is safely reusable');
+
+    await writeFile(path.join(fx.root, '.env.local'), 'FEATURE_FLAG=on\n');
+    result = run(fx.root, fx.args);
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 2, 'changed .env bytes must invalidate prior PASS');
+    const changed = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.notEqual(changed.environment_digest, first.environment_digest);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('a same-PATH executable replacement invalidates reusable evidence', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  const executable = path.join(fx.root, 'node_modules/pnpm/bin/pnpm.cjs');
+  const writeExecutable = async marker => writeFile(executable, `#!/usr/bin/env node\nconst fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(path.join(fx.root, '.tmp/calls.log'))}, ${JSON.stringify(`${marker}\n`)});\n`, { mode: 0o755 });
+  try {
+    await writeExecutable('first-tool');
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const first = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(first.results.length, 2);
+    const calls = await callCount(fx.root);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 0, 'unchanged executable should still reuse');
+    assert.equal(await callCount(fx.root), calls);
+
+    await writeExecutable('replacement-tool');
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 2, 'changed executable bytes at the same PATH must rerun commands');
+    const replacement = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.notEqual(replacement.environment_digest, first.environment_digest);
+    assert.equal(await callCount(fx.root), calls + 2);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('a same-PATH local vitest replacement invalidates evidence through pnpm exec', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  const executable = path.join(fx.root, 'node_modules/vitest/bin/vitest.mjs');
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const first = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 0);
+    await writeFile(executable, '#!/usr/bin/env node\nprocess.exit(1);\n', { mode: 0o755 });
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 2);
+    const changed = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.notEqual(changed.environment_digest, first.environment_digest);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('a missing local pnpm exec tool that could fall back to global PATH is not reused', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  const globalBin = await mkdtemp(path.join(os.tmpdir(), 'gate-global-tool-'));
+  try {
+    await rm(path.join(fx.root, 'node_modules/.bin/vitest'));
+    await writeFile(path.join(globalBin, 'vitest'), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
+    process.env.PATH = `${fx.bin}:${globalBin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const evidence = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(evidence.environment_digest, null);
+    assert.match(evidence.reuse_disabled_reason, /no project-root node_modules/);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
+  } finally { process.env.PATH = oldPath; await rm(globalBin, { recursive: true, force: true }); }
+});
+
+test('a dependency tree that changes during execution cannot produce reusable evidence', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  const executable = path.join(fx.root, 'node_modules/pnpm/bin/pnpm.cjs');
+  const changed = `#!/usr/bin/env node\nconst fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(path.join(fx.root, '.tmp/calls.log'))}, JSON.stringify(process.argv.slice(2)) + '\\n');\n`;
+  await writeFile(executable, `#!/usr/bin/env node\nconst fs = require('node:fs');\nconst target = ${JSON.stringify(executable)};\nfs.appendFileSync(${JSON.stringify(path.join(fx.root, '.tmp/calls.log'))}, JSON.stringify(process.argv.slice(2)) + '\\n');\nif (!fs.existsSync('.tmp/tool-mutated')) { fs.writeFileSync('.tmp/tool-mutated', 'yes'); fs.writeFileSync(target, ${JSON.stringify(changed)}); }\n`);
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const firstOutput = JSON.parse(result.stdout);
+    const first = JSON.parse(await readFile(firstOutput.evidence, 'utf8'));
+    assert.equal(first.status, 'PASS', 'the commands ran and passed');
+    assert.equal(first.environment_digest, null, 'post-run identity drift must not be reusable');
+    assert.match(first.reuse_disabled_reason, /changed during gate execution/);
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2, 'the next run must execute after post-run identity drift');
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('legacy partial environment digests are not eligible for reuse', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const evidencePath = JSON.parse(result.stdout).evidence;
+    const evidence = JSON.parse(await readFile(evidencePath, 'utf8'));
+    evidence.environment_digest = sha256(JSON.stringify([process.version, process.env.PATH, process.env.NODE_ENV,
+      process.env.LIVE_PG_TEST, process.env.LIVE_PG_CONTOUR, process.env.DATABASE_URL]));
+    await writeFile(evidencePath, JSON.stringify(evidence));
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
   } finally { process.env.PATH = oldPath; }
 });
 
@@ -510,7 +786,9 @@ if (fs.existsSync('.tmp/fail')) { console.error('FAIL orders invariant'); proces
 `, { mode: 0o755 });
   const git = (...args) => spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
   git('checkout', '--', 'src/orders.ts');
-  git('add', 'bin'); assert.equal(git('commit', '-m', 'env pnpm').status, 0);
+  git('add', 'bin');
+  const committed = git('commit', '-m', 'env pnpm');
+  if (committed.status !== 0) assert.match(`${committed.stdout}\n${committed.stderr}`, /nothing (?:added to commit|to commit)/);
   const manifestFile = path.join(fx.stateRoot, fx.runId, 'manifest.json');
   const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
   manifest.git_setup = { base_sha: git('rev-parse', 'HEAD').stdout.trim() };
@@ -561,6 +839,36 @@ test('gate env vars leave environment_digest unchanged so evidence reuse still w
   } finally { process.env.PATH = oldPath; }
 });
 
+test('a relevant inherited gate environment change invalidates reusable evidence', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH; const oldWorkers = process.env.PIPELINE_MAX_WORKERS;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    process.env.PIPELINE_MAX_WORKERS = '2';
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const first = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    process.env.PIPELINE_MAX_WORKERS = '3';
+    result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.commands_run, 2);
+    const changed = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.notEqual(changed.environment_digest, first.environment_digest);
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldWorkers === undefined) delete process.env.PIPELINE_MAX_WORKERS; else process.env.PIPELINE_MAX_WORKERS = oldWorkers;
+  }
+});
+
+test('lockfile changes invalidate evidence and keep affected selection broad', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args); assert.equal(result.status, 0, result.stderr);
+    await writeFile(path.join(fx.root, 'pnpm-lock.yaml'), 'lockfileVersion: "9.0"\n# changed\n');
+    result = run(fx.root, [...fx.args, '--advisory', '--affected']); assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
+  } finally { process.env.PATH = oldPath; }
+});
+
 test('plan probe runs the complete frozen set statelessly and writes planning/probes evidence', async () => {
   const fx = await envFixture(); const oldPath = process.env.PATH;
   const probeArgs = ['--plan-probe', fx.manifestFile, 'app', 'build'];
@@ -592,6 +900,163 @@ test('plan probe runs the complete frozen set statelessly and writes planning/pr
     const failed = JSON.parse(await readFile(output.evidence, 'utf8'));
     assert.equal(failed.status, 'FAIL'); assert.match(failed.error, /gate command failed/);
     assert.ok(failed.results[0].failure_summary.length + failed.results[0].output_tail.length > 0);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('PLAN live probe validates with a real phase lock before attempt/Docker, then executes statelessly', async () => {
+  const fx = await envFixture();
+  await attachPostgres(fx);
+  const scriptDir = path.join(fx.root, 'scripts');
+  await mkdir(scriptDir, { recursive: true });
+  await writeFile(path.join(scriptDir, 'live-preflight.mjs'), String.raw`
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+const location = '.tmp/pipelines/.runtime-locks';
+const files = fs.readdirSync(location).filter(name => name.endsWith('.lock'));
+if (files.length !== 1 || process.argv[2] !== '--pipeline-preflight') process.exit(11);
+const lock = JSON.parse(fs.readFileSync(location + '/' + files[0], 'utf8'));
+const raw = fs.readFileSync(lock.manifest_file);
+const manifestHash = createHash('sha256').update(raw).digest('hex');
+if (lock.phase !== 'plan_probe' || lock.pid !== process.ppid || lock.manifest_sha256 !== manifestHash ||
+    !/^[a-f0-9]{64}$/.test(lock.input_digest) || !/^[a-f0-9]{40}$/.test(lock.head_sha) ||
+    process.env.CANDIDATE_SHA || process.env.PIPELINE_GATE_ATTEMPT || process.env.DATABASE_URL ||
+    process.env.LIVE_PG_TEST || process.env.PGPASSWORD) process.exit(12);
+fs.writeFileSync('.tmp/preflight-evidence.json', JSON.stringify(lock));
+if (fs.existsSync('.tmp/reject-cheap')) process.exit(19);
+`, 'utf8');
+
+  const git = (...args) => spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
+  assert.equal(git('add', 'bin', 'scripts').status, 0);
+  assert.equal(git('commit', '-m', 'live phase probe fixture').status, 0);
+  const head = git('rev-parse', 'HEAD').stdout.trim();
+  const manifest = JSON.parse(await readFile(fx.manifestFile, 'utf8'));
+  manifest.git_setup.base_sha = head;
+  manifest.gate_testing.default.build.live_postgres.preflight_command =
+    'node scripts/live-preflight.mjs --pipeline-preflight';
+  await writeFile(fx.manifestFile, JSON.stringify(manifest));
+  await unlink(path.join(fx.stateRoot, fx.runId, 'state.json'));
+  const oldPath = process.env.PATH, inherited = process.env.CANDIDATE_SHA, inheritedDb = process.env.DATABASE_URL;
+  const args = ['--plan-probe', fx.manifestFile, 'app', 'build'];
+  try {
+    process.env.PATH = fx.bin + ':' + oldPath;
+    process.env.CANDIDATE_SHA = 'f'.repeat(40);
+    process.env.DATABASE_URL = 'postgresql://inherited-prod.invalid/must-not-see';
+    await writeFile(path.join(fx.root, '.tmp/reject-cheap'), 'yes');
+    let result = run(fx.root, args);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /PLAN_LIVE_PREFLIGHT_FAILED/);
+    let evidence = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'planning/probes/app-build.json'), 'utf8'));
+    assert.deepEqual([evidence.phase, evidence.status, evidence.attempt, evidence.scratch_dir, evidence.candidate_sha, evidence.preflight_status],
+      ['plan_probe', 'BLOCKED', null, null, null, 'FAIL']);
+    await assert.rejects(access(path.join(fx.root, '.tmp/docker.log')), 'preflight failure must not call Docker');
+    await assert.rejects(access(path.join(fx.stateRoot, '.runtime-locks', sha256('gate:' + fx.runId + ':app:build') + '.lock')));
+    const preflight = JSON.parse(await readFile(path.join(fx.root, '.tmp/preflight-evidence.json'), 'utf8'));
+    assert.equal(preflight.manifest_sha256, sha256(JSON.stringify(manifest)));
+    assert.equal(preflight.head_sha, head);
+    await unlink(path.join(fx.root, '.tmp/reject-cheap'));
+    result = run(fx.root, args);
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    evidence = JSON.parse(await readFile(output.evidence, 'utf8'));
+    assert.equal(evidence.status, 'PASS');
+    assert.equal(evidence.preflight_status, 'PASS');
+    assert.equal(evidence.attempt, 1);
+    assert.equal(evidence.candidate_sha, null);
+    assert.equal(evidence.input_digest, preflight.input_digest);
+    const calls = (await readFile(path.join(fx.root, '.tmp/docker.log'), 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.ok(calls.some(x => x[0] === 'create'));
+    assert.equal(calls.at(-1)[0], 'rm');
+    await assert.rejects(access(path.join(fx.stateRoot, '.runtime-locks', sha256('gate:' + fx.runId + ':app:build') + '.lock')));
+  } finally {
+    process.env.PATH = oldPath;
+    if (inherited === undefined) delete process.env.CANDIDATE_SHA; else process.env.CANDIDATE_SHA = inherited;
+    if (inheritedDb === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = inheritedDb;
+  }
+});
+
+test('deployed-service smoke reads exact completed deploy proof and refuses stale contour before commands', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = fx.bin + ':' + oldPath;
+    const stateFile = path.join(fx.stateRoot, fx.runId, 'state.json');
+    const state = JSON.parse(await readFile(stateFile, 'utf8'));
+    const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+    const sha = 'a'.repeat(40);
+    manifest.git_setup.branch = 'feature/test';
+    manifest.deploy_target = 'dev-test';
+    manifest.pipelines[0].stages = ['deploy', 'smoke'];
+    manifest.pipelines[0].executors = { deploy: 'dev_deploy', smoke: 'local_gate' };
+    manifest.gate_profiles.default.smoke = [...manifest.gate_profiles.default.build];
+    manifest.gate_testing.default.smoke = { input_kind: 'deployed-service' };
+    const raw = JSON.stringify(manifest);
+    state.manifest_sha256 = sha256(raw);
+    state.pipelines = { app: { stages: { deploy: {
+      status: 'completed', started_at: new Date(Date.now() - 30_000).toISOString(),
+    } } } };
+    await writeFile(state.manifest_file, raw);
+    await writeFile(stateFile, JSON.stringify(state));
+    const runDir = path.dirname(state.manifest_file);
+    const deployState = path.join(fx.root, '.tmp', 'deploy-state');
+    await mkdir(deployState, { recursive: true });
+    const originalDeployDir = process.env.OPENCODE_DEPLOY_STATE_DIR;
+    process.env.OPENCODE_DEPLOY_STATE_DIR = deployState;
+    try {
+      await writeFile(path.join(runDir, 'candidate.json'), JSON.stringify({
+        status: 'PASS', run_id: fx.runId, branch: 'feature/test',
+        manifest_sha256: state.manifest_sha256, candidate_sha: sha, remote_sha: sha,
+      }));
+      await mkdir(path.join(runDir, 'deploy'), { recursive: true });
+      await writeFile(path.join(runDir, 'deploy/app-deploy.json'), JSON.stringify({
+        status: 'PASS', run_id: fx.runId, pipeline_id: 'app', stage: 'deploy',
+        target: 'dev-test', candidate_sha: sha,
+      }));
+      const statusFile = path.join(deployState, 'dev-test.status.json');
+      await writeFile(statusFile, JSON.stringify({ sha, health: 'ok' }));
+      const install = { key: 'dev-test', sha, exit_code: 0,
+        finished_at: new Date().toISOString(), status_file: statusFile };
+      await writeFile(path.join(deployState, 'dev-test.json'), JSON.stringify(install));
+      const args = [fx.runId, 'app', 'smoke', '--state-root', fx.stateRoot, '--no-reuse'];
+      // The command must receive the verified contour key, not an inherited
+      // or hand-selected target; commands that target a different contour fail.
+      const binFile = path.join(fx.bin, 'pnpm');
+      const binContent = await readFile(binFile, 'utf8');
+      assert.match(binContent, /const fs = require\('node:fs'\)/);
+      await writeFile(binFile, binContent.replace("const fs = require('node:fs');",
+        "if (process.env.PIPELINE_DEPLOY_TARGET !== 'dev-test') process.exit(42);\nconst fs = require('node:fs');"), { mode: 0o755 });
+      let result = run(fx.root, args);
+      assert.equal(result.status, 0, result.stderr);
+      const data = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+      assert.equal(data.deployed_service.installed_sha, sha);
+      assert.equal(data.deployed_service.target, 'dev-test');
+      await writeFile(path.join(deployState, 'dev-test.json'), JSON.stringify({ ...install, sha: 'b'.repeat(40) }));
+      result = run(fx.root, args);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /GATE_SERVICE_INSTALL_CHANGED/);
+      await writeFile(path.join(deployState, 'dev-test.json'), JSON.stringify(install));
+      state.pipelines.app.stages.deploy.status = 'pending';
+      await writeFile(stateFile, JSON.stringify(state));
+      result = run(fx.root, args);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /GATE_SERVICE_DEPLOY_INCOMPLETE/);
+      // A target that changes DURING an otherwise passing smoke must not emit PASS.
+      state.pipelines.app.stages.deploy.status = 'completed';
+      await writeFile(stateFile, JSON.stringify(state));
+      await writeFile(path.join(fx.bin, 'pnpm'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const p = '.tmp/deploy-state/dev-test.json';
+const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+data.sha = 'c'.repeat(40);
+fs.writeFileSync(p, JSON.stringify(data));
+`, { mode: 0o755 });
+      result = run(fx.root, args);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /GATE_SERVICE_CHANGED_DURING_GATE/);
+      const smokeEvidence = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'gates/app-smoke.json'), 'utf8'));
+      assert.equal(smokeEvidence.status, 'BLOCKED');
+    } finally {
+      if (originalDeployDir === undefined) delete process.env.OPENCODE_DEPLOY_STATE_DIR;
+      else process.env.OPENCODE_DEPLOY_STATE_DIR = originalDeployDir;
+    }
   } finally { process.env.PATH = oldPath; }
 });
 
@@ -630,3 +1095,59 @@ test('a later RUN over the same tree reuses the gate commands an earlier RUN pas
     assert.equal(second.reused_from, first.evidence);
   } finally { process.env.PATH = oldPath; }
 });
+
+test('nested ignored local config change invalidates actual cached PASS in same runner', async t => {
+  const fx = await diagnosticFixture(); t.after(() => rm(fx.root,{recursive:true,force:true}));
+  const oldPath=process.env.PATH;
+  try {
+    await writeFile(path.join(fx.root,'.gitignore'),'node_modules/\n.tmp/\n.local-config/\n');
+    await mkdir(path.join(fx.root,'.local-config'));
+    await writeFile(path.join(fx.root,'.local-config/mode.txt'),'good');
+    await writeFile(path.join(fx.root,'node_modules/pnpm/bin/pnpm.cjs'),`#!/usr/bin/env node
+const fs=require('node:fs');fs.appendFileSync('.tmp/review-calls','called\\n');
+if(fs.readFileSync('.local-config/mode.txt','utf8')==='bad')process.exit(17);
+`,{mode:0o755});
+    process.env.PATH=fx.bin+':'+oldPath;
+    const first=run(fx.root,fx.args);assert.equal(first.status,0,first.stderr);
+    await writeFile(path.join(fx.root,'.local-config/mode.txt'),'bad');
+    const second=run(fx.root,fx.args);
+    const fresh=run(fx.root,[...fx.args,'--no-reuse']);
+    console.log('REPRO nested ignored input',JSON.stringify({first:JSON.parse(first.stdout),second:second.stdout,exit:second.status,noReuseExit:fresh.status}));
+    assert.notEqual(fresh.status,0,'control: uncached command must fail on bad local input');
+    assert.notEqual(second.status,0,'changed input makes the actual command fail; stale PASS must not be reused');
+  } finally {process.env.PATH=oldPath;}
+});
+
+
+test('RUN preflight rejects before expensive commands or Docker',async t=>{
+  const fx=await diagnosticFixture();t.after(()=>rm(fx.root,{recursive:true,force:true}));await attachPostgres(fx);
+  const statePath=path.join(fx.stateRoot,fx.runId,'state.json');
+  const state=JSON.parse(await readFile(statePath,'utf8'));
+  const manifest=JSON.parse(await readFile(state.manifest_file,'utf8'));
+  manifest.gate_testing.default.build.live_postgres.command_indexes=[1];
+  manifest.gate_testing.default.build.live_postgres.preflight_command='node scripts/live-preflight.mjs --pipeline-preflight';
+  await mkdir(path.join(fx.root,'scripts'),{recursive:true});
+  await writeFile(path.join(fx.root,'scripts/live-preflight.mjs'),"import fs from 'node:fs';fs.writeFileSync('.tmp/preflight-called','yes');process.exit(41);\n");
+  await writeFile(path.join(fx.bin,'pnpm'),"#!/usr/bin/env node\nrequire('node:fs').appendFileSync('.tmp/expensive-called','called\\n');\n",{mode:0o755});
+  state.status='in_progress';const raw=JSON.stringify(manifest);state.manifest_sha256=sha256(raw);
+  await writeFile(state.manifest_file,raw);await writeFile(statePath,JSON.stringify(state));
+  const oldPath=process.env.PATH;
+  try {
+    process.env.PATH=fx.bin+':'+oldPath;
+    const result=run(fx.root,fx.args);
+    let preflightCalled=true;try{await access(path.join(fx.root,'.tmp/preflight-called'));}catch{preflightCalled=false;}
+    let expensiveCalled=true;try{await access(path.join(fx.root,'.tmp/expensive-called'));}catch{expensiveCalled=false;}
+    let dockerCalled=true;try{await access(path.join(fx.root,'.tmp/docker.log'));}catch{dockerCalled=false;}
+    console.log('REPRO RUN preflight',JSON.stringify({exit:result.status,preflightCalled,expensiveCalled,dockerCalled,stderr:result.stderr}));
+    assert.notEqual(result.status,0,'failing lifecycle preflight must block RUN before commands');
+    assert.equal(preflightCalled,true);assert.equal(expensiveCalled,false);assert.equal(dockerCalled,false);
+    await assert.rejects(access(path.join(fx.stateRoot, fx.runId, 'gates/app-build.json')), 'preflight failure cannot allocate an attempt');
+    const advisory = run(fx.root, [...fx.args, '--advisory']);
+    assert.notEqual(advisory.status, 0, 'advisory RUN must use the same lifecycle preflight');
+    await assert.rejects(access(path.join(fx.root, '.tmp/expensive-called')));
+    await assert.rejects(access(path.join(fx.root, '.tmp/docker.log')));
+    await assert.rejects(access(path.join(fx.stateRoot, '.gate-locks', sha256('gate:' + fx.runId + ':app:build') + '.lock')));
+    await assert.rejects(access(path.join(fx.stateRoot, '.runtime-locks', sha256('gate:' + fx.runId + ':app:build') + '.lock')));
+  } finally {process.env.PATH=oldPath;}
+});
+

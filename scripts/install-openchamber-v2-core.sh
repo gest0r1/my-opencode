@@ -8,8 +8,8 @@ CONFIG_REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 CONFIG_REF="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
 APP_REPO="${OPENCHAMBER_REPO:-gest0r1/openchamber-ru}"
 APP_REF="${OPENCHAMBER_REF:-main}"
-OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.1.4}"
-EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.5.2}"
+OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.2.5}"
+EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.6.1}"
 OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}"
 HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"
 PORT="${OPENCHAMBER_BIND_PORT:-3000}"
@@ -42,8 +42,8 @@ Usage: install-openchamber.sh [--opencode-update]
 Environment:
   OPENCODE_CONFIG_REF / MY_OPENCODE_REF
   OPENCHAMBER_REF
-  OPENCODE_INSTALL_VERSION (default: 2.1.4)
-  OPENCHAMBER_EXPECTED_VERSION (default: 2.5.2)
+  OPENCODE_INSTALL_VERSION (default: 2.2.5)
+  OPENCHAMBER_EXPECTED_VERSION (default: 2.6.1)
   OPENCHAMBER_PACKAGE_MODE (auto|release|source; default: auto)
   OPENCHAMBER_BIND_HOST (default: 0.0.0.0)
   OPENCHAMBER_BIND_PORT (default: 3000)
@@ -78,11 +78,9 @@ case "$RESTART_MODE" in
   *) echo 'OPENCHAMBER_RESTART_MODE must be auto, now or defer' >&2; exit 2 ;;
 esac
 
-ensure_node22() {
-  local major
-  major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
-  (( major >= 22 )) || {
-    echo "Node.js 22+ is required (found: $(node --version 2>/dev/null || echo missing))" >&2
+ensure_supported_node() {
+  node -e 'const [major,minor]=process.versions.node.split(".").map(Number);process.exit(major>24||(major===24&&minor>=14)?0:1)' 2>/dev/null || {
+    echo "Node.js 24.14.0+ is required (found: $(node --version 2>/dev/null || echo missing))" >&2
     exit 1
   }
 }
@@ -165,7 +163,7 @@ write_state() {
   mv -f "$tmp" "$STATE"
 }
 
-ensure_node22
+ensure_supported_node
 validate_bind_host
 mkdir -p "$STATE_ROOT" "$CACHE_ROOT"
 exec 9>"$LOCK"

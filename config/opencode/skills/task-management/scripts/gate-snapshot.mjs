@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { copyFileSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { copyFileSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import os from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { sourceInventory } from './gate-diagnostics.mjs';
 import { checkProjectTooling, restoreDependencies } from './project-tooling.mjs';
@@ -14,6 +14,7 @@ import { checkProjectTooling, restoreDependencies } from './project-tooling.mjs'
 // are restored from the lockfile, and `.tmp/pipelines` points back to the run's state root.
 
 const IGNORED_SKIP = /(^|\/)(node_modules|dist|build|coverage|\.tmp|\.git|\.pnpm-store|\.next|\.turbo|\.cache|\.vite|out)(\/|$)/;
+const SENSITIVE_UNTRACKED = /(^|\/)(\.env(?:\..*)?|[^/]+\.(?:key|pem|secret))$/i;
 const generated = file => /(^|\/)(\.tmp|\.git|node_modules|dist|build|coverage)(\/|$)/i.test(file);
 const sensitive = file => /(^|\/)(\.env(?:\..*)?|[^/]+\.(?:key|pem|secret))$/i.test(file);
 
@@ -64,12 +65,64 @@ function linkDependencyTrees(cwd, dir) {
   return { dependency_trees: trees, link_ms: Date.now() - started };
 }
 
+// This is the exact read-set of ignored local inputs copied into the snapshot.
+// The gate reuse identity hashes these same paths, otherwise a changed .env.local
+// could reuse a PASS from a different service/test configuration.
+// Git --directory collapses ignored directories to "dir/" entries. Expand only
+// non-generated directories returned by Git; otherwise nested ignored config
+// files disappear from snapshot/reuse identity and a changed file may reuse PASS.
+const MAX_LOCAL_INPUT_DIRS = 256;
+const MAX_LOCAL_INPUT_FILES = 8192;
+function localIgnoredEntries(cwd) {
+  const summary = lines(git(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']));
+  const directories = summary.filter(entry => entry.endsWith('/') && !IGNORED_SKIP.test(entry));
+  if (directories.length > MAX_LOCAL_INPUT_DIRS) throw new Error('SNAPSHOT_LOCAL_INPUT_LIMIT: too many ignored directories');
+  const files = summary.filter(entry => !entry.endsWith('/') && !IGNORED_SKIP.test(entry));
+  for (const directory of directories) {
+    // Git pathspec limits the traversal to this known ignored directory; do not
+    // walk node_modules, build outputs or arbitrary filesystem ancestors.
+    const expanded = lines(git(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', directory]));
+    for (const entry of expanded) if (!IGNORED_SKIP.test(entry)) files.push(entry);
+    if (files.length > MAX_LOCAL_INPUT_FILES) throw new Error('SNAPSHOT_LOCAL_INPUT_LIMIT: too many ignored local files');
+  }
+  if (files.length > MAX_LOCAL_INPUT_FILES) throw new Error('SNAPSHOT_LOCAL_INPUT_LIMIT: too many ignored local files');
+  return [...new Set(files)].sort();
+}
+
+function verifyLocalInput(cwd, entry) {
+  if (!entry || isAbsolute(entry) || entry.split('/').some(part => part === '..' || part === '.git')) {
+    throw new Error('SNAPSHOT_LOCAL_INPUT_PATH_INVALID');
+  }
+  const root = realpathSync(cwd);
+  const file = join(cwd, entry);
+  const real = realpathSync(file);
+  if (!real.startsWith(root + sep)) throw new Error('SNAPSHOT_LOCAL_INPUT_OUTSIDE_CHECKOUT: ' + entry);
+  const info = lstatSync(file);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error('SNAPSHOT_LOCAL_INPUT_NOT_REGULAR: ' + entry);
+}
+
+export function copiedIgnoredInputs(cwd) {
+  const entries = localIgnoredEntries(cwd);
+  for (const entry of entries) verifyLocalInput(cwd, entry);
+  return entries;
+}
+
+// An untracked, nonignored secret is intentionally not committed to a snapshot,
+// but may affect a fallback in-place gate. Hash its bytes in the reuse identity;
+// never expose the content or persist an individual secret hash.
+export function reuseLocalInputs(cwd) {
+  const excludedSensitive = lines(git(cwd, ['ls-files', '--others', '--exclude-standard', '-z']))
+    .filter(file => !IGNORED_SKIP.test(file) && SENSITIVE_UNTRACKED.test(file));
+  const inputs = [...new Set([...copiedIgnoredInputs(cwd), ...excludedSensitive])].sort();
+  for (const entry of inputs) verifyLocalInput(cwd, entry);
+  return inputs;
+}
+
 function copyIgnoredFiles(cwd, dir) {
-  const ignored = lines(git(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']));
-  for (const entry of ignored) {
-    if (entry.endsWith('/') || IGNORED_SKIP.test(entry)) continue;
+  for (const entry of copiedIgnoredInputs(cwd)) {
     mkdirSync(dirname(join(dir, entry)), { recursive: true });
-    try { copyFileSync(join(cwd, entry), join(dir, entry)); } catch {}
+    try { copyFileSync(join(cwd, entry), join(dir, entry)); }
+    catch (error) { throw new Error(`SNAPSHOT_LOCAL_INPUT_COPY_FAILED: ${entry}: ${String(error instanceof Error ? error.message : error)}`); }
   }
 }
 

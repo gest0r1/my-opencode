@@ -1,0 +1,17 @@
+✔ technical revision retains folder and approval until actual implementation start (2788.687914ms)
+✔ owner-contract-changing revision does not carry prior approval (1153.866043ms)
+✔ final-manifest approval rejects wrong subject or hash before state mutation (1928.02371ms)
+✔ final-manifest approval accepts a short explicit response without optional message correlation (612.631006ms)
+✔ new planned run cannot approve without an explicit audit descriptor (623.861842ms)
+✔ legacy approved and in-progress states without approval record validate without backfill (1228.326067ms)
+✔ plan-start rejects a mismatched final-manifest hash before init creates state (346.568613ms)
+✔ owner can add a runtime unit between stages and dispatch it with immutable evidence (1751.427725ms)
+✔ owner-amend-apply output is accepted by git verify and stays exact-path bounded (1448.727017ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 12089.53156

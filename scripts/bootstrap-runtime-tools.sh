@@ -6,9 +6,9 @@ export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share" XDG_ST
 cd "$HOME"
 
 ensure_runtime_node() {
-  local major=0
-  if command -v node >/dev/null 2>&1; then major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"; fi
-  if [[ "$major" =~ ^[0-9]+$ ]] && (( major >= 22 )); then return 0; fi
+  local minimum="${1:-22.0.0}"
+  local check='const a=process.versions.node.split(".").map(Number),b=process.argv[1].split(".").map(Number);process.exit(a[0]>b[0]||(a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>=b[2])))?0:1)'
+  if command -v node >/dev/null 2>&1 && node -e "$check" "$minimum" 2>/dev/null; then return 0; fi
   # Pin the supported LTS bootstrap; an existing compatible runtime is retained.
   local version=24.21.0 arch archive tmp dest
   case "$(uname -m)" in x86_64) arch=x64;; *) echo 'Node bootstrap supports Linux x86_64 only' >&2; return 1;; esac
@@ -31,7 +31,7 @@ ensure_runtime_node() {
   ); then rm -rf -- "$tmp"; return 1; fi
   rm -rf -- "$tmp"
   hash -r
-  node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)'
+  node -e "$check" "$minimum"
 }
 
 ensure_claude_cli() {

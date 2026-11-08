@@ -61,3 +61,51 @@ test('dev_deploy evidence proves the candidate itself was installed after the st
     assert.deepEqual(evidence.contour_status, { version: '0.6.5', sha: SHA });
   } finally { await rm(fx.root, { recursive: true, force: true }); }
 });
+
+test('current service status requires exact running sha, never desired/history/requested mentions', async () => {
+  const fx = await fixture();
+  const state = path.join(fx.root, 'deploy-state');
+  const previous = process.env.OPENCODE_DEPLOY_STATE_DIR;
+  const wrong = 'b'.repeat(40);
+  process.env.OPENCODE_DEPLOY_STATE_DIR = state;
+  try {
+    const { currentContourSha, verifyDeployedServiceGate } = await import('./dev-deploy-cli.ts');
+    const status = { sha: SHA, version: 'dev' };
+    await fx.install({}, status);
+    assert.equal(fx.record().status, 0, 'record accepts top-level current sha');
+    const input = { artifactRoot: path.join(fx.root, '.tmp/pipelines/run-1'),
+      runId: 'run-1', pipelineId: 'sink', stage: 'dev', target: 'svd1',
+      candidateSha: SHA, startedAt: fx.startedAt };
+    assert.equal((await verifyDeployedServiceGate(input)).status, 'PASS');
+    assert.equal(currentContourSha({ sha: SHA.toUpperCase() }), SHA);
+
+    await fx.install({}, { sha: wrong, requested_sha: SHA, message: 'installed ' + SHA });
+    // Verify against the last successful install evidence *before* record()
+    // replaces it with FAIL. Otherwise this only tests the evidence status.
+    await assert.rejects(verifyDeployedServiceGate(input), /GATE_SERVICE_STATUS_MISMATCH/);
+    assert.match(fx.record().stderr, /DEV_DEPLOY_STATUS_MISMATCH/);
+
+    await fx.install({}, { sha: SHA });
+    assert.equal(fx.record().status, 0);
+    await fx.install({}, { current: { sha: wrong }, requested_sha: SHA });
+    await assert.rejects(verifyDeployedServiceGate(input), /GATE_SERVICE_STATUS_CURRENT_SHA_MISSING/);
+    assert.match(fx.record().stderr, /DEV_DEPLOY_STATUS_INVALID/);
+
+    await fx.install({}, { sha: SHA });
+    assert.equal(fx.record().status, 0);
+    await fx.install({}, { sha: SHA, current: { sha: wrong }, requested_sha: SHA });
+    await assert.rejects(verifyDeployedServiceGate(input), /GATE_SERVICE_STATUS_AMBIGUOUS_CURRENT/);
+    assert.match(fx.record().stderr, /GATE_SERVICE_STATUS_AMBIGUOUS_CURRENT/);
+
+    await fx.install({}, { sha: SHA, current: { sha: SHA } });
+    assert.equal(fx.record().status, 0);
+    await assert.rejects(verifyDeployedServiceGate({ ...input, target: 'svd2' }), /EVIDENCE_MISMATCH|missing/);
+
+    await fx.install({}, undefined);
+    assert.match(fx.record().stderr, /DEV_DEPLOY_STATUS_MISSING/);
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_DEPLOY_STATE_DIR;
+    else process.env.OPENCODE_DEPLOY_STATE_DIR = previous;
+    await rm(fx.root, { recursive: true, force: true });
+  }
+});

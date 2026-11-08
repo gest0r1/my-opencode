@@ -86,3 +86,26 @@ export function gatePolicyError(tokens, gate) {
   }
   return `executable is outside deterministic gate policy: ${exe}`;
 }
+
+// The PLAN live preflight is one approved local repository script, without a shell.
+// --pipeline-preflight is mandatory; its validateOnly mode must not create evidence or resources.
+export function preflightPolicyError(tokens) {
+  if (!Array.isArray(tokens) || !tokens.length) return 'PLAN_LIVE_PREFLIGHT_COMMAND_INVALID: missing executable';
+  const [exe, ...args] = tokens;
+  let script;
+  if (exe === 'node' && args.length === 2 && args[1] === '--pipeline-preflight' && /\.(?:cjs|mjs|js)$/.test(args[0])) {
+    script = args[0];
+  } else if (exe === 'pnpm' && args.length === 4 && args[0] === 'exec' && args[1] === 'tsx' &&
+             args[3] === '--pipeline-preflight' && /\.(?:mts|cts|ts)$/.test(args[2])) {
+    script = args[2];
+  } else if (exe === 'corepack' && args.length === 5 && args[0] === 'pnpm' && args[1] === 'exec' &&
+             args[2] === 'tsx' && args[4] === '--pipeline-preflight' && /\.(?:mts|cts|ts)$/.test(args[3])) {
+    script = args[3];
+  } else {
+    return 'PLAN_LIVE_PREFLIGHT_COMMAND_INVALID: use node <script.js> or pnpm exec tsx <script.ts>, followed by --pipeline-preflight';
+  }
+  if (!safeRelativePath(script) || script.startsWith('-') || /[*?\[\]{}]/.test(script) || script.split('/').includes('.')) {
+    return 'PLAN_LIVE_PREFLIGHT_COMMAND_INVALID: script must be a safe exact repository-relative path';
+  }
+  return null;
+}
