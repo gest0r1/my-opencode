@@ -166,9 +166,12 @@ export async function runLifecycleCommand({
       PIPELINE_LIFECYCLE_HANDOFF_SHA256: evidence.handoff_sha256,
     });
     await heartbeatPromise;
-    if (sha256(await protectedFile(handoffRef)) !== evidence.handoff_sha256) {
+    const after = await protectedFile(handoffRef);
+    if (sha256(after) !== evidence.handoff_sha256) {
       throw new Error('LIFECYCLE_HANDOFF_CHANGED: contour changed during verification');
     }
+    // Time-bound identity must remain valid until the gate has finished.
+    verifyLifecycleHandoff(after, attemptId, descriptor);
     // A PASS is only final after a successful owned-only teardown.
     evidence.status = gateResult.exit_code === 0 ? 'PASS' : 'FAIL';
   } catch (failure) { error = failure; }
