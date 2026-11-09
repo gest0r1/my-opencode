@@ -22,7 +22,8 @@ function run(cwd, args) {
   // NODE_PATH only lets this test worker resolve the external tsx install. Gate child fixtures use
   // built-ins/project dependencies; do not make that loader-only path part of their runtime identity.
   delete env.NODE_PATH;
-  return spawnSync('npx', ['--yes', 'tsx', RUNNER, ...args], {
+  // Avoid npx's npm_config_prefix injection: it intentionally disables gate reuse.
+  return spawnSync(process.execPath, ['--import', import.meta.resolve('tsx'), RUNNER, ...args], {
     cwd,
     encoding: 'utf8',
     env,
