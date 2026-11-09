@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { gatePolicyError, tokenizeGateCommand, preflightPolicyError } from './gate-command-policy.mjs';
 import { validArtifactPath } from './build-output-proof.mjs';
+import { validateLifecycle } from './gate-lifecycle.mjs';
 
 // Keys a project-generated impact map may supply; the manifest keeps only its frozen reference.
 const SOURCE_KEYS = ['impact_groups', 'coordinator_only', 'parallel_groups', 'live_postgres', 'ignored_inputs'];
@@ -101,16 +102,16 @@ export function validateGateTesting(manifest) {
       const commands = manifest.gate_profiles?.[profile]?.[gate];
       if (!Array.isArray(commands) || !config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`GATE_TESTING_INVALID: ${profile}/${gate}`);
       if (/(runtime|deploy|release|smoke|install)/i.test(gate) && !isPrePublishGate(manifest, profile, gate) &&
-          Object.keys(config).some(key => !['input_kind', 'build_output', 'artifact_output'].includes(key))) {
+          Object.keys(config).some(key => !['input_kind', 'build_output', 'artifact_output', 'lifecycle', ...(config.lifecycle ? ['timeout_seconds'] : [])].includes(key))) {
         throw new Error('GATE_TESTING_INVALID: test resources cannot wrap deployment gates');
       }
-      if (Object.keys(config).some(key => !['input_kind', 'artifact_output', 'build_output', 'impact_groups', 'live_postgres', 'timeout_seconds', 'report_files', 'coordinator_only', 'parallel_groups', 'ignored_inputs', 'source'].includes(key))) throw new Error('GATE_TESTING_INVALID: unknown option');
+      if (Object.keys(config).some(key => !['input_kind', 'artifact_output', 'build_output', 'impact_groups', 'live_postgres', 'timeout_seconds', 'report_files', 'coordinator_only', 'parallel_groups', 'ignored_inputs', 'source', 'lifecycle'].includes(key))) throw new Error('GATE_TESTING_INVALID: unknown option');
       // Optional for legacy manifests. New PLANs classify what a gate actually checks.
       // A tree check may never be silently postponed until after publication.
       if (config.input_kind !== undefined) {
         const kind = config.input_kind;
-        if (!['tree', 'candidate', 'build-output', 'deployed-service'].includes(kind)) {
-          throw new Error(`GATE_INPUT_KIND_INVALID: ${profile}/${gate} requires tree|candidate|build-output|deployed-service`);
+        if (!['tree', 'candidate', 'candidate-contour', 'build-output', 'deployed-service'].includes(kind)) {
+          throw new Error(`GATE_INPUT_KIND_INVALID: ${profile}/${gate} requires tree|candidate|candidate-contour|build-output|deployed-service`);
         }
         const users = (manifest.pipelines ?? []).filter(pipeline => pipeline.profile === profile && (pipeline.stages ?? []).includes(gate));
         if (!users.length || users.some(pipeline => pipeline.executors?.[gate] !== 'local_gate')) {
@@ -152,13 +153,13 @@ export function validateGateTesting(manifest) {
         if (kind !== 'build-output' && commands.some(command => String(command).includes('{artifact_path}'))) {
           throw new Error(`GATE_BUILD_OUTPUT_PLACEHOLDER_UNBOUND: ${profile}/${gate}`);
         }
-        if (kind === 'candidate' && users.some(pipeline => {
+        if (['candidate', 'candidate-contour'].includes(kind) && users.some(pipeline => {
           const index = pipeline.stages.indexOf(gate);
           return !pipeline.stages.slice(0, index).some(stage => pipeline.executors?.[stage] === 'git_verify');
         })) {
           throw new Error(`GATE_CANDIDATE_BEFORE_VERIFY: ${profile}/${gate} requires a preceding git_verify`);
         }
-        if (kind === 'candidate' && users.some(pipeline => {
+        if (['candidate', 'candidate-contour'].includes(kind) && users.some(pipeline => {
           const index = pipeline.stages.indexOf(gate);
           return !pipeline.stages.slice(0, index).some(stage => pipeline.executors?.[stage] === 'git_publish');
         })) throw new Error(`GATE_CANDIDATE_BEFORE_PUBLISH: ${profile}/${gate} requires a preceding git_publish producer`);
@@ -171,6 +172,16 @@ export function validateGateTesting(manifest) {
         })) {
           throw new Error(`GATE_SERVICE_BEFORE_DEPLOY: ${profile}/${gate} needs a completed dev_deploy stage`);
         }
+      }
+      if (config.lifecycle !== undefined) {
+        if (config.input_kind !== 'candidate-contour' || config.live_postgres || config.artifact_output ||
+            config.build_output || config.parallel_groups || config.impact_groups || config.coordinator_only) {
+          throw new Error(`GATE_LIFECYCLE_INVALID: ${profile}/${gate} must be an isolated candidate-contour gate`);
+        }
+        validateLifecycle(config.lifecycle, commands);
+      }
+      if (config.input_kind === 'candidate-contour' && config.lifecycle === undefined) {
+        throw new Error(`GATE_LIFECYCLE_REQUIRED: ${profile}/${gate}`);
       }
       // An unresolved source reference is validated after resolveGateTesting merges its snapshot.
       if (config.source !== undefined) continue;

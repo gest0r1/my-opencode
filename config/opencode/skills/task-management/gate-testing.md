@@ -378,3 +378,122 @@ the owner; see the RUN command for repair and stop handling.
 Docker access for managed test resources is only through the trusted runner. DevOps uses its
 separate bounded runtime diagnostic route; orchestration owns the final gate and stage
 transitions. No manual env-prefix or OpenCode restart is needed for a frozen managed resource.
+
+
+## Candidate-contour lifecycle supervisor (Issue #60)
+
+A post-publish disposable-contour gate uses the existing `local_gate` executor and the
+new `gate_testing[profile][gate].input_kind: "candidate-contour"` contract. It is
+**different** from `deployed-service`: the latter still requires a completed
+`dev_deploy` with live installed-candidate provenance and is not provisioned by this hook.
+A `candidate-contour` gate requires preceding `git_verify` and `git_publish`.
+The runner loads their exact published candidate evidence; it does not infer a candidate
+from the mutable checkout. PLAN, RUN and the gate runner all validate the same frozen
+manifest. Existing manifests are not implicitly migrated.
+
+Example (use actual project commands and the reviewed 64-hex recipe digest):
+
+```json
+{
+  "gate_profiles": {
+    "release": {
+      "install-check": [
+        "bash scripts/testing/release-parity.sh fresh-install",
+        "bash scripts/testing/release-parity.sh upgrade-install"
+      ]
+    }
+  },
+  "gate_testing": {
+    "release": {
+      "install-check": {
+        "input_kind": "candidate-contour",
+        "timeout_seconds": 3600,
+        "lifecycle": {
+          "schema_version": 1,
+          "producer": "bash scripts/testing/release-contour.sh",
+          "handoff_schema": "sevami.release-contour/v2",
+          "recipe_digest": "REPLACE_WITH_REVIEWED_64_HEX_SHA256",
+          "exclusive_lock": "sevami-dev-provider-tokens",
+          "commands": [
+            { "command": "bash scripts/testing/release-parity.sh fresh-install", "operation": "fresh" },
+            { "command": "bash scripts/testing/release-parity.sh upgrade-install", "operation": "upgrade" }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+The example digest placeholder is deliberately INVALID. Every frozen command must occur
+exactly once in the lifecycle command mapping. Operations are `fresh` or `upgrade`;
+a `service-health` command can bind to `fresh` without masquerading as `deployed-service`.
+Mappings use exact command **text**, never array indexes. Each command receives a unique
+nested attempt scratch/lease and a fresh producer-owned contour. No command-level PASS
+reuse, impact reuse, automatic timeout retry or snapshot rerun is allowed on lifecycle
+gates; a failed provision must never be silently skipped.
+
+### Producer protocol
+
+The frozen `producer` is only a repository-local `bash <file.sh>`,
+`node <file.mjs|file.js>`, or `node --import tsx <file.ts>` entry. It is executed
+with `spawn` (no shell) and the following exact subcommands:
+
+- `reap --expired` before each provision and periodically while a gate is running;
+- `provision --operation fresh|upgrade --handoff-ref ABS --lease-ref ABS --run-id ID
+  --pipeline-id ID --gate ID --attempt N --candidate-sha SHA --nonce HEX
+  --recipe-digest SHA256`;
+- `heartbeat --lease-ref ABS` every 30 seconds during an active gate;
+- `down --lease-ref ABS` in `finally` on all outcomes, including a refusal.
+  
+The producer owns resource creation, journal-before-create, ownership verification,
+lease expiry and owned-only destruction. `reap --expired` MUST refuse a still-valid
+live holder and reclaim orphaned resources from interrupted supervisors; it must work
+after a supervisor is killed without `finally`. All subcommands exit nonzero on
+failure. The runner never executes arbitrary Compose commands or manipulates a target
+project's dev contour directly.
+
+The producer writes the handoff as an owner-only (mode 0600), regular absolute-path
+JSON file at `--handoff-ref`. It must include:
+
+```text
+schema, runId, pipelineId, gate, attempt (integer), candidateSha,
+operation, nonce, recipeDigest, expiresAt (future ISO timestamp)
+```
+
+The runner verifies each field against the frozen descriptor and exact gate attempt,
+hashes the handoff bytes, and injects the following into the **one** frozen gate child:
+
+- `RELEASE_PARITY_CONTOUR_REF` — protected absolute path;
+- `RELEASE_PARITY_CONTOUR_EXPECTED_SHA256` and `PIPELINE_LIFECYCLE_HANDOFF_SHA256`
+  — the expected SHA-256 of handoff bytes;
+- existing `PIPELINE_RUN_ID`, `PIPELINE_ID`, `PIPELINE_GATE`,
+  `PIPELINE_GATE_ATTEMPT`, `CANDIDATE_SHA`, `PIPELINE_SCRATCH_DIR`.
+
+Before accepting result evidence the runner rehashes the handoff. A changed, invalid
+or expired handoff is BLOCKED. Child PASS is not finalized until producer `down`
+succeeds; cleanup evidence is attached to the normal gate result. A crash or SIGKILL
+requires subsequent startup reaping by the producer, not a claim that `finally`
+ran. The runner takes a machine-wide `exclusive_lock` (independent of worktree)
+for the provision/gate/down window, so shared credential users do not overlap.
+
+`RELEASE_PARITY_INCIDENT_COPY` may be supplied by the operator only as a protected
+owner-readable file. Provider references and credentials are operator-managed
+environment inputs; the generic runner does not mint, log or stop/start bots.
+The producer must report refusals with a **leading machine code on stderr**,
+e.g. `DEV_CONTOUR_RUNNING: ...`, and never print secret values. A refusal is not
+retried. If the dev contour shares Telegram/MAX tokens, the operator stops it for
+the exclusive test window and restarts it after teardown; the generic runner
+does neither.
+
+Errors include `GATE_LIFECYCLE_REQUIRED`, `GATE_LIFECYCLE_INVALID`,
+`LIFECYCLE_DESCRIPTOR_INVALID`, `LIFECYCLE_HANDOFF_INVALID`,
+`LIFECYCLE_HANDOFF_CHANGED`, `LIFECYCLE_INCIDENT_COPY_INVALID`,
+`LIFECYCLE_PRODUCER_FAILED` and `LIFECYCLE_CLEANUP_FAILED`.
+An unavailable producer or broken handoff is always BLOCKED, not PASS/skipped.
+Tests: `node --test config/opencode/skills/task-management/scripts/gate-lifecycle.test.mjs`.
+
+An existing approved manifest requires the regular PLAN revision/amendment flow
+before adding or changing this frozen contract; installed OpenCode files must not
+be hot-patched. Real SeVami integration requires its repository producer to adopt
+this exact CLI/handoff protocol; this document does not assert that it is already deployed.

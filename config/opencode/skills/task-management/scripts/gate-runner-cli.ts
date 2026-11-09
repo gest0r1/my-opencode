@@ -16,6 +16,7 @@ import { resolveReuseIdentity } from './gate-reuse-identity.mjs';
 import { planProbeInputDigest, requirePlanProbeManifestPath } from './plan-probe-identity.mjs';
 import { verifyDeployedServiceGate } from './dev-deploy-cli.ts';
 import { artifactDigest, outputProof, verifyOutputProof } from './build-output-proof.mjs';
+import { runLifecycleCommand } from './gate-lifecycle.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -224,6 +225,7 @@ export function planProbeCommandsSha256(commands: string[]): string {
 function gateEnv(identity: { runId: string; pipelineId: string; gate: string; attempt: number; candidateSha?: string; deployTarget?: string; scratchDir: string }): Record<string, string | undefined> {
   return { PIPELINE_RUN_ID: identity.runId, PIPELINE_ID: identity.pipelineId, PIPELINE_GATE: identity.gate, PIPELINE_GATE_ATTEMPT: String(identity.attempt),
     CANDIDATE_SHA: identity.candidateSha, PIPELINE_SCRATCH_DIR: identity.scratchDir,
+    RELEASE_PARITY_CONTOUR_REF: undefined, RELEASE_PARITY_CONTOUR_EXPECTED_SHA256: undefined, PIPELINE_LIFECYCLE_HANDOFF_SHA256: undefined,
     PIPELINE_DEPLOY_TARGET: identity.deployTarget,
     // Half the machine for a gate's own workers; a project wires it into its runner (vitest --maxWorkers,
     // jest --maxWorkers, pytest -n) in the frozen command. Set PIPELINE_MAX_WORKERS outside to override.
@@ -468,16 +470,17 @@ async function main(): Promise<void> {
     throw new GateRunnerError(`no executable gate commands: profile=${pipeline.profile} gate=${gate}`);
   }
 
-  if (advisory && RUNTIME_GATE.test(gate)) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
   validateGateTesting(manifest);
   const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
-  if (advisory && (['candidate', 'build-output', 'deployed-service'].includes(config?.input_kind) || config?.artifact_output)) {
+  const lifecycle = config?.lifecycle;
+  if (advisory && (RUNTIME_GATE.test(gate) || lifecycle)) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
+  if (advisory && (['candidate', 'candidate-contour', 'build-output', 'deployed-service'].includes(config?.input_kind) || config?.artifact_output)) {
     throw new GateRunnerError('candidate/build-output/deployed-service or artifact-producing gates cannot be advisory');
   }
   // Service checks consume the existing dev_deploy proof, not a new deployment
   // state store; do this before source inventory and test/container allocations.
   const candidateSha = advisory ? undefined
-    : ['candidate', 'deployed-service'].includes(config?.input_kind)
+    : ['candidate', 'candidate-contour', 'deployed-service'].includes(config?.input_kind)
       ? await loadDeclaredCandidate(state.manifest_file, manifest, state.manifest_sha256)
       : await loadCandidate(state.manifest_file);
   let deployedServiceEvidence: Record<string, unknown> | null = null;
@@ -577,7 +580,7 @@ async function main(): Promise<void> {
   // One held RUN lane lock covers the cheap preflight and all ensuing gate
   // work. A failing preflight does not allocate a numbered attempt or scratch.
   const gateLock = `gate:${runId}:${pipelineId}:${gate}`;
-  const runtimeGate = RUNTIME_GATE.test(gate);
+  const runtimeGate = RUNTIME_GATE.test(gate) || Boolean(lifecycle);
   const releaseLocks = [...(runtimeGate ? pipeline.runtime_locks ?? [] : []), gateLock];
   // Pure gates keep their original late lock acquisition, so hashing does
   // not serialize other invocations of the same lane. Live RUN alone holds
@@ -632,7 +635,7 @@ async function main(): Promise<void> {
         if (after.exit_code !== 0 || after.stdout.trim() !== before.stdout.trim()) {
           throw new GateRunnerError('RUN_LIVE_PREFLIGHT_HEAD_CHANGED');
         }
-        if (['candidate', 'deployed-service'].includes(config?.input_kind) &&
+        if (['candidate', 'candidate-contour', 'deployed-service'].includes(config?.input_kind) &&
             await loadDeclaredCandidate(state.manifest_file, manifest, state.manifest_sha256) !== candidateSha) {
           throw new GateRunnerError('RUN_LIVE_PREFLIGHT_CANDIDATE_CHANGED');
         }
@@ -711,10 +714,14 @@ async function main(): Promise<void> {
   // Failure to enumerate them means reuse is unsafe, but fresh execution remains allowed.
   let ignoredSnapshotFiles: string[] | null = null;
   let ignoredSnapshotError: string | null = null;
-  try { ignoredSnapshotFiles = reuseLocalInputs(originalCwd); }
-  catch (error) { ignoredSnapshotError = 'ignored snapshot inputs cannot be enumerated: ' + String(error instanceof Error ? error.message : error); }
-  let reuseIdentity = ignoredSnapshotFiles === null
-    ? { digest: null, reason: ignoredSnapshotError, metrics: { files: 0, bytes: 0, elapsed_ms: 0 } }
+  if (!lifecycle) {
+    try { ignoredSnapshotFiles = reuseLocalInputs(originalCwd); }
+    catch (error) { ignoredSnapshotError = 'ignored snapshot inputs cannot be enumerated: ' + String(error instanceof Error ? error.message : error); }
+  }
+  let reuseIdentity = lifecycle
+    ? { digest: null, reason: 'lifecycle contour: no result reuse', metrics: { files: 0, bytes: 0, elapsed_ms: 0 } }
+    : ignoredSnapshotFiles === null
+      ? { digest: null, reason: ignoredSnapshotError, metrics: { files: 0, bytes: 0, elapsed_ms: 0 } }
     : await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles });
   const reuseIdentityMeasurements: Array<{ files: number; bytes: number; elapsed_ms: number }> = reuseIdentity.metrics ? [reuseIdentity.metrics] : [];
   let environmentDigest = reuseIdentity.digest;
@@ -745,7 +752,7 @@ async function main(): Promise<void> {
   let treeCopy: any;
   let copyFiles: Record<string, string> | null = null;
   let snapshotRecord: Record<string, any> | null = null;
-  if ((!advisory || coordinator) && !config?.artifact_output && config?.input_kind !== 'build-output' && !RUNTIME_GATE.test(gate) && !commands.some(command => command.includes('{candidate_sha}')) && process.env.PIPELINE_GATE_SNAPSHOT !== '0' && !args.includes('--in-place')) {
+  if ((!advisory || coordinator) && !config?.artifact_output && config?.input_kind !== 'build-output' && !runtimeGate && !lifecycle && !commands.some(command => command.includes('{candidate_sha}')) && process.env.PIPELINE_GATE_SNAPSHOT !== '0' && !args.includes('--in-place')) {
     const created = await createGateSnapshot({ cwd: originalCwd, stateRoot, label: `${pipelineId}-${gate}`,
       installEvidence: join(stateRoot, runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-snapshot-install.json`) });
     if (created.snapshot) {
@@ -764,6 +771,7 @@ async function main(): Promise<void> {
     treeCopy = undefined;
   };
   const results: Array<Record<string, any>> = [];
+  const lifecycleEvidence: Array<Record<string, unknown>> = [];
   let resource: Awaited<ReturnType<typeof createLivePostgres>> | undefined;
   let failure: unknown;
   let cleanupComplete: boolean | null = null;
@@ -773,8 +781,8 @@ async function main(): Promise<void> {
   // Resource-bound results do not prove the state of a later disposable DB or deployed service.
   // Keep reuse for pure commands from the same gate, but always establish fresh live evidence.
   const liveCommandIndexes = new Set(liveIndexes(config));
-  const canReuseCommand = (index: number) => !config?.artifact_output && !['build-output', 'deployed-service'].includes(config?.input_kind) && !liveCommandIndexes.has(index);
-  const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || !snapshot?.digest || !environmentDigest ? new Map()
+  const canReuseCommand = (index: number) => !config?.artifact_output && !['build-output', 'deployed-service'].includes(config?.input_kind) && !liveCommandIndexes.has(index) && !lifecycle;
+  const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || lifecycle || !snapshot?.digest || !environmentDigest ? new Map()
     : await findReusableResults({ stateRoot: resolve(stateRoot), runId, gate, sourceDigest: snapshot.digest, environmentDigest,
       selected: invocations.filter(item => canReuseCommand(item.index))
         .map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
@@ -799,7 +807,7 @@ async function main(): Promise<void> {
   // A gate that passed on an earlier snapshot and runs again (its lane files moved after it, or a plain
   // rerun) repeats only the commands that the changes between the two snapshots reach through the frozen
   // impact map; the others keep their PASS. Unmapped and dependency changes reach every command.
-  if (environmentDigest && treeCopy && !args.includes('--no-reuse') && !hypothesis && previous?.status === 'PASS' && previous.snapshot?.status === 'used' &&
+  if (!lifecycle && environmentDigest && treeCopy && !args.includes('--no-reuse') && !hypothesis && previous?.status === 'PASS' && previous.snapshot?.status === 'used' &&
       SHA.test(previous.snapshot.commit ?? '') && previous.manifest_sha256 === state.manifest_sha256 && previous.environment_digest === environmentDigest) {
     const diff = await runInvocation('git', ['diff', '--name-only', '-z', '--no-renames', previous.snapshot.commit, treeCopy.commit, '--'], originalCwd, gitReadEnv({}), 30);
     if (diff.exit_code === 0 && !diff.truncated) {
@@ -857,10 +865,22 @@ async function main(): Promise<void> {
       // start never leaves its siblings running unrecorded.
       const settled = await Promise.all(batch.map(async invocation => {
         const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
+        if (lifecycle) {
+          const { gateResult } = await runLifecycleCommand({
+            descriptor: lifecycle, frozenCommand: invocation.command,
+            identity: { runId, pipelineId, gate, attempt, candidateSha, frozenCommands: commands },
+            scratchDir: scratchDir!, cwd: process.cwd(), runInvocation,
+            timeoutSeconds: config?.timeout_seconds ?? 1800,
+            executeGate: (handoffEnv: Record<string, string>) =>
+              executeInvocation(invocation, { ...env, ...handoffEnv }, config?.timeout_seconds ?? 1800),
+            onEvidence: (proof: Record<string, unknown>) => lifecycleEvidence.push(proof),
+          });
+          return { invocation, result: gateResult.result };
+        }
         const done = await executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800);
         return { invocation, result: done.result };
       }));
-      await retryTimeouts(settled, () => interrupted, (invocation: Invocation) => {
+      if (!lifecycle) await retryTimeouts(settled, () => interrupted, (invocation: Invocation) => {
         const usesLive = resource && config.live_postgres.command_indexes.includes(invocation.index);
         return executeInvocation(invocation, { ...(usesLive ? resource.env : {}), ...env }, config?.timeout_seconds ?? 1800);
       });
@@ -998,7 +1018,7 @@ async function main(): Promise<void> {
         selection_reason: selectionReason, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
-        live_postgres: liveEvidence ?? resource?.evidence ?? null, cleanup_complete: cleanupComplete, heavy_slot: heavy, heavy_slot_wait_ms: slotWaitMs, live_slot_wait_ms: liveWaitMs,
+        live_postgres: liveEvidence ?? resource?.evidence ?? null, lifecycle: lifecycleEvidence, cleanup_complete: lifecycle ? lifecycleEvidence.length === invocations.length && lifecycleEvidence.every(item => item.cleanup_complete === true) : cleanupComplete, heavy_slot: heavy, heavy_slot_wait_ms: slotWaitMs, live_slot_wait_ms: liveWaitMs,
         snapshot: snapshotRecord && treeCopy && copyFiles ? { ...snapshotRecord, ...laneProof(copyFiles) } : snapshotRecord,
         test_reports: reuse ? [] : JSON.parse(redact(JSON.stringify(await readTestReports(config?.report_files, join(resolve(stateRoot), runId), startedAt)))),
         error: failure ? redact(String(failure)) : null, results: [...results].sort((a: any, b: any) => a.command_index - b.command_index) }, null, 2)}\n`, 'utf8');
