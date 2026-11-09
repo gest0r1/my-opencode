@@ -1,7 +1,8 @@
 // Generic, frozen repository lifecycle hook for candidate-contour gates.
 // Infrastructure ownership, credential admission and survivor reclamation belong to the repository producer.
 import { createHash, randomBytes } from 'node:crypto';
-import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve, isAbsolute, sep } from 'node:path';
 import os from 'node:os';
 import { acquireLockFiles } from './runtime-locks.mjs';
@@ -47,13 +48,19 @@ export function validateLifecycle(config, commands) {
     seen.add(item.command);
   }
 }
-async function protectedFile(path) {
+async function protectedFile(path, { contents = true } = {}) {
   if (!isAbsolute(path)) throw new Error('LIFECYCLE_HANDOFF_INVALID: reference must be absolute');
-  const info = await lstat(path);
-  if (!info.isFile() || (info.mode & 0o077) !== 0) {
-    throw new Error('LIFECYCLE_HANDOFF_INVALID: reference is not a regular owner-only file');
-  }
-  return readFile(path, 'utf8');
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const info = await handle.stat();
+    if (!info.isFile() || (info.mode & 0o077) !== 0 || (contents && info.size > 1024 * 1024)) {
+      throw new Error('unsafe contour reference');
+    }
+    return contents ? await handle.readFile('utf8') : null;
+  } catch {
+    throw new Error('LIFECYCLE_HANDOFF_INVALID: reference missing, unsafe or unreadable');
+  } finally { await handle?.close(); }
 }
 export function verifyLifecycleHandoff(raw, identity, descriptor) {
   let data;
@@ -71,7 +78,7 @@ export function verifyLifecycleHandoff(raw, identity, descriptor) {
   return sha256(raw);
 }
 async function protectedReference(path) {
-  try { await protectedFile(path); } catch { throw new Error('LIFECYCLE_INCIDENT_COPY_INVALID: protected reference required'); }
+  try { await protectedFile(path, { contents: false }); } catch { throw new Error('LIFECYCLE_INCIDENT_COPY_INVALID: protected reference required'); }
 }
 const shortError = result => {
   // Only an explicit leading machine refusal code may cross the producer boundary; never log its raw output.
@@ -88,7 +95,8 @@ export async function runLifecycleCommand({
   if (!binding) reject('unknown command identity');
   const operation = binding.operation;
   const nonce = randomBytes(24).toString('hex');
-  const attemptId = { ...identity, operation, nonce };
+  const attemptId = { runId: identity.runId, pipelineId: identity.pipelineId, gate: identity.gate,
+    attempt: identity.attempt, candidateSha: identity.candidateSha, operation, nonce };
   const producer = lifecycleProducerTokens(descriptor.producer);
   const attemptRoot = resolve(scratchDir);
   if (!isAbsolute(scratchDir) || !attemptRoot.includes(sep + 'scratch' + sep)) {
@@ -115,7 +123,8 @@ export async function runLifecycleCommand({
     const result = await runInvocation(producer[0], [...producer.slice(1), action, ...argv], cwd,
       { PIPELINE_RUN_ID: identity.runId, PIPELINE_ID: identity.pipelineId, PIPELINE_GATE: identity.gate,
         PIPELINE_GATE_ATTEMPT: String(identity.attempt), CANDIDATE_SHA: identity.candidateSha,
-        PIPELINE_SCRATCH_DIR: root, PIPELINE_LIFECYCLE_NONCE: nonce, PIPELINE_LIFECYCLE_RECIPE_SHA256: descriptor.recipe_digest },
+        PIPELINE_SCRATCH_DIR: root, PIPELINE_LIFECYCLE_NONCE: nonce, PIPELINE_LIFECYCLE_RECIPE_SHA256: descriptor.recipe_digest,
+        RELEASE_PARITY_CONTOUR_REF: undefined, RELEASE_PARITY_CONTOUR_EXPECTED_SHA256: undefined },
       action === 'provision' ? timeoutSeconds : 180, cleanup);
     if (result.exit_code !== 0) throw new Error(shortError(result) + ': ' + action + ' refused');
     return result;
