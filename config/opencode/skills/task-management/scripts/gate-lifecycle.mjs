@@ -50,11 +50,14 @@ export function validateLifecycle(config, commands) {
 }
 async function protectedFile(path, { contents = true } = {}) {
   if (!isAbsolute(path)) throw new Error('LIFECYCLE_HANDOFF_INVALID: reference must be absolute');
+  if (!Number.isInteger(constants.O_NOFOLLOW)) throw new Error('LIFECYCLE_HANDOFF_INVALID: O_NOFOLLOW is required');
   let handle;
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const info = await handle.stat();
-    if (!info.isFile() || (info.mode & 0o077) !== 0 || (contents && info.size > 1024 * 1024)) {
+    if (!info.isFile() || (info.mode & 0o077) !== 0 ||
+        (typeof process.getuid === 'function' && info.uid !== process.getuid()) ||
+        (contents && info.size > 1024 * 1024)) {
       throw new Error('unsafe contour reference');
     }
     return contents ? await handle.readFile('utf8') : null;
@@ -119,6 +122,7 @@ export async function runLifecycleCommand({
   let gateResult;
   let pulse;
   let heartbeatPromise = Promise.resolve();
+  let leaseCreated = false;
   const producerCall = async (action, argv, cleanup = false) => {
     const result = await runInvocation(producer[0], [...producer.slice(1), action, ...argv], cwd,
       { PIPELINE_RUN_ID: identity.runId, PIPELINE_ID: identity.pipelineId, PIPELINE_GATE: identity.gate,
@@ -139,6 +143,7 @@ export async function runLifecycleCommand({
       attempt: identity.attempt, candidateSha: identity.candidateSha, operation, nonce,
       recipeDigest: descriptor.recipe_digest, pid: process.pid, createdAt: new Date().toISOString() }) + '\n',
       { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    leaseCreated = true;
     await producerCall('provision', [
       '--operation', operation, '--handoff-ref', handoffRef, '--lease-ref', leaseRef,
       '--run-id', identity.runId, '--pipeline-id', identity.pipelineId, '--gate', identity.gate,
@@ -171,8 +176,9 @@ export async function runLifecycleCommand({
     if (pulse) clearInterval(pulse);
     try {
       await heartbeatPromise;
-      // Down is mandatory even if provision failed: it uses the journal/lease, not a guessed resource name.
-      await producerCall('down', ['--lease-ref', leaseRef], true);
+      // Down is mandatory whenever the lease exists, even if provision itself failed.
+      // A refusal during startup reap has allocated nothing and must retain its original error code.
+      if (leaseCreated) await producerCall('down', ['--lease-ref', leaseRef], true);
       evidence.cleanup_complete = true;
     } catch (cleanupError) {
       evidence.cleanup_complete = false;
