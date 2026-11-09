@@ -91,7 +91,7 @@ const shortError = result => {
 
 export async function runLifecycleCommand({
   descriptor, frozenCommand, identity, scratchDir, cwd, runInvocation, executeGate, onEvidence,
-  timeoutSeconds = 1800,
+  timeoutSeconds = 1800, heartbeatIntervalMs = 30000,
 }) {
   validateLifecycle(descriptor, identity.frozenCommands);
   const binding = descriptor.commands.find(entry => entry.command === frozenCommand);
@@ -158,7 +158,7 @@ export async function runLifecycleCommand({
         await producerCall('reap', ['--expired'], true);
       });
       heartbeatPromise.catch(() => undefined);
-    }, 30000);
+    }, heartbeatIntervalMs);
     gateResult = await executeGate({
       PIPELINE_SCRATCH_DIR: root,
       RELEASE_PARITY_CONTOUR_REF: handoffRef,
