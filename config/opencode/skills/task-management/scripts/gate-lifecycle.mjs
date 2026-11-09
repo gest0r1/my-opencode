@@ -178,7 +178,8 @@ export async function runLifecycleCommand({
   finally {
     if (pulse) clearInterval(pulse);
     try {
-      await heartbeatPromise;
+      // An unsuccessful heartbeat blocks PASS, but must never suppress owned teardown.
+      await heartbeatPromise.catch(() => undefined);
       // Down is mandatory whenever the lease exists, even if provision itself failed.
       // A refusal during startup reap has allocated nothing and must retain its original error code.
       if (leaseCreated) await producerCall('down', ['--lease-ref', leaseRef], true);
