@@ -106,7 +106,8 @@ export async function runLifecycleCommand({
     throw new Error('LIFECYCLE_SCRATCH_INVALID: expected runner-owned attempt directory');
   }
   // Multiple frozen commands share one gate attempt but must never share their lease or handoff.
-  const root = join(attemptRoot, 'lifecycle-' + sha256(frozenCommand).slice(0, 16));
+  // Nonce prevents lease-file collisions when a SIGKILL occurs before gate evidence advances attempt.
+  const root = join(attemptRoot, 'lifecycle-' + sha256(frozenCommand).slice(0, 12) + '-' + nonce.slice(0, 12));
   const handoffRef = join(root, 'lifecycle-handoff.json');
   const leaseRef = join(root, 'lifecycle-lease.json');
   const incidentCopy = process.env.RELEASE_PARITY_INCIDENT_COPY;
