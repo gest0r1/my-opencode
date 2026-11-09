@@ -225,6 +225,7 @@ export function planProbeCommandsSha256(commands: string[]): string {
 function gateEnv(identity: { runId: string; pipelineId: string; gate: string; attempt: number; candidateSha?: string; deployTarget?: string; scratchDir: string }): Record<string, string | undefined> {
   return { PIPELINE_RUN_ID: identity.runId, PIPELINE_ID: identity.pipelineId, PIPELINE_GATE: identity.gate, PIPELINE_GATE_ATTEMPT: String(identity.attempt),
     CANDIDATE_SHA: identity.candidateSha, PIPELINE_SCRATCH_DIR: identity.scratchDir,
+    RELEASE_PARITY_CONTOUR_REF: undefined, RELEASE_PARITY_CONTOUR_EXPECTED_SHA256: undefined, PIPELINE_LIFECYCLE_HANDOFF_SHA256: undefined,
     PIPELINE_DEPLOY_TARGET: identity.deployTarget,
     // Half the machine for a gate's own workers; a project wires it into its runner (vitest --maxWorkers,
     // jest --maxWorkers, pytest -n) in the frozen command. Set PIPELINE_MAX_WORKERS outside to override.
