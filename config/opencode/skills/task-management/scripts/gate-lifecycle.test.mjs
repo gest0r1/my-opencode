@@ -29,7 +29,8 @@ function fixture(options = {}) {
   const runInvocation = async (_exe, args) => {
     const action = args[1];
     calls.push(action);
-    if (action === 'reap' || action === 'heartbeat') return { exit_code: 0 };
+    if (action === 'reap') return { exit_code: 0 };
+    if (action === 'heartbeat') return { exit_code: options.heartbeatFails ? 2 : 0, stderr: 'LIFECYCLE_HEARTBEAT_FAILED: simulated' };
     if (action === 'down') return { exit_code: options.cleanupFails ? 1 : 0, stderr: 'OWNED_DOWN_FAILED: simulated' };
     if (action !== 'provision') throw Error('unexpected action');
     if (options.refuse) return { exit_code: 3, stderr: 'DEV_CONTOUR_RUNNING: operator must stop dev' };
@@ -48,6 +49,7 @@ function fixture(options = {}) {
   };
   const executeGate = async (env) => {
     observed.push(env);
+    if (options.gateDelayMs) await new Promise(resolve => setTimeout(resolve, options.gateDelayMs));
     if (options.changeHandoff) await writeFile(currentRef, '{}', { mode: 0o600 });
     if (options.gateThrows) throw Error('simulated child failure');
     return { exit_code: options.gateFails ? 1 : 0, result: { exit_code: options.gateFails ? 1 : 0 } };
@@ -65,7 +67,7 @@ async function runOne(t, options = {}, command = commandFresh, desc = descriptor
   const run = () => runLifecycleCommand({
     descriptor: desc, frozenCommand: command, identity, scratchDir, cwd: root,
     runInvocation: fx.runInvocation, executeGate: fx.executeGate,
-    onEvidence: item => evidence.push(item),
+    onEvidence: item => evidence.push(item), heartbeatIntervalMs: options.heartbeatIntervalMs ?? 30000,
   });
   return { ...fx, run, evidence };
 }
@@ -147,4 +149,13 @@ test('two commands in the same attempt use different handoff and lease paths', a
   await first.run();
   await second.run();
   assert.notEqual(first.observed[0].RELEASE_PARITY_CONTOUR_REF, second.observed[0].RELEASE_PARITY_CONTOUR_REF);
+});
+
+
+test('heartbeat failure blocks result but never suppresses down', async t => {
+  const fx = await runOne(t, { heartbeatFails: true, gateDelayMs: 35, heartbeatIntervalMs: 5 });
+  await assert.rejects(fx.run(), /LIFECYCLE_HEARTBEAT_FAILED/);
+  assert.equal(fx.calls.at(-1), 'down', 'teardown must run even when periodic heartbeat failed');
+  assert.equal(fx.evidence.at(-1).cleanup_complete, true);
+  assert.equal(fx.evidence.at(-1).status, 'BLOCKED');
 });
