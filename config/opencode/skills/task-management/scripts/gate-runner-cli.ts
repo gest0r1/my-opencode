@@ -470,10 +470,10 @@ async function main(): Promise<void> {
     throw new GateRunnerError(`no executable gate commands: profile=${pipeline.profile} gate=${gate}`);
   }
 
-  if (advisory && (RUNTIME_GATE.test(gate) || lifecycle)) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
   validateGateTesting(manifest);
   const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
   const lifecycle = config?.lifecycle;
+  if (advisory && (RUNTIME_GATE.test(gate) || lifecycle)) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
   if (advisory && (['candidate', 'candidate-contour', 'build-output', 'deployed-service'].includes(config?.input_kind) || config?.artifact_output)) {
     throw new GateRunnerError('candidate/build-output/deployed-service or artifact-producing gates cannot be advisory');
   }
