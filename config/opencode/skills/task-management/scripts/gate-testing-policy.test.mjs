@@ -325,3 +325,34 @@ test('post-deploy input classification is accepted without enabling deployment t
   manifest.gate_testing.local.smoke.live_postgres = { image, command_indexes: [0] };
   assert.throws(() => validateGateTesting(manifest), /test resources cannot wrap deployment gates/);
 });
+
+
+test('candidate-contour requires a frozen lifecycle after publish, never dev-deploy semantics', () => {
+  const command = 'bash scripts/check.sh';
+  const lifecycle = {
+    schema_version: 1, producer: 'node scripts/producer.mjs',
+    handoff_schema: 'example.release-contour/v2', recipe_digest: 'f'.repeat(64),
+    exclusive_lock: 'provider-dev',
+    commands: [{ command, operation: 'fresh' }],
+  };
+  const manifest = {
+    pipelines: [{ id: 'delivery', profile: 'release',
+      stages: ['verify', 'publish', 'install-check'],
+      executors: { verify: 'git_verify', publish: 'git_publish', 'install-check': 'local_gate' } }],
+    gate_profiles: { release: { 'install-check': [command] } },
+    gate_testing: { release: { 'install-check': { input_kind: 'candidate-contour', lifecycle } } },
+  };
+  assert.doesNotThrow(() => validateGateTesting(manifest));
+  assert.equal(isPrePublishGate(manifest, 'release', 'install-check'), false);
+  delete manifest.gate_testing.release['install-check'].lifecycle;
+  assert.throws(() => validateGateTesting(manifest), /GATE_LIFECYCLE_REQUIRED/);
+  manifest.gate_testing.release['install-check'].lifecycle = lifecycle;
+  manifest.pipelines[0].stages = ['verify', 'install-check', 'publish'];
+  assert.throws(() => validateGateTesting(manifest), /GATE_CANDIDATE_BEFORE_PUBLISH/);
+  manifest.pipelines[0].stages = ['verify', 'publish', 'install-check'];
+  manifest.gate_testing.release['install-check'].parallel_groups = [[0, 1]];
+  assert.throws(() => validateGateTesting(manifest), /GATE_TESTING_INVALID|GATE_LIFECYCLE_INVALID/);
+  delete manifest.gate_testing.release['install-check'].parallel_groups;
+  manifest.gate_testing.release['install-check'].input_kind = 'deployed-service';
+  assert.throws(() => validateGateTesting(manifest), /GATE_SERVICE_BEFORE_DEPLOY|GATE_LIFECYCLE_INVALID/);
+});

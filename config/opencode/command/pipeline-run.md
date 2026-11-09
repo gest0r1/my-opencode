@@ -41,6 +41,29 @@ Unknown modes/arguments BLOCK.
 
 Owner may provide clarification at any moment in the current session, including between stages and after acceptance FAIL. Stop source workers before applying it. Before implementation starts, revise this PLAN in place; after it starts, compatible feedback uses amendments. Starting RUN/preflight/review is not the implementation freeze boundary.
 
+## Candidate-contour lifecycle gates
+
+A frozen `local_gate` with `gate_testing[profile][gate].input_kind: candidate-contour`
+is a post-publish test on a repo-provisioned disposable contour, **not**
+`deployed-service`. Require the reviewed `lifecycle` descriptor in the
+same frozen manifest: typed producer command, exact command identity-to-operation
+mapping, v2 handoff schema, recipe SHA-256 and exclusive lock. The runner
+allocates a fresh lease/scratch per frozen command, runs `reap` and `provision`,
+validates the identity-bound handoff, injects the ref and SHA-256, executes the
+unchanged frozen command, and always calls `down`. A failed provision, changed
+handoff or failed cleanup is BLOCKED. No PASS reuse or timeout retry is
+permitted for these commands. Only the repository producer manages Docker,
+databases, fixtures or provider transports. The operator, not RUN, stops and
+restarts any dev contour that shares provider tokens. No installed-config
+hot-patch, new stage, extra agent, or alternative scheduler is allowed.
+
+The schema, subcommands, handoff fields, protected incident-copy reference,
+failure codes and tests are specified in
+`skills/task-management/gate-testing.md#candidate-contour-lifecycle-supervisor-issue-60`.
+A previously approved manifest must use ordinary revision/amendment before
+accepting the new descriptor. SeVami producer availability is an independent
+integration prerequisite.
+
 ## Scheduler and frozen work
 
 `stage-cli next <run-id> --json` is the ONLY runnable queue. Do not recompute planning dependencies during RUN. A frozen dependency is satisfied when its upstream pipeline has completed through `ready_after_stage`; only pipelines without that milestone retain the legacy requirement `status=completed`. Therefore a late CI/CD/infrastructure blocker after source-ready does not freeze downstream source work. The `test_preparation` lane contains frozen `test_rework[]` items. Respect the explicit `required_by` dependencies in the frozen plan; independent source lanes may run concurrently. Older manifests without `required_by` retain their frozen legacy dependencies. Rework tests rather than raising limits without evidence. If runnable work remains, RUN stays active even when another pipeline is blocked/failed; report terminal BLOCKED/FAILED only when no active/runnable work remains.
