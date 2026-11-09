@@ -155,6 +155,7 @@ export async function runLifecycleCommand({
       heartbeatPromise.catch(() => undefined);
     }, 30000);
     gateResult = await executeGate({
+      PIPELINE_SCRATCH_DIR: root,
       RELEASE_PARITY_CONTOUR_REF: handoffRef,
       RELEASE_PARITY_CONTOUR_EXPECTED_SHA256: evidence.handoff_sha256,
       PIPELINE_LIFECYCLE_HANDOFF_SHA256: evidence.handoff_sha256,
