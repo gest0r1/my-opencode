@@ -580,7 +580,7 @@ async function main(): Promise<void> {
   // One held RUN lane lock covers the cheap preflight and all ensuing gate
   // work. A failing preflight does not allocate a numbered attempt or scratch.
   const gateLock = `gate:${runId}:${pipelineId}:${gate}`;
-  const runtimeGate = RUNTIME_GATE.test(gate);
+  const runtimeGate = RUNTIME_GATE.test(gate) || Boolean(lifecycle);
   const releaseLocks = [...(runtimeGate ? pipeline.runtime_locks ?? [] : []), gateLock];
   // Pure gates keep their original late lock acquisition, so hashing does
   // not serialize other invocations of the same lane. Live RUN alone holds
@@ -714,10 +714,14 @@ async function main(): Promise<void> {
   // Failure to enumerate them means reuse is unsafe, but fresh execution remains allowed.
   let ignoredSnapshotFiles: string[] | null = null;
   let ignoredSnapshotError: string | null = null;
-  try { ignoredSnapshotFiles = reuseLocalInputs(originalCwd); }
-  catch (error) { ignoredSnapshotError = 'ignored snapshot inputs cannot be enumerated: ' + String(error instanceof Error ? error.message : error); }
-  let reuseIdentity = ignoredSnapshotFiles === null
-    ? { digest: null, reason: ignoredSnapshotError, metrics: { files: 0, bytes: 0, elapsed_ms: 0 } }
+  if (!lifecycle) {
+    try { ignoredSnapshotFiles = reuseLocalInputs(originalCwd); }
+    catch (error) { ignoredSnapshotError = 'ignored snapshot inputs cannot be enumerated: ' + String(error instanceof Error ? error.message : error); }
+  }
+  let reuseIdentity = lifecycle
+    ? { digest: null, reason: 'lifecycle contour: no result reuse', metrics: { files: 0, bytes: 0, elapsed_ms: 0 } }
+    : ignoredSnapshotFiles === null
+      ? { digest: null, reason: ignoredSnapshotError, metrics: { files: 0, bytes: 0, elapsed_ms: 0 } }
     : await resolveReuseIdentity({ cwd: originalCwd, invocations: identityInvocations, env: identityEnvironment, ignoredSnapshotFiles });
   const reuseIdentityMeasurements: Array<{ files: number; bytes: number; elapsed_ms: number }> = reuseIdentity.metrics ? [reuseIdentity.metrics] : [];
   let environmentDigest = reuseIdentity.digest;
@@ -748,7 +752,7 @@ async function main(): Promise<void> {
   let treeCopy: any;
   let copyFiles: Record<string, string> | null = null;
   let snapshotRecord: Record<string, any> | null = null;
-  if ((!advisory || coordinator) && !config?.artifact_output && config?.input_kind !== 'build-output' && !RUNTIME_GATE.test(gate) && !commands.some(command => command.includes('{candidate_sha}')) && process.env.PIPELINE_GATE_SNAPSHOT !== '0' && !args.includes('--in-place')) {
+  if ((!advisory || coordinator) && !config?.artifact_output && config?.input_kind !== 'build-output' && !runtimeGate && !lifecycle && !commands.some(command => command.includes('{candidate_sha}')) && process.env.PIPELINE_GATE_SNAPSHOT !== '0' && !args.includes('--in-place')) {
     const created = await createGateSnapshot({ cwd: originalCwd, stateRoot, label: `${pipelineId}-${gate}`,
       installEvidence: join(stateRoot, runId, 'checks', `${pipelineId}-${gate}${evidenceSuffix}-snapshot-install.json`) });
     if (created.snapshot) {
