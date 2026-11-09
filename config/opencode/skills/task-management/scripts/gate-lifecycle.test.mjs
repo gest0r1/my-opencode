@@ -172,3 +172,19 @@ test('handoff that expires while the gate is running cannot attest PASS', async 
   await assert.rejects(fx.run(), /LIFECYCLE_HANDOFF_INVALID/);
   assert.equal(fx.calls.at(-1), 'down');
 });
+
+
+test('restarted supervisor can reuse the attempt number without colliding with an orphan lease file', async t => {
+  const root = await mkdtemp(join(os.tmpdir(), 'lifecycle-replay-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const scratchDir = join(root, 'scratch', 'same-attempt');
+  await mkdir(scratchDir, { recursive: true });
+  const fx = fixture();
+  const common = { descriptor: descriptor(), frozenCommand: commandFresh, identity, scratchDir,
+    cwd: root, runInvocation: fx.runInvocation, executeGate: fx.executeGate };
+  await runLifecycleCommand(common);
+  // The prior lease file is retained for recovery/audit, as after an interrupted attempt.
+  await runLifecycleCommand(common);
+  assert.notEqual(fx.observed[0].RELEASE_PARITY_CONTOUR_REF, fx.observed[1].RELEASE_PARITY_CONTOUR_REF);
+  assert.deepEqual(fx.calls, ['reap', 'provision', 'down', 'reap', 'provision', 'down']);
+});
