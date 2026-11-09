@@ -40,7 +40,7 @@ function fixture(options = {}) {
       pipelineId: arg(args, '--pipeline-id'), gate: arg(args, '--gate'),
       attempt: Number(arg(args, '--attempt')), candidateSha: arg(args, '--candidate-sha'),
       operation: arg(args, '--operation'), nonce: arg(args, '--nonce'), recipeDigest: arg(args, '--recipe-digest'),
-      expiresAt: new Date(Date.now() + (options.expired ? -10000 : 600000)).toISOString(),
+      expiresAt: new Date(Date.now() + (options.expired ? -10000 : options.shortLived ? 15 : 600000)).toISOString(),
     };
     if (options.wrongCandidate) handoff.candidateSha = 'c'.repeat(40);
     await writeFile(currentRef, JSON.stringify(handoff), { mode: 0o600 });
@@ -142,13 +142,19 @@ test('a gate throw still tears down the lease', async t => {
   assert.equal(fx.evidence.at(-1).cleanup_complete, true);
 });
 
-test('two commands in the same attempt use different handoff and lease paths', async t => {
+test('two commands in the SAME attempt use different handoff and lease paths', async t => {
+  const root = await mkdtemp(join(os.tmpdir(), 'lifecycle-shared-attempt-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const scratchDir = join(root, 'scratch', 'delivery-install-check-1');
+  await mkdir(scratchDir, { recursive: true });
+  const fx = fixture();
   const desc = descriptor();
-  const first = await runOne(t, {}, commandFresh, desc);
-  const second = await runOne(t, {}, commandUpgrade, desc);
-  await first.run();
-  await second.run();
-  assert.notEqual(first.observed[0].RELEASE_PARITY_CONTOUR_REF, second.observed[0].RELEASE_PARITY_CONTOUR_REF);
+  const common = { descriptor: desc, identity, scratchDir, cwd: root,
+    runInvocation: fx.runInvocation, executeGate: fx.executeGate };
+  await runLifecycleCommand({ ...common, frozenCommand: commandFresh });
+  await runLifecycleCommand({ ...common, frozenCommand: commandUpgrade });
+  assert.notEqual(fx.observed[0].RELEASE_PARITY_CONTOUR_REF, fx.observed[1].RELEASE_PARITY_CONTOUR_REF);
+  assert.deepEqual(fx.calls, ['reap', 'provision', 'down', 'reap', 'provision', 'down']);
 });
 
 
@@ -158,4 +164,11 @@ test('heartbeat failure blocks result but never suppresses down', async t => {
   assert.equal(fx.calls.at(-1), 'down', 'teardown must run even when periodic heartbeat failed');
   assert.equal(fx.evidence.at(-1).cleanup_complete, true);
   assert.equal(fx.evidence.at(-1).status, 'BLOCKED');
+});
+
+
+test('handoff that expires while the gate is running cannot attest PASS', async t => {
+  const fx = await runOne(t, { shortLived: true, gateDelayMs: 40 });
+  await assert.rejects(fx.run(), /LIFECYCLE_HANDOFF_INVALID/);
+  assert.equal(fx.calls.at(-1), 'down');
 });
