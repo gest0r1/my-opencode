@@ -1151,3 +1151,83 @@ test('RUN preflight rejects before expensive commands or Docker',async t=>{
   } finally {process.env.PATH=oldPath;}
 });
 
+
+
+test('candidate-contour gate gets a fresh producer handoff, no reuse, and cleanup blocks PASS', async () => {
+  const fx = await makeRun('bash scripts/check.sh', 'install-check');
+  const dir = path.join(fx.root, 'scripts');
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, 'check.sh'), '#!/bin/sh\n[ -f "$RELEASE_PARITY_CONTOUR_REF" ] || exit 14\n[ -n "$RELEASE_PARITY_CONTOUR_EXPECTED_SHA256" ] || exit 15\n', { mode: 0o755 });
+  await writeFile(path.join(dir, 'producer.mjs'), `import fs from 'node:fs';
+import path from 'node:path';
+const [action, ...args] = process.argv.slice(2);
+const option = name => args[args.indexOf(name) + 1];
+fs.appendFileSync('.tmp/lifecycle-actions.log', action + '\\n');
+if (action === 'provision') {
+  if (fs.existsSync('.tmp/refuse')) { console.error('DEV_CONTOUR_RUNNING: operator window'); process.exit(3); }
+  const handoff = {
+    schema: 'test.release-contour/v2', runId: option('--run-id'),
+    pipelineId: option('--pipeline-id'), gate: option('--gate'),
+    attempt: Number(option('--attempt')), candidateSha: option('--candidate-sha'),
+    operation: option('--operation'), nonce: option('--nonce'),
+    recipeDigest: option('--recipe-digest'),
+    expiresAt: new Date(Date.now() + 60000).toISOString()
+  };
+  fs.writeFileSync(option('--handoff-ref'), JSON.stringify(handoff), { mode: 0o600 });
+} else if (action === 'down' && fs.existsSync('.tmp/fail-down')) {
+  console.error('OWNED_DOWN_FAILED: simulated'); process.exit(3);
+}
+`);
+  const manifestFile = path.join(fx.root, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  manifest.git_setup = { branch: 'test-branch' };
+  manifest.pipelines[0].stages = ['verify', 'publish', 'install-check'];
+  manifest.pipelines[0].executors = { verify: 'git_verify', publish: 'git_publish', 'install-check': 'local_gate' };
+  manifest.gate_testing = { default: { 'install-check': {
+    input_kind: 'candidate-contour',
+    lifecycle: {
+      schema_version: 1, producer: 'node scripts/producer.mjs',
+      handoff_schema: 'test.release-contour/v2', recipe_digest: 'b'.repeat(64),
+      exclusive_lock: 'unit-gate-' + path.basename(fx.root),
+      commands: [{ command: 'bash scripts/check.sh', operation: 'fresh' }],
+    },
+  } } };
+  const raw = JSON.stringify(manifest);
+  const stateFile = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(stateFile, 'utf8'));
+  state.manifest_sha256 = sha256(raw);
+  await writeFile(manifestFile, raw);
+  await writeFile(stateFile, JSON.stringify(state));
+  const candidateSha = 'a'.repeat(40);
+  await writeFile(path.join(fx.root, 'candidate.json'), JSON.stringify({
+    status: 'PASS', run_id: fx.runId, branch: 'test-branch', candidate_sha: candidateSha,
+    remote_sha: candidateSha, manifest_sha256: sha256(raw),
+  }));
+  const args = [fx.runId, 'app', 'install-check', '--state-root', fx.stateRoot];
+  for (let i = 0; i < 2; i++) {
+    const result = run(fx.root, args);
+    assert.equal(result.status, 0, result.stderr);
+    const evidence = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(evidence.status, 'PASS');
+    assert.equal(evidence.lifecycle.length, 1);
+    assert.equal(evidence.lifecycle[0].cleanup_complete, true);
+    assert.equal(evidence.results[0].exit_code, 0);
+    assert.equal(evidence.commands_reused ?? 0, 0);
+  }
+  assert.deepEqual((await readFile(path.join(fx.root, '.tmp/lifecycle-actions.log'), 'utf8')).trim().split('\n'),
+    ['reap', 'provision', 'down', 'reap', 'provision', 'down']);
+  await writeFile(path.join(fx.root, '.tmp/fail-down'), '1');
+  const failedCleanup = run(fx.root, args);
+  assert.notEqual(failedCleanup.status, 0);
+  assert.match(failedCleanup.stderr, /LIFECYCLE_CLEANUP_FAILED/);
+  const failureEvidence = JSON.parse(await readFile(path.join(fx.stateRoot, fx.runId, 'gates/app-install-check.json'), 'utf8'));
+  assert.equal(failureEvidence.status, 'BLOCKED');
+  assert.equal(failureEvidence.cleanup_complete, false);
+  await rm(path.join(fx.root, '.tmp/fail-down'));
+  await writeFile(path.join(fx.root, '.tmp/refuse'), '1');
+  const refused = run(fx.root, args);
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /DEV_CONTOUR_RUNNING/);
+  const actions = (await readFile(path.join(fx.root, '.tmp/lifecycle-actions.log'), 'utf8')).trim().split('\n');
+  assert.deepEqual(actions.slice(-3), ['reap', 'provision', 'down']);
+});
