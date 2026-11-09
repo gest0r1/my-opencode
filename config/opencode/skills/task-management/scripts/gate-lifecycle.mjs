@@ -90,10 +90,12 @@ export async function runLifecycleCommand({
   const nonce = randomBytes(24).toString('hex');
   const attemptId = { ...identity, operation, nonce };
   const producer = lifecycleProducerTokens(descriptor.producer);
-  const root = resolve(scratchDir);
-  if (!isAbsolute(scratchDir) || !root.includes(sep + 'scratch' + sep)) {
+  const attemptRoot = resolve(scratchDir);
+  if (!isAbsolute(scratchDir) || !attemptRoot.includes(sep + 'scratch' + sep)) {
     throw new Error('LIFECYCLE_SCRATCH_INVALID: expected runner-owned attempt directory');
   }
+  // Multiple frozen commands share one gate attempt but must never share their lease or handoff.
+  const root = join(attemptRoot, 'lifecycle-' + sha256(frozenCommand).slice(0, 16));
   const handoffRef = join(root, 'lifecycle-handoff.json');
   const leaseRef = join(root, 'lifecycle-lease.json');
   const incidentCopy = process.env.RELEASE_PARITY_INCIDENT_COPY;
@@ -123,7 +125,9 @@ export async function runLifecycleCommand({
     await producerCall('reap', ['--expired'], true);
     evidence.reap = 'PASS';
     await mkdir(root, { recursive: true, mode: 0o700 });
-    await writeFile(leaseRef, JSON.stringify({ schema: 'opencode.lifecycle-lease/v1', ...attemptId,
+    await writeFile(leaseRef, JSON.stringify({ schema: 'opencode.lifecycle-lease/v1',
+      runId: identity.runId, pipelineId: identity.pipelineId, gate: identity.gate,
+      attempt: identity.attempt, candidateSha: identity.candidateSha, operation, nonce,
       recipeDigest: descriptor.recipe_digest, pid: process.pid, createdAt: new Date().toISOString() }) + '\n',
       { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     await producerCall('provision', [
@@ -135,7 +139,10 @@ export async function runLifecycleCommand({
     const raw = await protectedFile(handoffRef);
     evidence.handoff_sha256 = verifyLifecycleHandoff(raw, attemptId, descriptor);
     pulse = setInterval(() => {
-      heartbeatPromise = heartbeatPromise.then(() => producerCall('heartbeat', ['--lease-ref', leaseRef], true));
+      heartbeatPromise = heartbeatPromise.then(async () => {
+        await producerCall('heartbeat', ['--lease-ref', leaseRef], true);
+        await producerCall('reap', ['--expired'], true);
+      });
       heartbeatPromise.catch(() => undefined);
     }, 30000);
     gateResult = await executeGate({
