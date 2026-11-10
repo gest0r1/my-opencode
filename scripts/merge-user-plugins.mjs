@@ -69,6 +69,8 @@ export function preservePlugins(active, staged, policyFile) {
   if (hasActive) {
     if (userModel === undefined || userModel === null) delete repo.model;
     else if (typeof userModel === 'string' && userModel.trim()) repo.model = userModel;
+    else if (userModel && typeof userModel === 'object' && !Array.isArray(userModel) &&
+      typeof userModel.providerID === 'string' && typeof userModel.model === 'string') repo.model = userModel;
     else throw Error('Invalid existing model preference');
   }
   repo.plugins = mergePlugins(repo, user, policy); delete repo.plugin;
