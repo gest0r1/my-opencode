@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readLeases } from './dispatch-leases.mjs';
 import process from 'node:process';
 
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -42,10 +43,16 @@ export async function snapshotHandover(stateRoot, runId, cwd = process.cwd()) {
   if (manifest.run_id !== runId) throw Error('HANDOVER_MANIFEST_IDENTITY_INVALID');
   const candidate = await optionalJson(join(runRoot, 'candidate.json'));
   const registry = await optionalJson(join(runRoot, 'session-registry.json'));
-  const workers = (Array.isArray(registry) ? registry : [])
-    .filter(item => item && ['in_progress', 'background'].includes(item.status))
+  // Live leases are the dispatch authority; the session registry alone may not yet
+  // contain a just-started child. Read both without polling.
+  const leases = readLeases(runRoot, { state });
+  const workers = [...leases, ...(Array.isArray(registry) ? registry : [])
+    .filter(item => item && ['in_progress', 'background'].includes(item.status))]
+    .filter((item, index, all) => index === all.findIndex(other =>
+      other.pipeline_id === item.pipeline_id && other.stage === item.stage &&
+      other.work_item_id === item.work_item_id))
     .map(item => ({ pipeline_id: item.pipeline_id, stage: item.stage, role: item.role,
-      work_item_id: item.work_item_id, status: item.status }));
+      work_item_id: item.work_item_id, status: item.status ?? 'leased' }));
   const pipelines = Object.entries(state.pipelines ?? {}).map(([id, lane]) => ({
     id, status: lane.status,
     stages: (lane.stage_order ?? Object.keys(lane.stages ?? {})).map(name => {
