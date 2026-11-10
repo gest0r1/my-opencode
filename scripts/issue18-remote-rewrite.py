@@ -81,9 +81,10 @@ def prepare(root):
         raise RuntimeError("Main or branch inventory unavailable")
     run(["git", "clone", "--no-hardlinks", "--mirror", str(original), str(clean)])
     git(clean, "remote", "set-url", "origin", REMOTE)
+    scripts = Path(__file__).resolve().parent
     replacements = root / "replace-private.txt"
-    run(["python3", "scripts/build-history-replacements.py", str(replacements)], cwd=clean)
-    run(["bash", "scripts/security-history-rewrite.sh", str(replacements)],
+    run(["python3", str(scripts / "build-history-replacements.py"), str(replacements)], cwd=clean)
+    run(["bash", str(scripts / "security-history-rewrite.sh"), str(replacements)],
         cwd=clean, env=dict(env, ISSUE18_APPROVE_LOCAL_REWRITE="yes"))
     after = refs(clean)
     if set(before) != set(after):
@@ -93,7 +94,7 @@ def prepare(root):
     for name in before:
         if tree_entries(original, before[name]) != tree_entries(clean, after[name]):
             raise RuntimeError("Tree paths/types/modes changed unexpectedly: " + name)
-    scan = run(["python3", "scripts/scan-history-candidates.py"], cwd=clean)
+    scan = run(["python3", str(scripts / "scan-history-candidates.py")], cwd=clean)
     for label in FIVE_KEYS:
         marker = "HISTORY_AUDIT candidate_blobs_" + label + "=0"
         if marker not in scan:
