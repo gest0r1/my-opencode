@@ -86,6 +86,13 @@ def prepare(root):
     run(["python3", str(scripts / "build-history-replacements.py"), str(replacements)], cwd=clean)
     run(["bash", str(scripts / "security-history-rewrite.sh"), str(replacements)],
         cwd=clean, env=dict(env, ISSUE18_APPROVE_LOCAL_REWRITE="yes"))
+    # git-filter-repo intentionally removes 'origin' in many versions.
+    # Restore only the plain GitHub URL; authentication remains in GIT_ASKPASS.
+    remotes = git(clean, "remote").splitlines()
+    if "origin" in remotes:
+        git(clean, "remote", "set-url", "origin", REMOTE)
+    else:
+        git(clean, "remote", "add", "origin", REMOTE)
     after = refs(clean)
     if set(before) != set(after):
         raise RuntimeError("Remote HEAD/TAG names changed by rewrite")
@@ -100,6 +107,17 @@ def prepare(root):
         if marker not in scan:
             raise RuntimeError("Cleaned mirror still contains candidate key type: " + label)
     run(["git", "-C", str(clean), "fsck", "--strict", "--no-reflogs"])
+    # Validate atomic protocol and per-ref leases without changing remote.
+    # A server that does not support --atomic is a blocker, not a reason for a
+    # risky sequence of partial force-push operations.
+    updates = [(name, before[name], after[name]) for name in sorted(before)
+               if before[name] != after[name]]
+    leases = ["--force-with-lease=" + name + ":" + old
+              for name, old, new in updates]
+    specs = [new + ":" + name for name, old, new in updates]
+    run(["git", "-C", str(clean), "push", "--atomic", "--dry-run",
+         *leases, "origin", *specs], env=env)
+    print("ISSUE18_REWRITE_PLAN atomic_dry_run=PASS")
     state = {"repository": REPOSITORY, "before": before, "after": after,
              "updated_refs": sum(a != before[n] for n, a in after.items()),
              "pr_refs_in_original": len(git(original, "for-each-ref",
