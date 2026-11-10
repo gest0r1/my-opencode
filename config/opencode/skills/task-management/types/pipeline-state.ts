@@ -354,6 +354,8 @@ export interface StageRuntime {
   repair_origin_pipeline?: string;
   /** Set when five cycles pass since the last relevant reviewed block; legacy paths use multiples of five. */
   architecture_review_due?: boolean;
+  /** Exact scope that triggered the pending checkpoint; class review must cover it to discharge it. */
+  architecture_review_due_paths?: string[];
   architecture_reviews?: ArchitectureReviewRecord[];
   defect_class_history?: DefectClassCycle[];
   /** Classes that recurred in consecutive negative results; the next cycle needs a recorded class review. */
