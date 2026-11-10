@@ -254,7 +254,23 @@ export async function workItemWaves(root: string, run: string, pipelineFilter?: 
       if (executor !== 'agent') continue;
       const runtime = state.pipelines[pipeline.id]?.stages?.[stage];
       if (runtime?.status !== 'in_progress' && !runnable.some(r => r.pipeline_id === pipeline.id && r.stage === stage)) continue;
-      const amendmentItems = (state.owner_amendments ?? []).filter((a: any) => a.pipeline_id === pipeline.id).flatMap((a: any) => a.work_items ?? []);
+      const amendments = (state.owner_amendments ?? []).filter((a: any) => a.pipeline_id === pipeline.id);
+      const amendmentItems = amendments.flatMap((a: any) => a.work_items ?? []);
+      // Match actual per-item owner amendment scopes without an extra CLI call or per-item
+      // filesystem pass. Stale evidence must not make the preview promise unsafe dispatch.
+      const amendmentPathsByItem = new Map<string, string[]>();
+      let amendmentEvidenceInvalid = false;
+      for (const amendment of amendments) {
+        try {
+          const content = readFileSync(resolve(amendment.evidence_path), 'utf8');
+          if (hash(content) !== amendment.evidence_sha256) throw Error('OWNER_AMENDMENT_EVIDENCE_CHANGED');
+          const evidence = JSON.parse(content);
+          const ids = [evidence.work_item_id, ...(evidence.work_items ?? []).map((unit: any) => unit.id)]
+            .filter((id: unknown): id is string => typeof id === 'string');
+          for (const id of ids) amendmentPathsByItem.set(id,
+            [...new Set([...(amendmentPathsByItem.get(id) ?? []), ...(amendment.paths ?? [])])]);
+        } catch { amendmentEvidenceInvalid = true; }
+      }
       const units = [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems];
       const entry: any = { pipeline_id: pipeline.id, stage, status: runtime?.status ?? 'pending', dispatchable: [], running: [], done: [], waiting: [] };
       for (const unit of units) {
@@ -265,11 +281,16 @@ export async function workItemWaves(root: string, run: string, pipelineFilter?: 
         if (workItemDone(state, registry, pipeline.id, unit.id, stage)) { entry.done.push(unit.id); continue; }
         const dependency = pendingDependency(state, manifest, registry, item, leases);
         if (dependency) { entry.waiting.push({ id: unit.id, reason: `depends_on ${dependency}` }); continue; }
-        // The wave planner must include the same borrowed repair paths as the actual dispatch.
-        // An owner amendment clears stale repair_origin_stage, making unrelated items parallel again.
+        if (amendmentEvidenceInvalid) {
+          entry.waiting.push({ id: unit.id, reason: 'OWNER_AMENDMENT_EVIDENCE_INVALID: revalidate approved amendment' });
+          continue;
+        }
+        // The wave planner must include the same borrowed repair paths and current per-item
+        // amendment paths as actual dispatch, never stale repair paths from the old review.
         const repairRuntime = runtime?.repair_origin_stage
           ? state.pipelines[runtime.repair_origin_pipeline ?? pipeline.id]?.stages[runtime.repair_origin_stage] : runtime;
-        const repairScope = checkedScope(repairRuntime?.repair_paths ?? [], effectiveScope);
+        const repairScope = checkedScope([...(repairRuntime?.repair_paths ?? []),
+          ...(amendmentPathsByItem.get(unit.id) ?? [])], effectiveScope);
         let ownScope: string[];
         try { ownScope = coderScope(item, effectiveScope); }
         catch {
