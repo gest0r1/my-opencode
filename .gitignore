@@ -39,3 +39,13 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Credential and key files (templates with .example suffix remain allowed)
+**/auth.json
+**/.npmrc
+**/credentials.json
+**/id_rsa
+**/id_ed25519
+**/*.pem
+**/*.p12
+**/*.pfx

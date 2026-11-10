@@ -10,10 +10,11 @@ test('repo priority, options, versions, v1 tuples and exclusions', () => {
 test('JSONC keeps URLs and quoted comment text', () => {
   assert.deepEqual(parseConfig('{ // comment\n "plugins": ["https://host/plugin", "/*literal*/",],}'), { plugins: ['https://host/plugin', '/*literal*/'] });
 });
-test('managed Claude version retains subscription transport options', () => {
-  assert.deepEqual(mergePlugins({plugins: ['@openchamber/opencode-claude@1.3.4']},
-    {plugins: [{package: '@openchamber/opencode-claude@1.3.3', options: {transport: 'cli'}}]}),
-    [{package: '@openchamber/opencode-claude@1.3.4', options: {transport: 'cli'}}]);
+test('retired Claude plugin excluded while independent plugins survive', () => {
+  const policy = {excluded: ['@openchamber/opencode-claude']};
+  assert.deepEqual(mergePlugins({plugins: ['@openchamber/opencode-claude@1.3.4','independent@1']},
+    {plugins: [{package: '@openchamber/opencode-claude@1.3.3', options: {transport: 'cli'}}]}, policy),
+    ['independent@1']);
 });
 test('fresh install, repeated update and local plugins remain available', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugins-')); const active = path.join(root, 'active'), staged = path.join(root, 'staged');
@@ -47,4 +48,23 @@ test('retired reboot helper is excluded while independent user plugins survive',
     assert.equal(fs.existsSync(path.join(staged, 'plugins/opencode-web-reboot')), false);
     assert.equal(fs.readFileSync(path.join(staged, 'plugins/user.ts'), 'utf8'), 'user');
   } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test('preserve global model across staging, config updates and deliberate unpinning', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-pref-'));
+  const active = path.join(root, 'active'), staged = path.join(root, 'staged');
+  try {
+    fs.mkdirSync(active); fs.mkdirSync(staged);
+    const repoFile = path.join(staged, 'opencode.json');
+    fs.writeFileSync(repoFile, '{"model":"repo/default","plugins":[]}');
+    fs.writeFileSync(path.join(active, 'opencode.json'), '{"model":"my/provider#high","plugins":[]}');
+    preservePlugins(active, staged, new URL('../config/opencode/plugin-policy.json', import.meta.url));
+    assert.equal(parseConfig(fs.readFileSync(repoFile,'utf8')).model, 'my/provider#high');
+    preservePlugins(active, staged, new URL('../config/opencode/plugin-policy.json', import.meta.url));
+    assert.equal(parseConfig(fs.readFileSync(repoFile,'utf8')).model, 'my/provider#high');
+    fs.writeFileSync(path.join(active, 'opencode.json'), '{"plugins":[]}');
+    fs.writeFileSync(repoFile, '{"model":"repo/new","plugins":[]}');
+    preservePlugins(active, staged, new URL('../config/opencode/plugin-policy.json', import.meta.url));
+    assert.equal(Object.hasOwn(parseConfig(fs.readFileSync(repoFile,'utf8')), 'model'), false);
+  } finally { fs.rmSync(root, {recursive:true}); }
 });
