@@ -980,6 +980,54 @@ test('a class review satisfies a pending architecture checkpoint; unrelated clas
   assert.match(result.stderr, /ARCHITECTURE_REVIEW_REQUIRED: lane\/code-review/);
 });
 
+test('changed dependency invalidates scoped architecture reuse before another fix cycle', async () => {
+  const fx = await lanesFixture('reviewed-dependency-drift');
+  fx.finish('lane', 'implementation');
+  fx.step('lane', 'code-review', 'start');
+  for (let cycle = 1; cycle <= 4; cycle += 1) {
+    const result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'prior-' + cycle]);
+    assert.equal(result.status, 0, result.stderr);
+    fx.finish('lane', 'implementation');
+    fx.step('lane', 'code-review', 'start');
+  }
+  let result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'prior-4']);
+  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED/);
+  const contractContent = 'contract: v1\n';
+  const contract = path.join(fx.root, 'contract-interface.txt');
+  await writeFile(contract, contractContent);
+  const runDir = path.join(fx.stateRoot, fx.runId);
+  const research = path.join(runDir, 'research.md');
+  const tech = path.join(runDir, 'tech.md');
+  await writeFile(research, 'Current version and contracts verified\n');
+  await writeFile(tech, 'status: ready\n');
+  const review = path.join(runDir, 'covered.json');
+  await writeFile(review, JSON.stringify({
+    kind: 'class_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
+    classes: ['prior-4'], approach: 'remove_mechanism',
+    summary: 'Use the consumer's existing mechanism', research_artifact: research, technical_review_artifact: tech,
+    covered_paths: ['packages/lane/src/a.ts'],
+    dependency_files: [{path:'contract-interface.txt',
+      sha256: createHash('sha256').update(contractContent).digest('hex')}],
+    requirements_changed: false, acceptance_criteria_changed: false,
+    external_contract_changed: false, security_boundary_changed: false, destructive_change: false,
+  }));
+  result = fx.cli('class-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', review);
+  assert.equal(result.status, 0, result.stderr);
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'prior-4']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].technical_fix_cycles, 5);
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].architecture_review_due, false);
+
+  // No time or another model call is spent on this check until a *negative result*
+  // requests a new source-changing repair. The dependency changed after the review.
+  await writeFile(contract, 'contract: v2\n');
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'other-bug']);
+  assert.match(result.stderr, /ARCHITECTURE_REVIEW_REQUIRED: lane\/code-review.*dependency changed/);
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].technical_fix_cycles, 5);
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].architecture_review_due, true);
+});
+
 test('architecture requirements_change blocks only that lane; other pipelines stay runnable and the owner path resumes it', async () => {
   const fx = await lanesFixture('arch-requirements-change');
   fx.finish('lane', 'implementation');
