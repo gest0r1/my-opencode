@@ -115,8 +115,21 @@ def prepare(root):
     leases = ["--force-with-lease=" + name + ":" + old
               for name, old, new in updates]
     specs = [new + ":" + name for name, old, new in updates]
-    run(["git", "-C", str(clean), "push", "--atomic", "--dry-run",
-         *leases, "origin", *specs], env=env)
+    atomic = subprocess.run(["git", "-C", str(clean), "push", "--atomic",
+                             "--dry-run", *leases, "origin", *specs],
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, errors="replace")
+    if atomic.returncode:
+        stderr = atomic.stderr.lower()
+        if "atomic" in stderr and ("support" in stderr or "failed" in stderr):
+            reason = "ATOMIC_PROTOCOL_UNSUPPORTED_OR_REJECTED"
+        elif "permission" in stderr or "denied" in stderr or "403" in stderr:
+            reason = "REMOTE_PUSH_PERMISSION_DENIED"
+        elif "stale" in stderr or "lease" in stderr:
+            reason = "REMOTE_REF_LEASE_MISMATCH"
+        else:
+            reason = "REMOTE_ATOMIC_DRYRUN_REJECTED"
+        raise RuntimeError(reason + ": no remote refs were changed")
     print("ISSUE18_REWRITE_PLAN atomic_dry_run=PASS")
     state = {"repository": REPOSITORY, "before": before, "after": after,
              "updated_refs": sum(a != before[n] for n, a in after.items()),
