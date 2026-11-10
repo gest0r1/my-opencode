@@ -1146,6 +1146,25 @@ test('owner amendment releases stale repair paths; reopened wave ignores prior c
     assert.match(a.run_stage_rules_path, /run-worker-rules\.md$/);
     assert.equal(a.run_stage_rules_path, b.run_stage_rules_path);
     assert.match(await readFile(a.run_stage_rules_path, 'utf8'), /RUN worker stage/);
+
+    // A second approved amendment, targeting only item a, now crosses item b's
+    // original scope. The wave preview must reserve that path and serialize only
+    // the two conflicting writers; it must not advertise both as dispatchable.
+    const crossingEvidence = {
+      ...JSON.parse(await readFile(amendment, 'utf8')),
+      paths: ['src/b/conflict.ts'],
+    };
+    const crossingRaw = JSON.stringify(crossingEvidence);
+    const crossingFile = path.join(runRoot, 'crossing-owner-amendment.json');
+    await writeFile(crossingFile, crossingRaw);
+    const updated = JSON.parse(await readFile(statePath, 'utf8'));
+    const priorApproval = updated.owner_amendments.at(-1);
+    updated.owner_amendments.push({ ...priorApproval, revision: priorApproval.revision + 1,
+      paths: crossingEvidence.paths, evidence_path: crossingFile, evidence_sha256: sha(crossingRaw) });
+    await writeFile(statePath, JSON.stringify(updated, null, 2));
+    const crossing = (await workItemWaves(root, runId)).stages.find(x => x.pipeline_id === 'p');
+    assert.deepEqual(crossing.dispatchable, ['a']);
+    assert.equal(crossing.waiting.find(x => x.id === 'b')?.reason.includes('shares paths'), true);
   } finally {
     process.chdir(previousCwd);
     await rm(root, { recursive: true, force: true });
