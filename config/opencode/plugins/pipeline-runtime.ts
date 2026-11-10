@@ -366,6 +366,7 @@ const RUNTIME_FILES = [
   fileURLToPath(import.meta.url),
   fileURLToPath(new URL("../skills/task-management/scripts/pipeline-dispatch.ts", import.meta.url)),
   fileURLToPath(new URL("../command/pipeline-run.md", import.meta.url)),
+  fileURLToPath(new URL("../skills/task-management/run-worker-rules.md", import.meta.url)),
   fileURLToPath(new URL("../agent/core/openstage-orchestrator.md", import.meta.url)),
 ]
 function runtimeFingerprint() {
@@ -740,7 +741,7 @@ export default Plugin.define({
       input.prompt = [
         String(input.prompt),
         `<pipeline_dispatch_packet path="${dispatchPath}"/>`,
-        "Read the dispatch packet file before work. Authoritative files and machine evidence stay in files; conversation history is supplemental. Return only the concise role result required by the pipeline.",
+        "Read the dispatch packet file before work. When it contains run_stage_rules_path, read that role-owned stage file once before acting. Authoritative files and machine evidence stay in files; conversation history is supplemental. Return only the concise role result required by the pipeline.",
       ].join("\n")
       event.input = input
       const promptBytes = byteLength(input.prompt ?? "")
