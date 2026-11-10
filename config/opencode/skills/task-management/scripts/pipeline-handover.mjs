@@ -134,9 +134,14 @@ export async function checkHandover(stateRoot, runId, cwd = process.cwd()) {
   const current = await snapshotHandover(stateRoot, runId, cwd);
   const file = join(resolve(stateRoot, runId), 'handoffs', 'context', 'current.json');
   const previous = await optionalJson(file);
+  // The CLI state can be unchanged while a worker lease settles or Git HEAD moves.
+  // Never call such a snapshot fresh: a resume must re-read the live machine evidence.
   const matches = previous?.run_id === current.run_id &&
     previous?.state_sha256 === current.state_sha256 &&
-    previous?.manifest_sha256 === current.manifest_sha256;
+    previous?.manifest_sha256 === current.manifest_sha256 &&
+    previous?.head_sha === current.head_sha &&
+    previous?.candidate_sha === current.candidate_sha &&
+    JSON.stringify(previous?.active_workers ?? null) === JSON.stringify(current.active_workers);
   return { status: !previous ? 'MISSING' : matches ? 'PASS' : 'STALE',
     run_id: runId, snapshot_path: file, state_sha256: current.state_sha256,
     next_action: current.next_action, machine_state_authoritative: true };
