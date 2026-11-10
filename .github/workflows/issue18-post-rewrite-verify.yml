@@ -33,5 +33,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           git fetch --no-tags origin '+refs/pull/*/head:refs/audit/pull-head/*'
+          git fetch --no-tags origin '+refs/pull/*/merge:refs/audit/pull-merge/*'
           echo "ISSUE18_PR_REFS_CHECK count=$(git for-each-ref --format='%(refname)' refs/audit/pull-head | wc -l)"
           python3 scripts/scan-history-candidates.py
+          python3 scripts/issue18-pr-ref-audit.py
