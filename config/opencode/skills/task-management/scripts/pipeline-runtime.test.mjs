@@ -1118,7 +1118,8 @@ test('owner amendment releases stale repair paths; reopened wave ignores prior c
     await writeFile(amendment, JSON.stringify({
       kind: 'owner_amendment', status: 'ready', bounded: true,
       pipeline_id: 'p', source_stage: 'acceptance', target_stage: 'implementation',
-      paths: ['src/a/new.ts'], work_items: [], summary: 'Test-only amendment',
+      paths: ['src/a/new.ts'], work_items: [], work_item_id: 'a',
+      new_work_item_required: false, summary: 'Test-only amendment',
       business_intent_changed: false, external_contract_changed: false,
       security_boundary_changed: false, destructive_change: false,
       acceptance_criteria_changed: false, requirements_changed: false,
