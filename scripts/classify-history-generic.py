@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only inspection of generic credential candidates. NEVER print captured values."""
+"""Audit generic credential candidates in Git blobs; never print values."""
 import collections
 import re
 import subprocess
@@ -16,7 +16,6 @@ def inspect():
         oid, _, path = line.partition(b' ')
         if not re.fullmatch(rb'[0-9a-f]{40,64}', oid): raise RuntimeError('bad sha')
         objects.setdefault(oid.decode(), path.decode('utf-8', 'replace') if path else None)
-    observations = collections.defaultdict(lambda:collections.Counter())
     matches = []
     with tempfile.TemporaryFile() as requests:
         for oid in objects: requests.write(oid.encode() + b'\n')
@@ -32,61 +31,28 @@ def inspect():
                 if len(content)!=size or proc.stdout.read(1)!=b'\n': raise RuntimeError('corrupt git object')
                 if kind!=b'blob': continue
                 for hit in PATTERN.finditer(content):
-                    # Only metadata about *what* matched, never secrets, tokens
-                    # or surrounding code. A suspicious candidate is NEVER
-                    # treated as a placeholder merely by this heuristic.
+                    # Print only key, source blob, path and syntax category.
+                    # No values, context lines, hashes of values or snippets.
                     key=hit.group(1).decode('ascii','replace').lower()
                     path=objects[oid]
                     path=path if path and SAFE_PATH.fullmatch(path) else '<unknown>'
-                    group=path.split('/')[0] if path!='<unknown>' else 'unknown'
-                    # Distinguish *syntax classes*, not secret validity. Values
-                    # are NEVER printed, hashed to logs, or persisted.
-                    value = hit.group(2)
-                    if value.startswith((b'
+                    value=hit.group(2)
+                    if value.startswith((b'$', b'\x60')) or b'$' in value:
+                        shape='shell_expression'
+                    elif b'(' in value or b')' in value or b'+' in value:
+                        shape='source_expression'
+                    elif re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_.]*', value):
+                        shape='identifier_or_literal'
+                    else:
+                        shape='unclassified_literal'
+                    matches.append((oid[:12],key,path,shape))
             if proc.wait(timeout=30): raise RuntimeError('git cat-file failed')
         finally:
             if proc.poll() is None: proc.kill()
     for oid,key,path,shape in sorted(set(matches)):
         print(f'GENERIC_CANDIDATE blob={oid} key={key} path={path} value_syntax={shape} status=UNCLASSIFIED')
     print(f'GENERIC_CANDIDATE total_matches={len(matches)} unique_blobs={len(set(x[0] for x in matches))}')
-    print('GENERIC_CANDIDATE manual review required: this report does not distinguish secrets from code identifiers.')
-
-if __name__=='__main__':
-    try: inspect()
-    except Exception as exc:
-        print('GENERIC_INSPECTION_FAILED: '+type(exc).__name__,file=sys.stderr)
-        sys.exit(2)
-, b'`')) or b'
-            if proc.wait(timeout=30): raise RuntimeError('git cat-file failed')
-        finally:
-            if proc.poll() is None: proc.kill()
-    for oid,key,path in sorted(set(matches)):
-        print(f'GENERIC_CANDIDATE blob={oid} key={key} path={path} status=UNCLASSIFIED')
-    print(f'GENERIC_CANDIDATE total_matches={len(matches)} unique_blobs={len(set(x[0] for x in matches))}')
-    print('GENERIC_CANDIDATE manual review required: this report does not distinguish secrets from code identifiers.')
-
-if __name__=='__main__':
-    try: inspect()
-    except Exception as exc:
-        print('GENERIC_INSPECTION_FAILED: '+type(exc).__name__,file=sys.stderr)
-        sys.exit(2)
- in value:
-                        shape = 'shell_expression'
-                    elif b'(' in value or b')' in value or b'+' in value:
-                        shape = 'source_expression'
-                    elif re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_.]*', value):
-                        shape = 'identifier_or_literal'
-                    else:
-                        shape = 'unclassified_literal'
-                    observations[key][group]+=1
-                    matches.append((oid[:12], key, path, shape))
-            if proc.wait(timeout=30): raise RuntimeError('git cat-file failed')
-        finally:
-            if proc.poll() is None: proc.kill()
-    for oid,key,path in sorted(set(matches)):
-        print(f'GENERIC_CANDIDATE blob={oid} key={key} path={path} status=UNCLASSIFIED')
-    print(f'GENERIC_CANDIDATE total_matches={len(matches)} unique_blobs={len(set(x[0] for x in matches))}')
-    print('GENERIC_CANDIDATE manual review required: this report does not distinguish secrets from code identifiers.')
+    print('GENERIC_CANDIDATE manual review required; syntax alone does not prove a value is safe.')
 
 if __name__=='__main__':
     try: inspect()
