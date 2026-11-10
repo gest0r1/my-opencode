@@ -9,6 +9,7 @@ import { RUN_PROMPT, WAKE_MARKER, runningGates, wakeDecision, wakeText } from ".
 import { readLeases, removeLease, updateLease, writeLease } from "../skills/task-management/scripts/dispatch-leases.mjs"
 import { processAlive } from "../skills/task-management/scripts/runtime-locks.mjs"
 import { computeRunnable } from "../skills/task-management/scripts/stage-cli-core.ts"
+import { writeHandover } from "../skills/task-management/scripts/pipeline-handover.mjs"
 
 const ELIGIBLE_ROLES = new Set([
   "CoderAgent", "TestEngineer", "BuildAgent",
@@ -807,6 +808,21 @@ export default Plugin.define({
     await plugin.tool.hook("execute.after", async (event) => {
       if (event.tool !== "subagent") {
         compactDispatchShellResult(root, event, runtimeState)
+        if (event.tool === "shell" && event.status === "completed") {
+          const cmd = String(event.input?.command ?? "")
+          // Machine-state handover at existing stage/owner boundaries, not on every shell/read.
+          // A failure to write a summary never changes the authoritative CLI outcome.
+          const transition = /(?:stage-cli|stage-complete-cli)\.ts\s+(?:advance|fix-cycle|owner-amend-apply|owner-accept|owner-decision-resolve|class-review-record|architecture-review-record|runtime-replan-approve)\s+([A-Za-z0-9._-]+)/.exec(cmd)
+          if (transition && fs.existsSync(path.join(root, ".tmp", "pipelines", transition[1], "state.json"))) {
+            try { await writeHandover(path.join(root, ".tmp", "pipelines"), transition[1], root) }
+            catch (error) {
+              appendJsonLine(metricsFile(root, transition[1]), {
+                timestamp: new Date().toISOString(), event: "handover_warning",
+                reason: error instanceof Error ? error.message.slice(0, 260) : "unknown",
+              })
+            }
+          }
+        }
         const run = runBySession.get(String(event.sessionID))
         if (run && event.status === "completed" && event.tool === "read") appendJsonLine(metricsFile(root, run), {
           event: "parent_read", timestamp: new Date().toISOString(), bytes_read: byteLength(event.result.content) })
