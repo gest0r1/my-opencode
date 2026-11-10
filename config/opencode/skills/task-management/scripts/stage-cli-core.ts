@@ -2034,6 +2034,7 @@ export async function recordTechnicalFixCycle(
       if (due.length) {
         const again = due.filter((name) => reworked.has(name));
         runtime.class_review_due = due;
+        runtime.class_review_due_paths = [...scopePreflight.paths];
         runtime.message = again.length
           ? `class review due: ${again.join(',')} recurred after its last verified attempt; diagnose cause and verify current approach`
           : `class review due: ${due.join(',')} recurred after cycle ${cycles}`;
@@ -2583,9 +2584,11 @@ export async function recordClassReview(
       }
     }
     runtime.class_review_due = undefined;
+    // Bind the reviewed block to the fresh negative result, not the previous cycle's paths.
+    const coveredPaths = [...(runtime.class_review_due_paths ?? runtime.repair_paths ?? [])];
+    runtime.class_review_due_paths = undefined;
     // A class review of block B does not waive an outstanding checkpoint for block A.
     const pendingPaths = runtime.architecture_review_due_paths ?? [];
-    const coveredPaths = [...(runtime.repair_paths ?? [])];
     if (!runtime.architecture_review_due || !pendingPaths.length ||
         pendingPaths.every(path => coveredPaths.some(scope => pathMatchesScope(path, scope)))) {
       runtime.architecture_review_due = false;
@@ -2595,7 +2598,7 @@ export async function recordClassReview(
     runtime.class_reviews.push({
       path: absoluteEvidence, sha256: sha256(content), classes, approach, research_artifact: research,
       research_sha256: researchHash, summary_sha256: sha256(String(review.summary).trim()),
-      after_cycle: runtime.technical_fix_cycles ?? 0, covered_paths: [...(runtime.repair_paths ?? [])],
+      after_cycle: runtime.technical_fix_cycles ?? 0, covered_paths: coveredPaths,
       diagnostic_sha256: diagnosticHash, implementation_plan_sha256: implementationPlanHash, at: now(),
     });
     if (approach === 'requirements_change') {
