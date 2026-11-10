@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
-      ISSUE18_REWRITE_APPLY: no
+      ISSUE18_REWRITE_APPLY: yes
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
