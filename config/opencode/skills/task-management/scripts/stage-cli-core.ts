@@ -2185,7 +2185,8 @@ function reportedRootCauseKeys(result: any): Record<string, string> {
 
 // Relative checkpoints must never infer reviewed dependencies from the *write* scope.
 // An architect's explicit read-only coverage and the exact hashes of dependent contracts
-// are recorded within the existing review evidence. Unstated coverage is legacy: conservative.
+// are recorded within the existing review evidence. Unstated or empty dependency proof
+// is legacy: conservative. An empty list never authorizes relative reuse.
 function verifiedReviewCoverage(review: any, requiredPaths: string[], prefix: string):
   { covered_paths?: string[]; dependency_files?: Array<{ path: string; sha256: string }> } {
   if (review.covered_paths === undefined && review.dependency_files === undefined) return {};
@@ -2229,7 +2230,7 @@ function latestScopedArchitectureReview(runtime: StageRuntime, paths: string[]) 
   if (!paths.length) return undefined;
   const reviews = [...(runtime.class_reviews ?? []), ...(runtime.architecture_reviews ?? [])];
   return reviews.filter(review => (review.covered_paths?.length ?? 0) > 0 &&
-    Array.isArray(review.dependency_files) &&
+    Array.isArray(review.dependency_files) && review.dependency_files.length > 0 &&
     paths.every(path => review.covered_paths!.some(scope => pathMatchesScope(path, scope))))
     .sort((a, b) => (b.after_cycle ?? 0) - (a.after_cycle ?? 0))[0];
 }
