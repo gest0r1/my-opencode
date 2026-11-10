@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { writeHandover, checkHandover, snapshotHandover } from './pipeline-handover.mjs';
+import { writeLease, removeLease } from './dispatch-leases.mjs';
 
 const sha = s => createHash('sha256').update(s).digest('hex');
 
@@ -37,13 +38,18 @@ test('handover is a small machine-state index, not a second scheduler or decisio
     { pipeline_id: 'app', stage: 'implementation', work_item_id: 'WI1', status: 'healthy' },
     { pipeline_id: 'app', stage: 'code-review', work_item_id: 'review', role: 'CodeReviewer', status: 'background' },
   ]));
+  const lease = { pipeline_id: 'app', stage: 'code-review', work_item_id: 'WI-2',
+    role: 'CodeReviewer', status: 'in_progress', scope: [] };
+  writeLease(fx.runRoot, lease);
+  t.after(() => removeLease(fx.runRoot, lease));
   const result = await writeHandover(fx.stateRoot, fx.runId, fx.root);
   assert.equal(result.status, 'PASS');
   const saved = JSON.parse(await readFile(result.snapshot_path, 'utf8'));
   assert.equal(saved.run_id, fx.runId);
   assert.equal(saved.manifest_sha256, fx.state.manifest_sha256);
   assert.equal(saved.pipelines[0].stages[1].fix_cycles, 2);
-  assert.equal(saved.active_workers.length, 1);
+  assert.equal(saved.active_workers.length, 2);
+  assert.deepEqual(new Set(saved.active_workers.map(x => x.work_item_id)), new Set(['review', 'WI-2']));
   assert.match(saved.next_action, /^stage-cli next/);
   assert.equal(saved.state_source.includes('NOT permission'), true);
   assert.equal((await checkHandover(fx.stateRoot, fx.runId, fx.root)).status, 'PASS');
