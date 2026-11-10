@@ -959,11 +959,19 @@ test('a class review satisfies a pending architecture checkpoint; unrelated clas
   assert.equal(result.status, 0, result.stderr);
   const runtime = JSON.parse(result.stdout).pipelines.lane.stages['code-review'];
   assert.equal(runtime.technical_fix_cycles, 5);
-  // The 5th charged cycle still flags the count-based checkpoint as a backstop.
-  assert.equal(runtime.architecture_review_due, true);
+  // The class review at cycle 4 covers this block; cycle 5 is NOT another checkpoint.
+  assert.equal(runtime.architecture_review_due, false);
+  result = fx.cli('fix-budget-add', fx.runId, 'code-review', '--pipeline', 'lane', '--cycles', '5');
+  assert.equal(result.status, 0, result.stderr);
+  for (let cycle = 6; cycle <= 9; cycle += 1) {
+    fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+    result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'class-new-' + cycle]);
+    assert.equal(result.status, 0, result.stderr);
+  }
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].architecture_review_due, true,
+    'next checkpoint is five charged cycles after the class review, not absolute 5/10');
   fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
-  result = fx.cli('fix-budget-add', fx.runId, 'code-review', '--pipeline', 'lane', '--cycles', '1'); assert.equal(result.status, 0, result.stderr);
-  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'class-new']);
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'class-next']);
   assert.match(result.stderr, /ARCHITECTURE_REVIEW_REQUIRED: lane\/code-review/);
 });
 
@@ -1066,4 +1074,79 @@ test('cross-lane ownership is ambiguous when another pipeline also declares the 
   none.finish('sink', 'implementation'); none.step('sink', 'code-review', 'start');
   result = await none.fixCycle('sink', ['packages/lane/src/a.ts'], ['--repair-pipeline', 'lane']);
   assert.match(result.stderr, /CROSS_LANE_OWNER_AMBIGUOUS/);
+});
+
+
+test('distinct evidenced root causes in one defect class do not force class review', async () => {
+  const fx = await lanesFixture('distinct-root-causes');
+  fx.finish('lane', 'implementation');
+  fx.step('lane', 'code-review', 'start');
+  const cause = async (id, evidence) => {
+    let result = fx.cli('scope-check', fx.runId, 'code-review', 'packages/lane/src/a.ts', '--pipeline', 'lane');
+    assert.equal(result.status, 0, result.stderr);
+    const file = path.join(fx.root, 'cause-' + id + '.json');
+    await writeFile(file, JSON.stringify({ status: 'needs_revision', run_id: fx.runId,
+      pipeline_id: 'lane', stage: 'code-review',
+      findings: [{ id, defect_class: 'same-class', root_cause_id: id,
+        root_cause_evidence: evidence }] }));
+    return fx.cli('fix-cycle', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
+  };
+  let result = await cause('cause-a', 'tests/a.test.ts failed at assertion A');
+  assert.equal(result.status, 0, result.stderr);
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  result = await cause('cause-b', 'tests/b.test.ts failed at assertion B');
+  assert.equal(result.status, 0, result.stderr);
+  const runtime = fx.status().pipelines.lane.stages['code-review'];
+  assert.equal(runtime.technical_fix_cycles, 2);
+  assert.equal(runtime.class_review_due, undefined);
+  assert.equal(runtime.defect_class_history[0].cause_keys['same-class'], 'cause-a');
+  assert.equal(runtime.defect_class_history[1].cause_keys['same-class'], 'cause-b');
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  result = await cause('cause-b', 'tests/b.test.ts still fails at assertion B');
+  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED/);
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].technical_fix_cycles, 2);
+});
+
+test('class review may confirm a sound approach only with new diagnostic evidence and a repair plan', async () => {
+  const fx = await lanesFixture('confirm-class-approach');
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  let result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'same-bug']);
+  assert.equal(result.status, 0, result.stderr);
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'same-bug']);
+  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED/);
+  const runDir = path.join(fx.stateRoot, fx.runId);
+  await writeFile(path.join(runDir, 'research.md'), '# Official documentation checked for the current version\n');
+  await writeFile(path.join(runDir, 'tech.md'), 'status: ready\n');
+  await writeFile(path.join(runDir, 'diagnostic-1.md'), 'Root cause is implementation error at test A, not architecture.\n');
+  const record = async (patch = {}) => {
+    const file = path.join(runDir, 'confirm-' + Math.random().toString(36).slice(2) + '.json');
+    await writeFile(file, JSON.stringify({
+      kind: 'class_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
+      classes: ['same-bug'], approach: 'confirm_approach', summary: 'Existing approach is correct',
+      research_artifact: path.join(runDir, 'research.md'),
+      technical_review_artifact: path.join(runDir, 'tech.md'),
+      diagnostic_artifact: path.join(runDir, 'diagnostic-1.md'),
+      research_freshness_confirmed: true,
+      implementation_plan: 'Fix implementation at assertion A, then test all sibling paths',
+      approach_justification: 'Existing invariant and contracts remain valid',
+      requirements_changed: false, acceptance_criteria_changed: false,
+      external_contract_changed: false, security_boundary_changed: false, destructive_change: false,
+      ...patch,
+    }));
+    return fx.cli('class-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
+  };
+  result = await record({ implementation_plan: '' }); assert.match(result.stderr, /confirm_approach requires/);
+  result = await record(); assert.equal(result.status, 0, result.stderr);
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].class_reviews[0].approach, 'confirm_approach');
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'same-bug']);
+  assert.equal(result.status, 0, result.stderr);
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'same-bug']);
+  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED.*after rework/);
+  result = await record(); assert.match(result.stderr, /repeated confirmation needs new diagnostic evidence/);
+  await writeFile(path.join(runDir, 'diagnostic-2.md'), 'New run shows a different implementation fault at test B.\n');
+  result = await record({ diagnostic_artifact: path.join(runDir, 'diagnostic-2.md'),
+    implementation_plan: 'Correct assertion B and all related paths' });
+  assert.equal(result.status, 0, result.stderr);
 });
