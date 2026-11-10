@@ -360,6 +360,8 @@ export interface StageRuntime {
   defect_class_history?: DefectClassCycle[];
   /** Classes that recurred in consecutive negative results; the next cycle needs a recorded class review. */
   class_review_due?: string[];
+  /** Current negative result's scoped paths, frozen when CLASS_REVIEW_REQUIRED is raised. */
+  class_review_due_paths?: string[];
   class_reviews?: ClassReviewRecord[];
   repair_evidence?: FrozenArtifact;
   repair_paths?: string[];
