@@ -44,11 +44,7 @@ export function mergePlugins(repo, user, policy = { excluded: [] }) {
         const normalized = normalize(entry), id = identity(normalized);
         if (!(policy.excluded ?? []).includes(id) && !(policy.excluded ?? []).includes(spec(normalized))) {
           const previous = result.get(id);
-          // The managed subscription plugin pins its version while retaining
-          // the runtime user's transport/options configuration.
-          const selected = id === '@openchamber/opencode-claude' && typeof normalized === 'string' && previous?.options !== undefined
-            ? {package: normalized, options: previous.options} : normalized;
-          result.set(id, selected);
+          result.set(id, normalized);
         }
       }
     }
@@ -59,11 +55,21 @@ export function preservePlugins(active, staged, policyFile) {
   const repoFile = path.join(staged, 'opencode.json');
   const repo = parseConfig(fs.readFileSync(repoFile, 'utf8'));
   const policy = fs.existsSync(policyFile) ? JSON.parse(fs.readFileSync(policyFile, 'utf8')) : { excluded: [] };
-  let user = {};
+  let user = {}, hasActive = false, userModel;
+  // Existing global model (or its deliberate absence) wins over distribution defaults.
   // Both files may contribute; invalid input aborts before active config changes.
   for (const name of ['opencode.json', 'opencode.jsonc']) {
     const file = path.join(active, name);
-    if (fs.existsSync(file)) user.plugins = mergePlugins(parseConfig(fs.readFileSync(file, 'utf8')), user, policy);
+    if (!fs.existsSync(file)) continue;
+    const existing = parseConfig(fs.readFileSync(file, 'utf8'));
+    hasActive = true;
+    if (Object.hasOwn(existing, 'model')) userModel = existing.model;
+    user.plugins = mergePlugins(existing, user, policy);
+  }
+  if (hasActive) {
+    if (userModel === undefined || userModel === null) delete repo.model;
+    else if (typeof userModel === 'string' && userModel.trim()) repo.model = userModel;
+    else throw Error('Invalid existing model preference');
   }
   repo.plugins = mergePlugins(repo, user, policy); delete repo.plugin;
   const oldPlugins = path.join(active, 'plugins'), newPlugins = path.join(staged, 'plugins');
