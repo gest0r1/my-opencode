@@ -2216,7 +2216,7 @@ function unchangedReviewedDependency(dep: { path: string; sha256: string }): boo
     // A seemingly repository-relative path may be a symlink to external secrets.
     // Never inspect, hash or reuse evidence from outside the current checkout.
     if (!candidate.startsWith(projectRoot + sep)) return false;
-    return sha256(readFileSync(candidate)) === dep.sha256;
+    return sha256(readFileSync(candidate, 'utf8')) === dep.sha256;
   } catch { return false; }
 }
 
