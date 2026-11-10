@@ -93,6 +93,9 @@ def prepare(root):
         git(clean, "remote", "set-url", "origin", REMOTE)
     else:
         git(clean, "remote", "add", "origin", REMOTE)
+    # git clone --mirror sets remote.origin.mirror=true; it prohibits explicit
+    # lease-guarded refspecs. Never push --mirror during credential cleanup.
+    git(clean, "config", "remote.origin.mirror", "false")
     after = refs(clean)
     if set(before) != set(after):
         raise RuntimeError("Remote HEAD/TAG names changed by rewrite")
