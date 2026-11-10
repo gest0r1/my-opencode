@@ -17,7 +17,8 @@ async function fixture(t) {
   const runRoot = join(stateRoot, runId);
   await mkdir(runRoot, { recursive: true });
   const manifestRaw = JSON.stringify({ run_id: runId, pipelines: [{ id: 'app' }] }) + '\n';
-  const manifestFile = join(runRoot, 'manifest.json');
+  // stage-cli often freezes a manifest outside .tmp/pipelines/<run>.
+  const manifestFile = join(root, 'manifest.json');
   await writeFile(manifestFile, manifestRaw);
   const state = {
     run_id: runId, status: 'in_progress', manifest_file: manifestFile,
