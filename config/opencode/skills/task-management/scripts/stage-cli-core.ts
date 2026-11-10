@@ -2045,6 +2045,22 @@ export async function recordTechnicalFixCycle(
         return;
       }
     }
+    // Dependency drift invalidates the last relevant architecture decision before the next
+    // charged repair, not five cycles later. This is part of the existing negative-evidence
+    // transition; ordinary work and successful gates do not pay for dependency checks.
+    if (!resumeChargedRepair && !runtime.architecture_review_due) {
+      const last = latestScopedArchitectureReview(runtime, scopePreflight.paths);
+      if (last && !last.dependency_files!.every(unchangedReviewedDependency)) {
+        runtime.architecture_review_due = true;
+        runtime.architecture_review_due_paths = [...scopePreflight.paths];
+        runtime.message = 'architecture checkpoint due: reviewed dependency changed';
+        addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
+        refusal = new StageCliError(
+          `ARCHITECTURE_REVIEW_REQUIRED: ${pipeline.id}/${stage}; previously reviewed dependency changed; obtain current research, architecture and technical review`,
+        );
+        return;
+      }
+    }
     // A due class review also covers the count-based checkpoint, so recurrence is checked first.
     if (!resumeChargedRepair && runtime.architecture_review_due) {
       throw new StageCliError(
@@ -2191,19 +2207,20 @@ function unchangedReviewedDependency(dep: { path: string; sha256: string }): boo
   catch { return false; }
 }
 
-// A review only resets the 5-cycle clock for paths it actually inspected. Unknown/legacy
-// coverage falls back to the original absolute checkpoints; it never silently waives one.
-function latestRelevantArchitectureCycle(runtime: StageRuntime, paths: string[]): number {
-  if (!paths.length) return 0;
+// The latest review covering ALL current repair paths is authoritative for this block.
+// Scope may include neighboring read-only callers, while writes remain restricted by CLI.
+// Unverified/legacy coverage retains the conservative absolute checkpoint cadence.
+function latestScopedArchitectureReview(runtime: StageRuntime, paths: string[]) {
+  if (!paths.length) return undefined;
   const reviews = [...(runtime.class_reviews ?? []), ...(runtime.architecture_reviews ?? [])];
-  return reviews.reduce((latest, review) => {
-    const covered = review.covered_paths ?? [];
-    const dependencies = review.dependency_files;
-    const applies = covered.length && Array.isArray(dependencies) &&
-      paths.every(path => covered.some(scope => pathMatchesScope(path, scope))) &&
-      dependencies.every(unchangedReviewedDependency);
-    return applies ? Math.max(latest, review.after_cycle ?? 0) : latest;
-  }, 0);
+  return reviews.filter(review => (review.covered_paths?.length ?? 0) > 0 &&
+    Array.isArray(review.dependency_files) &&
+    paths.every(path => review.covered_paths!.some(scope => pathMatchesScope(path, scope))))
+    .sort((a, b) => (b.after_cycle ?? 0) - (a.after_cycle ?? 0))[0];
+}
+function latestRelevantArchitectureCycle(runtime: StageRuntime, paths: string[]): number {
+  const review = latestScopedArchitectureReview(runtime, paths);
+  return review?.dependency_files?.every(unchangedReviewedDependency) ? (review.after_cycle ?? 0) : 0;
 }
 
 function pipelineDependsOn(state: PipelineState, pipelineId: string, targetId: string, seen = new Set<string>()): boolean {
@@ -2631,7 +2648,7 @@ export async function recordClassReview(
     // A class review of block B does not waive an outstanding checkpoint for block A.
     const pendingPaths = runtime.architecture_review_due_paths ?? [];
     if (!runtime.architecture_review_due || !pendingPaths.length ||
-        (!coverage.covered_paths || pendingPaths.every(path =>
+        (coverage.covered_paths?.length && pendingPaths.every(path =>
           coverage.covered_paths!.some(scope => pathMatchesScope(path, scope))))) {
       runtime.architecture_review_due = false;
       runtime.architecture_review_due_paths = undefined;
