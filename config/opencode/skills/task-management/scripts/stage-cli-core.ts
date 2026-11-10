@@ -2311,6 +2311,11 @@ export async function applyOwnerAmendment(
       if (!runtime) continue;
       runtime.status = 'pending'; runtime.started_at = undefined; runtime.completed_at = undefined; runtime.evidence = undefined;
       runtime.message = undefined;
+      // A new owner amendment is a distinct repair wave, not a continuation of the prior review's
+      // source repair. Preserve the charged cycle/evidence for audit, but do not borrow its
+      // repair_paths into every freshly reopened work item: that serialized unrelated writers.
+      runtime.repair_origin_stage = undefined;
+      runtime.repair_origin_pipeline = undefined;
       addHistory(state, pipeline.id, name, 'pending', 'reopened by owner amendment revision ' + revision);
     }
     pipeline.status = 'approved';
