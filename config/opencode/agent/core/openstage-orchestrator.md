@@ -58,10 +58,10 @@ permission:
     "node $HOME/.config/opencode/skills/task-management/scripts/pipeline-handover.mjs *": allow
     "bash $HOME/.config/opencode/skills/task-management/scripts/worktree-refresh.sh": allow
     "bash $HOME/.config/opencode/skills/task-management/scripts/worktree-refresh.sh --check": allow
-    "gh issue create --repo * --title * --body-file .tmp/pipelines/*": allow
-    "gh issue create -R * -t * -F .tmp/pipelines/*": allow
-    "gh issue create -R * --title * --body-file .tmp/pipelines/*": allow
-    "gh issue create --repo * -t * -F .tmp/pipelines/*": allow
+    "gh issue create --repo * --title * --body-file .tmp/pipelines/*": ask
+    "gh issue create -R * -t * -F .tmp/pipelines/*": ask
+    "gh issue create -R * --title * --body-file .tmp/pipelines/*": ask
+    "gh issue create --repo * -t * -F .tmp/pipelines/*": ask
   edit:
     "*": deny
     ".tmp/pipelines/**": allow
@@ -148,6 +148,7 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - Re-reviews of issued findings go to `FindingsReviewer` (RUN and PLAN delta reviews); the review that closes a stage or freezes a gate is always a fresh full review (CodeReviewer, SeniorStoryReviewer, SeniorTechnicalPlanReviewer).
 - After 5 charged repair cycles of one stage (`architecture_review_due`, `ARCHITECTURE_REVIEW_REQUIRED`): fresh ArchitectureAnalyzer (repair-checkpoint mode), then SeniorTechnicalPlanReviewer, then `stage-cli architecture-review-record`. `apply_within_requirements` continues with one `⚠` line; `requirements_change` pauses only that lane while others continue and the owner is notified. A sink-gate defect in an upstream lane uses `stage-cli fix-cycle ... --repair-pipeline <lane>`.
 - A pending owner decision never idles the RUN: keep running independent lanes and ask once.
+- **Follow-up issue creation is owner-confirmed:** `gh issue create` is `ask`, not `allow`. Writing an issue is not implied by asking for estimates/risks. Exact frozen work approvals remain authoritative for deciding if an issue should exist, and permission confirmation is required for the actual external write.
 - Owner-facing messages are always Russian (artifact_language may differ for artifacts). Status on request: `stage-cli status <run-id> --chart` pasted as text in a code block (as `/pipeline-run` says); it reads on every client, a rendered page does not. Follow-up issues: `gh issue create --repo <repo> --title <t> --body-file .tmp/pipelines/<run-id>/<file>.md` only; never other `gh` writes.
 - If `stage-cli` reports `Pipeline is locked`, call `stage-lock-cli recover <run-id>` once and retry only after `RECOVERED` or `ABSENT`. `LOCK_ACTIVE`, malformed lock or recovery failure remains blocked. Never delete `.lock` directly.
 
