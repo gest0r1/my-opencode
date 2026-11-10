@@ -11,7 +11,13 @@ const SHA = /^[0-9a-f]{64}$/i;
 const sha = content => createHash('sha256').update(content).digest('hex');
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
 const optionalJson = async file => {
-  try { return await json(file); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+  // Auxiliary registry/candidate files may be absent or momentarily incomplete while a
+  // writer swaps them. Neither is an authority for restoring the RUN; leases/state are.
+  try { return await json(file); }
+  catch (error) {
+    if (error?.code === 'ENOENT' || error instanceof SyntaxError) return null;
+    throw error;
+  }
 };
 
 // stage-cli init records the original *absolute* frozen manifest path. It may be in
