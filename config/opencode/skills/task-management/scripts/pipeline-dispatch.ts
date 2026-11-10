@@ -267,8 +267,13 @@ export async function workItemWaves(root: string, run: string, pipelineFilter?: 
         const repairRuntime = runtime?.repair_origin_stage
           ? state.pipelines[runtime.repair_origin_pipeline ?? pipeline.id]?.stages[runtime.repair_origin_stage] : runtime;
         const repairScope = checkedScope(repairRuntime?.repair_paths ?? [], effectiveScope);
-        let ownScope: string[] = [];
-        try { ownScope = coderScope(item, effectiveScope); } catch { /* dispatch validates malformed scope */ }
+        let ownScope: string[];
+        try { ownScope = coderScope(item, effectiveScope); }
+        catch {
+          // The preview must not reserve *less* than dispatch when an item is invalid.
+          // Fail closed: malformed/legacy work-item metadata conservatively uses the full scope.
+          ownScope = effectiveScope;
+        }
         const scope = writerScope(item, [...new Set([...ownScope, ...repairScope])], effectiveScope,
           readStagePaths(runRoot, pipeline.id, stage));
         const busy = leaseConflict([...leases, ...reservations.filter((lane: any) => lane.pipeline_id !== pipeline.id)], self, scope);
