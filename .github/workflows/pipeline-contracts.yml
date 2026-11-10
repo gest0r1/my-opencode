@@ -97,7 +97,7 @@ jobs:
             config/opencode/skills/task-management/scripts/owner-amendment-policy.test.mjs \
             config/opencode/skills/task-management/scripts/owner-amendment-git-gate.test.mjs \
             config/opencode/skills/task-management/scripts/gate-lifecycle.test.mjs \
-            config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs
+            config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs \
             config/opencode/skills/task-management/scripts/legacy-live-preflight-v067.test.mjs \
             config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs \
             config/opencode/skills/task-management/scripts/git-worktree-cli.test.mjs \
