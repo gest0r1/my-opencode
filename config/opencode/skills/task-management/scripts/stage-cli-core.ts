@@ -1,6 +1,6 @@
 import { acceptedReconciliations } from './reconcile-evidence.ts';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { access, cp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import process from 'node:process';
@@ -21,10 +21,10 @@ import type {
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
 const DEFAULT_TECHNICAL_FIX_LIMIT = 5;
 const MAX_TECHNICAL_FIX_LIMIT = 20;
-// Every ARCHITECTURE_REVIEW_AFTER-th charged cycle of one stage flags an architecture checkpoint.
+// The relative interval starts at the last relevant review of this repair scope; legacy cycles retain their 5/10/15 checkpoints.
 const ARCHITECTURE_REVIEW_AFTER = 5;
-// A defect class named by two consecutive negative results stops the patch loop: the next cycle
-// needs a recorded class review (prior-art research + block rework), not another literal fix.
+// A confirmed repeated root cause needs review; distinct evidenced causes do not force redesign.
+// Unknown cause identity remains conservative and retains the existing class-review trigger.
 const DEFECT_CLASS_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}$/;
 const STATE_FILE = 'state.json';
 const LOCK_FILE = '.lock';
@@ -1969,8 +1969,15 @@ export async function recordTechnicalFixCycle(
     }
     const scopePreflight = state.scope_preflight;
     if (!scopePreflight || scopePreflight.pipeline_id !== pipeline.id || scopePreflight.stage !== stage) {
+      // Give the complete known blockers in the existing failed call: do not force the model
+      // to discover class/checkpoint prerequisites through repeated rejected fix-cycle calls.
+      const pending = [
+        ...(runtime.class_review_due?.length ? [`CLASS_REVIEW_REQUIRED classes=${runtime.class_review_due.join(',')}`] : []),
+        ...(runtime.architecture_review_due ? ['ARCHITECTURE_REVIEW_REQUIRED'] : []),
+      ];
       throw new StageCliError(
-        `SCOPE_PREFLIGHT_REQUIRED: run stage-cli scope-check ${runId} ${stage} <planned-path>... --pipeline ${pipeline.id} before fix-cycle`,
+        `SCOPE_PREFLIGHT_REQUIRED: run stage-cli scope-check ${runId} ${stage} <planned-path>... --pipeline ${pipeline.id} before fix-cycle` +
+        (pending.length ? `; also pending: ${pending.join('; ')}; complete review before retry` : ''),
       );
     }
     const lane = repairPipelineId ? resolveRepairLane(state, manifest, pipeline, repairPipelineId, scopePreflight.paths) : undefined;
@@ -2023,7 +2030,11 @@ export async function recordTechnicalFixCycle(
       }
       const cycles = runtime.technical_fix_cycles ?? 0;
       const previous = runtime.defect_class_history?.at(-1);
-      const recurring = previous?.cycle === cycles ? classes.filter((name) => previous.classes.includes(name)) : [];
+      // Reviewer-supplied root_cause_id/evidence are advisory annotations, not an independently
+      // verifiable proof. Even two different labels cannot silently waive class review; only
+      // the existing reviewed class-review-record can authorize the next consolidation.
+      const recurring = previous?.cycle === cycles
+        ? classes.filter((name) => previous.classes.includes(name)) : [];
       const reviews = runtime.class_reviews ?? [];
       // A review recorded since the last charged cycle authorizes exactly one consolidated rework of its classes.
       const authorized = new Set(reviews.filter((item) => item.after_cycle === cycles).flatMap((item) => item.classes));
@@ -2032,12 +2043,29 @@ export async function recordTechnicalFixCycle(
       if (due.length) {
         const again = due.filter((name) => reworked.has(name));
         runtime.class_review_due = due;
+        runtime.class_review_due_paths = [...scopePreflight.paths];
         runtime.message = again.length
-          ? `class review due: ${again.join(',')} recurred after its rework; new research and a different approach required`
+          ? `class review due: ${again.join(',')} recurred after its last verified attempt; diagnose cause and verify current approach`
           : `class review due: ${due.join(',')} recurred after cycle ${cycles}`;
         addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
         refusal = new StageCliError(
-          `CLASS_REVIEW_REQUIRED: ${pipeline.id}/${stage} classes=${due.join(',')} recurred${again.length ? ' after rework' : ''}; research prior art, rework the block, then run stage-cli class-review-record ${runId} ${stage} --pipeline ${pipeline.id} --evidence <class-review.json>`,
+          `CLASS_REVIEW_REQUIRED: ${pipeline.id}/${stage} classes=${due.join(',')} recurred${again.length ? ' after rework' : ''}; verify root cause, current research and architectural approach, then run stage-cli class-review-record ${runId} ${stage} --pipeline ${pipeline.id} --evidence <class-review.json>`,
+        );
+        return;
+      }
+    }
+    // Dependency drift invalidates the last relevant architecture decision before the next
+    // charged repair, not five cycles later. This is part of the existing negative-evidence
+    // transition; ordinary work and successful gates do not pay for dependency checks.
+    if (!resumeChargedRepair && !runtime.architecture_review_due) {
+      const last = latestScopedArchitectureReview(runtime, scopePreflight.paths);
+      if (last && !last.dependency_files!.every(unchangedReviewedDependency)) {
+        runtime.architecture_review_due = true;
+        runtime.architecture_review_due_paths = [...scopePreflight.paths];
+        runtime.message = 'architecture checkpoint due: reviewed dependency changed';
+        addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
+        refusal = new StageCliError(
+          `ARCHITECTURE_REVIEW_REQUIRED: ${pipeline.id}/${stage}; previously reviewed dependency changed; obtain current research, architecture and technical review`,
         );
         return;
       }
@@ -2051,10 +2079,19 @@ export async function recordTechnicalFixCycle(
     runtime.repair_evidence = { path: absoluteRepair, sha256: repairHash };
     runtime.repair_paths = [...scopePreflight.paths];
     runtime.technical_fix_cycles = next;
-    if (!resumeChargedRepair && next > 0 && next % ARCHITECTURE_REVIEW_AFTER === 0) runtime.architecture_review_due = true;
+    if (!resumeChargedRepair && next > 0) {
+      const lastReviewedCycle = latestRelevantArchitectureCycle(runtime, scopePreflight.paths);
+      const due = lastReviewedCycle > 0
+        ? next - lastReviewedCycle >= ARCHITECTURE_REVIEW_AFTER
+        : next % ARCHITECTURE_REVIEW_AFTER === 0;
+      if (due) {
+        runtime.architecture_review_due = true;
+        runtime.architecture_review_due_paths = [...scopePreflight.paths];
+      }
+    }
     if (!resumeChargedRepair) {
       runtime.defect_class_history ??= [];
-      runtime.defect_class_history.push({ cycle: next, classes, evidence_sha256: repairHash });
+      runtime.defect_class_history.push({ cycle: next, classes, evidence_sha256: repairHash, cause_keys: reportedRootCauseKeys(result) });
     }
     runtime.message = `${repairClass} cycle ${next}/${limit}${classes.length ? ` classes=${classes.join(',')}` : ''}`;
     state.scope_preflight = undefined;
@@ -2120,6 +2157,86 @@ function resultDefectClasses(result: any, extra: string[]): string[] {
     for (const finding of list) if (finding && typeof finding === 'object' && finding.defect_class) named.push(finding.defect_class);
   }
   return [...new Set(named.map(normalizeDefectClass))].sort();
+}
+
+// Track reviewer-reported labels as an audit hint only. A string/length check cannot
+// authenticate their causal meaning; these values never waive CLASS_REVIEW_REQUIRED.
+function reportedRootCauseKeys(result: any): Record<string, string> {
+  const findings = [...(Array.isArray(result?.findings) ? result.findings : []),
+    ...(Array.isArray(result?.blockers) ? result.blockers : [])];
+  const grouped = new Map<string, Array<{ id: string; evidence: string }>>();
+  for (const finding of findings) {
+    const cls = String(finding?.defect_class ?? '').trim().toLowerCase().replace(/\s+/g, '-');
+    if (!DEFECT_CLASS_PATTERN.test(cls)) continue;
+    const id = String(finding.root_cause_id ?? '').trim();
+    const evidence = String(finding.root_cause_evidence ?? '').trim();
+    const entries = grouped.get(cls) ?? [];
+    entries.push({ id, evidence });
+    grouped.set(cls, entries);
+  }
+  const confirmed: Record<string, string> = {};
+  for (const [cls, entries] of grouped) {
+    if (entries.length && entries.every(x => /^[a-zA-Z0-9._:-]{3,128}$/.test(x.id) && x.evidence.length >= 8)) {
+      confirmed[cls] = [...new Set(entries.map(x => x.id))].sort().join(',');
+    }
+  }
+  return confirmed;
+}
+
+// Relative checkpoints must never infer reviewed dependencies from the *write* scope.
+// An architect's explicit read-only coverage and the exact hashes of dependent contracts
+// are recorded within the existing review evidence. Unstated or empty dependency proof
+// is legacy: conservative. An empty list never authorizes relative reuse.
+function verifiedReviewCoverage(review: any, requiredPaths: string[], prefix: string):
+  { covered_paths?: string[]; dependency_files?: Array<{ path: string; sha256: string }> } {
+  if (review.covered_paths === undefined && review.dependency_files === undefined) return {};
+  const covered = review.covered_paths;
+  const dependencies = review.dependency_files;
+  if (!Array.isArray(covered) || !covered.length || covered.length > 100 ||
+      covered.some((scope: unknown) => !safeScopePath(scope)) ||
+      !Array.isArray(dependencies) || dependencies.length > 64 ||
+      dependencies.some((item: any) => !item || !safeRepoPath(item.path) ||
+        !/^[0-9a-f]{64}$/i.test(String(item.sha256 ?? '')))) {
+    throw new StageCliError(prefix + ': coverage needs safe covered_paths and exact dependency_files[]');
+  }
+  if (requiredPaths.some(path => !covered.some((scope: string) => pathMatchesScope(path, scope)))) {
+    throw new StageCliError(prefix + ': covered_paths must include every currently failing repair path');
+  }
+  const normalized = [...new Map(dependencies.map((item: any) =>
+    [item.path, { path: item.path, sha256: String(item.sha256).toLowerCase() }])).values()] as
+    Array<{ path: string; sha256: string }>;
+  if (normalized.length !== dependencies.length || !normalized.every(unchangedReviewedDependency)) {
+    throw new StageCliError(prefix + ': dependency file is missing, changed, or duplicated; review current code');
+  }
+  return { covered_paths: [...new Set(covered as string[])], dependency_files: normalized };
+}
+
+function unchangedReviewedDependency(dep: { path: string; sha256: string }): boolean {
+  if (!safeRepoPath(dep.path)) return false;
+  try {
+    const projectRoot = realpathSync(process.cwd());
+    const candidate = realpathSync(resolve(projectRoot, dep.path));
+    // A seemingly repository-relative path may be a symlink to external secrets.
+    // Never inspect, hash or reuse evidence from outside the current checkout.
+    if (!candidate.startsWith(projectRoot + sep)) return false;
+    return sha256(readFileSync(candidate, 'utf8')) === dep.sha256;
+  } catch { return false; }
+}
+
+// The latest review covering ALL current repair paths is authoritative for this block.
+// Scope may include neighboring read-only callers, while writes remain restricted by CLI.
+// Unverified/legacy coverage retains the conservative absolute checkpoint cadence.
+function latestScopedArchitectureReview(runtime: StageRuntime, paths: string[]) {
+  if (!paths.length) return undefined;
+  const reviews = [...(runtime.class_reviews ?? []), ...(runtime.architecture_reviews ?? [])];
+  return reviews.filter(review => (review.covered_paths?.length ?? 0) > 0 &&
+    Array.isArray(review.dependency_files) && review.dependency_files.length > 0 &&
+    paths.every(path => review.covered_paths!.some(scope => pathMatchesScope(path, scope))))
+    .sort((a, b) => (b.after_cycle ?? 0) - (a.after_cycle ?? 0))[0];
+}
+function latestRelevantArchitectureCycle(runtime: StageRuntime, paths: string[]): number {
+  const review = latestScopedArchitectureReview(runtime, paths);
+  return review?.dependency_files?.every(unchangedReviewedDependency) ? (review.after_cycle ?? 0) : 0;
 }
 
 function pipelineDependsOn(state: PipelineState, pipelineId: string, targetId: string, seen = new Set<string>()): boolean {
@@ -2188,6 +2305,7 @@ type ArchitectureReview = {
   kind?: unknown; run_id?: unknown; pipeline_id?: unknown; stage?: unknown; result?: unknown; summary?: unknown;
   requirements_changed?: unknown; acceptance_criteria_changed?: unknown; external_contract_changed?: unknown;
   security_boundary_changed?: unknown; destructive_change?: unknown;
+  covered_paths?: unknown; dependency_files?: unknown;
 };
 
 // Records the architecture checkpoint of a repeatedly repaired stage. Only requirements_change stops work, and only
@@ -2227,9 +2345,15 @@ export async function recordArchitectureReview(
           review.security_boundary_changed, review.destructive_change].some((value) => value !== false)) {
       throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: apply_within_requirements needs requirements_changed, acceptance_criteria_changed, external_contract_changed, security_boundary_changed and destructive_change all false');
     }
+    const covered = verifiedReviewCoverage(review,
+      runtime.architecture_review_due_paths ?? runtime.repair_paths ?? [], 'ARCHITECTURE_REVIEW_INVALID');
     runtime.architecture_review_due = false;
+    runtime.architecture_review_due_paths = undefined;
     runtime.architecture_reviews ??= [];
-    runtime.architecture_reviews.push({ path: absoluteEvidence, sha256: sha256(content), result, at: now() });
+    runtime.architecture_reviews.push({
+      path: absoluteEvidence, sha256: sha256(content), result,
+      after_cycle: runtime.technical_fix_cycles ?? 0, ...covered, at: now(),
+    });
     if (result === 'requirements_change') {
       runtime.status = 'blocked';
       runtime.message = 'ARCHITECTURE_REQUIREMENTS_CHANGE: owner decision; other lanes continue';
@@ -2311,6 +2435,11 @@ export async function applyOwnerAmendment(
       if (!runtime) continue;
       runtime.status = 'pending'; runtime.started_at = undefined; runtime.completed_at = undefined; runtime.evidence = undefined;
       runtime.message = undefined;
+      // A new owner amendment is a distinct repair wave, not a continuation of the prior review's
+      // source repair. Preserve the charged cycle/evidence for audit, but do not borrow its
+      // repair_paths into every freshly reopened work item: that serialized unrelated writers.
+      runtime.repair_origin_stage = undefined;
+      runtime.repair_origin_pipeline = undefined;
       addHistory(state, pipeline.id, name, 'pending', 'reopened by owner amendment revision ' + revision);
     }
     pipeline.status = 'approved';
@@ -2438,6 +2567,8 @@ export async function supersedeRun(
 
 type ClassReview = ArchitectureReview & {
   classes?: unknown; approach?: unknown; research_artifact?: unknown; technical_review_artifact?: unknown;
+  diagnostic_artifact?: unknown; implementation_plan?: unknown; approach_justification?: unknown;
+  research_freshness_confirmed?: unknown;
 };
 
 async function runArtifact(root: string, value: unknown, field: string): Promise<string> {
@@ -2481,29 +2612,72 @@ export async function recordClassReview(
     const classes = Array.isArray(review.classes) ? [...new Set(review.classes.map(normalizeDefectClass))].sort() : [];
     const missing = due.filter((name) => !classes.includes(name));
     if (missing.length) throw new StageCliError(`CLASS_REVIEW_INVALID: classes must cover ${missing.join(',')}`);
-    // A class that already had a rework needs new research and a changed approach, not the same review again.
-    const researchHash = sha256(readFileSync(research, 'utf8'));
-    for (const previous of (runtime.class_reviews ?? []).filter((item) => item.classes.some((name) => classes.includes(name)))) {
-      if (previous.research_sha256 === researchHash) throw new StageCliError('CLASS_REVIEW_INVALID: the class already had a rework; new research_artifact required');
-      if (previous.summary_sha256 === sha256(String(review.summary).trim())) throw new StageCliError('CLASS_REVIEW_INVALID: the class already had a rework; the approach summary must change');
-    }
     const approach = review.approach;
-    if (approach !== 'rework_block' && approach !== 'remove_mechanism' && approach !== 'requirements_change') {
-      throw new StageCliError('CLASS_REVIEW_INVALID: approach must be rework_block, remove_mechanism or requirements_change');
+    if (approach !== 'confirm_approach' && approach !== 'rework_block' && approach !== 'remove_mechanism' && approach !== 'requirements_change') {
+      throw new StageCliError('CLASS_REVIEW_INVALID: approach must be confirm_approach, rework_block, remove_mechanism or requirements_change');
     }
     if (typeof review.summary !== 'string' || !review.summary.trim()) throw new StageCliError('CLASS_REVIEW_INVALID: summary is required');
     if (approach !== 'requirements_change' &&
         [review.requirements_changed, review.acceptance_criteria_changed, review.external_contract_changed,
           review.security_boundary_changed, review.destructive_change].some((value) => value !== false)) {
-      throw new StageCliError('CLASS_REVIEW_INVALID: rework_block/remove_mechanism need requirements_changed, acceptance_criteria_changed, external_contract_changed, security_boundary_changed and destructive_change all false');
+      throw new StageCliError('CLASS_REVIEW_INVALID: bounded review requires all five structural-change flags false');
     }
+    const researchHash = sha256(readFileSync(research, 'utf8'));
+    // Confirming a sound approach is legitimate; it requires fresh diagnostic proof and a concrete
+    // repair plan. The same diagnosis/plan cannot be resubmitted indefinitely after another failure.
+    const diagnostic = approach === 'confirm_approach'
+      ? String(review.diagnostic_artifact ?? '') : '';
+    if (approach === 'confirm_approach' &&
+        (review.research_freshness_confirmed !== true ||
+         typeof review.implementation_plan !== 'string' || !review.implementation_plan.trim() ||
+         typeof review.approach_justification !== 'string' || !review.approach_justification.trim())) {
+      throw new StageCliError('CLASS_REVIEW_INVALID: confirm_approach requires current research, justification and a concrete implementation_plan');
+    }
+    let diagnosticHash: string | undefined;
+    if (approach === 'confirm_approach') {
+      const absoluteDiagnostic = resolve(diagnostic.startsWith('/') ? diagnostic : join(process.cwd(), diagnostic));
+      if (!absoluteDiagnostic.startsWith(`${root}/`)) throw new StageCliError('CLASS_REVIEW_INVALID: diagnostic_artifact must live inside the current run');
+      const diagnosticContent = (() => {
+        try { return readFileSync(absoluteDiagnostic, 'utf8'); }
+        catch { throw new StageCliError('CLASS_REVIEW_INVALID: diagnostic_artifact is missing or unreadable'); }
+      })();
+      if (!diagnosticContent.trim()) throw new StageCliError('CLASS_REVIEW_INVALID: diagnostic_artifact must be nonempty');
+      diagnosticHash = sha256(diagnosticContent);
+    }
+    const implementationPlanHash = approach === 'confirm_approach' ? sha256(String(review.implementation_plan).trim()) : undefined;
+    for (const previous of (runtime.class_reviews ?? []).filter((item) => item.classes.some((name) => classes.includes(name)))) {
+      if (approach !== 'confirm_approach' && previous.research_sha256 === researchHash) {
+        throw new StageCliError('CLASS_REVIEW_INVALID: the class already had a rework; new research_artifact required');
+      }
+      if (approach !== 'confirm_approach' && previous.summary_sha256 === sha256(String(review.summary).trim())) {
+        throw new StageCliError('CLASS_REVIEW_INVALID: the class already had a rework; the approach summary must change');
+      }
+      if (approach === 'confirm_approach' && (previous.diagnostic_sha256 === diagnosticHash ||
+          previous.implementation_plan_sha256 === implementationPlanHash)) {
+        throw new StageCliError('CLASS_REVIEW_INVALID: repeated confirmation needs new diagnostic evidence and a different implementation plan');
+      }
+    }
+    const coverage = verifiedReviewCoverage(review,
+      runtime.class_review_due_paths ?? runtime.repair_paths ?? [], 'CLASS_REVIEW_INVALID');
     runtime.class_review_due = undefined;
-    runtime.architecture_review_due = false;
+    runtime.class_review_due_paths = undefined;
+    // A class review of block B does not waive an outstanding checkpoint for block A.
+    const pendingPaths = runtime.architecture_review_due_paths ?? [];
+    // Legacy class review already ran ExternalScout+architect+senior for this pending
+    // checkpoint. Clear that single pending review to avoid a duplicate invocation,
+    // but do NOT reset the relative clock without explicit dependency fingerprints.
+    if (!runtime.architecture_review_due || !pendingPaths.length ||
+        !coverage.covered_paths ||
+        pendingPaths.every(path => coverage.covered_paths!.some(scope => pathMatchesScope(path, scope)))) {
+      runtime.architecture_review_due = false;
+      runtime.architecture_review_due_paths = undefined;
+    }
     runtime.class_reviews ??= [];
     runtime.class_reviews.push({
       path: absoluteEvidence, sha256: sha256(content), classes, approach, research_artifact: research,
       research_sha256: researchHash, summary_sha256: sha256(String(review.summary).trim()),
-      after_cycle: runtime.technical_fix_cycles ?? 0, at: now(),
+      after_cycle: runtime.technical_fix_cycles ?? 0, ...coverage,
+      diagnostic_sha256: diagnosticHash, implementation_plan_sha256: implementationPlanHash, at: now(),
     });
     if (approach === 'requirements_change') {
       runtime.status = 'blocked';
@@ -2512,7 +2686,7 @@ export async function recordClassReview(
       pipeline.current_stage = undefined;
       addHistory(state, pipeline.id, stage, 'blocked', runtime.message);
     } else {
-      runtime.message = `class review recorded: ${approach} for ${classes.join(',')}; next cycle is one consolidated rework`;
+      runtime.message = `class review recorded: ${approach} for ${classes.join(',')}; next cycle applies the reviewed repair plan`;
       addHistory(state, pipeline.id, stage, runtime.status, runtime.message);
     }
   });
