@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readLeases } from './dispatch-leases.mjs';
 import process from 'node:process';
@@ -14,10 +14,11 @@ const optionalJson = async file => {
   try { return await json(file); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
 };
 
-function ensureInside(parent, candidate) {
-  const file = resolve(candidate);
-  if (!file.startsWith(resolve(parent) + sep)) throw Error('HANDOVER_PATH_OUTSIDE_RUN');
-  return file;
+// stage-cli init records the original *absolute* frozen manifest path. It may be in
+// .tmp/pipelines/<run>, a planning folder or the project root. Its SHA binds identity.
+function verifiedManifestPath(value) {
+  if (typeof value !== 'string' || !value.startsWith('/')) throw Error('HANDOVER_MANIFEST_PATH_INVALID');
+  return resolve(value);
 }
 
 function gitHead(cwd) {
@@ -36,7 +37,7 @@ export async function snapshotHandover(stateRoot, runId, cwd = process.cwd()) {
   if (state.run_id !== runId || !state.manifest_file || !SHA.test(String(state.manifest_sha256 ?? ''))) {
     throw Error('HANDOVER_STATE_IDENTITY_INVALID');
   }
-  const manifestFile = ensureInside(runRoot, state.manifest_file);
+  const manifestFile = verifiedManifestPath(state.manifest_file);
   const manifestRaw = await readFile(manifestFile, 'utf8');
   if (sha(manifestRaw) !== state.manifest_sha256) throw Error('HANDOVER_FROZEN_MANIFEST_CHANGED');
   const manifest = JSON.parse(manifestRaw);
