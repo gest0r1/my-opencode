@@ -1150,13 +1150,13 @@ test('cross-lane ownership is ambiguous when another pipeline also declares the 
 });
 
 
-test('distinct evidenced root causes in one defect class do not force class review', async () => {
-  const fx = await lanesFixture('distinct-root-causes');
+test('unverified root cause labels cannot suppress the class-review guard', async () => {
+  const fx = await lanesFixture('untrusted-root-cause-ids');
   fx.finish('lane', 'implementation');
   fx.step('lane', 'code-review', 'start');
   const cause = async (id, evidence) => {
-    let result = fx.cli('scope-check', fx.runId, 'code-review', 'packages/lane/src/a.ts', '--pipeline', 'lane');
-    assert.equal(result.status, 0, result.stderr);
+    const checked = fx.cli('scope-check', fx.runId, 'code-review', 'packages/lane/src/a.ts', '--pipeline', 'lane');
+    assert.equal(checked.status, 0, checked.stderr);
     const file = path.join(fx.root, 'cause-' + id + '.json');
     await writeFile(file, JSON.stringify({ status: 'needs_revision', run_id: fx.runId,
       pipeline_id: 'lane', stage: 'code-review',
@@ -1168,16 +1168,12 @@ test('distinct evidenced root causes in one defect class do not force class revi
   assert.equal(result.status, 0, result.stderr);
   fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
   result = await cause('cause-b', 'tests/b.test.ts failed at assertion B');
-  assert.equal(result.status, 0, result.stderr);
-  const runtime = fx.status().pipelines.lane.stages['code-review'];
-  assert.equal(runtime.technical_fix_cycles, 2);
-  assert.equal(runtime.class_review_due, undefined);
-  assert.equal(runtime.defect_class_history[0].cause_keys['same-class'], 'cause-a');
-  assert.equal(runtime.defect_class_history[1].cause_keys['same-class'], 'cause-b');
-  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
-  result = await cause('cause-b', 'tests/b.test.ts still fails at assertion B');
   assert.match(result.stderr, /CLASS_REVIEW_REQUIRED/);
-  assert.equal(fx.status().pipelines.lane.stages['code-review'].technical_fix_cycles, 2);
+  const runtime = fx.status().pipelines.lane.stages['code-review'];
+  assert.equal(runtime.technical_fix_cycles, 1, 'unverified labels never charge a second fix cycle');
+  assert.deepEqual(runtime.class_review_due, ['same-class']);
+  assert.equal(runtime.defect_class_history[0].cause_keys['same-class'], 'cause-a',
+    'reported cause labels remain available only as diagnostic hints');
 });
 
 test('class review may confirm a sound approach only with new diagnostic evidence and a repair plan', async () => {
