@@ -1,0 +1,35 @@
+name: Issue 18 guarded Git history rewrite preparation
+on:
+  push:
+    branches:
+      - security/issue18-history-cleanup-phase2
+    paths:
+      - scripts/issue18-remote-rewrite.py
+      - .github/workflows/issue18-remote-rewrite.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: issue18-remote-rewrite
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 1
+      - name: Install local rewrite dependency
+        run: python3 -m pip install --user --break-system-packages 'git-filter-repo>=2.47.0'
+      - name: Validate clean mirror without pushing anything
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          python3 scripts/issue18-remote-rewrite.py prepare "$RUNNER_TEMP/issue18-cleanup"
+          rm -rf -- "$RUNNER_TEMP/issue18-cleanup"
