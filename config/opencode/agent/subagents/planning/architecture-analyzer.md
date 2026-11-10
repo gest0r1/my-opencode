@@ -24,7 +24,7 @@ Run when /pipeline-plan selected an architecture/domain/cross-module trigger, wh
 
 Run fresh when /pipeline-run reports `architecture_review_due` after five charged cycles since the last **relevant** class/architecture review of that block (legacy coverage uses 5/10/15). Input: the repeatedly repaired block (pipeline, stage, work items, paths), the findings history of all cycles and the frozen requirements/AC/contracts. Do not redesign the feature. Decide whether the defects share a design cause (a crutch such as a patch around a wrong owner, duplicated logic or a test that pins the wrong behavior) or are independent.
 
-Write the supplied versioned artifact under `.tmp/pipelines/{run-id}/planning/**`. State explicitly:
+Write the supplied versioned artifact under `.tmp/pipelines/{run-id}/planning/**`. To enable safe *relative* reuse, include in the machine review the explicit `covered_paths` actually examined, including callers and related interfaces, plus `dependency_files: [{path, sha256}]` for each relevant exact local contract/dependency (read-only analysis, not write permission). If dependency coverage cannot be demonstrated, leave it unspecified: the CLI conservatively keeps its absolute checkpoints. Do not copy the repair write scope and call it dependency analysis. State explicitly:
 - `result: no_change | apply_within_requirements | requirements_change`;
 - the defect classes across cycles and the structural cause, or why the current design is sound;
 - `requirements_changed`, `acceptance_criteria_changed`, `external_contract_changed`, `security_boundary_changed`, `destructive_change`, each with the literal value `false` or `true`.
