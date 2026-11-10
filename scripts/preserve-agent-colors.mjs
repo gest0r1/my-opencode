@@ -1,14 +1,29 @@
 #!/usr/bin/env node
-// Keep the colour a user picked for a managed agent across reinstalls.
+// Preserve a user's agent model, variant and colour across managed reinstalls.
 // OpenChamber saves an agent's colour as `color:` in that agent's Markdown file,
 // and every install replaces the managed files, so the choice would be lost.
-//   collect SOURCE TARGET OUT  record `color:` of the installed copies of managed agents
-//   apply TARGET IN            write those colours into the freshly installed files
+//   collect SOURCE TARGET OUT  save the installed model/variant presence and chosen colour
+//   apply TARGET IN            restore those preferences into newly staged managed files
 import fs from 'node:fs';
 import path from 'node:path';
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---/;
 const HEX = /^#[0-9a-fA-F]{6}$/;
+
+const MODEL_KEYS = ['model', 'variant'];
+function scalarLine(text, key) {
+  const front = FRONTMATTER.exec(text)?.[1] ?? '';
+  const line = front.split(/\r?\n/).find((line) => line.startsWith(key + ':'));
+  return line && line.slice(key.length + 1).trim() ? line : null;
+}
+function replaceScalar(text, key, line) {
+  const match = FRONTMATTER.exec(text);
+  if (!match) return text;
+  const lines = match[1].split(/\r?\n/).filter((item) => !item.startsWith(key + ':'));
+  if (line !== null) lines.push(line);
+  return text.replace(match[0], '---\n' + lines.join('\n') + '\n---');
+}
+
 
 function walk(root) {
   if (!fs.existsSync(root)) return [];
@@ -36,33 +51,40 @@ if (command === 'collect') {
     const text = fs.readFileSync(file, 'utf8');
     return [identity(file, text), field(text, 'color')];
   }));
-  const colors = {};
-  for (const file of walk(target)) {
+
+  const preferences = {};
+  // Canonical flat agents win over obsolete nested copies with the same name.
+  const files = walk(target).sort((a, b) =>
+    Number(path.dirname(a) !== target) - Number(path.dirname(b) !== target));
+  for (const file of files) {
     if (fs.lstatSync(file).isSymbolicLink()) continue;
     const text = fs.readFileSync(file, 'utf8');
     const id = identity(file, text);
+    if (!managed.has(id) || Object.hasOwn(preferences, id)) continue;
+    const choice = Object.fromEntries(MODEL_KEYS.map((key) => [key, scalarLine(text, key)]));
     const color = field(text, 'color');
-    // Only a valid colour that differs from the distribution's own is a user choice.
-    if (managed.has(id) && HEX.test(color) && color.toLowerCase() !== managed.get(id).toLowerCase()) colors[id] = color;
+    if (HEX.test(color) && color.toLowerCase() !== managed.get(id).toLowerCase()) choice.color = color;
+    preferences[id] = choice;
   }
-  fs.writeFileSync(out, `${JSON.stringify(colors, null, 2)}\n`);
+  fs.writeFileSync(out, JSON.stringify(preferences, null, 2) + '\n');
 } else if (command === 'apply') {
   const [target, input] = args;
   if (!target || !input) throw new Error('usage: preserve-agent-colors.mjs apply TARGET IN');
-  const colors = JSON.parse(fs.readFileSync(input, 'utf8'));
+  const preferences = JSON.parse(fs.readFileSync(input, 'utf8'));
   let applied = 0;
   for (const file of walk(target)) {
-    const text = fs.readFileSync(file, 'utf8');
-    const color = colors[identity(file, text)];
-    const match = FRONTMATTER.exec(text);
-    if (!color || !HEX.test(color) || !match) continue;
-    const front = /^color:.*$/m.test(match[1])
-      ? match[1].replace(/^color:.*$/m, `color: "${color}"`)
-      : `${match[1]}\ncolor: "${color}"`;
-    fs.writeFileSync(file, text.replace(match[1], front));
+    if (fs.lstatSync(file).isSymbolicLink()) continue;
+    let text = fs.readFileSync(file, 'utf8');
+    const choice = preferences[identity(file, text)];
+    if (!choice || !FRONTMATTER.test(text)) continue;
+    for (const key of MODEL_KEYS) {
+      if (Object.hasOwn(choice, key)) text = replaceScalar(text, key, choice[key]);
+    }
+    if (HEX.test(choice.color ?? '')) text = replaceScalar(text, 'color', 'color: "' + choice.color + '"');
+    fs.writeFileSync(file, text);
     applied++;
   }
-  if (applied) console.log(`Kept ${applied} user-chosen agent colours`);
+  if (applied) console.log('Kept ' + applied + ' managed-agent model/variant preferences');
 } else {
   throw new Error('usage: preserve-agent-colors.mjs collect|apply ...');
 }

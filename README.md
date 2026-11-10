@@ -23,7 +23,7 @@
 ```text
 ~/.opencode/bin/opencode              # бинарник OpenCode
 /usr/local/bin/opencode               # managed launcher
-~/.local/share/opencode/auth.json     # штатные credentials OpenCode
+~/.local/share/opencode/opencode.db   # SQLite credentials/sessions (OpenCode V2)
 ~/.config/opencode/                   # активная конфигурация
 ~/.config/opencode/agents/            # активные agents
 ~/.agents/skills/                     # активные skills
@@ -51,7 +51,7 @@ opencode auth list
 Каноническое хранилище:
 
 ```text
-~/.local/share/opencode/auth.json
+~/.local/share/opencode/opencode.db
 ```
 
 Общий runtime-файл:
@@ -60,7 +60,7 @@ opencode auth list
 ~/.config/opencode.env
 ```
 
-Он используется OpenCode CLI и OpenChamber. `OPENAI_API_KEY` и `OPENCODE_API_KEY` намеренно не должны перекрывать штатный `auth.json`.
+Он используется OpenCode CLI и OpenChamber. `OPENAI_API_KEY` и `OPENCODE_API_KEY` намеренно не должны перекрывать штатное SQLite-хранилище V2.
 
 Legacy `~/.config/opencode-web.env` мигрируется и выводится из использования. OpenChamber UI password при миграции сохраняется отдельно и затем переносится в native startup env.
 
@@ -247,3 +247,14 @@ rm -f ~/.config/opencode-web.env
 Выборочные диагностики и временная БД для live-тестов: [контракт тестирования](config/opencode/skills/task-management/gate-testing.md). Аудит остатков v1: [проверка и варианты очистки](project/v1-audit.md).
 
 Исследование документации, библиотек и GitHub встроено в существующие гейты: [механика и права](config/opencode/PIPELINE.md#external-research-within-existing-gates).
+
+
+### Пользовательские модели и Claude Code (issue #18)
+
+При обновлении дистрибутива сохраняются `model` на уровне глобального `opencode.json` и пользовательские `model`/`variant` в существующих управляемых Markdown-агентах. Отсутствие этих полей в существующем агенте сохраняет наследование вместо закрепления нового дефолта. Содержимое и права управляемого агента обновляются из дистрибутива. Новые агенты получают проектные дефолты. Изменение модели только в открытой сессии OpenCode не переписывает конфигурацию: выбор для следующих сессий нужно сохранить явно в конфиге. Недоступный провайдер/вариант не заменяется установщиком молча — проверяйте доступность через `opencode models`.
+
+`models.txt` больше не поставляется: список доступных моделей определяется OpenCode и подключёнными провайдерами. Начиная с версии 2.2.3, Claude Code поддерживается встроенным провайдером OpenCode без `@openchamber/opencode-claude`. Существующая авторизация `claude` не удаляется; для новой установки CLI опционален (`OPENCODE_INSTALL_CLAUDE_CLI=1`), затем `claude auth login --claudeai`. Перед использованием проверить `claude auth status` и наличие нужных моделей в OpenCode. Учётные данные OpenCode V2 находятся в SQLite (точный путь: `opencode debug paths db`); старый `auth.json` используется только для импорта при миграции.
+
+**Перед публичным доступом:** обязательна отдельная процедура из [протокола очистки истории](project/issue18-security-cleanup-runbook.md). Удаление файлов из `main` не устраняет секреты из старых веток, PR, merge-коммитов и GitHub-кэшей.
+
+При удалении старого Claude-плагина установщик переносит `claude-code/<model>` в `claude-agent/<model>`, сохраняя суффикс модели и `#variant`. Перед переключением конфигурации он сверяет выбранные модели с `opencode models claude-agent`. Если модель или вход не доступны, установка прерывается **до активации** и оставляет прежнюю рабочую конфигурацию. Для старых сессий, где выбор записан только в SQLite и не в файлах настройки, при возобновлении может потребоваться выбрать модель штатным способом; база не переписывается.

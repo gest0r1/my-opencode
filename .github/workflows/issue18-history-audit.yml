@@ -1,0 +1,50 @@
+name: Issue 18 historical secret candidates (read-only)
+on:
+  push:
+    branches:
+      - feature/issue-18-models-security-20261110
+    paths:
+      - scripts/scan-history-candidates.py
+      - .github/workflows/issue18-history-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Fetch every published branch and tag for read-only audit
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git fetch --tags origin
+          # PR refs can exist even for closed pull requests; absence is not proof of safety.
+          if ! git fetch --no-tags origin '+refs/pull/*/head:refs/audit/pr/*'; then
+            echo "WARNING: PR refs incomplete; inspect via GitHub Support."
+          fi
+      - name: Audit all reachable blob contents without exposing values
+        run: |
+          python3 scripts/scan-history-candidates.py
+      - name: Verify local-only rewrite of historical credentials (no push)
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --user --break-system-packages 'git-filter-repo>=2.47.0'
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir -p "$RUNNER_TEMP/rewrite-private"
+          chmod 700 "$RUNNER_TEMP/rewrite-private"
+          git clone --mirror . "$RUNNER_TEMP/rewrite-private/repo.git"
+          (
+            cd "$RUNNER_TEMP/rewrite-private/repo.git"
+            git remote set-url origin https://github.com/gest0r1/my-opencode.git
+            python3 "$GITHUB_WORKSPACE/scripts/build-history-replacements.py" "$RUNNER_TEMP/rewrite-private/replacements.txt"
+            ISSUE18_APPROVE_LOCAL_REWRITE=yes bash "$GITHUB_WORKSPACE/scripts/security-history-rewrite.sh" "$RUNNER_TEMP/rewrite-private/replacements.txt"
+            python3 "$GITHUB_WORKSPACE/scripts/scan-history-candidates.py"
+          )
+          rm -rf -- "$RUNNER_TEMP/rewrite-private"
