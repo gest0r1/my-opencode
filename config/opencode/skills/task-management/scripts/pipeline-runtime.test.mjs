@@ -1079,10 +1079,10 @@ test('owner amendment releases stale repair paths; reopened wave ignores prior c
     await writeFile(path.join(root, 'src', 'base.ts'), 'export const ready = true;\n');
     git('add', 'src'); git('commit', '-m', 'base');
     const runId = 'amend-reopened-wave';
-    const manifest = await baseManifest(root, runId, [{ id: 'p', stages: ['implementation', 'code-review', 'acceptance'] }]);
+    const manifest = await baseManifest(root, runId, [{ id: 'p', stages: ['implementation', 'code-review'] }]);
     manifest.allowed_change_paths = ['src/**'];
     manifest.pipelines[0].executors = {
-      implementation: 'agent', 'code-review': 'review', acceptance: 'owner_acceptance',
+      implementation: 'agent', 'code-review': 'review',
     };
     const unit = async (id, scope) => {
       const raw = JSON.stringify({ id, pipeline_id: 'p', stage: 'implementation',
@@ -1106,7 +1106,8 @@ test('owner amendment releases stale repair paths; reopened wave ignores prior c
       status: 'completed', technical_fix_cycles: 1,
       repair_paths: ['src/shared/**'],
     };
-    state.pipelines.p.stages.acceptance = { status: 'in_progress' };
+    // The owner amendment is applied at a quiescent completed-review checkpoint.
+    // A nondeployable fixture cannot contain an owner_acceptance executor.
     await writeFile(statePath, JSON.stringify(state, null, 2));
     await writeFile(path.join(runRoot, 'session-registry.json'), JSON.stringify([
       { run_id: runId, pipeline_id: 'p', stage: 'implementation', work_item_id: 'a',
@@ -1117,14 +1118,14 @@ test('owner amendment releases stale repair paths; reopened wave ignores prior c
     const amendment = path.join(runRoot, 'amendment.json');
     await writeFile(amendment, JSON.stringify({
       kind: 'owner_amendment', status: 'ready', bounded: true,
-      pipeline_id: 'p', source_stage: 'acceptance', target_stage: 'implementation',
+      pipeline_id: 'p', source_stage: 'code-review', target_stage: 'implementation',
       paths: ['src/a/new.ts'], work_items: [], work_item_id: 'a',
       new_work_item_required: false, summary: 'Test-only amendment',
       business_intent_changed: false, external_contract_changed: false,
       security_boundary_changed: false, destructive_change: false,
       acceptance_criteria_changed: false, requirements_changed: false,
     }));
-    run(root, ['owner-amend-apply', runId, 'acceptance', '--pipeline', 'p', '--evidence', amendment]);
+    run(root, ['owner-amend-apply', runId, 'code-review', '--pipeline', 'p', '--evidence', amendment]);
     const reopened = JSON.parse(await readFile(statePath, 'utf8'));
     assert.equal(reopened.pipelines.p.stages.implementation.repair_origin_stage, undefined);
     assert.equal(reopened.pipelines.p.stages.implementation.repair_origin_pipeline, undefined);
