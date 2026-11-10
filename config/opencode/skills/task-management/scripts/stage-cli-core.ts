@@ -2566,7 +2566,10 @@ export async function recordClassReview(
     if (approach === 'confirm_approach') {
       const absoluteDiagnostic = resolve(diagnostic.startsWith('/') ? diagnostic : join(process.cwd(), diagnostic));
       if (!absoluteDiagnostic.startsWith(`${root}/`)) throw new StageCliError('CLASS_REVIEW_INVALID: diagnostic_artifact must live inside the current run');
-      const diagnosticContent = readFileSync(absoluteDiagnostic, 'utf8');
+      const diagnosticContent = (() => {
+        try { return readFileSync(absoluteDiagnostic, 'utf8'); }
+        catch { throw new StageCliError('CLASS_REVIEW_INVALID: diagnostic_artifact is missing or unreadable'); }
+      })();
       if (!diagnosticContent.trim()) throw new StageCliError('CLASS_REVIEW_INVALID: diagnostic_artifact must be nonempty');
       diagnosticHash = sha256(diagnosticContent);
     }
