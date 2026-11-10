@@ -277,6 +277,18 @@ Do not make CI green by excluding/suppressing a failing tracked test merely beca
 
 After any source-changing fix to an already published candidate: Git verify, rerun the frozen local fail-fast gates, publish a NEW candidate SHA, then rerun the candidate gate, `dev_deploy` and acceptance. The version stays the same; only the SHA changes. Evidence from the previous candidate is stale by construction and `stage-complete-cli` must reject it.
 
+## Durable handover and context compaction
+
+OpenCode already has automatic compaction. The pipeline runtime writes a compact **machine-derived index** under `.tmp/pipelines/<run-id>/handoffs/context/current.{json,md}` on meaningful existing RUN transitions **and before model compaction**. This is an index, never stage/owner/security authority. It includes current lanes, fix budgets, candidate/manifest hashes, active worker markers, amendments, blockers and evidence pointers. It does not paste whole logs, research or prompts into the coordinator's context and adds no model call or per-tool permission check.
+
+On **resume**, read `handoffs/context/current.md` if present, then run the authoritative `stage-cli next <run-id> --json` (and check active leases/children through existing runtime mechanisms) before dispatch. Handover can be stale: only the current frozen manifest, `state.json`, canonical evidence and CLI decisions may authorize work; compaction cannot approve, complete, relaunch or skip a stage. To create a snapshot before an intentional stop when no transition has just occurred, use the allowlisted exact CLI:
+
+```text
+node $HOME/.config/opencode/skills/task-management/scripts/pipeline-handover.mjs <run-id>
+```
+
+`--check` returns `PASS|STALE|MISSING`, and neither mode modifies machine state. Do not call it after every ordinary shell/read/edit. Never infer a child's completion from a handover snapshot; a running child must settle through the existing runtime lease/wake authority.
+
 ## Status on request
 
 When the owner asks for status, read `.tmp/pipelines/<run-id>/state.json` and `stage-cli next <run-id> --json` once and show lanes and work items (pipeline, stage, state, cycles `n/N`, blocker or `⚠` notes) as a compact `openchamber_render` page when that tool exists, otherwise as a table, in Russian. Do not dispatch or change anything for a status request.
@@ -315,7 +327,7 @@ For a versioned run (`release.version`), the final report tells the owner to mer
 
 Use the deterministic CLI that owns the operation. Owner shell intervention is allowed only on explicit `OWNER_ACTION_REQUIRED`, auth or permission blockers; model/tool-format inconvenience is not an owner task. Never hand the owner `rm`, `git add|commit|push`, exports of gate variables, install-root creation or generator runs: deletion of strays is `quarantine-strays`, identity/install roots come from the gate environment, staging/commit/push belong to `git_publish`. If a command needs a shell action only the owner can do, say in Russian exactly one command, why, and what RUN does meanwhile.
 
-Follow-up issues of the run (out-of-scope findings, deferred work): write the body to `.tmp/pipelines/<run-id>/follow-up-<name>.md` and create the issue with `gh issue create --repo <owner/repo> --title <title> --body-file .tmp/pipelines/<run-id>/follow-up-<name>.md` (the only `gh` write OpenStage has; the owner pre-granted it for follow-ups; no labels/assignees beyond what the body states). Mention the issue number in the final report. Never use it for the delivery PR or to reopen/close existing issues.
+Follow-up issues of the run (out-of-scope findings, deferred work): **creating a GitHub Issue is a separate write decision.** Do it only when the owner explicitly requests creating that Issue, or an approved frozen work item explicitly requires the follow-up Issue. An owner asking for consequences, alternatives or risk analysis is not authorization to create an Issue. If not approved, record the finding locally in the RUN's handover/report and ask at an existing owner checkpoint, never blocking unrelated work. For authorized follow-ups: write the body to `.tmp/pipelines/<run-id>/follow-up-<name>.md` and create the issue with `gh issue create --repo <owner/repo> --title <title> --body-file .tmp/pipelines/<run-id>/follow-up-<name>.md` (the only `gh` write OpenStage has; the owner pre-granted it for follow-ups; no labels/assignees beyond what the body states). Mention the issue number in the final report. Never use it for the delivery PR or to reopen/close existing issues.
 
 ## Owner skip
 
