@@ -15,6 +15,17 @@ for (const file of ['install.sh', 'install-openchamber.sh', 'scripts/install-ope
 // OpenChamber RU: install-openchamber.sh is the single source; every other default and the README follow it.
 const openchamber = read('install-openchamber.sh').match(/OPENCHAMBER_EXPECTED_VERSION="\$\{OPENCHAMBER_EXPECTED_VERSION:-(\d+\.\d+\.\d+)\}"/)?.[1];
 if (!openchamber) throw Error('install-openchamber.sh: OpenChamber pin missing');
+/* TEMPORARY LEGACY RUN COMPATIBILITY (#18), REMOVE ON NEXT UPSTREAM UPDATE.
+ * No upstream OpenCode/OpenChamber version bump may ship with the one-off
+ * SeVami v0.6.7 frozen RUN exemption still installed. Removing the exemption
+ * and its test is part of the upstream version-bump acceptance contract.
+ */
+const legacyCompat = 'config/opencode/skills/task-management/scripts/legacy-live-preflight-v067.mjs';
+if (fs.existsSync(path.join(root, legacyCompat)) &&
+    (version !== '2.2.5' || openchamber !== '2.6.1')) {
+  throw Error('TEMPORARY_COMPAT_REMOVAL_REQUIRED: remove legacy-live-preflight-v067.mjs + import/test/doc before the next upstream OpenCode/OpenChamber update');
+}
+
 if (read('scripts/install-openchamber-v2-core.sh').match(/EXPECTED_OPENCHAMBER_VERSION="\$\{OPENCHAMBER_EXPECTED_VERSION:-(\d+\.\d+\.\d+)\}"/)?.[1] !== openchamber) {
   throw Error(`scripts/install-openchamber-v2-core.sh: OpenChamber default differs from ${openchamber}`);
 }
