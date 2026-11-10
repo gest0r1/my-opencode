@@ -2654,9 +2654,12 @@ export async function recordClassReview(
     runtime.class_review_due_paths = undefined;
     // A class review of block B does not waive an outstanding checkpoint for block A.
     const pendingPaths = runtime.architecture_review_due_paths ?? [];
+    // Legacy class review already ran ExternalScout+architect+senior for this pending
+    // checkpoint. Clear that single pending review to avoid a duplicate invocation,
+    // but do NOT reset the relative clock without explicit dependency fingerprints.
     if (!runtime.architecture_review_due || !pendingPaths.length ||
-        (coverage.covered_paths?.length && pendingPaths.every(path =>
-          coverage.covered_paths!.some(scope => pathMatchesScope(path, scope))))) {
+        !coverage.covered_paths ||
+        pendingPaths.every(path => coverage.covered_paths!.some(scope => pathMatchesScope(path, scope)))) {
       runtime.architecture_review_due = false;
       runtime.architecture_review_due_paths = undefined;
     }
