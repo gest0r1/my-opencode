@@ -163,25 +163,9 @@ Respect the repository package-manager contract for `local_gate`. Before dispatc
 
 ### Early feedback during implementation
 
-For every CoderAgent dispatch, inspect the packet's `advisory_checks[]`. Every supplied `mode=affected` entry is a mandatory completion check for that exact work item and must be executed by the worker after its source changes using the packet's exact identity. The entry carries the exact allowlisted `command` (literal `$HOME` prefix) for the worker to run verbatim, plus `focus_command` and `frozen_commands[]` for fast single-file iteration:
+For dispatched worker agents, the validated `pipeline-dispatch` packet contains `run_stage_rules_path`; **only the target worker reads that file**. The coordinator passes the packet/marker, not its content or expanded role instructions. Universal standalone-agent instructions remain unchanged.
 
-```text
-gate-runner-cli.ts RUN PIPELINE GATE --advisory --affected \
-  --work-item WORK_ITEM_ID \
-  --baseline BASELINE_PATH \
-  --baseline-sha256 BASELINE_SHA256
-```
-
-Do not substitute a different baseline, guess a profile/test command or run the bound check concurrently with a worker that overlaps the same frozen work-item scope. A failing bound advisory remains inside the current implementation attempt: correct the source and rerun it without `fix-cycle`. `stage-complete-cli` rejects successful completion when bound PASS evidence is missing, belongs to another work item/baseline, or is stale after another change inside that work-item scope. Unrelated parallel changes outside the scope do not invalidate it.
-
-The worker iterates on a failing suite with `--advisory --command-index N --test-file PATH` (repeatable; explicit `vitest run` commands only) and finishes with the bound check as one foreground shell call with the entry's `shell.timeout`. A run stopped by its caller is recorded as `INTERRUPTED` and does not consume the no-progress fingerprint; rerun it the same way. Never tell a worker it has no shell: its allowlist permits exactly these gate-runner invocations, and a rejected arbitrary command proves nothing. GateRunner, TestEngineer or another permitted specialist may additionally run `--advisory --affected` or `--advisory --command-index N` for diagnostics. Those unbound diagnostic checks are useful evidence but do not satisfy a supplied completion check unless they carry the exact work-item/baseline identity.
-
-Read `skills/task-management/gate-testing.md` for PLAN contract fields and diagnostic/resource rules.
-`DIAGNOSTIC_NO_PROGRESS` requires a concrete correction or a new recorded hypothesis under
-this RUN's `checks/` (pass `--hypothesis PATH`); if diagnosis is exhausted, dispatch independent
-review of code and tests. It is not a routine owner checkpoint. Do not weaken tests or
-rewrite a frozen manifest to bypass diagnostics. Authoritative invocation has no `--advisory`;
-only its complete final evidence satisfies the stage.
+Coordinator contract: each supplied `advisory_checks[]` entry is bound to a work item and is mandatory for successful CoderAgent completion; `stage-complete-cli` enforces identity, freshness and PASS. Advisory failures, failed edits, interrupted tests, unknown paths and no-progress diagnoses are resolved **within the current implementation attempt** without charging `fix-cycle`. Only a fresh negative independent CodeReviewer or authoritative machine gate triggers a charged repair. Never add an agent, probe permissions, or run full tests merely to validate an advisory packet. Consult `skills/task-management/gate-testing.md` for authoritative testing semantics.
 
 ## Automatic repair loops — initial budget 5
 
