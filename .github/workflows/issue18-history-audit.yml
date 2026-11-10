@@ -3,8 +3,10 @@ on:
   push:
     branches:
       - feature/issue-18-models-security-20261110
+      - security/issue18-history-cleanup-phase2
     paths:
       - scripts/scan-history-candidates.py
+      - scripts/classify-history-generic.py
       - .github/workflows/issue18-history-audit.yml
   workflow_dispatch:
 
@@ -46,5 +48,6 @@ jobs:
             python3 "$GITHUB_WORKSPACE/scripts/build-history-replacements.py" "$RUNNER_TEMP/rewrite-private/replacements.txt"
             ISSUE18_APPROVE_LOCAL_REWRITE=yes bash "$GITHUB_WORKSPACE/scripts/security-history-rewrite.sh" "$RUNNER_TEMP/rewrite-private/replacements.txt"
             python3 "$GITHUB_WORKSPACE/scripts/scan-history-candidates.py"
+            python3 "$GITHUB_WORKSPACE/scripts/classify-history-generic.py"
           )
           rm -rf -- "$RUNNER_TEMP/rewrite-private"
