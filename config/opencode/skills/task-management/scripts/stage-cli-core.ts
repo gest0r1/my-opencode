@@ -1,6 +1,6 @@
 import { acceptedReconciliations } from './reconcile-evidence.ts';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { access, cp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import process from 'node:process';
@@ -2210,8 +2210,14 @@ function verifiedReviewCoverage(review: any, requiredPaths: string[], prefix: st
 
 function unchangedReviewedDependency(dep: { path: string; sha256: string }): boolean {
   if (!safeRepoPath(dep.path)) return false;
-  try { return sha256(readFileSync(resolve(process.cwd(), dep.path), 'utf8')) === dep.sha256; }
-  catch { return false; }
+  try {
+    const projectRoot = realpathSync(process.cwd());
+    const candidate = realpathSync(resolve(projectRoot, dep.path));
+    // A seemingly repository-relative path may be a symlink to external secrets.
+    // Never inspect, hash or reuse evidence from outside the current checkout.
+    if (!candidate.startsWith(projectRoot + sep)) return false;
+    return sha256(readFileSync(candidate)) === dep.sha256;
+  } catch { return false; }
 }
 
 // The latest review covering ALL current repair paths is authoritative for this block.
