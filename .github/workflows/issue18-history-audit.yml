@@ -1,0 +1,34 @@
+name: Issue 18 historical secret candidates (read-only)
+on:
+  push:
+    branches:
+      - feature/issue-18-models-security-20261110
+    paths:
+      - scripts/scan-history-candidates.py
+      - .github/workflows/issue18-history-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Fetch every published branch and tag for read-only audit
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git fetch --tags origin
+          # PR refs can exist even for closed pull requests; absence is not proof of safety.
+          if ! git fetch --no-tags origin '+refs/pull/*/head:refs/audit/pr/*'; then
+            echo "WARNING: PR refs incomplete; inspect via GitHub Support."
+          fi
+      - name: Audit all reachable blob contents without exposing values
+        run: |
+          python3 scripts/scan-history-candidates.py
