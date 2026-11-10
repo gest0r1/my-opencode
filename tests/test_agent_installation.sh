@@ -35,6 +35,8 @@ cat > "$SRC/subagents/code/coder-agent.md" <<'EOF'
 ---
 name: CoderAgent
 mode: subagent
+model: repo/default#low
+variant: low
 ---
 managed coder
 EOF
@@ -63,6 +65,8 @@ test ! -d "$TARGET/planning"
 test ! -d "$TARGET/utils"
 
 grep -Fq 'managed coder' "$TARGET/CoderAgent.md"
+grep -Fq 'model: user-edited-old-model' "$TARGET/CoderAgent.md"
+if grep -q '^variant:' "$TARGET/CoderAgent.md"; then echo 'FAIL: inherited an unselected variant' >&2; exit 1; fi
 
 # Re-running is idempotent and managed source remains authoritative.
 sed -i 's/managed primary v1/managed primary v2/' "$SRC/core/primary-agent.md"
@@ -80,8 +84,21 @@ bash scripts/install-opencode-agents.sh \
   "$TARGET"
 grep -Fq 'color: "#12a4c8"' "$TARGET/CoderAgent.md"
 grep -Fq 'managed coder v2' "$TARGET/CoderAgent.md"
+grep -Fq 'model: user-edited-old-model' "$TARGET/CoderAgent.md"
+# Model and variant changes made by the user survive prompt/body upgrades.
+sed -i 's|^model: user-edited-old-model$|model: claude-code/claude-sonnet-5#high\nvariant: high|' "$TARGET/CoderAgent.md"
+sed -i 's/managed coder v2/managed coder v3/' "$SRC/subagents/code/coder-agent.md"
+bash scripts/install-opencode-agents.sh "$SRC" "$TARGET"
+grep -Fq 'model: claude-code/claude-sonnet-5#high' "$TARGET/CoderAgent.md"
+grep -Fq 'variant: high' "$TARGET/CoderAgent.md"
+grep -Fq 'managed coder v3' "$TARGET/CoderAgent.md"
+
+# Explicit absence of model on an existing agent must not turn into a pin.
+sed -i 's/^name: PrimaryAgent$/name: PrimaryAgent\nmodel: repo/new-default/' "$SRC/core/primary-agent.md"
+bash scripts/install-opencode-agents.sh "$SRC" "$TARGET"
+if grep -q '^model:' "$TARGET/PrimaryAgent.md"; then echo 'FAIL: user model inheritance overwritten' >&2; exit 1; fi
 if grep -q '^color:' "$TARGET/PrimaryAgent.md"; then echo 'FAIL: colour leaked to another agent' >&2; exit 1; fi
 
-printf 'PASS: flat canonical agent IDs, managed copy replacement, repeat install, kept agent colour\n'
+printf 'PASS: flat canonical agent IDs, managed copy replacement, repeat install, kept agent colour and model/variant preferences\n'
 
 
