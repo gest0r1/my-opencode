@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { computeRunnable, validateState } from './stage-cli-core.ts';
 import { validateOwnerAmendmentEvidence } from './owner-amendment-policy.ts';
 import { resolveGateTestingFile } from './gate-testing-policy.mjs';
@@ -14,6 +15,7 @@ import { laneReservations, leaseConflict, readLeases, readStagePaths, sameDispat
 const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
 // A review stage runs a full CodeReviewer; FindingsReviewer (cheaper model) only re-checks findings a review already issued.
 const REVIEW_ROLES = new Set(['CodeReviewer', 'FindingsReviewer']);
+const RUN_WORKER_RULES = fileURLToPath(new URL('../run-worker-rules.md', import.meta.url));
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 
 function scopePath(value: unknown): value is string {
@@ -444,6 +446,8 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   }
   if (executor === 'review') await recordReviewDispatch(root, run, pipelineId, stage, role, Number(runtime?.technical_fix_cycles ?? 0));
   return { run_id: run, pipeline_id: pipelineId, stage, executor, role, work_item_id: workItemId,
+    // The orchestrator passes a path; only the targeted worker reads these stage rules.
+    ...(executor === 'agent' ? { run_stage_rules_path: RUN_WORKER_RULES } : {}),
     work_item_path: workItemPath, work_item_sha256: frozen.sha256, authoritative_paths: [state.manifest_file, state.rules_file, ...referencePaths, ...amendmentEvidence],
     review_work_items: stageReview ? [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems].map((w: any) => ({ id: w.id, path: resolve(dirname(state.manifest_file), w.path), sha256: w.sha256 })) : undefined,
     context_paths: (item.context_files ?? []).map((p: string) => resolve(root, p)), reference_paths: (item.reference_files ?? []).map((p: string) => resolve(root, p)),
