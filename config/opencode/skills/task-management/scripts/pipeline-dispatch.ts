@@ -193,11 +193,19 @@ function sessionRegistry(root: string, run: string): any[] {
   } catch { return []; }
 }
 
-// A work item is done once a worker on it returned (its registry entry settled) or its stage is completed.
+// A result from a previous wave does not complete work reopened by an owner amendment or repair.
+// The stage start time is the wave boundary; it is persisted in machine state, not inferred from
+// a previous child session. No extra tool call is needed to check it.
 function workItemDone(state: any, registry: any[], pipelineId: string, workItemId: string, stage?: string): boolean {
-  if (registry.some(entry => entry.pipeline_id === pipelineId && entry.work_item_id === workItemId && ['healthy', 'stale'].includes(entry.status))) return true;
-  const stages = state.pipelines[pipelineId]?.stages ?? {};
-  return stage ? stages[stage]?.status === 'completed' : false;
+  const runtime = stage ? state.pipelines[pipelineId]?.stages?.[stage] : undefined;
+  if (stage && runtime?.status === 'completed') return true;
+  const waveStartedAt = stage ? Date.parse(String(runtime?.started_at ?? '')) : NaN;
+  if (stage && !Number.isFinite(waveStartedAt)) return false;
+  return registry.some(entry =>
+    entry.pipeline_id === pipelineId && entry.work_item_id === workItemId &&
+    (!stage || entry.stage === stage) && ['healthy', 'stale'].includes(entry.status) &&
+    (!stage || (Number.isFinite(Date.parse(String(entry.updated_at ?? ''))) &&
+      Date.parse(String(entry.updated_at)) >= waveStartedAt)));
 }
 
 function pendingDependency(state: any, manifest: any, registry: any[], item: any, leases: any[]): string | null {
@@ -254,7 +262,14 @@ export async function workItemWaves(root: string, run: string, pipelineFilter?: 
         if (workItemDone(state, registry, pipeline.id, unit.id, stage)) { entry.done.push(unit.id); continue; }
         const dependency = pendingDependency(state, manifest, registry, item, leases);
         if (dependency) { entry.waiting.push({ id: unit.id, reason: `depends_on ${dependency}` }); continue; }
-        const scope = writerScope(item, [], effectiveScope, readStagePaths(runRoot, pipeline.id, stage));
+        // The wave planner must include the same borrowed repair paths as the actual dispatch.
+        // An owner amendment clears stale repair_origin_stage, making unrelated items parallel again.
+        const repairRuntime = runtime?.repair_origin_stage
+          ? state.pipelines[runtime.repair_origin_pipeline ?? pipeline.id]?.stages[runtime.repair_origin_stage] : runtime;
+        const repairScope = checkedScope(repairRuntime?.repair_paths ?? [], effectiveScope);
+        const ownScope = coderScope(item, effectiveScope);
+        const scope = writerScope(item, [...new Set([...ownScope, ...repairScope])], effectiveScope,
+          readStagePaths(runRoot, pipeline.id, stage));
         const busy = leaseConflict([...leases, ...reservations.filter((lane: any) => lane.pipeline_id !== pipeline.id)], self, scope);
         if (busy) { entry.waiting.push({ id: unit.id, reason: `${busy.path} is being changed by ${busy.lease.work_item_id}` }); continue; }
         const sibling = planned.find(other => leaseConflict([other], self, scope));
