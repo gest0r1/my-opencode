@@ -1969,8 +1969,15 @@ export async function recordTechnicalFixCycle(
     }
     const scopePreflight = state.scope_preflight;
     if (!scopePreflight || scopePreflight.pipeline_id !== pipeline.id || scopePreflight.stage !== stage) {
+      // Give the complete known blockers in the existing failed call: do not force the model
+      // to discover class/checkpoint prerequisites through repeated rejected fix-cycle calls.
+      const pending = [
+        ...(runtime.class_review_due?.length ? [`CLASS_REVIEW_REQUIRED classes=${runtime.class_review_due.join(',')}`] : []),
+        ...(runtime.architecture_review_due ? ['ARCHITECTURE_REVIEW_REQUIRED'] : []),
+      ];
       throw new StageCliError(
-        `SCOPE_PREFLIGHT_REQUIRED: run stage-cli scope-check ${runId} ${stage} <planned-path>... --pipeline ${pipeline.id} before fix-cycle`,
+        `SCOPE_PREFLIGHT_REQUIRED: run stage-cli scope-check ${runId} ${stage} <planned-path>... --pipeline ${pipeline.id} before fix-cycle` +
+        (pending.length ? `; also pending: ${pending.join('; ')}; complete review before retry` : ''),
       );
     }
     const lane = repairPipelineId ? resolveRepairLane(state, manifest, pipeline, repairPipelineId, scopePreflight.paths) : undefined;
