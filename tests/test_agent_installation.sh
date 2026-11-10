@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-set -x # temporary CI diagnosis for #18
 
 ROOT=$(mktemp -d)
 trap 'rm -rf "$ROOT"' EXIT
@@ -95,7 +94,7 @@ grep -Fq 'variant: high' "$TARGET/CoderAgent.md"
 grep -Fq 'managed coder v3' "$TARGET/CoderAgent.md"
 
 # Explicit absence of model on an existing agent must not turn into a pin.
-sed -i 's/^name: PrimaryAgent$/name: PrimaryAgent\nmodel: repo/new-default/' "$SRC/core/primary-agent.md"
+sed -i 's|^name: PrimaryAgent$|name: PrimaryAgent\nmodel: repo/new-default|' "$SRC/core/primary-agent.md"
 bash scripts/install-opencode-agents.sh "$SRC" "$TARGET"
 if grep -q '^model:' "$TARGET/PrimaryAgent.md"; then echo 'FAIL: user model inheritance overwritten' >&2; exit 1; fi
 if grep -q '^color:' "$TARGET/PrimaryAgent.md"; then echo 'FAIL: colour leaked to another agent' >&2; exit 1; fi
