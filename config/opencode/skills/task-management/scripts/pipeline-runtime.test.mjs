@@ -1143,6 +1143,9 @@ test('owner amendment releases stale repair paths; reopened wave ignores prior c
       'unrelated work item must not inherit amendment or previous repair paths');
     assert.deepEqual(a.repair_paths, ['src/a/new.ts']);
     assert.deepEqual(b.repair_paths, []);
+    assert.match(a.run_stage_rules_path, /run-worker-rules\.md$/);
+    assert.equal(a.run_stage_rules_path, b.run_stage_rules_path);
+    assert.match(await readFile(a.run_stage_rules_path, 'utf8'), /RUN worker stage/);
   } finally {
     process.chdir(previousCwd);
     await rm(root, { recursive: true, force: true });
