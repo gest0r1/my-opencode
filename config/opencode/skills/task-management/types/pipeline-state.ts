@@ -315,6 +315,10 @@ export interface ArchitectureReviewRecord {
   path: string;
   sha256: string;
   result: 'no_change' | 'apply_within_requirements' | 'requirements_change';
+  /** Charged repair cycle of the reviewed checkpoint. Legacy records may omit it. */
+  after_cycle?: number;
+  /** Exact authorized paths inspected, never a change permission. */
+  covered_paths?: string[];
   at: string;
 }
 
@@ -323,14 +327,19 @@ export interface DefectClassCycle {
   cycle: number;
   classes: string[];
   evidence_sha256: string;
+  /** Evidence-backed class → root-cause identities; absent means conservative class recurrence. */
+  cause_keys?: Record<string, string>;
 }
 
 export interface ClassReviewRecord {
   path: string;
   sha256: string;
   classes: string[];
-  approach: 'rework_block' | 'remove_mechanism' | 'requirements_change';
+  approach: 'confirm_approach' | 'rework_block' | 'remove_mechanism' | 'requirements_change';
   research_artifact: string;
+  covered_paths?: string[];
+  diagnostic_sha256?: string;
+  implementation_plan_sha256?: string;
   research_sha256?: string;
   summary_sha256?: string;
   /** technical_fix_cycles when recorded; the next charged cycle is the consolidated rework of these classes. */
@@ -343,7 +352,7 @@ export interface StageRuntime {
   repair_origin_stage?: string;
   /** Cross-lane repair: pipeline whose gate stage `repair_origin_stage` holds the evidence and loop number (default: same pipeline). */
   repair_origin_pipeline?: string;
-  /** Set when technical_fix_cycles reaches a multiple of ARCHITECTURE_REVIEW_AFTER; the next charged fix-cycle needs a recorded review. */
+  /** Set when five cycles pass since the last relevant reviewed block; legacy paths use multiples of five. */
   architecture_review_due?: boolean;
   architecture_reviews?: ArchitectureReviewRecord[];
   defect_class_history?: DefectClassCycle[];
