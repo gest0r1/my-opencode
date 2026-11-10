@@ -410,8 +410,10 @@ test('RUN instructions carry architecture checkpoint, cross-lane repair, bounded
   assert.match(run, /ask once/);
   assert.match(run, /openchamber_render/);
   assert.match(run, /gh issue create --repo .* --body-file \.tmp\/pipelines\/<run-id>\//);
-  assert.match(orch, /"gh issue create --repo \* --title \* --body-file \.tmp\/pipelines\/\*": allow/);
-  assert.match(orch, /"gh issue create -R \* -t \* -F \.tmp\/pipelines\/\*": allow/);
+  // Creating a follow-up Issue is an external write and must request owner permission.
+  // It is no longer implicitly authorized by a prior discussion of the finding.
+  assert.match(orch, /"gh issue create --repo \* --title \* --body-file \.tmp\/pipelines\/\*": ask/);
+  assert.match(orch, /"gh issue create -R \* -t \* -F \.tmp\/pipelines\/\*": ask/);
   assert.doesNotMatch(orch, /"gh \*"/);
   const reviewer = await flatRun('config/opencode/agent/subagents/code/reviewer.md');
   assert.match(reviewer, /enumerate the whole class across the reviewed change/);
