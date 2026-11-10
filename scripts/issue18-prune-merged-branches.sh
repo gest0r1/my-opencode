@@ -14,7 +14,8 @@ open_prs="$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100")"
 mapfile -t open_heads < <(printf '%s' "$open_prs" | jq -r '.[].head.ref')
 is_open() {
   local candidate=$1
-  for name in "${open_heads[@]}"; do [[ "$candidate" != "$name" ]] || return 0; done
+  local open_name
+  for open_name in "${open_heads[@]}"; do [[ "$candidate" != "$open_name" ]] || return 0; done
   return 1
 }
 approved_squash() {
