@@ -944,9 +944,14 @@ test('a class review satisfies a pending architecture checkpoint; unrelated clas
   const runDir = path.join(fx.stateRoot, fx.runId);
   await writeFile(path.join(runDir, 'research.md'), 'evidence\n');
   await writeFile(path.join(runDir, 'tech.md'), 'status: ready\n');
+  const contractPath = path.join(fx.root, 'reviewed-contract.json');
+  const contractContent = '{"api":"v1"}\n';
+  await writeFile(contractPath, contractContent);
   const file = path.join(runDir, 'class.json');
   await writeFile(file, JSON.stringify({ kind: 'class_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
     classes: ['class-4'], approach: 'remove_mechanism', summary: 'use the standard format; delete the converter',
+    covered_paths: ['packages/lane/src/a.ts'],
+    dependency_files: [{ path: 'reviewed-contract.json', sha256: createHash('sha256').update(contractContent).digest('hex') }],
     research_artifact: 'research.md', technical_review_artifact: path.join(runDir, 'tech.md'),
     requirements_changed: false, acceptance_criteria_changed: false, external_contract_changed: false,
     security_boundary_changed: false, destructive_change: false }));
