@@ -2030,9 +2030,11 @@ export async function recordTechnicalFixCycle(
       }
       const cycles = runtime.technical_fix_cycles ?? 0;
       const previous = runtime.defect_class_history?.at(-1);
-      const causeKeys = confirmedRootCauseKeys(result);
-      const recurring = previous?.cycle === cycles ? classes.filter((name) => previous.classes.includes(name) &&
-        !(causeKeys[name] && previous.cause_keys?.[name] && causeKeys[name] !== previous.cause_keys[name])) : [];
+      // Reviewer-supplied root_cause_id/evidence are advisory annotations, not an independently
+      // verifiable proof. Even two different labels cannot silently waive class review; only
+      // the existing reviewed class-review-record can authorize the next consolidation.
+      const recurring = previous?.cycle === cycles
+        ? classes.filter((name) => previous.classes.includes(name)) : [];
       const reviews = runtime.class_reviews ?? [];
       // A review recorded since the last charged cycle authorizes exactly one consolidated rework of its classes.
       const authorized = new Set(reviews.filter((item) => item.after_cycle === cycles).flatMap((item) => item.classes));
@@ -2089,7 +2091,7 @@ export async function recordTechnicalFixCycle(
     }
     if (!resumeChargedRepair) {
       runtime.defect_class_history ??= [];
-      runtime.defect_class_history.push({ cycle: next, classes, evidence_sha256: repairHash, cause_keys: confirmedRootCauseKeys(result) });
+      runtime.defect_class_history.push({ cycle: next, classes, evidence_sha256: repairHash, cause_keys: reportedRootCauseKeys(result) });
     }
     runtime.message = `${repairClass} cycle ${next}/${limit}${classes.length ? ` classes=${classes.join(',')}` : ''}`;
     state.scope_preflight = undefined;
@@ -2157,9 +2159,9 @@ function resultDefectClasses(result: any, extra: string[]): string[] {
   return [...new Set(named.map(normalizeDefectClass))].sort();
 }
 
-// Only a reviewer with an explicit diagnosis and a supporting failing test/trace may
-// distinguish two causes in one defect class. Unknown causes retain conservative review.
-function confirmedRootCauseKeys(result: any): Record<string, string> {
+// Track reviewer-reported labels as an audit hint only. A string/length check cannot
+// authenticate their causal meaning; these values never waive CLASS_REVIEW_REQUIRED.
+function reportedRootCauseKeys(result: any): Record<string, string> {
   const findings = [...(Array.isArray(result?.findings) ? result.findings : []),
     ...(Array.isArray(result?.blockers) ? result.blockers : [])];
   const grouped = new Map<string, Array<{ id: string; evidence: string }>>();
