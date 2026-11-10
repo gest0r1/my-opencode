@@ -129,7 +129,12 @@ def prepare(root):
             reason = "REMOTE_REF_LEASE_MISMATCH"
         else:
             reason = "REMOTE_ATOMIC_DRYRUN_REJECTED"
-        raise RuntimeError(reason + ": no remote refs were changed")
+        # Only print sanitized diagnostics from the *plain-URL* git push.
+        # Mask token-like strings, URLs, credentials and long identifiers.
+        excerpt = atomic.stderr.strip().splitlines()
+        excerpt = excerpt[0] if excerpt else "<empty>"
+        excerpt = re.sub(r"https?://\\S+|[A-Za-z0-9_+/=.-]{16,}", "[REDACTED]", excerpt)[:220]
+        raise RuntimeError(reason + " (" + excerpt + "): no remote refs were changed")
     print("ISSUE18_REWRITE_PLAN atomic_dry_run=PASS")
     state = {"repository": REPOSITORY, "before": before, "after": after,
              "updated_refs": sum(a != before[n] for n, a in after.items()),
