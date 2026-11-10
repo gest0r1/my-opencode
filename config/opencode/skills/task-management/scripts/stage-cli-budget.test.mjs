@@ -1024,7 +1024,7 @@ test('changed dependency invalidates scoped architecture reuse before another fi
   await writeFile(review, JSON.stringify({
     kind: 'class_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
     classes: ['prior-4'], approach: 'remove_mechanism',
-    summary: 'Use the consumer's existing mechanism', research_artifact: research, technical_review_artifact: tech,
+    summary: "Use the consumer's existing mechanism", research_artifact: research, technical_review_artifact: tech,
     covered_paths: ['packages/lane/src/a.ts'],
     dependency_files: [{path:'contract-interface.txt',
       sha256: createHash('sha256').update(contractContent).digest('hex')}],
