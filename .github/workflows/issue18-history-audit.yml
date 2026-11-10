@@ -32,3 +32,19 @@ jobs:
       - name: Audit all reachable blob contents without exposing values
         run: |
           python3 scripts/scan-history-candidates.py
+      - name: Verify local-only rewrite of historical credentials (no push)
+        run: |
+          set -Eeuo pipefail
+          python3 -m pip install --user --break-system-packages 'git-filter-repo>=2.47.0'
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir -p "$RUNNER_TEMP/rewrite-private"
+          chmod 700 "$RUNNER_TEMP/rewrite-private"
+          git clone --mirror . "$RUNNER_TEMP/rewrite-private/repo.git"
+          (
+            cd "$RUNNER_TEMP/rewrite-private/repo.git"
+            git remote set-url origin https://github.com/gest0r1/my-opencode.git
+            python3 "$GITHUB_WORKSPACE/scripts/build-history-replacements.py" "$RUNNER_TEMP/rewrite-private/replacements.txt"
+            ISSUE18_APPROVE_LOCAL_REWRITE=yes bash "$GITHUB_WORKSPACE/scripts/security-history-rewrite.sh" "$RUNNER_TEMP/rewrite-private/replacements.txt"
+            python3 "$GITHUB_WORKSPACE/scripts/scan-history-candidates.py"
+          )
+          rm -rf -- "$RUNNER_TEMP/rewrite-private"
