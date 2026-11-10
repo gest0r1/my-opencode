@@ -1068,3 +1068,106 @@ test('no wake while a background worker holds its lease or a gate runs; one wake
     process.chdir(previousCwd); await rm(root,{recursive:true,force:true});
   }
 });
+
+
+test('owner amendment releases stale repair paths; reopened wave ignores prior child results', async () => {
+  const previousCwd = process.cwd(), root = await tempProject();
+  try {
+    const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    git('init'); git('config', 'user.email', 'test@example.invalid'); git('config', 'user.name', 'Test');
+    await mkdir(path.join(root, 'src'), { recursive: true });
+    await writeFile(path.join(root, 'src', 'base.ts'), 'export const ready = true;\n');
+    git('add', 'src'); git('commit', '-m', 'base');
+    const runId = 'amend-reopened-wave';
+    const manifest = await baseManifest(root, runId, [{ id: 'p', stages: ['implementation', 'code-review'] }]);
+    manifest.allowed_change_paths = ['src/**'];
+    manifest.pipelines[0].executors = {
+      implementation: 'agent', 'code-review': 'review',
+    };
+    const unit = async (id, scope) => {
+      const raw = JSON.stringify({ id, pipeline_id: 'p', stage: 'implementation',
+        suggested_agent: 'CoderAgent', allowed_change_paths: [scope] });
+      return { id, pipeline_id: 'p', ...await frozen(root, 'work-items/' + id + '.json', raw) };
+    };
+    manifest.work_items = [await unit('a', 'src/a/**'), await unit('b', 'src/b/**')];
+    manifest.pipelines[0].work_items = ['a', 'b'];
+    const manifestPath = await writeManifest(root, manifest);
+    run(root, ['init', manifestPath]); run(root, ['approve', runId]);
+    const runRoot = path.join(root, '.tmp/pipelines', runId);
+    const statePath = path.join(runRoot, 'state.json');
+    const state = JSON.parse(await readFile(statePath, 'utf8'));
+    state.status = 'in_progress';
+    state.pipelines.p.status = 'in_progress';
+    state.pipelines.p.stages.implementation = {
+      status: 'completed', started_at: '2026-11-04T09:00:00.000Z',
+      completed_at: '2026-11-04T09:10:00.000Z', repair_origin_stage: 'code-review',
+    };
+    state.pipelines.p.stages['code-review'] = {
+      status: 'completed', technical_fix_cycles: 1,
+      repair_paths: ['src/shared/**'],
+    };
+    // The owner amendment is applied at a quiescent completed-review checkpoint.
+    // A nondeployable fixture cannot contain an owner_acceptance executor.
+    await writeFile(statePath, JSON.stringify(state, null, 2));
+    await writeFile(path.join(runRoot, 'session-registry.json'), JSON.stringify([
+      { run_id: runId, pipeline_id: 'p', stage: 'implementation', work_item_id: 'a',
+        role: 'CoderAgent', status: 'healthy', updated_at: '2026-11-04T09:10:00.000Z' },
+      { run_id: runId, pipeline_id: 'p', stage: 'implementation', work_item_id: 'b',
+        role: 'CoderAgent', status: 'healthy', updated_at: '2026-11-04T09:10:00.000Z' },
+    ]));
+    const amendment = path.join(runRoot, 'amendment.json');
+    await writeFile(amendment, JSON.stringify({
+      kind: 'owner_amendment', status: 'ready', bounded: true,
+      pipeline_id: 'p', source_stage: 'code-review', target_stage: 'implementation',
+      paths: ['src/a/new.ts'], work_items: [], work_item_id: 'a',
+      new_work_item_required: false, summary: 'Test-only amendment',
+      business_intent_changed: false, external_contract_changed: false,
+      security_boundary_changed: false, destructive_change: false,
+      acceptance_criteria_changed: false, requirements_changed: false,
+    }));
+    run(root, ['owner-amend-apply', runId, 'code-review', '--pipeline', 'p', '--evidence', amendment]);
+    const reopened = JSON.parse(await readFile(statePath, 'utf8'));
+    assert.equal(reopened.pipelines.p.stages.implementation.repair_origin_stage, undefined);
+    assert.equal(reopened.pipelines.p.stages.implementation.repair_origin_pipeline, undefined);
+    assert.equal(reopened.pipelines.p.stages['code-review'].technical_fix_cycles, 1, 'audit stays intact');
+    run(root, ['start', runId, 'implementation', '--pipeline', 'p']);
+    process.chdir(root);
+    const { workItemWaves } = await import('./pipeline-dispatch.ts');
+    const wave = (await workItemWaves(root, runId)).stages.find(x => x.pipeline_id === 'p');
+    assert.deepEqual(wave.done, []);
+    assert.deepEqual(wave.dispatchable, ['a', 'b']);
+    const a = await dispatchPacket(root, runId, 'p', 'implementation', 'a', 'CoderAgent');
+    const b = await dispatchPacket(root, runId, 'p', 'implementation', 'b', 'CoderAgent');
+    assert.deepEqual(a.write_scope, ['src/a/**', 'src/a/new.ts'],
+      'approved amendment changes the owning work item only');
+    assert.deepEqual(b.write_scope, ['src/b/**'],
+      'unrelated work item must not inherit amendment or previous repair paths');
+    assert.deepEqual(a.repair_paths, ['src/a/new.ts']);
+    assert.deepEqual(b.repair_paths, []);
+    assert.match(a.run_stage_rules_path, /run-worker-rules\.md$/);
+    assert.equal(a.run_stage_rules_path, b.run_stage_rules_path);
+    assert.match(await readFile(a.run_stage_rules_path, 'utf8'), /RUN worker stage/);
+
+    // A second approved amendment, targeting only item a, now crosses item b's
+    // original scope. The wave preview must reserve that path and serialize only
+    // the two conflicting writers; it must not advertise both as dispatchable.
+    const crossingEvidence = {
+      ...JSON.parse(await readFile(amendment, 'utf8')),
+      paths: ['src/b/conflict.ts'],
+    };
+    const crossingRaw = JSON.stringify(crossingEvidence);
+    const crossingFile = path.join(runRoot, 'crossing-owner-amendment.json');
+    await writeFile(crossingFile, crossingRaw);
+    const updated = JSON.parse(await readFile(statePath, 'utf8'));
+    const priorApproval = updated.owner_amendments.at(-1);
+    updated.owner_amendments.push({ ...priorApproval, revision: priorApproval.revision + 1,
+      paths: crossingEvidence.paths, evidence_path: crossingFile, evidence_sha256: sha(crossingRaw) });
+    await writeFile(statePath, JSON.stringify(updated, null, 2));
+    const crossing = (await workItemWaves(root, runId)).stages.find(x => x.pipeline_id === 'p');
+    assert.deepEqual(crossing.dispatchable, ['a']);
+    assert.equal(crossing.waiting.find(x => x.id === 'b')?.reason.includes('shares paths'), true);
+  } finally {
+    process.chdir(previousCwd);
+    await rm(root, { recursive: true, force: true });
+  }
+});

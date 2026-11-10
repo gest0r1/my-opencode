@@ -9,6 +9,7 @@ import { RUN_PROMPT, WAKE_MARKER, runningGates, wakeDecision, wakeText } from ".
 import { readLeases, removeLease, updateLease, writeLease } from "../skills/task-management/scripts/dispatch-leases.mjs"
 import { processAlive } from "../skills/task-management/scripts/runtime-locks.mjs"
 import { computeRunnable } from "../skills/task-management/scripts/stage-cli-core.ts"
+import { writeHandover } from "../skills/task-management/scripts/pipeline-handover.mjs"
 
 const ELIGIBLE_ROLES = new Set([
   "CoderAgent", "TestEngineer", "BuildAgent",
@@ -365,6 +366,7 @@ const RUNTIME_FILES = [
   fileURLToPath(import.meta.url),
   fileURLToPath(new URL("../skills/task-management/scripts/pipeline-dispatch.ts", import.meta.url)),
   fileURLToPath(new URL("../command/pipeline-run.md", import.meta.url)),
+  fileURLToPath(new URL("../skills/task-management/run-worker-rules.md", import.meta.url)),
   fileURLToPath(new URL("../agent/core/openstage-orchestrator.md", import.meta.url)),
 ]
 function runtimeFingerprint() {
@@ -576,9 +578,20 @@ export default Plugin.define({
         fs.writeFileSync(file, JSON.stringify({ no_session_reuse: optedOut }))
       }
     })
-    await plugin.session.hook("compaction", (event) => {
-      const run = runBySession.get(String(event.sessionID))
-      if (run) appendJsonLine(metricsFile(root, run), { event: "parent_compaction", timestamp: new Date().toISOString() })
+    await plugin.session.hook("compaction", async (event) => {
+      const sessionID = String(event.sessionID)
+      const run = runBySession.get(sessionID) ?? orchestratorRun.get(sessionID)
+      if (!run) return
+      // Preserve authoritative run pointers BEFORE lossy compaction. This hook exists in
+      // our installed OpenCode plugin contract; no new model/tool invocation is needed.
+      try {
+        await writeHandover(path.join(root, ".tmp", "pipelines"), run, root)
+        appendJsonLine(metricsFile(root, run), { event: "parent_compaction", timestamp: new Date().toISOString(),
+          handover: "PASS" })
+      } catch (error) {
+        appendJsonLine(metricsFile(root, run), { event: "parent_compaction", timestamp: new Date().toISOString(),
+          handover: "WARNING", reason: error instanceof Error ? error.message.slice(0, 260) : "unknown" })
+      }
     })
     const visibleBySession = new Map<string, string[]>()
     await plugin.session.hook("context", (context) => {
@@ -728,7 +741,7 @@ export default Plugin.define({
       input.prompt = [
         String(input.prompt),
         `<pipeline_dispatch_packet path="${dispatchPath}"/>`,
-        "Read the dispatch packet file before work. Authoritative files and machine evidence stay in files; conversation history is supplemental. Return only the concise role result required by the pipeline.",
+        "Read the dispatch packet file before work. When it contains run_stage_rules_path, read that role-owned stage file once before acting. Authoritative files and machine evidence stay in files; conversation history is supplemental. Return only the concise role result required by the pipeline.",
       ].join("\n")
       event.input = input
       const promptBytes = byteLength(input.prompt ?? "")
@@ -807,6 +820,21 @@ export default Plugin.define({
     await plugin.tool.hook("execute.after", async (event) => {
       if (event.tool !== "subagent") {
         compactDispatchShellResult(root, event, runtimeState)
+        if (event.tool === "shell" && event.status === "completed") {
+          const cmd = String(event.input?.command ?? "")
+          // Machine-state handover at existing stage/owner boundaries, not on every shell/read.
+          // A failure to write a summary never changes the authoritative CLI outcome.
+          const transition = /(?:stage-cli|stage-complete-cli)\.ts\s+(?:advance|fix-cycle|owner-amend-apply|owner-accept|owner-decision-resolve|class-review-record|architecture-review-record|runtime-replan-approve)\s+([A-Za-z0-9._-]+)/.exec(cmd)
+          if (transition && fs.existsSync(path.join(root, ".tmp", "pipelines", transition[1], "state.json"))) {
+            try { await writeHandover(path.join(root, ".tmp", "pipelines"), transition[1], root) }
+            catch (error) {
+              appendJsonLine(metricsFile(root, transition[1]), {
+                timestamp: new Date().toISOString(), event: "handover_warning",
+                reason: error instanceof Error ? error.message.slice(0, 260) : "unknown",
+              })
+            }
+          }
+        }
         const run = runBySession.get(String(event.sessionID))
         if (run && event.status === "completed" && event.tool === "read") appendJsonLine(metricsFile(root, run), {
           event: "parent_read", timestamp: new Date().toISOString(), bytes_read: byteLength(event.result.content) })

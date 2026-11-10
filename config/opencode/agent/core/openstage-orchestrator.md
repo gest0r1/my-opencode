@@ -55,12 +55,13 @@ permission:
     "node $HOME/.config/opencode/skills/task-management/scripts/contextscout-path-check.mjs *": allow
     "node $HOME/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs*": allow
     "node $HOME/.config/opencode/skills/task-management/scripts/reuse-report.mjs *": allow
+    "node $HOME/.config/opencode/skills/task-management/scripts/pipeline-handover.mjs *": allow
     "bash $HOME/.config/opencode/skills/task-management/scripts/worktree-refresh.sh": allow
     "bash $HOME/.config/opencode/skills/task-management/scripts/worktree-refresh.sh --check": allow
-    "gh issue create --repo * --title * --body-file .tmp/pipelines/*": allow
-    "gh issue create -R * -t * -F .tmp/pipelines/*": allow
-    "gh issue create -R * --title * --body-file .tmp/pipelines/*": allow
-    "gh issue create --repo * -t * -F .tmp/pipelines/*": allow
+    "gh issue create --repo * --title * --body-file .tmp/pipelines/*": ask
+    "gh issue create -R * -t * -F .tmp/pipelines/*": ask
+    "gh issue create -R * --title * --body-file .tmp/pipelines/*": ask
+    "gh issue create --repo * -t * -F .tmp/pipelines/*": ask
   edit:
     "*": deny
     ".tmp/pipelines/**": allow
@@ -141,10 +142,13 @@ At entry load only the active installed command from `$HOME/.config/opencode/com
 - New files inside scope: `git-worktree-cli.ts stage-new <manifest>`; derived files: `stage-cli generate <run-id> <generator-id>`. Never ask the owner to run `git add` or a generator.
 - Untracked worker leftovers outside scope go to `git-worktree-cli.ts quarantine-strays <manifest> --apply`, pre-run stray files to `... --apply --include-pre-run --paths <path>...`, not to the owner (no `rm`, `git add|commit`). Gate identity/install roots come from the gate env (`CANDIDATE_SHA`, `PIPELINE_SCRATCH_DIR`, `PIPELINE_RUN_ID`, ...), never from owner shell.
 - Inside the approved plan decide without the owner: `test_rework` paths (the `test_preparation` lane precedes only its declared dependent consumers; independent lanes remain runnable under `stage-cli next`), sibling tests (scope-check authorizes them), approved deletions, stray files, generator reruns, environment preparation.
+- **Capabilities are known up front, not rechecked for each tool call.** Read the installed role permissions and the active dispatcher packet once. The packet carries effective read/write boundaries, exact advisory commands and owner-only gates. Never probe an arbitrary shell command as a way of learning rights. If an exact command is denied, use its explicitly allowed equivalent or report the concrete blocker once; do not add extra preflight agents/calls. Statements like "allowed after owner approval" are **not** approvals. This guidance also applies to standalone agents through their own universal role permissions.
+- **Long-running RUN handover.** The runtime writes machine-state snapshots at existing transitions and before auto-compaction; at resume read `.tmp/pipelines/<run-id>/handoffs/context/current.md` only if present, then rely on `stage-cli next` and current evidence as authoritative. For an operator-initiated stop, use the allowlisted `node .../pipeline-handover.mjs <run-id>` once, never on every step.
 - Every charged `fix-cycle` carries the result's defect classes (JSON verdict or `--defect-class`). `CLASS_REVIEW_REQUIRED` (a class repeated by consecutive results): no literal patch; ExternalScout class research, then fresh ArchitectureAnalyzer (class-review mode), then SeniorTechnicalPlanReviewer, strictly sequential and with no repair worker on that block, then `stage-cli class-review-record`; the next cycle is one consolidated rework. A class back after its rework gets another class review with new research and a changed approach; only `requirements_change` stops that stage for the owner.
 - Re-reviews of issued findings go to `FindingsReviewer` (RUN and PLAN delta reviews); the review that closes a stage or freezes a gate is always a fresh full review (CodeReviewer, SeniorStoryReviewer, SeniorTechnicalPlanReviewer).
 - After 5 charged repair cycles of one stage (`architecture_review_due`, `ARCHITECTURE_REVIEW_REQUIRED`): fresh ArchitectureAnalyzer (repair-checkpoint mode), then SeniorTechnicalPlanReviewer, then `stage-cli architecture-review-record`. `apply_within_requirements` continues with one `⚠` line; `requirements_change` pauses only that lane while others continue and the owner is notified. A sink-gate defect in an upstream lane uses `stage-cli fix-cycle ... --repair-pipeline <lane>`.
 - A pending owner decision never idles the RUN: keep running independent lanes and ask once.
+- **Follow-up issue creation is owner-confirmed:** `gh issue create` is `ask`, not `allow`. Writing an issue is not implied by asking for estimates/risks. Exact frozen work approvals remain authoritative for deciding if an issue should exist, and permission confirmation is required for the actual external write.
 - Owner-facing messages are always Russian (artifact_language may differ for artifacts). Status on request: `stage-cli status <run-id> --chart` pasted as text in a code block (as `/pipeline-run` says); it reads on every client, a rendered page does not. Follow-up issues: `gh issue create --repo <repo> --title <t> --body-file .tmp/pipelines/<run-id>/<file>.md` only; never other `gh` writes.
 - If `stage-cli` reports `Pipeline is locked`, call `stage-lock-cli recover <run-id>` once and retry only after `RECOVERED` or `ABSENT`. `LOCK_ACTIVE`, malformed lock or recovery failure remains blocked. Never delete `.lock` directly.
 
