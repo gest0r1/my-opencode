@@ -1137,10 +1137,12 @@ test('owner amendment releases stale repair paths; reopened wave ignores prior c
     assert.deepEqual(wave.dispatchable, ['a', 'b']);
     const a = await dispatchPacket(root, runId, 'p', 'implementation', 'a', 'CoderAgent');
     const b = await dispatchPacket(root, runId, 'p', 'implementation', 'b', 'CoderAgent');
-    assert.deepEqual(a.write_scope, ['src/a/**']);
-    assert.deepEqual(b.write_scope, ['src/b/**']);
-    assert.equal(a.repair_paths.length, 0);
-    assert.equal(b.repair_paths.length, 0);
+    assert.deepEqual(a.write_scope, ['src/a/**', 'src/a/new.ts'],
+      'approved amendment changes the owning work item only');
+    assert.deepEqual(b.write_scope, ['src/b/**'],
+      'unrelated work item must not inherit amendment or previous repair paths');
+    assert.deepEqual(a.repair_paths, ['src/a/new.ts']);
+    assert.deepEqual(b.repair_paths, []);
   } finally {
     process.chdir(previousCwd);
     await rm(root, { recursive: true, force: true });
