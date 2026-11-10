@@ -311,6 +311,12 @@ export interface OwnerAmendmentRecord {
   work_items: OwnerAmendmentWorkItem[];
 }
 
+/** An exact, read-only dependency fingerprint recorded by architecture/technical review. */
+export interface ReviewedDependency {
+  path: string;
+  sha256: string;
+}
+
 export interface ArchitectureReviewRecord {
   path: string;
   sha256: string;
@@ -319,6 +325,7 @@ export interface ArchitectureReviewRecord {
   after_cycle?: number;
   /** Exact authorized paths inspected, never a change permission. */
   covered_paths?: string[];
+  dependency_files?: ReviewedDependency[];
   at: string;
 }
 
@@ -338,6 +345,7 @@ export interface ClassReviewRecord {
   approach: 'confirm_approach' | 'rework_block' | 'remove_mechanism' | 'requirements_change';
   research_artifact: string;
   covered_paths?: string[];
+  dependency_files?: ReviewedDependency[];
   diagnostic_sha256?: string;
   implementation_plan_sha256?: string;
   research_sha256?: string;
