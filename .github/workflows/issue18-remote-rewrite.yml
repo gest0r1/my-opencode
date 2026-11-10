@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: read
 
 concurrency:
@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
+      ISSUE18_REWRITE_APPLY: no
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -32,4 +33,32 @@ jobs:
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           python3 scripts/issue18-remote-rewrite.py prepare "$RUNNER_TEMP/issue18-cleanup"
-          rm -rf -- "$RUNNER_TEMP/issue18-cleanup"
+      - name: Install age encryption for private backup
+        run: sudo apt-get update -qq && sudo apt-get install -qq -y age
+      - name: Encrypt pre-rewrite mirror to owner's registered SSH public keys
+        run: |
+          set -Eeuo pipefail
+          keys="$RUNNER_TEMP/issue18-cleanup/owner-recipients.keys"
+          curl -fsSL --max-time 30 https://github.com/gest0r1.keys > "$keys"
+          grep -Eq '^ssh-(ed25519|rsa) ' "$keys" || { echo "No supported GitHub SSH recipient; refusing rewrite" >&2; exit 1; }
+          tar -cf - -C "$RUNNER_TEMP/issue18-cleanup" original.git | age -R "$keys" -o "$RUNNER_TEMP/issue18-cleanup/private-original.bundle.tar.age"
+          test -s "$RUNNER_TEMP/issue18-cleanup/private-original.bundle.tar.age"
+          rm -f -- "$keys"
+          echo "ISSUE18_BACKUP encrypted=yes; decryption requires the GitHub owner's SSH private key"
+      - name: Preserve encrypted backup for emergency recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue18-encrypted-history-before-rewrite
+          path: ${{ runner.temp }}/issue18-cleanup/private-original.bundle.tar.age
+          retention-days: 7
+          if-no-files-found: error
+      - name: Apply one atomic remote lease update only after backup exists
+        if: env.ISSUE18_REWRITE_APPLY == 'yes'
+        env:
+          ISSUE18_ENCRYPTED_BACKUP_VERIFIED: yes
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          python3 scripts/issue18-remote-rewrite.py apply "$RUNNER_TEMP/issue18-cleanup"
+      - name: Remove private plaintext scratch from runner
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/issue18-cleanup"
