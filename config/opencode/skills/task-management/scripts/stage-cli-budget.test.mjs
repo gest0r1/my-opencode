@@ -957,7 +957,27 @@ test('a class review satisfies a pending architecture checkpoint; unrelated clas
     security_boundary_changed: false, destructive_change: false }));
   result = fx.cli('class-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
   assert.match(result.stderr, /research_artifact must live inside the current run directory/);
-  await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), research_artifact: path.join(runDir, 'research.md') }));
+  // A path inside the checkout may be a symlink pointing to external data.
+  // Review fingerprints must never read/hash any such target.
+  const external = path.join(os.tmpdir(), 'arch-review-external-' + fx.runId + '.txt');
+  const link = path.join(fx.root, 'external-contract.txt');
+  const externalContent = 'PRIVATE TEST SENTINEL: must not be inspected';
+  await writeFile(external, externalContent);
+  await symlink(external, link);
+  try {
+    const validResearch = path.join(runDir, 'research.md');
+    const badEvidence = { ...JSON.parse(await readFile(file, 'utf8')),
+      research_artifact: validResearch,
+      dependency_files: [{ path: 'external-contract.txt',
+        sha256: createHash('sha256').update(externalContent).digest('hex') }] };
+    await writeFile(file, JSON.stringify(badEvidence));
+    result = fx.cli('class-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
+    assert.match(result.stderr, /dependency file is missing, changed, or duplicated/);
+  } finally { await unlink(external); }
+  await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')),
+    research_artifact: path.join(runDir, 'research.md'),
+    dependency_files: [{ path: 'reviewed-contract.json',
+      sha256: createHash('sha256').update(contractContent).digest('hex') }] }));
   result = fx.cli('class-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
   assert.equal(result.status, 0, result.stderr);
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'class-4']);
