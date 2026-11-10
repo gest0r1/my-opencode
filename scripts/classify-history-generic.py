@@ -39,8 +39,47 @@ def inspect():
                     path=objects[oid]
                     path=path if path and SAFE_PATH.fullmatch(path) else '<unknown>'
                     group=path.split('/')[0] if path!='<unknown>' else 'unknown'
+                    # Distinguish *syntax classes*, not secret validity. Values
+                    # are NEVER printed, hashed to logs, or persisted.
+                    value = hit.group(2)
+                    if value.startswith((b'
+            if proc.wait(timeout=30): raise RuntimeError('git cat-file failed')
+        finally:
+            if proc.poll() is None: proc.kill()
+    for oid,key,path,shape in sorted(set(matches)):
+        print(f'GENERIC_CANDIDATE blob={oid} key={key} path={path} value_syntax={shape} status=UNCLASSIFIED')
+    print(f'GENERIC_CANDIDATE total_matches={len(matches)} unique_blobs={len(set(x[0] for x in matches))}')
+    print('GENERIC_CANDIDATE manual review required: this report does not distinguish secrets from code identifiers.')
+
+if __name__=='__main__':
+    try: inspect()
+    except Exception as exc:
+        print('GENERIC_INSPECTION_FAILED: '+type(exc).__name__,file=sys.stderr)
+        sys.exit(2)
+, b'`')) or b'
+            if proc.wait(timeout=30): raise RuntimeError('git cat-file failed')
+        finally:
+            if proc.poll() is None: proc.kill()
+    for oid,key,path in sorted(set(matches)):
+        print(f'GENERIC_CANDIDATE blob={oid} key={key} path={path} status=UNCLASSIFIED')
+    print(f'GENERIC_CANDIDATE total_matches={len(matches)} unique_blobs={len(set(x[0] for x in matches))}')
+    print('GENERIC_CANDIDATE manual review required: this report does not distinguish secrets from code identifiers.')
+
+if __name__=='__main__':
+    try: inspect()
+    except Exception as exc:
+        print('GENERIC_INSPECTION_FAILED: '+type(exc).__name__,file=sys.stderr)
+        sys.exit(2)
+ in value:
+                        shape = 'shell_expression'
+                    elif b'(' in value or b')' in value or b'+' in value:
+                        shape = 'source_expression'
+                    elif re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_.]*', value):
+                        shape = 'identifier_or_literal'
+                    else:
+                        shape = 'unclassified_literal'
                     observations[key][group]+=1
-                    matches.append((oid[:12], key, path))
+                    matches.append((oid[:12], key, path, shape))
             if proc.wait(timeout=30): raise RuntimeError('git cat-file failed')
         finally:
             if proc.poll() is None: proc.kill()
