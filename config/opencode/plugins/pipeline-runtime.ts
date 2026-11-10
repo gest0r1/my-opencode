@@ -577,9 +577,20 @@ export default Plugin.define({
         fs.writeFileSync(file, JSON.stringify({ no_session_reuse: optedOut }))
       }
     })
-    await plugin.session.hook("compaction", (event) => {
-      const run = runBySession.get(String(event.sessionID))
-      if (run) appendJsonLine(metricsFile(root, run), { event: "parent_compaction", timestamp: new Date().toISOString() })
+    await plugin.session.hook("compaction", async (event) => {
+      const sessionID = String(event.sessionID)
+      const run = runBySession.get(sessionID) ?? orchestratorRun.get(sessionID)
+      if (!run) return
+      // Preserve authoritative run pointers BEFORE lossy compaction. This hook exists in
+      // our installed OpenCode plugin contract; no new model/tool invocation is needed.
+      try {
+        await writeHandover(path.join(root, ".tmp", "pipelines"), run, root)
+        appendJsonLine(metricsFile(root, run), { event: "parent_compaction", timestamp: new Date().toISOString(),
+          handover: "PASS" })
+      } catch (error) {
+        appendJsonLine(metricsFile(root, run), { event: "parent_compaction", timestamp: new Date().toISOString(),
+          handover: "WARNING", reason: error instanceof Error ? error.message.slice(0, 260) : "unknown" })
+      }
     })
     const visibleBySession = new Map<string, string[]>()
     await plugin.session.hook("context", (context) => {
