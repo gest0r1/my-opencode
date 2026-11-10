@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+set -x # temporary CI diagnosis for #18
 
 ROOT=$(mktemp -d)
 trap 'rm -rf "$ROOT"' EXIT
