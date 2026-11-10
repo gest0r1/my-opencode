@@ -941,6 +941,10 @@ test('a class review satisfies a pending architecture checkpoint; unrelated clas
   }
   let result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'class-4']);
   assert.match(result.stderr, /CLASS_REVIEW_REQUIRED/);
+  // Owner grants additional cycles while the review stage is still in_progress.
+  // An accepted fix-cycle reopens the source and makes this stage pending.
+  result = fx.cli('fix-budget-add', fx.runId, 'code-review', '--pipeline', 'lane', '--cycles', '5');
+  assert.equal(result.status, 0, result.stderr);
   const runDir = path.join(fx.stateRoot, fx.runId);
   await writeFile(path.join(runDir, 'research.md'), 'evidence\n');
   await writeFile(path.join(runDir, 'tech.md'), 'status: ready\n');
@@ -986,8 +990,7 @@ test('a class review satisfies a pending architecture checkpoint; unrelated clas
   assert.equal(runtime.technical_fix_cycles, 5);
   // The class review at cycle 4 covers this block; cycle 5 is NOT another checkpoint.
   assert.equal(runtime.architecture_review_due, false);
-  result = fx.cli('fix-budget-add', fx.runId, 'code-review', '--pipeline', 'lane', '--cycles', '5');
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].technical_fix_limit, 10);
   for (let cycle = 6; cycle <= 9; cycle += 1) {
     fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
     result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'class-new-' + cycle]);
@@ -1081,6 +1084,15 @@ test('changed dependency invalidates scoped architecture reuse before another fi
   // requests a new source-changing repair. The dependency changed after the review.
   await writeFile(contract, 'contract: v2\n');
   fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  // The exhausted-budget refusal remains authoritative: a dependency change does not
+  // implicitly grant another source-changing cycle.
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'other-bug']);
+  assert.match(result.stderr, /TECHNICAL_FIX_LIMIT_EXCEEDED/);
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].technical_fix_cycles, 5);
+  // Only a simulated explicit owner grant unlocks the next attempted repair. The
+  // previously reviewed dependency is still stale, so it must then stop at review.
+  result = fx.cli('fix-budget-add', fx.runId, 'code-review', '--pipeline', 'lane', '--cycles', '5');
+  assert.equal(result.status, 0, result.stderr);
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'other-bug']);
   assert.match(result.stderr, /ARCHITECTURE_REVIEW_REQUIRED: lane\/code-review.*dependency changed/);
   assert.equal(fx.status().pipelines.lane.stages['code-review'].technical_fix_cycles, 5);
