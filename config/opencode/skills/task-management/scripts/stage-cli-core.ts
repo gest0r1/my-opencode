@@ -2058,7 +2058,10 @@ export async function recordTechnicalFixCycle(
       const due = lastReviewedCycle > 0
         ? next - lastReviewedCycle >= ARCHITECTURE_REVIEW_AFTER
         : next % ARCHITECTURE_REVIEW_AFTER === 0;
-      if (due) runtime.architecture_review_due = true;
+      if (due) {
+        runtime.architecture_review_due = true;
+        runtime.architecture_review_due_paths = [...scopePreflight.paths];
+      }
     }
     if (!resumeChargedRepair) {
       runtime.defect_class_history ??= [];
@@ -2272,10 +2275,12 @@ export async function recordArchitectureReview(
       throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: apply_within_requirements needs requirements_changed, acceptance_criteria_changed, external_contract_changed, security_boundary_changed and destructive_change all false');
     }
     runtime.architecture_review_due = false;
+    const reviewedPaths = [...(runtime.architecture_review_due_paths ?? runtime.repair_paths ?? [])];
+    runtime.architecture_review_due_paths = undefined;
     runtime.architecture_reviews ??= [];
     runtime.architecture_reviews.push({
       path: absoluteEvidence, sha256: sha256(content), result,
-      after_cycle: runtime.technical_fix_cycles ?? 0, covered_paths: [...(runtime.repair_paths ?? [])], at: now(),
+      after_cycle: runtime.technical_fix_cycles ?? 0, covered_paths: reviewedPaths, at: now(),
     });
     if (result === 'requirements_change') {
       runtime.status = 'blocked';
@@ -2578,7 +2583,14 @@ export async function recordClassReview(
       }
     }
     runtime.class_review_due = undefined;
-    runtime.architecture_review_due = false;
+    // A class review of block B does not waive an outstanding checkpoint for block A.
+    const pendingPaths = runtime.architecture_review_due_paths ?? [];
+    const coveredPaths = [...(runtime.repair_paths ?? [])];
+    if (!runtime.architecture_review_due || !pendingPaths.length ||
+        pendingPaths.every(path => coveredPaths.some(scope => pathMatchesScope(path, scope)))) {
+      runtime.architecture_review_due = false;
+      runtime.architecture_review_due_paths = undefined;
+    }
     runtime.class_reviews ??= [];
     runtime.class_reviews.push({
       path: absoluteEvidence, sha256: sha256(content), classes, approach, research_artifact: research,
