@@ -45,3 +45,11 @@
 - Одноразовые write-enabled workflows удаления веток и изменения remote history удалены из актуальной рабочей ветки.
 - На момент rewrite обнаружена 61 GitHub-managed PR ref. Они, кеши старых коммитов и внешние копии не очищены операцией. Дальнейший шаг: отдельная проверка и GitHub Support (см. issue18-github-support-request.md).
 - До завершения анализа остаточного риска не делать репозиторий публичным, старые клоны нельзя возвращать в Git через merge/push.
+
+## Независимая проверка PR refs после rewrite — 2026-11-10
+
+- GitHub Actions read-only проверка: https://github.com/gest0r1/my-opencode/actions/runs/42860221881
+- Свежий клон всех сохраняемых GitHub branch/tag refs: **0** совпадений по пяти известным категориям (Exchange, ITOP, Google OAuth client ID/client secret/refresh token).
+- После отдельного fetch GitHub-managed PR refs: **61 refs, 61 affected PRs**, доступна историческая цепочка blob-объектов с теми же категориями секретов. Values, excerpts и secret hashes не выводились.
+- Это доказанный остаточный риск, который нельзя устранить обычным Git push. Для публикации репозитория требуется GitHub Support и повторная проверка старых SHA/PR diff views; при невозможности отзыва отдельных учётных данных могут потребоваться дополнительные ограничения доступа.
+- Одноразовые audit/write workflows из текущей ветки удалены. Для следующей проверки можно применять read-only скрипты вручную из проверенного окружения.

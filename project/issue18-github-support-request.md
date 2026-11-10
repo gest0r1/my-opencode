@@ -10,10 +10,10 @@ COMPLETED:
 - Current cleaned main SHA: 31ea66697697f6daa5000cf13028e152d031c1a5.
 - Local post-rewrite scan found zero candidates for the five known secret classes; branch tree path/mode/type inventory preserved.
 - Verified run: https://github.com/gest0r1/my-opencode/actions/runs/42858968690
-- Pre-rewrite inventory showed 61 GitHub-managed PR refs. These could not be updated with a normal push.
+- A fresh post-rewrite GitHub audit fetched 61 GitHub-managed PR refs and confirmed **all 61 PR refs still reach historical blobs containing all five known secret categories**. These refs could not be updated with normal Git push. Read-only verification run: https://github.com/gest0r1/my-opencode/actions/runs/42860221881 .
 
 REQUEST TO GITHUB SUPPORT:
-1. Identify and remove secret-bearing refs/pull/* where supported and purge related cached PR diffs, commit views and raw object URLs.
+1. Remove/invalidate all 61 affected refs/pull/* where supported and purge related cached PR diffs, commit views and raw object URLs. A confidential non-secret list of PR numbers and categories is available in run 42860221881.
 2. Perform applicable garbage collection after the rewritten writable refs and report residual visibility of old commit SHAs.
 3. Identify possible residual Actions logs/artifacts, release files, LFS and cached archives, with removal options.
 4. Confirm whether old original secret-bearing Git objects can still be retrieved.
