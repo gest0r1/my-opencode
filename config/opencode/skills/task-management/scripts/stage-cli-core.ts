@@ -2158,6 +2158,39 @@ function confirmedRootCauseKeys(result: any): Record<string, string> {
   return confirmed;
 }
 
+// Relative checkpoints must never infer reviewed dependencies from the *write* scope.
+// An architect's explicit read-only coverage and the exact hashes of dependent contracts
+// are recorded within the existing review evidence. Unstated coverage is legacy: conservative.
+function verifiedReviewCoverage(review: any, requiredPaths: string[], prefix: string):
+  { covered_paths?: string[]; dependency_files?: Array<{ path: string; sha256: string }> } {
+  if (review.covered_paths === undefined && review.dependency_files === undefined) return {};
+  const covered = review.covered_paths;
+  const dependencies = review.dependency_files;
+  if (!Array.isArray(covered) || !covered.length || covered.length > 100 ||
+      covered.some((scope: unknown) => !safeScopePath(scope)) ||
+      !Array.isArray(dependencies) || dependencies.length > 64 ||
+      dependencies.some((item: any) => !item || !safeRepoPath(item.path) ||
+        !/^[0-9a-f]{64}$/i.test(String(item.sha256 ?? '')))) {
+    throw new StageCliError(prefix + ': coverage needs safe covered_paths and exact dependency_files[]');
+  }
+  if (requiredPaths.some(path => !covered.some((scope: string) => pathMatchesScope(path, scope)))) {
+    throw new StageCliError(prefix + ': covered_paths must include every currently failing repair path');
+  }
+  const normalized = [...new Map(dependencies.map((item: any) =>
+    [item.path, { path: item.path, sha256: String(item.sha256).toLowerCase() }])).values()] as
+    Array<{ path: string; sha256: string }>;
+  if (normalized.length !== dependencies.length || !normalized.every(unchangedReviewedDependency)) {
+    throw new StageCliError(prefix + ': dependency file is missing, changed, or duplicated; review current code');
+  }
+  return { covered_paths: [...new Set(covered as string[])], dependency_files: normalized };
+}
+
+function unchangedReviewedDependency(dep: { path: string; sha256: string }): boolean {
+  if (!safeRepoPath(dep.path)) return false;
+  try { return sha256(readFileSync(resolve(process.cwd(), dep.path), 'utf8')) === dep.sha256; }
+  catch { return false; }
+}
+
 // A review only resets the 5-cycle clock for paths it actually inspected. Unknown/legacy
 // coverage falls back to the original absolute checkpoints; it never silently waives one.
 function latestRelevantArchitectureCycle(runtime: StageRuntime, paths: string[]): number {
@@ -2165,7 +2198,10 @@ function latestRelevantArchitectureCycle(runtime: StageRuntime, paths: string[])
   const reviews = [...(runtime.class_reviews ?? []), ...(runtime.architecture_reviews ?? [])];
   return reviews.reduce((latest, review) => {
     const covered = review.covered_paths ?? [];
-    const applies = covered.length && paths.every(path => covered.some(scope => pathMatchesScope(path, scope)));
+    const dependencies = review.dependency_files;
+    const applies = covered.length && Array.isArray(dependencies) &&
+      paths.every(path => covered.some(scope => pathMatchesScope(path, scope))) &&
+      dependencies.every(unchangedReviewedDependency);
     return applies ? Math.max(latest, review.after_cycle ?? 0) : latest;
   }, 0);
 }
@@ -2236,6 +2272,7 @@ type ArchitectureReview = {
   kind?: unknown; run_id?: unknown; pipeline_id?: unknown; stage?: unknown; result?: unknown; summary?: unknown;
   requirements_changed?: unknown; acceptance_criteria_changed?: unknown; external_contract_changed?: unknown;
   security_boundary_changed?: unknown; destructive_change?: unknown;
+  covered_paths?: unknown; dependency_files?: unknown;
 };
 
 // Records the architecture checkpoint of a repeatedly repaired stage. Only requirements_change stops work, and only
@@ -2275,13 +2312,14 @@ export async function recordArchitectureReview(
           review.security_boundary_changed, review.destructive_change].some((value) => value !== false)) {
       throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: apply_within_requirements needs requirements_changed, acceptance_criteria_changed, external_contract_changed, security_boundary_changed and destructive_change all false');
     }
+    const covered = verifiedReviewCoverage(review,
+      runtime.architecture_review_due_paths ?? runtime.repair_paths ?? [], 'ARCHITECTURE_REVIEW_INVALID');
     runtime.architecture_review_due = false;
-    const reviewedPaths = [...(runtime.architecture_review_due_paths ?? runtime.repair_paths ?? [])];
     runtime.architecture_review_due_paths = undefined;
     runtime.architecture_reviews ??= [];
     runtime.architecture_reviews.push({
       path: absoluteEvidence, sha256: sha256(content), result,
-      after_cycle: runtime.technical_fix_cycles ?? 0, covered_paths: reviewedPaths, at: now(),
+      after_cycle: runtime.technical_fix_cycles ?? 0, ...covered, at: now(),
     });
     if (result === 'requirements_change') {
       runtime.status = 'blocked';
@@ -2586,14 +2624,15 @@ export async function recordClassReview(
         throw new StageCliError('CLASS_REVIEW_INVALID: repeated confirmation needs new diagnostic evidence and a different implementation plan');
       }
     }
+    const coverage = verifiedReviewCoverage(review,
+      runtime.class_review_due_paths ?? runtime.repair_paths ?? [], 'CLASS_REVIEW_INVALID');
     runtime.class_review_due = undefined;
-    // Bind the reviewed block to the fresh negative result, not the previous cycle's paths.
-    const coveredPaths = [...(runtime.class_review_due_paths ?? runtime.repair_paths ?? [])];
     runtime.class_review_due_paths = undefined;
     // A class review of block B does not waive an outstanding checkpoint for block A.
     const pendingPaths = runtime.architecture_review_due_paths ?? [];
     if (!runtime.architecture_review_due || !pendingPaths.length ||
-        pendingPaths.every(path => coveredPaths.some(scope => pathMatchesScope(path, scope)))) {
+        (!coverage.covered_paths || pendingPaths.every(path =>
+          coverage.covered_paths!.some(scope => pathMatchesScope(path, scope))))) {
       runtime.architecture_review_due = false;
       runtime.architecture_review_due_paths = undefined;
     }
@@ -2601,7 +2640,7 @@ export async function recordClassReview(
     runtime.class_reviews.push({
       path: absoluteEvidence, sha256: sha256(content), classes, approach, research_artifact: research,
       research_sha256: researchHash, summary_sha256: sha256(String(review.summary).trim()),
-      after_cycle: runtime.technical_fix_cycles ?? 0, covered_paths: coveredPaths,
+      after_cycle: runtime.technical_fix_cycles ?? 0, ...coverage,
       diagnostic_sha256: diagnosticHash, implementation_plan_sha256: implementationPlanHash, at: now(),
     });
     if (approach === 'requirements_change') {
