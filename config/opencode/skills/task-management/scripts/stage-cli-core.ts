@@ -23,8 +23,9 @@ const DEFAULT_TECHNICAL_FIX_LIMIT = 5;
 const MAX_TECHNICAL_FIX_LIMIT = 20;
 // The relative interval starts at the last relevant review of this repair scope; legacy cycles retain their 5/10/15 checkpoints.
 const ARCHITECTURE_REVIEW_AFTER = 5;
-// A confirmed repeated root cause needs review; distinct evidenced causes do not force redesign.
-// Unknown cause identity remains conservative and retains the existing class-review trigger.
+// Three independently recorded authoritative negative results of one class require review.
+// Reporter-supplied root cause labels are never trusted to reset the per-class count.
+const DEFECT_CLASS_REVIEW_THRESHOLD = 3;
 const DEFECT_CLASS_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}$/;
 const STATE_FILE = 'state.json';
 const LOCK_FILE = '.lock';
@@ -1959,6 +1960,10 @@ export async function recordTechnicalFixCycle(
     if (!['fail', 'failed', 'needs_revision', 'not ready', 'technical_fix', 'security_fix'].includes(verdict) && !(repairClass === 'security_fix' && result.kind === 'security_fix')) throw new StageCliError('REPAIR_RESULT_REQUIRED: PASS/partial/transport failure is not a negative review');
     if (spec?.executors?.[stage] !== 'review' && (result.status !== 'FAIL' || result.run_id !== runId || result.pipeline_id !== pipeline.id || (result.stage ?? result.gate) !== stage || result.purpose === 'advisory')) throw new StageCliError('REPAIR_MACHINE_RESULT_REQUIRED: use failed authoritative gate evidence');
     const repairHash = sha256(repairRaw);
+    if (result.purpose === 'advisory' || ['transport', 'environment'].includes(String(result.failure_type ?? '')) ||
+        result.classification === 'environment_failure') {
+      throw new StageCliError('REPAIR_RESULT_NOT_AUTHORITATIVE: advisory, transport and environment failures do not charge a fix cycle');
+    }
     // Retries of the same accepted result are idempotent while its repair is open.
     // A newly started review must produce fresh evidence rather than reusing a consumed result.
     if (runtime.repair_evidence?.path === absoluteRepair && runtime.repair_evidence.sha256 === repairHash &&
@@ -2020,6 +2025,11 @@ export async function recordTechnicalFixCycle(
         `TECHNICAL_FIX_LIMIT_EXCEEDED: ${pipeline.id}/${stage} used=${runtime.technical_fix_cycles ?? 0} limit=${limit}; owner may grant +N cycles or request runtime replan`,
       );
     }
+    // One evidence body cannot be submitted again at another path as a fresh discovery.
+    // A denied third result is intentionally absent from history and can be replayed after class review.
+    if (!resumeChargedRepair && (runtime.defect_class_history ?? []).some(item => item.evidence_sha256 === repairHash)) {
+      throw new StageCliError('REPAIR_RESULT_ALREADY_CONSUMED: identical evidence SHA was charged previously');
+    }
     // Checked after the limit so an exhausted budget keeps its own error; resuming an already charged attempt is free.
     const classes = resumeChargedRepair ? [] : resultDefectClasses(result, defectClasses);
     if (!resumeChargedRepair) {
@@ -2029,17 +2039,19 @@ export async function recordTechnicalFixCycle(
         );
       }
       const cycles = runtime.technical_fix_cycles ?? 0;
-      const previous = runtime.defect_class_history?.at(-1);
-      // Reviewer-supplied root_cause_id/evidence are advisory annotations, not an independently
-      // verifiable proof. Even two different labels cannot silently waive class review; only
-      // the existing reviewed class-review-record can authorize the next consolidation.
-      const recurring = previous?.cycle === cycles
-        ? classes.filter((name) => previous.classes.includes(name)) : [];
       const reviews = runtime.class_reviews ?? [];
-      // A review recorded since the last charged cycle authorizes exactly one consolidated rework of its classes.
-      const authorized = new Set(reviews.filter((item) => item.after_cycle === cycles).flatMap((item) => item.classes));
-      const reworked = new Set(reviews.filter((item) => item.after_cycle < cycles).flatMap((item) => item.classes));
-      const due = recurring.filter((name) => !authorized.has(name));
+      // A review authorizes replay of exactly the negative evidence that required it.
+      // Afterwards each class has a fresh epoch, independent of other classes' order.
+      const authorized = new Set(reviews.filter(item => item.after_cycle === cycles).flatMap(item => item.classes));
+      const due = classes.filter(name => {
+        if (authorized.has(name)) return false;
+        const lastReview = [...reviews].reverse().find(item => item.classes.includes(name));
+        const epochStart = lastReview?.after_cycle ?? 0;
+        const independentPrior = (runtime.defect_class_history ?? [])
+          .filter(item => item.cycle > epochStart && item.classes.includes(name)).length;
+        return independentPrior + 1 >= DEFECT_CLASS_REVIEW_THRESHOLD;
+      });
+      const reworked = new Set(reviews.filter(item => item.after_cycle < cycles).flatMap(item => item.classes));
       if (due.length) {
         const again = due.filter((name) => reworked.has(name));
         runtime.class_review_due = due;
@@ -2580,9 +2592,9 @@ async function runArtifact(root: string, value: unknown, field: string): Promise
   return absolute;
 }
 
-// Records the review that a recurring defect class requires: prior-art research, an architecture decision
-// for the whole block and a fresh technical review of it. It authorizes one consolidated rework cycle and
-// also satisfies a pending architecture checkpoint, since it is the same architect + senior review pair.
+// A third independently observed defect class needs prior-art research and an architecture diagnosis.
+// A confirmed, bounded existing approach needs no senior review; structural redesign still does.
+// The resulting class review also covers a pending architecture checkpoint for the same scope.
 export async function recordClassReview(
   stateRoot: string,
   runId: string,
@@ -2599,7 +2611,9 @@ export async function recordClassReview(
   let review: ClassReview;
   try { review = JSON.parse(content) as ClassReview; } catch { throw new StageCliError('class review evidence is not valid JSON'); }
   const research = await runArtifact(root, review.research_artifact, 'research_artifact');
-  await runArtifact(root, review.technical_review_artifact, 'technical_review_artifact');
+  if (review.approach !== 'confirm_approach') {
+    await runArtifact(root, review.technical_review_artifact, 'technical_review_artifact');
+  }
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
@@ -2663,8 +2677,8 @@ export async function recordClassReview(
     runtime.class_review_due_paths = undefined;
     // A class review of block B does not waive an outstanding checkpoint for block A.
     const pendingPaths = runtime.architecture_review_due_paths ?? [];
-    // Legacy class review already ran ExternalScout+architect+senior for this pending
-    // checkpoint. Clear that single pending review to avoid a duplicate invocation,
+    // A bounded class review already investigated this same scope; no duplicate senior
+    // invocation is needed for confirm_approach or a no-change checkpoint.
     // but do NOT reset the relative clock without explicit dependency fingerprints.
     if (!runtime.architecture_review_due || !pendingPaths.length ||
         !coverage.covered_paths ||
