@@ -857,40 +857,40 @@ test('the 5th charged cycle flags an architecture checkpoint; the next cycle nee
   assert.equal(JSON.parse(result.stdout).pipelines.lane.stages['code-review'].technical_fix_cycles, 6);
 });
 
-test('a defect class repeated by consecutive reviews needs a class review; a recurrence after the rework needs new research, not the owner', async () => {
+test('three distinct negative results of one class require a review; a new epoch resets the counter', async () => {
   const fx = await lanesFixture('class-recurrence');
   const again = () => { fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start'); };
   const runtime = () => fx.status().pipelines.lane.stages['code-review'];
-  fx.finish('lane', 'implementation');
-  fx.step('lane', 'code-review', 'start');
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
   let result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'Bad Class!']);
   assert.match(result.stderr, /DEFECT_CLASS_INVALID/);
-  // Classes also come from the review JSON itself.
-  let r = fx.cli('scope-check', fx.runId, 'code-review', 'packages/lane/src/a.ts', '--pipeline', 'lane'); assert.equal(r.status, 0, r.stderr);
+  let checked = fx.cli('scope-check', fx.runId, 'code-review', 'packages/lane/src/a.ts', '--pipeline', 'lane');
+  assert.equal(checked.status, 0, checked.stderr);
   const reviewFile = path.join(fx.root, 'review-with-classes.json');
-  await writeFile(reviewFile, JSON.stringify({ status: 'needs_revision', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
-    findings: [{ id: 'R1', defect_class: 'validator-laxer-than-consumer' }] }));
+  await writeFile(reviewFile, JSON.stringify({ status: 'needs_revision', run_id: fx.runId, pipeline_id: 'lane',
+    stage: 'code-review', findings: [{ id: 'R1', defect_class: 'validator-laxer-than-consumer' }] }));
   result = fx.cli('fix-cycle', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', reviewFile, '--json');
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(runtime().defect_class_history.map((item) => item.classes), [['validator-laxer-than-consumer']]);
-
   again();
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer,readme-drift']);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED: lane\/code-review classes=validator-laxer-than-consumer recurred/);
-  assert.equal(runtime().technical_fix_cycles, 1);
+  assert.equal(result.status, 0, result.stderr, 'second A must not invoke the architect');
+  assert.equal(runtime().technical_fix_cycles, 2);
+  again();
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer']);
+  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED.*validator-laxer-than-consumer/);
+  assert.equal(runtime().technical_fix_cycles, 2);
   assert.deepEqual(runtime().class_review_due, ['validator-laxer-than-consumer']);
-  assert.match(fx.cli('status', fx.runId).stdout, /class_review_due=validator-laxer-than-consumer/);
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'readme-drift']);
   assert.match(result.stderr, /CLASS_REVIEW_REQUIRED/);
 
   const runDir = path.join(fx.stateRoot, fx.runId);
-  await writeFile(path.join(runDir, 'research.md'), '# prior art\nByte comparison instead of a second HTML reader.\n');
-  await writeFile(path.join(runDir, 'class-review-tech.md'), 'status: ready\n');
-  const record = async (patch) => {
+  await writeFile(path.join(runDir, 'research.md'), '# prior art\\nByte comparison instead of a second HTML reader.\\n');
+  await writeFile(path.join(runDir, 'class-review-tech.md'), 'status: ready\\n');
+  const record = async (patch = {}) => {
     const file = path.join(runDir, `class-${Math.random().toString(36).slice(2)}.json`);
     await writeFile(file, JSON.stringify({ kind: 'class_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
-      classes: ['validator-laxer-than-consumer'], approach: 'rework_block', summary: 'compare served bytes with the built artifact',
+      classes: ['validator-laxer-than-consumer'], approach: 'rework_block',
+      summary: 'compare served bytes with the built artifact',
       research_artifact: path.join(runDir, 'research.md'), technical_review_artifact: path.join(runDir, 'class-review-tech.md'),
       requirements_changed: false, acceptance_criteria_changed: false, external_contract_changed: false,
       security_boundary_changed: false, destructive_change: false, ...patch }));
@@ -901,33 +901,63 @@ test('a defect class repeated by consecutive reviews needs a class review; a rec
   result = await record({ classes: ['readme-drift'] }); assert.match(result.stderr, /CLASS_REVIEW_INVALID: classes must cover validator-laxer-than-consumer/);
   result = await record({ approach: 'patch_again' }); assert.match(result.stderr, /CLASS_REVIEW_INVALID: approach/);
   result = await record({ destructive_change: true }); assert.match(result.stderr, /CLASS_REVIEW_INVALID/);
-  result = await record({}); assert.equal(result.status, 0, result.stderr);
+  result = await record(); assert.equal(result.status, 0, result.stderr);
   assert.equal(runtime().class_review_due, undefined);
-  assert.equal(runtime().class_reviews[0].after_cycle, 1);
-  result = await record({}); assert.match(result.stderr, /CLASS_REVIEW_NOT_DUE/);
-
-  // One consolidated rework cycle is charged for the reviewed class.
+  assert.equal(runtime().class_reviews[0].after_cycle, 2);
+  result = await record(); assert.match(result.stderr, /CLASS_REVIEW_NOT_DUE/);
+  // The reviewed third negative result authorizes only the next charged repair.
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer']);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(runtime().technical_fix_cycles, 2);
-
-  // The same class after its rework needs a new review with new research and a changed approach; nobody waits for the owner.
+  assert.equal(runtime().technical_fix_cycles, 3);
   again();
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer']);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED: lane\/code-review classes=validator-laxer-than-consumer recurred after rework/);
-  assert.equal(runtime().status, 'in_progress');
-  assert.equal(runtime().technical_fix_cycles, 2);
-  result = await record({}); assert.match(result.stderr, /new research_artifact required/);
-  await writeFile(path.join(runDir, 'research-2.md'), '# prior art 2\nUse the producer output as the oracle.\n');
-  result = await record({ research_artifact: path.join(runDir, 'research-2.md') }); assert.match(result.stderr, /approach summary must change/);
+  assert.equal(result.status, 0, result.stderr, 'second observation within the new epoch is allowed');
+  again();
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer']);
+  assert.match(result.stderr, /CLASS_REVIEW_REQUIRED.*recurred after rework/);
+  assert.equal(runtime().technical_fix_cycles, 4);
+  result = await record(); assert.match(result.stderr, /new research_artifact required/);
+  await writeFile(path.join(runDir, 'research-2.md'), '# prior art 2\\nUse producer output as oracle.\\n');
+  result = await record({ research_artifact: path.join(runDir, 'research-2.md') });
+  assert.match(result.stderr, /approach summary must change/);
   result = await record({ research_artifact: path.join(runDir, 'research-2.md'), approach: 'remove_mechanism',
     summary: 'drop the second reader; serve the built artifact as is' });
   assert.equal(result.status, 0, result.stderr);
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'validator-laxer-than-consumer']);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(runtime().technical_fix_cycles, 3);
+  assert.equal(runtime().technical_fix_cycles, 5);
   assert.deepEqual(fx.next(), ['lane/implementation', 'other/implementation']);
+});
+
+test('interleaved A/B/A/A is counted per class, not by consecutive verdicts', async () => {
+  const fx = await lanesFixture('interleaved-classes');
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  for (const cls of ['alpha', 'beta', 'alpha']) {
+    const r = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', cls]);
+    assert.equal(r.status, 0, r.stderr);
+    fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  }
+  const r = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'alpha']);
+  assert.match(r.stderr, /CLASS_REVIEW_REQUIRED.*alpha/);
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].technical_fix_cycles, 3);
+});
+
+test('identical review evidence at a different path is not a second detection', async () => {
+  const fx = await lanesFixture('sha-replay-rejected');
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  const original = await fx.evidence('lane');
+  let r = fx.cli('scope-check', fx.runId, 'code-review', 'packages/lane/src/a.ts', '--pipeline', 'lane');
+  assert.equal(r.status, 0, r.stderr);
+  r = fx.cli('fix-cycle', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', original, '--defect-class', 'alpha', '--json');
+  assert.equal(r.status, 0, r.stderr);
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  const duplicate = path.join(fx.root, 'same-content-different-path.json');
+  await writeFile(duplicate, await readFile(original, 'utf8'));
+  r = fx.cli('scope-check', fx.runId, 'code-review', 'packages/lane/src/a.ts', '--pipeline', 'lane');
+  assert.equal(r.status, 0, r.stderr);
+  r = fx.cli('fix-cycle', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', duplicate, '--defect-class', 'alpha', '--json');
+  assert.match(r.stderr, /REPAIR_RESULT_ALREADY_CONSUMED/);
+  assert.equal(fx.status().pipelines.lane.stages['code-review'].technical_fix_cycles, 1);
 });
 
 test('a class review satisfies a pending architecture checkpoint; unrelated classes keep the plain loop', async () => {
@@ -935,7 +965,7 @@ test('a class review satisfies a pending architecture checkpoint; unrelated clas
   fx.finish('lane', 'implementation');
   fx.step('lane', 'code-review', 'start');
   for (let cycle = 1; cycle <= 4; cycle += 1) {
-    const result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', `class-${cycle}`]);
+    const result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', cycle >= 3 ? 'class-4' : `class-${cycle}`]);
     assert.equal(result.status, 0, result.stderr);
     fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
   }
@@ -1008,7 +1038,7 @@ test('empty dependency fingerprints never waive the absolute architecture checkp
   fx.finish('lane', 'implementation');
   fx.step('lane', 'code-review', 'start');
   for (let cycle = 1; cycle <= 4; cycle += 1) {
-    const result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'distinct-' + cycle]);
+    const result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', cycle >= 3 ? 'distinct-4' : 'distinct-' + cycle]);
     assert.equal(result.status, 0, result.stderr);
     fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
   }
@@ -1047,7 +1077,7 @@ test('changed dependency invalidates scoped architecture reuse before another fi
   fx.finish('lane', 'implementation');
   fx.step('lane', 'code-review', 'start');
   for (let cycle = 1; cycle <= 4; cycle += 1) {
-    const result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'prior-' + cycle]);
+    const result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', cycle >= 3 ? 'prior-4' : 'prior-' + cycle]);
     assert.equal(result.status, 0, result.stderr);
     fx.finish('lane', 'implementation');
     fx.step('lane', 'code-review', 'start');
@@ -1219,9 +1249,12 @@ test('unverified root cause labels cannot suppress the class-review guard', asyn
   assert.equal(result.status, 0, result.stderr);
   fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
   result = await cause('cause-b', 'tests/b.test.ts failed at assertion B');
+  assert.equal(result.status, 0, result.stderr, 'second independent negative result is allowed');
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  result = await cause('cause-c', 'tests/c.test.ts failed at assertion C');
   assert.match(result.stderr, /CLASS_REVIEW_REQUIRED/);
   const runtime = fx.status().pipelines.lane.stages['code-review'];
-  assert.equal(runtime.technical_fix_cycles, 1, 'unverified labels never charge a second fix cycle');
+  assert.equal(runtime.technical_fix_cycles, 2, 'unverified labels cannot authorize a third fix cycle');
   assert.deepEqual(runtime.class_review_due, ['same-class']);
   assert.equal(runtime.defect_class_history[0].cause_keys['same-class'], 'cause-a',
     'reported cause labels remain available only as diagnostic hints');
@@ -1231,6 +1264,9 @@ test('class review may confirm a sound approach only with new diagnostic evidenc
   const fx = await lanesFixture('confirm-class-approach');
   fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
   let result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'same-bug']);
+  assert.equal(result.status, 0, result.stderr);
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'same-bug']);
   assert.equal(result.status, 0, result.stderr);
   fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'same-bug']);
@@ -1245,7 +1281,7 @@ test('class review may confirm a sound approach only with new diagnostic evidenc
       kind: 'class_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
       classes: ['same-bug'], approach: 'confirm_approach', summary: 'Existing approach is correct',
       research_artifact: path.join(runDir, 'research.md'),
-      technical_review_artifact: path.join(runDir, 'tech.md'),
+      // confirm_approach intentionally omits technical_review_artifact (no senior model invocation).
       diagnostic_artifact: path.join(runDir, 'diagnostic-1.md'),
       research_freshness_confirmed: true,
       implementation_plan: 'Fix implementation at assertion A, then test all sibling paths',
@@ -1261,6 +1297,9 @@ test('class review may confirm a sound approach only with new diagnostic evidenc
   assert.equal(fx.status().pipelines.lane.stages['code-review'].class_reviews[0].approach, 'confirm_approach');
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'same-bug']);
   assert.equal(result.status, 0, result.stderr);
+  fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
+  result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'same-bug']);
+  assert.equal(result.status, 0, result.stderr, 'second post-review occurrence is permitted');
   fx.finish('lane', 'implementation'); fx.step('lane', 'code-review', 'start');
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts'], ['--defect-class', 'same-bug']);
   assert.match(result.stderr, /CLASS_REVIEW_REQUIRED.*after rework/);
