@@ -1,8 +1,8 @@
 # План: OpenCode 2.2.7 + OpenChamber 2.7.1 + Telegram extension + защита от переусложнения
 
-Дата: 2026-11-13. Статус: **PLAN ONLY — без реализации, тестовых запусков, PR, merge и развёртывания**.
+Дата: 2026-11-13. Статус: **IMPLEMENTATION IN PROGRESS — обновлён порядок работ по решению владельца 2026-11-14**. Не означает готовность к тестированию/merge/deploy.
 Уточнения, утверждённые владельцем 2026-11-13: RUN class-review на третье обнаружение, без senior-review при сохранении подхода; PLAN — оценка необходимости самописного механизма и вопрос владельцу при отрицательном заключении.
-План размещён в отдельной ветке my-opencode; дальнейшие кодовые ветки в каждом целевом репозитории открывать только после утверждения.
+План размещён в отдельной ветке my-opencode; владелец 2026-11-14 разрешил реализацию в изолированных ветках, но не merge в main и не установку на сервер.
 
 ## Решения владельца и ограничения
 
@@ -21,10 +21,30 @@
 5. CodeReviewer — свежий независимый read-only reviewer; bash/task запрещены, .tmp/pipelines/** для evidence; внешние источники допустимы. По текущим правилам блокирует проверенный product/contract/security defect. Test-coverage note по умолчанию optional/nonblocking; блокирует только когда недоказанное поведение реально скрыто пробелом. FindingsReviewer проверяет ранее найденное, потом требуется свежий CodeReviewer.
 6. **AS IS / пробел:** PLAN уже имеет ExternalScout own-mechanism research, поиск альтернатив, reuse/drift и senior missing_prior_art. Требуется иной критерий: не создавать нестандартные собственные механизмы без доказанной необходимости, оценивать их сложность и влияние на исправления/скорость релизов и до реализации спрашивать владельца, если архитектор рекомендует отказаться/упростить. Не денежная окупаемость каждого фикса.
 
+## Порядок выполнения и фиксация состояния (обновлён 2026-11-14)
+
+**Главный принцип: upstream-first.** Сначала собрать совместимую базу OpenChamber 2.7.1 / OpenCode 2.2.7 без переноса новых самописных функций. Затем по каждой существующей fork-доработке сравнить актуальные upstream контракты/реализацию, выбрать `reuse upstream | adapt | preserve | delete`, указать основание и проверить сценарии. Не переносить обходные решения автоматически. Пока эквивалентность не доказана, сохранять обратимый прежний путь и не объявлять удаление завершённым.
+
+| Шаг | Статус | Контрольная точка |
+|---|---|---|
+| A0. Baseline и версия upstream: SHA, fork inventory, совместимость SDK, список защищённых функций | ⏳ | SHA + таблица fork-функций и рисков |
+| A1. Создание интеграционной ветки OpenChamber и upstream merge до 2.7.1 | ⏳ | merge tree / реальные конфликты / зафиксированный commit |
+| A2. Разбор конфликтов по функциям, а не перенос patch как есть, с #18 и исходными границами безопасности | ⏳ | решения preserve/reuse/adapt/delete с доказательствами |
+| A3. Согласованный pin OpenCode 2.2.7 во всех компонентах и проверка стартовых plugin events | ⏳ | сквозная версия, readiness, no premature agent missing |
+| B. Telegram SDK extension: контракт, теневая доставка, миграция, затем контролируемое переключение | ⏳ | матрица эквивалентности и rollback; legacy удалять отдельно |
+| C1. Три независимых обнаружения класса и отсутствие senior при bounded confirmation | 🟡 WIP от старой базы | Код/тесты в ветке плана, не протестировано, после upstream перепроверить и перенести |
+| C2. PLAN: оценка отказа от необоснованных самописных механизмов | ⏳ | обоснование, вопрос владельцу до реализации без нового gate |
+| D. CodeReviewer: блокирующий дефект vs optional | ⏳ | доказанные регрессионные кейсы |
+| E. Регрессии, финальный GitHub Actions OpenChamber / локальные OpenCode тесты, handoff | ⏳ | PASS на candidate SHA либо явный blocker; без merge/deploy |
+
+**Лог завершений / восстановление:** после закрытия каждого шага записывать дату, репозиторий, commit SHA, тесты (PASS/FAIL/NOT RUN), остаточные проблемы и следующий шаг непосредственно в этом файле; затем отправлять отдельное сообщение в чат. Статус «завершено» ставить только после соответствующей проверки. При отсутствии локальной среды фиксировать фактический blocker, а не «PASS».
+
+**Сохранённый незавершённый C1:** до изменения порядка созданы коммиты `0b2a830` (stage-cli-core.ts) и `c130204` (stage-cli-budget.test.mjs) в этой ветке my-opencode. Они не проходили тесты и не были смержены. Перед продолжением C1 необходимы анализ новых контрактов и локальные регрессии; при необходимости пересоздать рабочую ветку от обновлённого main.
+
 ## Блок A — переход OpenCode/OpenChamber
 
 1. Снять точные SHA upstream v2.7.1 / v2.2.7 и актуальных двух fork/main; проверить совместимость через официальный OpenChamber skill opencode-v2; сравнить API events, plugin hooks, permissions, background subagent result/metadata, session.wait, native plugin discovery, OAuth/MCP и initialization timing. Изменения OpenCode 2.3.x **исключить**.
-2. В отдельной реализации upstream merge OpenChamber v2.7.1 с сохранением Telegram/Markdown-export/per-tool timings, PR-watch/merge-follow, x64 manifest, release fingerprint и русского UI. До миграции Telegram не удалять.
+2. **Первым кодовым шагом** сделать upstream merge OpenChamber v2.7.1 в отдельной ветке. До merge снять inventory и тестовый baseline Telegram/Markdown-export/per-tool timings, PR-watch/merge-follow, x64 manifest, release fingerprint, русский UI. Сначала принять upstream архитектуру; конфликты разбивать по доменам и фиксировать решение о сохранении/замене/упрощении/удалении индивидуально. До доказанной эквивалентности Telegram ничего не удалять.
 3. Согласованно pin-ить 2.2.7 во всех OpenCode installer/config/package/lock, OpenChamber client/schema/Electron/Docker/scripts/lock, проверять cross-repo pins. Оставить пользовательский выбор моделей/variants/credentials из #18.
 4. Особый регресс v2.2.7: agent.list и несколько plugin endpoints возвращаются до завершения загрузки plugin; обновить preflight/wait по фактическим *.updated events/готовности, не объявлять отсутствующий GateRunner или других агентов без подтверждённого финального состояния.
 5. Проверить работу текущего subagent foreground/background, lease, wake/recovery, GateRunner, gate result SHA, owner amendments/reviews, PLAN/RUN, install/rollback, Markdown export. Ошибка permissions GateRunner диагностируется отдельно; версия сама по себе её не исправляет.
@@ -39,6 +59,8 @@
 5. Сначала параллельный **dry-run/shadow** без отправок в Telegram: события, получатели, тип, dedup key, completion decision; сравнить с текущим watcher на реальном OpenCode, отдельно протестировать reconnect, 429, 5xx, ambiguous timeout, crash/restart, cross-project/worktree, shell, forms, unanswered permissions. Не допускать два активных sender.
 6. После PASS выполнить controlled cutover, отключить встроенную доставку, сохранить rollback, затем отдельным PR удалить только подтверждённо избыточную Telegram fork-модификацию и legacy workflow, не затронув нативные notifications. Полный Markdown-export/per-tool timings не удалять.
 7. Acceptance: все реально используемые сценарии работают эквивалентно; не появилось дубликатов/потерянных уведомлений; секреты и выбор подписок сохранены; extension функционирует без Windows клиента и после restart; удаление встроенных изменений не ломает web UI.
+
+**Порядок для C1/C2/D:** исполнять лишь после A0–A3, а при проектировании B применять выводы C2/D без преждевременного переноса патчей C1. Текущее C1 WIP — не завершённый блок.
 
 ## Блок C — трёхкратный повтор класса и предотвращение переусложнения
 
@@ -68,7 +90,7 @@
 4. FindingsReviewer сохраняет узкую область повторной проверки; свежий CodeReviewer остаётся финальной проверкой. Новых модельных проходов или гейтов не добавлять.
 5. Доказать регрессионными тестами optional/nonblocking и blocking-real-defect; затем по фактическим RUN оценить влияние на ошибочные замечания, циклы и время без преждевременных обещаний.
 
-## Тестирование и выпуск — только после отдельного разрешения на реализацию
+## Тестирование и выпуск — реализация разрешена; merge и развёртывание требуют отдельного решения
 
 **OpenCode/my-opencode — самостоятельно, локально:** Node 24 / Bun 1.4.4 / tsx, installer + pin contracts, stage-cli budget/class-review/architecture-review/CodeReviewer regressions, permissions/capability-preflight, native CLI 2.2.7 + plugin readiness, full pipeline tests, isolated install/rollback. Никаких GitHub Actions для финальной проверки OpenCode. Без доступа к локальному checkout/runtime — явный blocker, а не фиктивный PASS.
 
