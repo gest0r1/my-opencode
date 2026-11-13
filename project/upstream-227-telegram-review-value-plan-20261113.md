@@ -27,10 +27,10 @@
 
 | Шаг | Статус | Контрольная точка |
 |---|---|---|
-| A0. Baseline и версия upstream: SHA, fork inventory, совместимость SDK, список защищённых функций | ⏳ | SHA + таблица fork-функций и рисков |
-| A1. Создание интеграционной ветки OpenChamber и upstream merge до 2.7.1 | ⏳ | merge tree / реальные конфликты / зафиксированный commit |
+| A0. Static baseline: SHA, fork inventory, SDK contracts, protected features | ✅ static complete | Ledger + SHA; runtime baseline tests deferred to E (NOT RUN) |
+| A1. Изолированная upstream-first сборка OpenChamber 2.7.1 и разбор пересечений | 🟡 WIP | Candidate `28a9366`; сохранены fork-only/overlap; 106 непроверенных пересечений после manifest reconciliation |
 | A2. Разбор конфликтов по функциям, а не перенос patch как есть, с #18 и исходными границами безопасности | ⏳ | решения preserve/reuse/adapt/delete с доказательствами |
-| A3. Согласованный pin OpenCode 2.2.7 во всех компонентах и проверка стартовых plugin events | ⏳ | сквозная версия, readiness, no premature agent missing |
+| A3. Согласованный pin OpenCode 2.2.7 во всех компонентах и проверка стартовых plugin events | 🟡 static pin PASS / runtime pending | core package, Docker, lock совпадают; plugin readiness ещё не проверен |
 | B. Telegram SDK extension: контракт, теневая доставка, миграция, затем контролируемое переключение | ⏳ | матрица эквивалентности и rollback; legacy удалять отдельно |
 | C1. Три независимых обнаружения класса и отсутствие senior при bounded confirmation | 🟡 WIP от старой базы | Код/тесты в ветке плана, не протестировано, после upstream перепроверить и перенести |
 | C2. PLAN: оценка отказа от необоснованных самописных механизмов | ⏳ | обоснование, вопрос владельцу до реализации без нового gate |
@@ -110,3 +110,10 @@
 - https://github.com/gest0r1/openchamber-ru/blob/main/packages/web/server/lib/notifications/DOCUMENTATION.md
 - https://github.com/gest0r1/openchamber-ru/blob/main/.github/workflows/oc-review.yml
 - https://github.com/gest0r1/openchamber-ru/blob/main/.github/workflows/telegram-notifications.yml
+
+### Журнал работы — 2026-11-14, после изменения порядка
+
+- **A0 (закрыт как статический baseline):** common ancestor OpenChamber 2.6.1 `ce853f4`, fork/main `1316bfe`, upstream 2.7.1 `f31748c`, OpenCode 2.2.7 `fedc6f2`. Сравнение полного дерева: 2181 upstream-only, 135 fork-only, 109 overlapping, 6207 unchanged. SDK 2.7.1 подтверждает service.keepRunning/sessionEvents/sessionControl; host notifications сами по себе не обеспечивают Telegram root completion, дедупликацию и detached-shell эквивалентность. Не менять на основании совпадения названий. Источник: [OC integration ledger](https://github.com/gest0r1/openchamber-ru/blob/feature/upstream-271-fork-reconciliation-20261114/project/upstream-271-20261114/integration-ledger.md). Фактические runtime тесты: **NOT RUN** (отнесены в E).
+- **A1 (не закрыт):** создана ветка `feature/upstream-271-fork-reconciliation-20261114` и pinned `upstream/v2.7.1-pinned-20261114`; кандидат `28a9366` — точное upstream дерево с сохранёнными fork-only и всеми contested fork blobs; файл ledger перечисляет каждый путь. Это **не утверждение о завершённом merge**: непереписанные пересекающиеся файлы остаются на старой версии, тесты NOT RUN.
+- **A3 (частично):** выровнены `package.json`, `packages/web/package.json`, `packages/electron/package.json` с upstream и защищены fork pins/публикация, коммиты `0f6e1ca`, `e63e28a`, `d1b6563`. Проверка контрактов без запуска кода: **static PASS** (все известные root/web/ui/vscode client/schema, Electron, Docker, lock = 2.2.7), `scripts/check-opencode-pins.mjs` и live plugin-readiness: **NOT RUN**. Ledger commit `d546aad`; осталось 106 file-level intersections, не равных 106 доказанным line-merge conflicts.
+- **Следующее:** A1/A2 — адресный перенос изменений `server/index.js`, Telegram paths, RU i18n, session status, release graph; затем native 2.2.7 readiness. Не сливать в main, не устанавливать на server до отдельного разрешения.
