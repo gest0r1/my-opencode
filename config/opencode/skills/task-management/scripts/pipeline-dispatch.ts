@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { computeRunnable, validateState } from './stage-cli-core.ts';
 import { validateOwnerAmendmentEvidence } from './owner-amendment-policy.ts';
 import { resolveGateTestingFile } from './gate-testing-policy.mjs';
-import { sourceInventory } from './gate-diagnostics.mjs';
+import { sourceInventory, changedFromInventory } from './gate-diagnostics.mjs';
+import { recordTestFirstBaseline, requireTestFirstBaseline } from './test-first-baseline.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { planProbeMatches } from './manifest-v2-policy.mjs';
 import { laneDigest, laneScope, laneReservations, leaseConflict, readLeases, readStagePaths, sameDispatch } from './dispatch-leases.mjs';
@@ -421,8 +422,41 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     if (hash(await readFile(file, 'utf8')) !== repairRuntime.repair_evidence.sha256) throw Error('REPAIR_EVIDENCE_CHANGED');
     evidencePaths.push(file);
   }
+  // Only an explicitly paired TestEngineer produces the RED-before-source baseline.
+  // Do not charge an extra inventory to unrelated TestEngineer work items.
+  const isIndependentRed = role === 'TestEngineer' && pipeline.work_items.some((id: string) => {
+    const unit = manifest.work_items.find((candidate: any) => candidate.id === id);
+    if (!unit) return false;
+    const consumer = JSON.parse(readFileSync(resolve(dirname(state.manifest_file), unit.path), 'utf8'));
+    return consumer.suggested_agent === 'CoderAgent' && consumer.stage === stage &&
+      consumer.test_first_work_item_id === workItemId;
+  });
+  if (isIndependentRed) {
+    const beforeRed = await sourceInventory(root, (exe: string, argv: string[]) => inventoryInvoke(root, exe, argv));
+    if (!beforeRed.files || !beforeRed.digest) throw Error('TDD_RED_SOURCE_INVENTORY_UNAVAILABLE');
+    await recordTestFirstBaseline(root, { run_id: run, pipeline_id: pipelineId, stage,
+      work_item_id: workItemId, work_item_sha256: frozen.sha256,
+      manifest_sha256: state.manifest_sha256, source_digest: beforeRed.digest, files: beforeRed.files });
+  }
   const revision = hash(JSON.stringify({ manifest: state.manifest_sha256, runtime, repairRuntime, effectiveScope, ownerAmendments: relevantAmendments }));
   const baseChecks = affectedAdvisoryChecks(manifest, pipeline, role);
+  let redBaseline: any = null;
+  let redScope: string[] = [];
+  if (role === 'CoderAgent' && typeof item.test_first_work_item_id === 'string') {
+    const testUnit = manifest.work_items.find((unit: any) => unit.id === item.test_first_work_item_id);
+    if (!testUnit || testUnit.pipeline_id !== pipelineId) throw Error('TDD_RED_WORK_ITEM_NOT_FROZEN');
+    const testItem = JSON.parse(await readFile(resolve(dirname(state.manifest_file), testUnit.path), 'utf8'));
+    if (testItem.suggested_agent !== 'TestEngineer' || testItem.stage !== stage ||
+        !Array.isArray(item.depends_on) || !item.depends_on.includes(testUnit.id)) {
+      throw Error('TDD_RED_WORK_ITEM_DEPENDENCY_INVALID');
+    }
+    if (!baseChecks.length) throw Error('TDD_GREEN_AFFECTED_CHECK_REQUIRED: give the consuming lane a frozen affected test profile');
+    redScope = checkedScope(testItem.allowed_change_paths ?? [], effectiveScope);
+    if (!redScope.length) throw Error('TDD_RED_SCOPE_MISSING');
+    redBaseline = await requireTestFirstBaseline(root, { run_id: run, pipeline_id: pipelineId,
+      stage, work_item_id: testUnit.id, work_item_sha256: testUnit.sha256,
+      manifest_sha256: state.manifest_sha256 });
+  }
   let itemScope = role === 'CoderAgent' ? coderScope(item, effectiveScope) : [];
   if (role === 'CoderAgent' && baseChecks.length > 0 && itemScope.length === 0 && runtimeAmendmentMatch) {
     itemScope = checkedScope(amendmentPaths, effectiveScope);
@@ -437,7 +471,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   // earlier PASS stale. Otherwise a PASS stays "fresh" after the repaired files change.
   const repairPaths = [...new Set([...(repairRuntime?.repair_paths ?? []), ...amendmentPaths])];
   const boundScope = role === 'CoderAgent' && itemScope.length > 0
-    ? [...new Set([...itemScope, ...checkedScope(repairPaths, effectiveScope)])] : itemScope;
+    ? [...new Set([...itemScope, ...redScope, ...checkedScope(repairPaths, effectiveScope)])] : itemScope;
   // Writers never start on paths another live worker may change, nor before their dependencies return.
   const writeScope = executor === 'agent' ? writerScope(item, boundScope, effectiveScope, readStagePaths(join(root, '.tmp/pipelines', run), pipelineId, stage)) : [];
   if (executor === 'agent' && !stageReview) {
@@ -453,6 +487,12 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     const baseProbe = await requireBaseProbe(root, run, state.manifest_file, manifest, pipeline, baseChecks.map(check => check.gate), item, effectiveScope);
     const inventory = await sourceInventory(root, (exe: string, argv: string[]) => inventoryInvoke(root, exe, argv));
     if (!inventory.files || !inventory.digest) throw Error('ADVISORY_BASELINE_UNAVAILABLE');
+    // A CoderAgent dispatch happens after TestEngineer has already written RED tests.
+    // Compare against BEFORE those tests to make --affected pick up their exact files.
+    if (redBaseline) {
+      const testChanges = changedFromInventory(inventory.files, redBaseline.files, redScope);
+      if (!testChanges?.length) throw Error('TDD_RED_TEST_CHANGE_MISSING: TestEngineer must deliver executable tests first');
+    }
     const baseline = await writeBaseline(root, run, {
       schema_version: 1,
       run_id: run,
@@ -469,8 +509,8 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       repair_origin_stage: runtime?.repair_origin_stage ?? null,
       repair_origin_pipeline: runtime?.repair_origin_stage ? (runtime.repair_origin_pipeline ?? pipelineId) : null,
       base_probe: baseProbe,
-      source_digest: inventory.digest,
-      files: inventory.files,
+      source_digest: redBaseline?.source_digest ?? inventory.digest,
+      files: redBaseline?.files ?? inventory.files,
       recorded_at: new Date().toISOString(),
     });
     // Exact allowlisted invocations (literal `$HOME`, matching CoderAgent's bash permission): the
@@ -481,7 +521,8 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       // Foreground with a long timeout: the worker sees the exit itself. A background shell wakes
       // only the child session, so its completion never reached the parent.
       shell: { background: false, timeout: 3_600_000 },
-      frozen_commands: (manifest.gate_profiles[pipeline.profile][check.gate] as string[]).map((command, index) => ({ index, command })) }));
+      frozen_commands: (manifest.gate_profiles[pipeline.profile][check.gate] as string[]).map((command, index) => ({ index, command })),
+      ...(redBaseline ? { test_first_work_item_id: item.test_first_work_item_id } : {}) }));
   }
   const reviewProof = executor === 'review'
     ? await recordReviewDispatch(root, run, pipelineId, stage, role, Number(runtime?.technical_fix_cycles ?? 0), manifest, state.manifest_file)
