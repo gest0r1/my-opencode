@@ -757,6 +757,22 @@ test('optional review suggestions never charge a fix cycle or a recurring defect
   assert.deepEqual(runtime.defect_class_history[0].classes, ['wrong-production-contract']);
 });
 
+test('an explicit blocker cannot be waived by optional-only notes', async () => {
+  const fx = await fixture('optional-and-blocker');
+  const cli = args => run(fx.root, [...args, '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  const review = await writeReview(fx, 'optional-plus-blocker.json', {
+    findings: [{ defect_class: 'test-idea', blocking: false, classification: 'optional' }],
+    blockers: [{ defect_class: 'real-security-gap', blocking: true, classification: 'security_fix' }],
+  });
+  let result = cli(['scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts']);
+  assert.equal(result.status, 0, result.stderr);
+  result = cli(['fix-cycle', fx.runId, 'code-review', '--evidence', review, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const runtime = JSON.parse(result.stdout).pipelines.app.stages['code-review'];
+  assert.equal(runtime.technical_fix_cycles, 1);
+  assert.deepEqual(runtime.defect_class_history[0].classes, ['real-security-gap']);
+});
+
 test('live PASS followed by bounded review findings reopens completed implementation without owner amendment', async () => {
   const fx = await fixture('live-pass-review-repair');
   const cli = args => run(fx.root, [...args, '--pipeline', 'app', '--state-root', fx.stateRoot]);
