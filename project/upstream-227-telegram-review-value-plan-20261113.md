@@ -52,12 +52,14 @@
 **RUN:** тесты будущих компонент не принадлежат предварительному test_preparation. В каждом независимом блоке готовность зависимых producers → RED (независимый TestEngineer, когда justified) → GREEN CoderAgent → impacted machine PASS → full CodeReviewer; unrelated готовые lanes параллельны. Coordinator/full gates только по замкнутым GREEN волнам/готовому source; финальный authoritative набор полный. CodeReviewer result должен быть persisted/source-bound, late negative review допускает обычный fix-cycle, но не owner amendment.
 
 **План реализации/проверки (обновлять после каждого блока):**
-1. [ ] Изменить PLAN orchestration: dependency-aware parallel artifacts, без несогласованного опережения, без искусственных stories.
-2. [ ] Уточнить инструкции StoryMapper / ArchitectureAnalyzer / ContractManager / TestEngineer (PLAN+RUN) / Senior* reviewer / TaskManager.
+1. [x] Изменить PLAN orchestration: dependency-aware parallel **authoring** после готовности общих inputs; review/freezing только при ready. **POLICY implemented, runtime-level PLAN parallel validation NOT RUN.**
+2. [x] Уточнить инструкции StoryMapper / ArchitectureAnalyzer / ContractManager / TestEngineer (PLAN+RUN) / Senior* reviewer / TaskManager / CoderAgent. **POLICY implemented; targeted tests NOT RUN.**
 3. [ ] Детерминированно проверить DAG/work-item роли и обязательный GREEN proof для выбранных RED work items; не создавать отдельные повторные проверки или новые неиспользуемые форматы.
-4. [ ] Согласовать RUN dispatch, coordinator gates, reviews/late-review и owner-acceptance с новым порядком.
+4. [~] Согласовать RUN dispatch, coordinator gates, reviews/late-review и owner-acceptance с новым порядком; policy green-wave rule added, CLI still needs tests.
 5. [ ] Targeted регрессии, при доступности Node24/Bun1.4.4/tsx изолированное интеграционное тестирование; сохранять NOT RUN без исполнения.
 6. [ ] Финальный audit: исходное ТЗ, нет дублирования работы, проверяемое состояние и дальнейшие критерии принятия, без merge/deploy.
+
+**Checkpoint 2026-11-15 / блок 1 — POLICY (SOURCE, tests NOT RUN):** утверждённые этапы и роли согласованы без дополнительных обязательных planning gates; добавлен риск-ориентированный TestEngineer PLAN assessment и выбор между независимым RED и TDD у CoderAgent, GREEN-only coordinator. Изменены `pipeline-plan.md` (`f481c69`), `task-manager.md` (`c6a9d39`), `test-engineer.md` (`89c2f81`), `story-mapper.md` (`ded9ab1`), `contract-manager.md` (`51be306`), `architecture-analyzer.md` (`83805ea`), `senior-technical-plan-reviewer.md` (`60c3696`), `coder-agent.md` (`b787f69`), `pipeline-run.md` (`ecdb717`). **NEXT:** закрыть исходно обнаруженный тестовый blind spot: независимые RED-тесты, написанные до Coder dispatch, должны входить в bound affected GREEN selection; затем machine regressions.
 
 **До начала этого блока:** my-opencode feature HEAD `1d6c9303eee65b193e58f711c8dd9ac154ae0c76`; текущие review-verdict unit tests ранее заявлены 4/4 PASS на Node22, обязательные end-to-end CLI/Node24/Bun **NOT RUN**. Все дальнейшие результаты привязывать к source SHA.
 
