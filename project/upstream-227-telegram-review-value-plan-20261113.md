@@ -1,11 +1,42 @@
 # План: OpenCode 2.2.7 + OpenChamber 2.7.1 + Telegram extension + защита от переусложнения
 
-Дата: 2026-11-13. Последняя актуализация состояния: **2026-11-14**. Статус: **PARTIAL IMPLEMENTATION / ACCEPTANCE OPEN — OpenChamber CI PASS, my-opencode runtime and Telegram cutover NOT ACCEPTED**. Не означает готовность к merge/deploy. Актуальная точка восстановления и остаток — в ближайшем блоке; старые записи ниже исторические.
+Дата: 2026-11-13. Последняя актуализация состояния: **2026-11-14**. Статус: **PARTIAL IMPLEMENTATION / ACCEPTANCE OPEN — Telegram SDK source added, latest OpenChamber grouped tests pending; my-opencode runtime and Telegram cutover NOT ACCEPTED**. Не означает готовность к merge/deploy. Актуальная точка восстановления и остаток — в ближайшем блоке; старые записи ниже исторические.
 Уточнения, утверждённые владельцем 2026-11-13: RUN class-review на третье обнаружение, без senior-review при сохранении подхода; PLAN — оценка необходимости самописного механизма и вопрос владельцу при отрицательном заключении.
 План размещён в отдельной ветке my-opencode; владелец 2026-11-14 разрешил реализацию в изолированных ветках, но не merge в main и не установку на сервер.
 
 
-## LATEST HANDOFF — актуальная точка возобновления, 2026-11-14
+## LATEST HANDOFF — Telegram SDK notifier и управление подписками, 2026-11-14
+
+**Актуально после утверждения владельцем новой архитектуры.** При продолжении сначала читать эту секцию и последнюю запись в [OpenChamber integration ledger](https://github.com/gest0r1/openchamber-ru/blob/feature/upstream-271-fork-reconciliation-20261114/project/upstream-271-20261114/integration-ledger.md). Предыдущий `5b347025` green checkpoint **больше не финальный SHA исходников**.
+
+| Repository | Source SHA before doc-only handoff | CI / acceptance |
+| --- | --- | --- |
+| `gest0r1/openchamber-ru`, `feature/upstream-271-fork-reconciliation-20261114` | **`7e25145c9ca142a1c8a9623033b9dac505834905`**, then doc-only ledger commit **`2023efb2922f0003b8b58ad33cd1e37aa926cf43`** | [PR #27](https://github.com/gest0r1/openchamber-ru/pull/27) DRAFT/OPEN. [CI 43628894909](https://github.com/gest0r1/openchamber-ru/actions/runs/43628894909): type-check, lint, build **PASS**, `tests` **IN PROGRESS at this checkpoint**; new Telegram shadow + notifier Node contract steps already **PASS**, full suite not yet final. [RU i18n 43628894980](https://github.com/gest0r1/openchamber-ru/actions/runs/43628894980) PASS, exact SHA. |
+| `gest0r1/my-opencode`, `feature/upstream-227-telegram-review-value-plan-20261113` | `c074e862e413aa93a41ffeb60dae6268cf33ac3a` (before this plan-only update; no code change) | Separate isolated Node24/Bun1.4.4/tsx runtime/installer/PLAN/RUN/GateRunner tests **NOT RUN**. No my-opencode Actions as final acceptance substitute. |
+
+### B3 — решение владельца утверждено, source реализован частично
+
+- **Выбран самостоятельный SDK-плагин `extensions/telegram-notifier`, не два параллельных Telegram sender.** Legacy остаётся исключительно текущим безопасным отправителем и fallback при невозможности обеспечить SDK parity. Telegram-бот не читает сообщения и команды, новых входящих действий не добавлять.
+- Реализованы read-only SDK/host методы `sessions.completion` плюс notifier-only `telegram.subscriptions`, `telegram.attention`, `telegram.deliverAttention`, `telegram.deliver`. Host проверяет активность root/descendants, detached shells, Goal, блокирующие form/permission, pending dispatch, последний terminal idle. Недоступность/сомнение => `unknown`, уведомление не отправляется. Проверка повторяется перед реальной доставкой. SDK события лишь триггер, **60 секунд** — независимый catch-up sweep после потери событий и рестарта. Токены/адресаты/реальный Bot API остаются в host с общим durable delivery ledger, включая `delivery_unknown`.
+- В OpenChamber Settings → Notifications → Telegram появился **«Отслеживаемые сессии»** с отображением свежего названия сессии, директорией проекта/worktree, получателем, пагинацией/поиском и **«Отключить»**. Список берётся из **всех активных подписок**, а не из последних 50 сессий; если OpenCode недоступен, используется сохранённое имя/ID. Включение подписки в текущей сессии сохранено.
+- Host `sender: legacy | paused | sdk` по умолчанию **legacy**. Есть UI-auth операторский endpoint для ручного controlled cutover, quiescent preflight на старых подписках, seed idle baselines, SDK readiness и rollback на legacy. **SDK не активирован на production**; автоматического переключения нет. Изолированные spaces прямо отклоняются preflight, их parity пока НЕ подтверждена. **Не трактовать наличие endpoint как принятое переключение.**
+- Изменения были в **51 коммите / 46 путях** OC после предыдущего doc-only checkpoint `72a37191`. Исходные проверки в PR после нового кода обязательны, исторические [PASS 43610434909](https://github.com/gest0r1/openchamber-ru/actions/runs/43610434909) относятся только к `5b347025`.
+
+### Открытые блоки, условия приёмки
+
+| Priority | Remaining work / evidence required |
+| --- | --- |
+| **P0** | Дождаться окончания `tests` [43628894909](https://github.com/gest0r1/openchamber-ru/actions/runs/43628894909); собрать точный **full PASS** (tests/type-check/lint/build/RU) либо исправить подтверждённые ошибки и перепроверить новый SHA. Нельзя пометить CI зелёным до факта. |
+| **P0** | Изолированный **real SDK host** install/approval/revoke, extension restart/drop/reconnect, lost-event catch-up, strict ACK, физическая delivery на disposable тестовом Telegram без секретов в логе/PR. Завершение root/children/shells/dispatch/Goal, form/permission/page cases, ambiguous delivery и user opt-out во время send. |
+| **P0** | **Sender cutover / rollback rehearsal:** проверить сохранность подписок/checkpoints/ledger, preflight при активности, `paused` в момент рестарта, concurrent delivery, single-owner, сквозной rollback. Для isolated spaces решить parity (либо явно оставить fallback до доказательства); система с одним выбранным SDK-отправителем, legacy только recovery. Нет merge/deploy. |
+| **P1** | UI smoke: давно завершённые и переименованные сессии, 50+ session history, разные worktrees/проекты, корректный live title/fallback, disable без прокрутки, сохранность after restart, поиск/пагинация, locale. Search сейчас фильтрует сохранённое имя **до** запроса актуального названия, возможный разрыв при rename — проверить. |
+| **Existing A3/C1/C2/D/E** | my-opencode isolated checkout Node24/Bun1.4.4/tsx; `bun install --frozen-lockfile`, model/variant/color #18, GateRunner permissions, PLAN/RUN class review and optional-only CodeReviewer CLI, rollback; OpenChamber manual fork UI/release smoke. Не утверждать, что уже пройдено. |
+
+**Политика:** только feature-ветки и draft PR. `main`, релизы, production и SSH **не трогать** без явного последующего разрешения. Старые handoff ниже исторические.
+
+---
+
+## HISTORICAL HANDOFF — prior 5b347025 checkpoint, superseded 2026-11-14
 
 **Сначала читать эту секцию, затем [OC ledger](https://github.com/gest0r1/openchamber-ru/blob/feature/upstream-271-fork-reconciliation-20261114/project/upstream-271-20261114/integration-ledger.md); нижние checkpoint и journal исторические.**
 
