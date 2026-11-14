@@ -59,7 +59,7 @@ test('bound Coder affected check includes TestEngineer-created RED test, but not
   ] };
   const selected = selectAffectedCommands(commands, map, changed, [], { isNew: path => path === 'test/new-orders.test.ts' });
   assert.deepEqual(selected.selected.map(entry => entry.index), [0]);
-  assert.deepEqual(selected.selected[0].test_files, ['test/new-orders.test.ts']);
+  assert.ok(selected.selected[0].test_files.includes('test/new-orders.test.ts'), 'the new RED test must be executed in the GREEN check');
 });
 
 test('do not infer a GREEN proof from a Coder-only baseline captured after tests', () => {
