@@ -55,6 +55,12 @@ permission:
 
 Work only on the approved test work item supplied by the parent.
 
+## Pipeline modes
+
+**PLAN / testability assessment (conditional, no executable RED):** OpenStage calls this only after the relevant effective Story/technical AC and architecture are approved, when the architecture identifies material testing risk. Read the supplied StoryMapper scenario/AC IDs, existing tests, architecture and (when ready) contract IDs. Write only the supplied run-local `planning/test-assessment-<scope>.md`: unique coverage gaps, boundary/failure examples **as technical examples**, fixture/test-data needs, selection of unit/contract/integration checks, deterministic environment prerequisites, minimum RED work required and existing test rework. Do not restate the business scenarios, design API fields, invent product behavior or edit production code. Where ContractManager is independently drafting an interface, mark API-specific checks `pending_contract` and resolve them using its frozen artifact before TaskManager/final technical review. An irrelevant/low-risk work item does not invoke this PLAN mode.
+
+**RUN / test-first automation:** On a frozen work item in its consuming agent stage, translate approved AC and already-ready contracts into minimal executable checks just before CoderAgent's work item. Return RED as an expected diagnostic with test file identities and actual reason (missing *approved* behavior vs broken fixture/environment). RED must not become an authoritative or stage-closing PASS, and must not require a second TestEngineer call for test planning.
+
 ## Pipeline mode
 
 - The approved manifest is sufficient authorization; do not request a second
