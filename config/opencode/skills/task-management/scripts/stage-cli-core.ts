@@ -576,7 +576,7 @@ function assertV2PlanningShape(manifest: PipelineManifest): void {
   for (const key of ['decision_register', 'work_items']) {
     assertFrozenArtifactShape(required[key], `planning_readiness.required_artifacts.${key}`);
   }
-  for (const key of ['technology_evidence', 'contract_inventory']) {
+  for (const key of ['technology_evidence', 'contract_inventory', 'test_assessment']) {
     if (required[key] !== undefined) {
       assertFrozenArtifactShape(required[key], `planning_readiness.required_artifacts.${key}`);
     }
