@@ -8,7 +8,7 @@ import { computeRunnable, validateState } from './stage-cli-core.ts';
 import { validateOwnerAmendmentEvidence } from './owner-amendment-policy.ts';
 import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 import { sourceInventory, changedFromInventory } from './gate-diagnostics.mjs';
-import { recordTestFirstBaseline, requireTestFirstBaseline } from './test-first-baseline.mjs';
+import { recordTestFirstBaseline, requireTestFirstBaseline, reusableTestFirstOnRepair } from './test-first-baseline.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { planProbeMatches } from './manifest-v2-policy.mjs';
 import { laneDigest, laneScope, laneReservations, leaseConflict, readLeases, readStagePaths, sameDispatch } from './dispatch-leases.mjs';
@@ -200,16 +200,30 @@ function sessionRegistry(root: string, run: string): any[] {
 // A result from a previous wave does not complete work reopened by an owner amendment or repair.
 // The stage start time is the wave boundary; it is persisted in machine state, not inferred from
 // a previous child session. No extra tool call is needed to check it.
-function workItemDone(state: any, registry: any[], pipelineId: string, workItemId: string, stage?: string): boolean {
+function workItemDone(state: any, registry: any[], pipelineId: string, workItemId: string, stage?: string, manifest?: any): boolean {
   const runtime = stage ? state.pipelines[pipelineId]?.stages?.[stage] : undefined;
   if (stage && runtime?.status === 'completed') return true;
   const waveStartedAt = stage ? Date.parse(String(runtime?.started_at ?? '')) : NaN;
   if (stage && !Number.isFinite(waveStartedAt)) return false;
-  return registry.some(entry =>
+  const results = registry.filter(entry =>
     entry.pipeline_id === pipelineId && entry.work_item_id === workItemId &&
-    (!stage || entry.stage === stage) && ['healthy', 'stale'].includes(entry.status) &&
-    (!stage || (Number.isFinite(Date.parse(String(entry.updated_at ?? ''))) &&
-      Date.parse(String(entry.updated_at)) >= waveStartedAt)));
+    (!stage || entry.stage === stage) && ['healthy', 'stale'].includes(entry.status));
+  if (results.some(entry =>
+    !stage || (Number.isFinite(Date.parse(String(entry.updated_at ?? ''))) &&
+      Date.parse(String(entry.updated_at)) >= waveStartedAt))) return true;
+  // Reopening a code-only repair must not repeatedly pay TestEngineer to recreate
+  // unchanged RED tests. A source/contract owner amendment or test-scope repair is not reusable.
+  if (!manifest || !stage || !runtime?.repair_origin_stage || !results.length || !state.manifest_file) return false;
+  const origin = state.pipelines[runtime.repair_origin_pipeline ?? pipelineId]?.stages?.[runtime.repair_origin_stage];
+  const unit = manifest.work_items.find((entry: any) => entry.id === workItemId && entry.pipeline_id === pipelineId);
+  if (!unit) return false;
+  const testItem = workItemRecord(manifest, state.manifest_file, unit);
+  if (testItem.suggested_agent !== 'TestEngineer') return false;
+  const consumers = manifest.work_items.filter((entry: any) => entry.pipeline_id === pipelineId)
+    .map((entry: any) => workItemRecord(manifest, state.manifest_file, entry));
+  return reusableTestFirstOnRepair({ testWorkItemId: workItemId, testItem,
+    consumerItems: consumers, repairPaths: origin?.repair_paths, sessionRegistry: results,
+    pipelineId, stage });
 }
 
 function pendingDependency(state: any, manifest: any, registry: any[], item: any, leases: any[]): string | null {
@@ -218,7 +232,7 @@ function pendingDependency(state: any, manifest: any, registry: any[], item: any
     if (!unit) continue;
     const stage = workItemStage(manifest, unit);
     if (leases.some((lease: any) => lease.pipeline_id === unit.pipeline_id && lease.work_item_id === dependency)) return dependency;
-    if (!workItemDone(state, registry, unit.pipeline_id, dependency, stage)) return dependency;
+    if (!workItemDone(state, registry, unit.pipeline_id, dependency, stage, manifest)) return dependency;
   }
   return null;
 }
@@ -279,7 +293,7 @@ export async function workItemWaves(root: string, run: string, pipelineFilter?: 
         if (item.stage !== undefined && item.stage !== stage) continue;
         const self = { pipeline_id: pipeline.id, stage, work_item_id: unit.id };
         if (leases.some((lease: any) => sameDispatch(lease, self))) { entry.running.push(unit.id); continue; }
-        if (workItemDone(state, registry, pipeline.id, unit.id, stage)) { entry.done.push(unit.id); continue; }
+        if (workItemDone(state, registry, pipeline.id, unit.id, stage, manifest)) { entry.done.push(unit.id); continue; }
         const dependency = pendingDependency(state, manifest, registry, item, leases);
         if (dependency) { entry.waiting.push({ id: unit.id, reason: `depends_on ${dependency}` }); continue; }
         if (amendmentEvidenceInvalid) {
