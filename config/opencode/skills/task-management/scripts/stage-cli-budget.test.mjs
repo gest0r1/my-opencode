@@ -736,6 +736,12 @@ test('optional review suggestions never charge a fix cycle or a recurring defect
   let result = cli(['fix-cycle', fx.runId, 'code-review', '--evidence', onlyOptional]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /REPAIR_RESULT_OPTIONAL_ONLY/);
+  const blockersOnly = await writeReview(fx, 'blockers-optional.json', {
+    status: 'needs_revision', blockers: [optional], defect_classes: [],
+  });
+  result = cli(['fix-cycle', fx.runId, 'code-review', '--evidence', blockersOnly]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /REPAIR_RESULT_OPTIONAL_ONLY/);
   const stateFile = path.join(fx.stateRoot, fx.runId, 'state.json');
   let state = JSON.parse(await readFile(stateFile, 'utf8'));
   assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles ?? 0, 0);
