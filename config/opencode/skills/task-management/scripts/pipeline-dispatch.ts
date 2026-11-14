@@ -10,7 +10,7 @@ import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 import { sourceInventory } from './gate-diagnostics.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { planProbeMatches } from './manifest-v2-policy.mjs';
-import { laneReservations, leaseConflict, readLeases, readStagePaths, sameDispatch } from './dispatch-leases.mjs';
+import { laneDigest, laneScope, laneReservations, leaseConflict, readLeases, readStagePaths, sameDispatch } from './dispatch-leases.mjs';
 
 const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
 // A review stage runs a full CodeReviewer; FindingsReviewer (cheaper model) only re-checks findings a review already issued.
@@ -318,12 +318,29 @@ export function reviewDispatchPath(root: string, run: string, pipelineId: string
   return join(root, '.tmp/pipelines', run, 'checks', 'review-dispatch', `${pipelineId}--${stage}.json`);
 }
 
-async function recordReviewDispatch(root: string, run: string, pipelineId: string, stage: string, role: string, loop: number) {
+async function recordReviewDispatch(root: string, run: string, pipelineId: string, stage: string, role: string,
+  loop: number, manifest: any, manifestFile: string) {
+  const runRoot = join(root, '.tmp/pipelines', run);
+  const pipeline = manifest.pipelines.find((item: any) => item.id === pipelineId);
+  // A sink review sees interactions across source lanes; a source-lane review owns only
+  // its local files. Both are pinned to the bytes the reviewer was dispatched to see.
+  const scope = pipeline?.depends_on?.length ? [] : laneScope(manifest, dirname(manifestFile), runRoot, pipelineId);
+  const inventory = await sourceInventory(root, (exe: string, argv: string[]) => inventoryInvoke(root, exe, argv), scope);
+  if (!inventory.files || !inventory.digest) throw Error('REVIEW_SOURCE_INVENTORY_UNAVAILABLE');
+  const sourceDigest = scope.length
+    ? laneDigest(inventory.files, scope, manifest.generated_paths ?? []) : inventory.digest;
+  if (!sourceDigest) throw Error('REVIEW_SOURCE_INVENTORY_UNAVAILABLE');
+  const recordedAt = new Date().toISOString();
+  const reviewDispatchId = hash(JSON.stringify([run, pipelineId, stage, role, loop, sourceDigest, recordedAt]));
+  const record = { run_id: run, pipeline_id: pipelineId, stage, role, loop,
+    source_scope: scope, source_digest: sourceDigest, review_dispatch_id: reviewDispatchId,
+    recorded_at: recordedAt };
   const target = reviewDispatchPath(root, run, pipelineId, stage);
   await mkdir(dirname(target), { recursive: true });
   const temporary = `${target}.tmp-${process.pid}`;
-  await writeFile(temporary, `${JSON.stringify({ run_id: run, pipeline_id: pipelineId, stage, role, loop, recorded_at: new Date().toISOString() }, null, 2)}\n`, 'utf8');
+  await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
   await rename(temporary, target);
+  return { review_dispatch_id: reviewDispatchId, review_source_digest: sourceDigest };
 }
 
 export async function dispatchPacket(root: string, run: string, pipelineId: string, stage: string, workItemId: string, role: string) {
@@ -466,11 +483,14 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       shell: { background: false, timeout: 3_600_000 },
       frozen_commands: (manifest.gate_profiles[pipeline.profile][check.gate] as string[]).map((command, index) => ({ index, command })) }));
   }
-  if (executor === 'review') await recordReviewDispatch(root, run, pipelineId, stage, role, Number(runtime?.technical_fix_cycles ?? 0));
+  const reviewProof = executor === 'review'
+    ? await recordReviewDispatch(root, run, pipelineId, stage, role, Number(runtime?.technical_fix_cycles ?? 0), manifest, state.manifest_file)
+    : undefined;
   return { run_id: run, pipeline_id: pipelineId, stage, executor, role, work_item_id: workItemId,
     // The orchestrator passes a path; only the targeted worker reads these stage rules.
     ...(executor === 'agent' && RUN_WORKER_RULE_ROLES.has(role) ? { run_stage_rules_path: RUN_WORKER_RULES } : {}),
     work_item_path: workItemPath, work_item_sha256: frozen.sha256, authoritative_paths: [state.manifest_file, state.rules_file, ...referencePaths, ...amendmentEvidence],
+    ...(reviewProof ?? {}),
     review_work_items: stageReview ? [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems].map((w: any) => ({ id: w.id, path: resolve(dirname(state.manifest_file), w.path), sha256: w.sha256 })) : undefined,
     context_paths: (item.context_files ?? []).map((p: string) => resolve(root, p)), reference_paths: (item.reference_files ?? []).map((p: string) => resolve(root, p)),
     decision_ids: item.decision_ids ?? pipeline.decision_ids ?? [], research_ids: item.research_ids ?? pipeline.research_ids ?? [], contract_ids: item.contract_ids ?? pipeline.contract_ids ?? [],
