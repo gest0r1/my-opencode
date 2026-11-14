@@ -1,4 +1,5 @@
 import { acceptedReconciliations } from './reconcile-evidence.ts';
+import { readReviewVerdict } from './review-result-evidence.mjs';
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
 import { access, cp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -2016,7 +2017,18 @@ export async function recordTechnicalFixCycle(
         `SECURITY_FIX_REPAIR_CLASS_REQUIRED: ${pipeline.id}/${stage} has approved security-fix evidence; use --repair-class security_fix`,
       );
     }
-    if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
+    // A legacy RUN could close a review before the asynchronous reviewer verdict
+    // arrived. Accept that exact late *blocking* result as an ordinary charged
+    // repair, without an owner amendment. New RUNs cannot close without READY.
+    const lateReview = runtime.status === 'completed' && spec?.executors?.[stage] === 'review';
+    if (lateReview) {
+      try {
+        readReviewVerdict({ stateRoot, runId, pipelineId: pipeline.id, stage,
+          evidencePath: absoluteRepair, mode: 'negative', allowLegacy: true });
+      } catch (error) {
+        throw new StageCliError(error instanceof Error ? error.message : String(error));
+      }
+    } else if (!['in_progress', 'failed', 'blocked'].includes(runtime.status)) {
       throw new StageCliError(`Fix cycle is not allowed while stage is ${runtime.status}: ${pipeline.id}/${stage}`);
     }
     const limit = technicalFixLimit(runtime);
