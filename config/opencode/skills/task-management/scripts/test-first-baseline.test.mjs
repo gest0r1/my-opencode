@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { recordTestFirstBaseline, requireTestFirstBaseline, testFirstBaselinePath } from './test-first-baseline.mjs';
+import { recordTestFirstBaseline, requireTestFirstBaseline, testFirstBaselinePath, reusableTestFirstOnRepair } from './test-first-baseline.mjs';
 import { changedFromInventory } from './gate-diagnostics.mjs';
 import { selectAffectedCommands } from './gate-testing-policy.mjs';
 
@@ -68,4 +68,20 @@ test('do not infer a GREEN proof from a Coder-only baseline captured after tests
   const afterGREEN = { ...afterRED, 'src/orders.ts': C };
   assert.deepEqual(changedFromInventory(afterGREEN, afterRED, ['test/**', 'src/orders.ts']), ['src/orders.ts']);
   assert.deepEqual(changedFromInventory(afterGREEN, beforeRED, ['test/**', 'src/orders.ts']), ['src/orders.ts', 'test/new-orders.test.ts']);
+});
+
+test('reuses an existing TestEngineer RED result only for independent code-only repair', () => {
+  const base = { testWorkItemId: 'red', testItem: {
+    pipeline_id: 'app', stage: 'implementation', suggested_agent: 'TestEngineer',
+    allowed_change_paths: ['test/**'] },
+  consumerItems: [{ pipeline_id: 'app', stage: 'implementation',
+    suggested_agent: 'CoderAgent', test_first_work_item_id: 'red' }],
+  pipelineId: 'app', stage: 'implementation', repairPaths: ['src/orders.ts'],
+  sessionRegistry: [{ pipeline_id: 'app', stage: 'implementation', work_item_id: 'red', status: 'healthy' }] };
+  assert.equal(reusableTestFirstOnRepair(base), true);
+  assert.equal(reusableTestFirstOnRepair({ ...base, repairPaths: ['test/orders.test.ts'] }), false);
+  assert.equal(reusableTestFirstOnRepair({ ...base, repairPaths: [] }), false);
+  assert.equal(reusableTestFirstOnRepair({ ...base, consumerItems: [] }), false);
+  assert.equal(reusableTestFirstOnRepair({ ...base, sessionRegistry: [] }), false);
+  assert.equal(reusableTestFirstOnRepair({ ...base, testItem: { ...base.testItem, stage: 'other' } }), false);
 });
