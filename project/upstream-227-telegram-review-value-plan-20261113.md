@@ -29,7 +29,7 @@
 |---|---|---|
 | A0. Static baseline: SHA, fork inventory, SDK contracts, protected features | ✅ static complete | Ledger + SHA; runtime baseline tests deferred to E (NOT RUN) |
 | A1. Upstream 2.7.1 source-path reconciliation (all overlapping paths classified) | ✅ static complete; tests pending | 109 overlap paths reconciled, 0 pending; candidate not release-ready |
-| A2. Разбор конфликтов по функциям, а не перенос patch как есть, с #18 и исходными границами безопасности | 🟡 WIP | 62 file-level overlaps reconciled; 44 pending |
+| A2. Разбор конфликтов по функциям, а не перенос patch как есть, с #18 и исходными границами безопасности | ✅ static complete; runtime pending | 109/109 пересечений разобраны, 0 pending; данные о 44/52 ниже — исторические промежуточные срезы |
 | A2-i18n. RU language labels + сохранение Telegram settings во всех 15 языках | ✅ static complete | 30/30 files, uniqueness checks PASS, runtime tests deferred to E |
 | A2-i18n SDK. Актуальные upstream i18n modules/test, RU fallback, RTL loader, ToolPart timing | ✅ static complete | 24 files; 52 overlap paths pending, Bun/typecheck NOT RUN |
 | A2-updater/UI. Защита fork update source, extension catalog, page-answer directory | ✅ static complete | 4 files; 48 overlap paths pending, tests NOT RUN |
@@ -39,11 +39,11 @@
 | A2-workflows. Keep fork-only deleted workflows, reconcile mobile CI/README | ✅ static merged, runtime unverified | 11 overlaps (8 deletions retained), static policy 7/7 PASS |
 | A2-chat/sync. ChatInput linked issues, ToolPart colors, Telegram button, sync timings | ✅ static merged, runtime unverified | 4 overlapping paths; CI type-check pending |
 | A2-release/CLI. Preserve x64 fork graph, merge startup and extension locale | ✅ static merged, runtime unverified | 5 paths; fork release deliberately retained |
-| A3. Согласованный pin OpenCode 2.2.7 во всех компонентах и проверка стартовых plugin events | 🟡 static pin PASS / runtime pending | core package, Docker, lock совпадают; plugin readiness ещё не проверен |
-| B. Telegram SDK extension: контракт, теневая доставка, миграция, затем контролируемое переключение | ⏳ | матрица эквивалентности и rollback; legacy удалять отдельно |
+| A3. Согласованный pin OpenCode 2.2.7 во всех компонентах и проверка стартовых plugin events | 🟡 partial | OpenChamber manifest/Docker/lock 2.2.7; my-opencode manifest/lock/installer всё ещё 2.2.5. Временный legacy bypass удалён. Full plugin readiness/rollback NOT RUN |
+| B. Telegram SDK extension: контракт, теневая доставка, миграция, затем контролируемое переключение | 🟡 passive shadow + HTTP test PASS at OC c2ec99c | SDK Node сервис тени готов; OpenChamber host grant, эквивалентность, миграция, cutover и rollback NOT RUN; отправитель отключён |
 | C1. Три независимых обнаружения класса и отсутствие senior при bounded confirmation | 🟡 WIP от старой базы | Код/тесты в ветке плана, не протестировано, после upstream перепроверить и перенести |
-| C2. PLAN: оценка отказа от необоснованных самописных механизмов | ⏳ | обоснование, вопрос владельцу до реализации без нового gate |
-| D. CodeReviewer: блокирующий дефект vs optional | ⏳ | доказанные регрессионные кейсы |
+| C2. PLAN: оценка отказа от необоснованных самописных механизмов | 🟡 static source implemented / NOT RUN | ExternalScout → ArchitectureAnalyzer → SeniorTechnicalPlanReviewer → существующий owner decision без нового gate; интеграционный тест ещё не выполнен |
+| D. CodeReviewer: блокирующий дефект vs optional | 🟡 policy + deterministic CLI guard + test written / NOT RUN | необязательные замечания не расходуют fix-cycle; тест добавлен, исполнение ещё не подтверждено |
 | E. Регрессии, финальный GitHub Actions OpenChamber / локальные OpenCode тесты, handoff | ⏳ | PASS на candidate SHA либо явный blocker; без merge/deploy |
 
 **Лог завершений / восстановление:** после закрытия каждого шага записывать дату, репозиторий, commit SHA, тесты (PASS/FAIL/NOT RUN), остаточные проблемы и следующий шаг непосредственно в этом файле; затем отправлять отдельное сообщение в чат. Статус «завершено» ставить только после соответствующей проверки. При отсутствии локальной среды фиксировать фактический blocker, а не «PASS».
