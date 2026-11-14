@@ -1,16 +1,16 @@
 # План: OpenCode 2.2.7 + OpenChamber 2.7.1 + Telegram extension + защита от переусложнения
 
-Дата: 2026-11-13. Последняя актуализация состояния: **2026-11-14**. Статус: **ACCEPTANCE OPEN — OC Telegram SDK candidate e3489d7 in grouped CI; my-opencode runtime and real Telegram cutover NOT ACCEPTED**. Не означает готовность к merge/deploy. Актуальная точка восстановления и остаток — в ближайшем блоке; старые записи ниже исторические.
+Дата: 2026-11-13. Последняя актуализация состояния: **2026-11-14**. Статус: **ACCEPTANCE OPEN — OpenChamber CI PASS on exact source e3489d7; isolated my-opencode runtime and real Telegram cutover NOT ACCEPTED**. Не означает готовность к merge/deploy. Актуальная точка восстановления и остаток — в ближайшем блоке; старые записи ниже исторические.
 Уточнения, утверждённые владельцем 2026-11-13: RUN class-review на третье обнаружение, без senior-review при сохранении подхода; PLAN — оценка необходимости самописного механизма и вопрос владельцу при отрицательном заключении.
 План размещён в отдельной ветке my-opencode; владелец 2026-11-14 разрешил реализацию в изолированных ветках, но не merge в main и не установку на сервер.
 
 
 ## CURRENT STATUS — читать первым, 2026-11-14
 
-- **OC code candidate:** [PR #27](https://github.com/gest0r1/openchamber-ru/pull/27) OPEN/DRAFT, `feature/upstream-271-fork-reconciliation-20261114` **`e3489d7fb53d05b7f01e82ef8ec9d9719c6a5679`**. [Grouped run 43634139182](https://github.com/gest0r1/openchamber-ru/actions/runs/43634139182): **IN PROGRESS**, do not claim PASS; [RU 43634139212](https://github.com/gest0r1/openchamber-ru/actions/runs/43634139212): **PASS**. The previous `b1bc067` test run failed one NEW fixture because the host lacked an OpenCode test provider; that fixture was corrected in `e3489d7`.
+- **OpenChamber source (FULL CI PASS):** [PR #27](https://github.com/gest0r1/openchamber-ru/pull/27) **OPEN/DRAFT, NOT MERGED**. Feature branch source **`e3489d7fb53d05b7f01e82ef8ec9d9719c6a5679`**; [grouped CI 43634139182](https://github.com/gest0r1/openchamber-ru/actions/runs/43634139182) **PASS tests/type-check/lint/build**; [RU 43634139212](https://github.com/gest0r1/openchamber-ru/actions/runs/43634139212) **PASS**, both on exact source SHA. Following ledger-only commit **`de777c5f30022097a511eb28846bc642db9548b3`** recorded acceptance without modifying source. No real Bot API or full host cutover acceptance.
 - **my-opencode:** current source last confirmed at `c074e862e413aa93a41ffeb60dae6268cf33ac3a` before documentation-only handovers; `OpenCode 2.2.7 / OpenChamber 2.7.1` pins and PLAN/RUN policies staged. Exact `preserve-agent-colors.mjs` Node22 isolated smoke **PASS**; Node24/Bun1.4.4 frozen install and A3/C1/C2/D/installer rollback **NOT RUN**.
 - **Not yet done:** real host SDK install with disposable Bot API, lost-event/Goal/child/shell/dispatch/attention cases, in-flight opt-out, physical delivery, manual UI/worktree smoke, cross-space parity (explicitly rejected by SDK preflight), complete rollback rehearsal, and full my-opencode runtime. **No main merge, release, production deploy, SSH or installation.**
-- **NEXT:** verify grouped CI exact `e3489d7`; fix actual failures only. Then synchronize OC ledger and this summary; complete isolated runtime acceptance following [pre-install checklist](./pre-install-acceptance-20261114.md). Never call code install-ready from source-only evidence.
+- **NEXT:** complete genuinely isolated real SDK/Telegram/cutover and UI acceptance, plus independent my-opencode Node24/Bun1.4.4 frozen install, GateRunner/PLAN/RUN and installer rollback, using [pre-install checklist](./pre-install-acceptance-20261114.md). If isolated host or disposable credentials are unavailable, record **NOT RUN**, keep draft PR; never claim ready for installation from CI alone.
 
 ---
 
@@ -21,6 +21,15 @@
 **После КАЖДОГО ЗАВЕРШЁННОГО ДЕЙСТВИЯ** (кодовый фикс, новая проверка/разбор CI, завершение тестового блока, решение о переносе/откате, обнаруженный блокер) **в том же рабочем ходе обновить этот handover**: что конкретно закрыто, пути, commit/source SHA, команда/CI run + результат `PASS/FAIL/NOT RUN`, остающиеся ограничения и **единственный следующий исполнимый шаг**. Если действие касается OpenChamber, синхронизировать его `project/upstream-271-20261114/integration-ledger.md`, когда обновление не отменит уже идущий CI; пока CI идёт, обновлять handover в my-opencode и переносить в ledger после завершения прогона. **Не писать PASS без проверенного теста на точном SHA.** Не подменять новые действия переписыванием истории, не допускать устаревших статусов в верхнем блоке. В чате кратко отмечать закрытое действие и ссылку на commit/checkpoint.
 
 **Согласованные границы:** продолжить до состояния «готово к установке и пользовательской проверке», но **не устанавливать**, не выполнять SSH/production действия и не сливать в main без отдельного разрешения. Ветка/PR остаётся изолированной и draft до приёмки.
+
+## VERIFIED CHECKPOINT — 2026-11-14, после OC ledger
+
+- **Закрыто:** OpenChamber source SHA `e3489d7fb53d05b7f01e82ef8ec9d9719c6a5679`, [PR CI 43634139182](https://github.com/gest0r1/openchamber-ru/actions/runs/43634139182) **PASS** (`tests`, `type-check`, `lint`, `build`); [RU 43634139212](https://github.com/gest0r1/openchamber-ru/actions/runs/43634139212) **PASS** на том же SHA. Предыдущий FAIL нового SDK-provider fixture исправлен и проверен.
+- **Документация синхронизирована:** OC `project/upstream-271-20261114/integration-ledger.md`, doc-only commit `de777c5f30022097a511eb28846bc642db9548b3`; исходники после зелёного SHA не менялись. Этот checkpoint — doc-only update master handover.
+- **Открыто (NOT RUN):** реальный SDK host/физический disposable Telegram send, end-to-end cutover/rollback и cross-space parity, UI smoke, my-opencode изолированный Node24/Bun1.4.4/tsx frozen install/PLAN/RUN/GateRunner/#18 installer rollback. Никаких main/SSH/prod/release/installation.
+- **Следующий исполнимый шаг:** выполнить реальные изолированные acceptance-проверки по `project/pre-install-acceptance-20261114.md` при наличии нужной среды. Без них не объявлять INSTALL READY.
+
+---
 
 ## ACTION JOURNAL — 2026-11-14, хронологические checkpoints (история)
 
