@@ -99,6 +99,7 @@ export interface PlanningReadinessV2 {
     work_items: FrozenArtifact;
     technology_evidence?: FrozenArtifact;
     contract_inventory?: FrozenArtifact;
+    test_assessment?: FrozenArtifact;
   };
 }
 
