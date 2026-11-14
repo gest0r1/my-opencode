@@ -5,6 +5,25 @@
 План размещён в отдельной ветке my-opencode; владелец 2026-11-14 разрешил реализацию в изолированных ветках, но не merge в main и не установку на сервер.
 
 
+## РЕЖИМ РАБОТЫ ПО HANDOVER — постоянное правило (владелец, 2026-11-14)
+
+**При каждом возобновлении:** сначала прочитать этот блок, затем самый новый checkpoint в начале handover и последний `LATEST HANDOFF` в OC integration ledger; только после этого проверить реальные HEAD, PR CI и затронутый код. Старые статусы — история, не источник текущего PASS.
+
+**После КАЖДОГО ЗАВЕРШЁННОГО ДЕЙСТВИЯ** (кодовый фикс, новая проверка/разбор CI, завершение тестового блока, решение о переносе/откате, обнаруженный блокер) **в том же рабочем ходе обновить этот handover**: что конкретно закрыто, пути, commit/source SHA, команда/CI run + результат `PASS/FAIL/NOT RUN`, остающиеся ограничения и **единственный следующий исполнимый шаг**. Если действие касается OpenChamber, синхронизировать его `project/upstream-271-20261114/integration-ledger.md`, когда обновление не отменит уже идущий CI; пока CI идёт, обновлять handover в my-opencode и переносить в ledger после завершения прогона. **Не писать PASS без проверенного теста на точном SHA.** Не подменять новые действия переписыванием истории, не допускать устаревших статусов в верхнем блоке. В чате кратко отмечать закрытое действие и ссылку на commit/checkpoint.
+
+**Согласованные границы:** продолжить до состояния «готово к установке и пользовательской проверке», но **не устанавливать**, не выполнять SSH/production действия и не сливать в main без отдельного разрешения. Ветка/PR остаётся изолированной и draft до приёмки.
+
+## CURRENT CHECKPOINT — 2026-11-14, возобновление после CI-разбора
+
+- **my-opencode:** branch HEAD перед этой записью `73b26d166fef8b1abaac00c4ce589d47a95c7003`; отличие от прежнего `c074e862` — лишь прошлый handover. A3/C1/C2/D runtime с Node24/Bun1.4.4/tsx **NOT RUN**.
+- **OpenChamber:** source HEAD теперь **`ba833b7944a22c372f61def40c61b8af61fee66c`**, PR [#27](https://github.com/gest0r1/openchamber-ru/pull/27) OPEN/DRAFT, нет merge/deploy. Предыдущий `7e25145c` + documentation `2023efb`: CI `43628894909` cancelled, последующий `43629513130` **FAIL** (11 030 tests PASS / **один FAIL**, прочие type-check/lint/build PASS; RU PASS).
+- **Подтверждённая причина и закрытый фикс:** `packages/web/server/lib/guests/service-host-api.test.js` в fixture "SDK read-only terminal proof approval" наследовал `row()` с `sessionControl` и `instructions` при grants `['service','opencode']`; SDK одобрение правильно отвечало **403 DISABLED**, а fixture ошибочно ожидал **200**. Коммит `ba833b7` явно задаёт `sessionControl: undefined, instructions: undefined` для read-only notifier. **Production-код и grants не расширены**. Это подтверждённый узкий test-only фикс, но его CI **ещё не объявлен PASS**.
+- **Открытая CI проверка точного source SHA:** [PR run 43630948473](https://github.com/gest0r1/openchamber-ru/actions/runs/43630948473) был `in_progress` при последней проверке, [RU 43630948467](https://github.com/gest0r1/openchamber-ru/actions/runs/43630948467) **PASS**. Проверить финал обоих; не считать исторический CI доказательством нового source.
+- **Дополнительно подтверждено статикой:** SDK `extensions/telegram-notifier` содержит 60-сек sweep и read-only `sessions.completion`; host имеет `sender=legacy|paused|sdk`, опт-ин список старых сессий и дедуп delivery. **Не проведены real SDK host/Telegram send/опт-аут/cutover/rollback и my-opencode runtime**. У списка подписок серверский поиск по `q` фильтрует сохранённый title **до** обновления live title; rename может не находиться — открытый P1.
+- **Следующий шаг:** прочитать полный финал CI `43630948473`, устранить только подтверждённые проблемы; затем выполнить Telegram host/cutover/rollback/UI acceptance и A3/C1/C2/D isolated runtime, фиксируя каждый закрытый блок здесь и в OC ledger. Не сливать в main, не устанавливать.
+
+---
+
 ## LATEST HANDOFF — Telegram SDK notifier и управление подписками, 2026-11-14
 
 **Актуально после утверждения владельцем новой архитектуры.** При продолжении сначала читать эту секцию и последнюю запись в [OpenChamber integration ledger](https://github.com/gest0r1/openchamber-ru/blob/feature/upstream-271-fork-reconciliation-20261114/project/upstream-271-20261114/integration-ledger.md). Предыдущий `5b347025` green checkpoint **больше не финальный SHA исходников**.
