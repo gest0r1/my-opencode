@@ -82,6 +82,10 @@
 
 **Порядок для C1/C2/D:** исполнять лишь после A0–A3, а при проектировании B применять выводы C2/D без преждевременного переноса патчей C1. Текущее C1 WIP — не завершённый блок.
 
+
+- **B1 SDK shadow (код создан, тестирование не завершено 2026-11-14):** в OC fork добавлено независимое `extensions/telegram-shadow/` (коммиты `413d389`, `cb0f7a3`), manifest public `sessionEvents` 2.7.1 + `keepRunning`, session root/subagent event journal с auth и atomic mode 0600, без transcript, токенов и отправки в Telegram, имеются `node:test` регрессии. **Execution NOT RUN**, подключение к host/паритет legacy НЕ проверены; не включать sender/cutover. Лог: [OC ledger](https://github.com/gest0r1/openchamber-ru/blob/feature/upstream-271-fork-reconciliation-20261114/project/upstream-271-20261114/integration-ledger.md).
+- **CI E текущая точка:** `a072961` PR #27 (2026-11-14) RU/updater/release PASS; type-check/lint/build PASS; tests **FAIL** (1359/1360). Повторный дефект только `guestLinks.render.test.ts` — уже третье независимое отрицательное обнаружение класса, после проб `useUIStore` и тайминг ожидания. Не допускать очередных гипотетических патчей: исследовать deterministic mount/guest store/Streamdown parser, различить upstream known issue и недостаточный fixture, только после evidence исправить. В старом коде приложение совпадает с upstream SHA и ошибка в тестовой Happy DOM среде может быть отдельно, **не доказано**. PR не merge/deploy. Новые B1 files еще не прогонялись.
+
 ## Блок C — трёхкратный повтор класса и предотвращение переусложнения
 
 ### C1. RUN: три обнаружения, а не два
