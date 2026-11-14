@@ -73,6 +73,8 @@ gap. Call ExternalScout only for a missing current external testing/API fact.
 
 ## Test design
 
+The reviewed StoryMapper scenarios and named acceptance checks (or technical AC for technical-only work) are the **single source of test intent**. Reference their IDs and the approved contract; do not create, restate or independently expand a second scenario/test-plan document. Before writing assertions, confirm the producer/dependency milestones of this consuming work item are ready. Implement minimal executable tests immediately before the corresponding CoderAgent work item in the **same lane**. Record the expected RED failures on missing behavior as diagnostic evidence, not an implementation-stage PASS requirement; CoderAgent must turn them GREEN with the bound affected check. Do not put future-feature RED tests in a preceding test-preparation lane, do not weaken an existing green suite, and do not add tests for unspecified behavior.
+
 - Cover acceptance criteria and material failure/edge cases; do not mechanically
   maximize line coverage.
 - Prefer repository-native test framework/patterns.
