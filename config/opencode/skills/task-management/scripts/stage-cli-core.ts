@@ -1964,7 +1964,10 @@ export async function recordTechnicalFixCycle(
     if (spec?.executors?.[stage] === 'review' &&
         Array.isArray(result.findings) && result.findings.length > 0 &&
         result.findings.every((finding: any) => finding && typeof finding === 'object' &&
-          finding.blocking === false && finding.classification === 'optional')) {
+          finding.blocking === false && finding.classification === 'optional') &&
+        (!Array.isArray(result.blockers) || !result.blockers.some((finding: any) =>
+          finding && typeof finding === 'object' && finding.blocking !== false &&
+          finding.classification !== 'optional'))) {
       throw new StageCliError('REPAIR_RESULT_OPTIONAL_ONLY: nonblocking suggestions cannot spend a fix cycle');
     }
     if (spec?.executors?.[stage] !== 'review' && (result.status !== 'FAIL' || result.run_id !== runId || result.pipeline_id !== pipeline.id || (result.stage ?? result.gate) !== stage || result.purpose === 'advisory')) throw new StageCliError('REPAIR_MACHINE_RESULT_REQUIRED: use failed authoritative gate evidence');
