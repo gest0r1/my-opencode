@@ -18,7 +18,8 @@
 
 - **Approved:** option A; reuse StoryMapper's existing scenarios and AC, do not write a duplicate test scenario plan. TestEngineer authors executable tests in the consuming lane immediately before its Coder work item; future-feature tests do not run in prep lanes. Keep final frozen full gates.
 - **Action 1 (CODE, NOT RUN):** new shared verifier `config/opencode/skills/task-management/scripts/review-result-evidence.mjs`, commit `9061cd97ebe007eb2f63c36038ac35ac41a054e7`; enforces persisted source-bound full CodeReviewer verdict, rejects missing/stale/mismatched results and blocking findings. **Not wired to CLI yet.**
-- **NEXT:** bind review dispatch to source identity, enforce verdict in stage completion/late negative fix-cycle, then targeted regression tests and POLICY; update this ledger after each completed block. No main/SSH/prod/install.
+- **Action 2 (CODE, NOT RUN):** `pipeline-dispatch.ts` now binds full CodeReviewer packet to scoped/full source inventory digest and unique dispatch ID, commit `6c4606a20b5414fc7c00d39931b682a2f66d16ee`. Source-bound result fields are delivered to reviewer; completion guard still pending.
+- **NEXT:** enforce verdict at stage completion and support authorized late negative review in fix-cycle; tests/policies after. No main/SSH/prod/install.
 
 ## РЕЖИМ РАБОТЫ ПО HANDOVER — постоянное правило (владелец, 2026-11-14)
 
