@@ -52,3 +52,30 @@ export async function requireTestFirstBaseline(root, expected) {
   }
   return found;
 }
+
+// Repair cycles should not re-author an unchanged independent RED specification.
+// Reuse it only when the last verified TestEngineer result belongs to a frozen
+// pair and the repair's authorized paths do not intersect its test/support scope.
+function covers(scope, target) {
+  if (scope.endsWith('/**')) {
+    const base = scope.slice(0, -3);
+    return target === base || target.startsWith(base + '/');
+  }
+  return scope === target;
+}
+export function reusableTestFirstOnRepair({
+  testWorkItemId, testItem, consumerItems, repairPaths, sessionRegistry, pipelineId, stage,
+}) {
+  if (!identity(testWorkItemId) || testItem?.suggested_agent !== 'TestEngineer' ||
+      testItem.pipeline_id !== pipelineId || testItem.stage !== stage ||
+      !Array.isArray(consumerItems) || !consumerItems.some(item =>
+        item.pipeline_id === pipelineId && item.stage === stage &&
+        item.suggested_agent === 'CoderAgent' && item.test_first_work_item_id === testWorkItemId) ||
+      !Array.isArray(testItem.allowed_change_paths) || !testItem.allowed_change_paths.length ||
+      !Array.isArray(repairPaths) || !repairPaths.length) return false;
+  if (repairPaths.some(path => testItem.allowed_change_paths.some(scope =>
+    covers(scope, path) || covers(path, scope)))) return false;
+  return Array.isArray(sessionRegistry) && sessionRegistry.some(entry =>
+    entry.pipeline_id === pipelineId && entry.stage === stage &&
+    entry.work_item_id === testWorkItemId && ['healthy', 'stale'].includes(entry.status));
+}
