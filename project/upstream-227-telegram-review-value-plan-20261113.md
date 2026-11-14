@@ -21,7 +21,8 @@
 - **Action 2 (CODE, NOT RUN):** `pipeline-dispatch.ts` now binds full CodeReviewer packet to scoped/full source inventory digest and unique dispatch ID, commit `6c4606a20b5414fc7c00d39931b682a2f66d16ee`. Source-bound result fields are delivered to reviewer; completion guard still pending.
 - **Action 3 (CODE, NOT RUN):** `stage-cli.ts` now rejects review completion without a current persisted full CodeReviewer JSON `status=ready`, exact dispatch+source digest and no blocking findings; compares current scoped source to review dispatch. Commit `72964edca090bcf8b72e9e6db2b9eb99106ccdea`.
 - **Action 4 (CODE, NOT RUN):** `stage-cli-core.ts` accepts a completed **legacy review** stage only when `fix-cycle` receives a persisted, matching, blocking CodeReviewer verdict (`readReviewVerdict`), commit `8937bba66db19c998e2daefcd4acc6d330ecbd39`. Uses normal scope preflight/fix budget/source reopening, not owner amendment.
-- **NEXT:** tests and StoryMapper/TestEngineer/PLAN/RUN instructions; validate actual runtime/CLI before claiming PASS; no main/SSH/prod/install.
+- **Action 5 (POLICY, NOT RUN):** PLAN now explicitly reuses StoryMapper scenario/AC IDs without duplicate TestEngineer scenarios; TestEngineer works just-in-time RED in consuming lane, followed by Coder GREEN and bound PASS. Only rework of existing tests belongs in prep. CodeReviewer outputs review dispatch/source identity, RUN passes persisted JSON via `--evidence` before completion. Commits `18ec3f9` (`pipeline-plan.md`), `3efe510` (`test-engineer.md`), `c1be2ce` (`pipeline-run.md`), `ed8e5b7` (`reviewer.md`).
+- **NEXT:** isolated regression tests of ready/pending/stale/late-blocking review and PLAN/RUN TDD contract; correct any failures. No main/SSH/prod/install.
 
 ## РЕЖИМ РАБОТЫ ПО HANDOVER — постоянное правило (владелец, 2026-11-14)
 
