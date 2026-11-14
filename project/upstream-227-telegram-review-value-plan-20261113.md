@@ -1,12 +1,56 @@
 # План: OpenCode 2.2.7 + OpenChamber 2.7.1 + Telegram extension + защита от переусложнения
 
-Дата: 2026-11-13. Последняя актуализация состояния: **2026-11-14**. Статус: **IMPLEMENTATION IN PROGRESS — source changes staged, runtime acceptance incomplete**. Не означает готовность к merge/deploy. Последняя контрольная точка указана сразу ниже; прежние записи журнала являются историческими.
+Дата: 2026-11-13. Последняя актуализация состояния: **2026-11-14**. Статус: **PARTIAL IMPLEMENTATION / ACCEPTANCE OPEN — OpenChamber CI PASS, my-opencode runtime and Telegram cutover NOT ACCEPTED**. Не означает готовность к merge/deploy. Актуальная точка восстановления и остаток — в ближайшем блоке; старые записи ниже исторические.
 Уточнения, утверждённые владельцем 2026-11-13: RUN class-review на третье обнаружение, без senior-review при сохранении подхода; PLAN — оценка необходимости самописного механизма и вопрос владельцу при отрицательном заключении.
 План размещён в отдельной ветке my-opencode; владелец 2026-11-14 разрешил реализацию в изолированных ветках, но не merge в main и не установку на сервер.
 
-## Актуальная точка восстановления — 2026-11-14 (проверено перед сохранением)
 
-**Эта секция имеет приоритет над историческими статусами ниже; старые сообщения «NOT RUN», «52 pending» и похожие числа относятся к моменту соответствующего checkpoint. Никакие изменения из этой сессии не слиты в main, production/SSH не затрагивались.**
+## LATEST HANDOFF — актуальная точка возобновления, 2026-11-14
+
+**Сначала читать эту секцию, затем [OC ledger](https://github.com/gest0r1/openchamber-ru/blob/feature/upstream-271-fork-reconciliation-20261114/project/upstream-271-20261114/integration-ledger.md); нижние checkpoint и journal исторические.**
+
+| Репозиторий | Ветка | Подтверждённый SHA / HEAD до этой записи |
+|---|---|---|
+| `gest0r1/my-opencode` | `feature/upstream-227-telegram-review-value-plan-20261113` | `d64149da79760111b8d70bc22ea8772dcfab6a8e` (source + previous plan, **runtime CI NOT RUN**) |
+| `gest0r1/openchamber-ru` | `feature/upstream-271-fork-reconciliation-20261114` | **source SHA `5b347025bd912227b9f2f0624f3ff4135cb10083`**, all PR checks PASS; после него добавлена только ledger-документация `0ce80e22aa70972793348ba2f1a9828ef245c2d7` |
+
+**Проверенный факт по OpenChamber:** [PR #27](https://github.com/gest0r1/openchamber-ru/pull/27) OPEN/DRAFT, mergeable. На **точном source SHA `5b347025`** [GitHub run 43610434909](https://github.com/gest0r1/openchamber-ru/actions/runs/43610434909) **PASS** по `tests/type-check/lint/build`. В job `tests` **PASS**: `bun install --frozen-lockfile`, Node shadow state/HTTP/migration, полный Vitest, fork release/agent contracts, Electron Linux packaging unit tests. [RU i18n 43610434910](https://github.com/gest0r1/openchamber-ru/actions/runs/43610434910) **PASS** на том же SHA. Последующие изменения только в документах не требуют считать source новым, но **при новом коде необходим свежий CI**. **Никаких действий с main, реальным сервером, секретами, релизом не было.**
+
+### Фактический остаток по блокам
+
+| Блок | Что закрыто с подтверждением | Что ещё нужно для конечного ACCEPT |
+|---|---|---|
+| **A0–A2 upstream-first** | Reconciliation OpenChamber 2.7.1: 109/109 перекрывающихся путей классифицированы, 0 открытых; **все существующие PR CI jobs PASS** на `5b347025`. Совместимость с ранее поддерживаемым OpenCode `>=2.2.4` сохранена при дистрибутивном pin 2.2.7. | Отдельный **runtime/UI smoke** сохранённых fork-функций (worktrees/sessions, Markdown export, Telegram legacy, i18n, обновление клиента), а также мобильная release job **NOT RUN**. Не называть это подготовленным производственным release. |
+| **A3 OpenCode 2.2.7** | Манифесты, `bun.lock`, install scripts, README обновлены; временный SeVami 0.6.7 live-PG bypass удалён; #18 сохранение выбора model/variant/color в коде остается. Статический source pin audit PASS. | **NOT RUN:** в независимом checkout `config/opencode` выполнить `bun install --frozen-lockfile` с Node24/Bun1.4.4/tsx, линтер/скрипты проверки, автономную установку и rollback, #18 реальные пользовательские model/variant и GateRunner tool permissions. Нельзя подменять этими словами запуск. |
+| **B1 SDK metadata-only shadow** | **PASS в OpenChamber PR CI на `5b347025`**: реальный manifest SDK, grants, service host, root/child events, idempotent disk journal, restart/revoke, router busy→idle, strict `{ok:true}`, fail-closed read of unknown children. Пассивный SDK **не отправляет Telegram**. | Отдельная реальная установка/разрешения SDK в изолированном хосте, drop/reconnect matrix. **Не считать B3/доставку уведомлений закрытыми.** |
+| **B2 off-line миграция** | Node22 offline migration suite 6/6 PASS ранее; новые Node service state/HTTP/migration tests и их выполнение внутри полного PR CI на `5b347025` **PASS**. Private snapshot может готовиться без изменения старых файлов; `delivery_unknown` сохраняется. | Реальный quiescent source export, целостность и путь private snapshot, import в новый **неактивный** процесс, cross-space и rehearsal rollback под single-owner fence **NOT RUN**. Никаких токенов в PR/чат. |
+| **B3 Telegram sender/cutover** | **Не реализовано**, legacy остаётся единственным действующим отправителем; нет второго sender. Документированы ограничения SDK at-most-once и неполнота terminal proof для detached shells/pending dispatch. | **Решение владельца по C2:** A — оставить legacy и отложить полный cutover, либо B — согласовать минимальный read-only host/SDK terminal-probe + durable catch-up, exclusive sender ownership, atomically reversible cutover. После решения нужны интеграционные proof/restart/drop/rollback и parity с legacy, только затем включать SDK sender и удалять legacy. |
+| **C1 RUN** | Source/CLI policy: class-review **после третьего независимого authoritative FAIL**, отдельные epochs, `confirm_approach` без SeniorTechnicalPlanReviewer, существующие 5 fix-cycles сохранены. | Targeted `stage-cli-budget.test.mjs` и реальный PLAN/RUN flow на изолированном checkout с Node24/tsx/Bun: **NOT RUN**. |
+| **C2 PLAN** | У `ExternalScout/ArchitectureAnalyzer/SeniorTechnicalPlanReviewer/pipeline-plan` есть сравнение reuse / SDK / adapter / bespoke и документирование выбора без нового gate; требование не расширять функционал без измеримой цели/существенного риска. | **NOT RUN:** интеграционная демонстрация на оправданном/неоправданном custom mechanism и owner-choice до реализации; отдельно решать B3 по указанным вариантам. |
+| **D CodeReviewer** | Source policy требует доказательства blocker, optional не приводит к необоснованным новым циклам; `stage-cli-core.ts` учитывает оба массива `findings[]` + `blockers[]`. | **NOT RUN:** CLI regressions на optional-only, mixed blocker, реальную фиксацию fix-cycle, неизменность budget; адекватность scope/read/write. |
+| **E end-to-end accept** | **Только часть OC CI — PASS** на `5b347025`, включая README docs/contract checks. | my-opencode A3/C1/C2/D runtime suite, успешный offline installer, end-to-end пользовательские сценарии, Telegram B3 по решению владельца, rollback в изолированном хосте. No main merge/prod. |
+
+### Выявлено дополнительно и уже исправлено (не открытые дефекты)
+
+- Настоящий SDK manifest отклонил `sessionEvents.content: false`; удалено поле (metadata-only), проверено реальным SDK parser и теперь **PASS CI**.
+- SDK host строго валидирует HTTP event ACK: `{ok:true,recorded,duplicate}` ошибочно инициировал 30-секундный backoff, хотя запись на диск прошла. Исправлено на строго `{ok:true}`, дедуп теперь независимо проверяет journal до/после повтора и рестарта; **PASS CI**.
+- Guest `turn-finished` ранее выдавал окончание при недоступном child status read. Исправлено fail-closed, отдельные негативные и здоровый regression-сценарии **PASS CI**. Это **не** закрывает detached shells/pending dispatch.
+- Два нестабильных upstream UI теста приведены к проверке определённого времени/состояния DOM без изменения product-инвариантов; **полный CI PASS**.
+- `.github/workflows/mobile-release.yml` — syntax исправлен, но настоящий mobile release/publish workflow **NOT RUN**.
+
+### Точка продолжения без повторной работы
+
+1. Сверить HEAD обеих веток. Последняя зелёная **кодовая** точка OC — `5b347025bd912227b9f2f0624f3ff4135cb10083`, а ledger HEAD стал `0ce80e22` только из-за документации. Внешняя проверка: [CI 43610434909](https://github.com/gest0r1/openchamber-ru/actions/runs/43610434909), [RU 43610434910](https://github.com/gest0r1/openchamber-ru/actions/runs/43610434910).
+2. Для my-opencode **не использовать production/SSH**: требуется реальный isolated checkout с Node24/Bun1.4.4/tsx, `bun install --frozen-lockfile` и локальные tests/install smoke; ранее доступное исполнение позволяло только статическую проверку по GitHub connector и не заменяет эти тесты. Использование GitHub Actions для my-opencode final acceptance запрещено этим планом.
+3. Воспроизводимо проверить A3, GateRunner permissions (ранее был denial у GateRunner), PLAN/RUN классы дефектов, optional-only CLI, сохранение выбранных моделей/вариантов #18 и rollback. Все результаты записывать как **PASS/FAIL/NOT RUN** с точным SHA/командой.
+4. Перед B3 выполнить **C2 owner choice**, описанный в подразделе «Архитектурное решение B3» ниже: оставить legacy сейчас или согласовать ограниченный новый host API. SDK shadow остаётся выключенным как отправитель; **без подтверждённого terminal proof/single-owner не отправлять**.
+5. Не делать PR merge, release или deploy до явного разрешения владельца и соответствующей приёмки. PR #27 остается draft. По завершении каждого блока обновлять этот plan и OC ledger. **Работа в целом ещё НЕ ГОТОВА.**
+
+---
+
+## Историческая точка восстановления — 2026-11-14 (заменена новым handoff выше)
+
+**ИСТОРИЧЕСКИЙ CHECKPOINT. Не использовать SHA/CI/NOT RUN из этой секции как текущий статус. Последний подтверждённый статус, приоритеты и команды восстановления — в блоке «LATEST HANDOFF» выше.**
 
 | Репозиторий | Ветка | Контрольный HEAD на момент записи |
 |---|---|---|
