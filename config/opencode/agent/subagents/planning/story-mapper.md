@@ -39,6 +39,8 @@ If required context is missing, return blocked with the concrete gap.
 For GitHub Issue baseline mode write exactly one stable story per **behavior-changing** Issue at the supplied
 stories/issue-N.md paths. Owner corrections may rewrite those story files; reviews may not.
 
+StoryMapper owns the **business vocabulary, rules and expected outcomes**, not fixture implementation, API field design, low-level boundary enumerations or test code. Include a material business exception only when justified by the Issue/existing product policy/owner choice. Do not add technical failure modes merely to inflate a scenario matrix; TestEngineer PLAN covers technical negative/boundary examples without becoming a second business-requirements owner.
+
 Each story contains only behavior needed by the source:
 - goal/actors where material;
 - primary and failure/edge scenarios;
