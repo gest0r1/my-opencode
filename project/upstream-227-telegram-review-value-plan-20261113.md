@@ -12,7 +12,7 @@
 | Репозиторий | Ветка | Подтверждённый SHA / HEAD до этой записи |
 |---|---|---|
 | `gest0r1/my-opencode` | `feature/upstream-227-telegram-review-value-plan-20261113` | `d64149da79760111b8d70bc22ea8772dcfab6a8e` (source + previous plan, **runtime CI NOT RUN**) |
-| `gest0r1/openchamber-ru` | `feature/upstream-271-fork-reconciliation-20261114` | **source SHA `5b347025bd912227b9f2f0624f3ff4135cb10083`**, all PR checks PASS; после него добавлена только ledger-документация `0ce80e22aa70972793348ba2f1a9828ef245c2d7` |
+| `gest0r1/openchamber-ru` | `feature/upstream-271-fork-reconciliation-20261114` | **source SHA `5b347025bd912227b9f2f0624f3ff4135cb10083`**, all PR checks PASS; после него добавлена только ledger-документация, HEAD `72a3719169540ee0f17301b62edcebc495561a84` |
 
 **Проверенный факт по OpenChamber:** [PR #27](https://github.com/gest0r1/openchamber-ru/pull/27) OPEN/DRAFT, mergeable. На **точном source SHA `5b347025`** [GitHub run 43610434909](https://github.com/gest0r1/openchamber-ru/actions/runs/43610434909) **PASS** по `tests/type-check/lint/build`. В job `tests` **PASS**: `bun install --frozen-lockfile`, Node shadow state/HTTP/migration, полный Vitest, fork release/agent contracts, Electron Linux packaging unit tests. [RU i18n 43610434910](https://github.com/gest0r1/openchamber-ru/actions/runs/43610434910) **PASS** на том же SHA. Последующие изменения только в документах не требуют считать source новым, но **при новом коде необходим свежий CI**. **Никаких действий с main, реальным сервером, секретами, релизом не было.**
 
