@@ -725,6 +725,38 @@ test('missing or positive review results never spend budget and free dispatch re
   assert.equal(state.pipelines.app.stages['code-review'].status, 'in_progress');
 });
 
+test('optional review suggestions never charge a fix cycle or a recurring defect class', async () => {
+  const fx = await fixture('optional-review-not-repair');
+  const cli = args => run(fx.root, [...args, '--pipeline', 'app', '--state-root', fx.stateRoot]);
+  const optional = { id: 'N1', defect_class: 'extra-edge-test', subject: 'test_coverage',
+    blocking: false, classification: 'optional', locations: ['packages/db/src/change.ts:1'] };
+  const onlyOptional = await writeReview(fx, 'optional-only.json', {
+    status: 'needs_revision', findings: [optional], defect_classes: [],
+  });
+  let result = cli(['fix-cycle', fx.runId, 'code-review', '--evidence', onlyOptional]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /REPAIR_RESULT_OPTIONAL_ONLY/);
+  const stateFile = path.join(fx.stateRoot, fx.runId, 'state.json');
+  let state = JSON.parse(await readFile(stateFile, 'utf8'));
+  assert.equal(state.pipelines.app.stages['code-review'].technical_fix_cycles ?? 0, 0);
+
+  // One proven production blocker still permits a scoped repair, but the optional
+  // note must not become a recorded recurring defect class.
+  const blocker = { id: 'R1', defect_class: 'wrong-production-contract', subject: 'product',
+    blocking: true, classification: 'technical_fix', locations: ['packages/db/src/change.ts:1'] };
+  const mixed = await writeReview(fx, 'mixed-review.json', {
+    status: 'needs_revision', findings: [optional, blocker], defect_classes: ['wrong-production-contract'],
+  });
+  result = cli(['scope-check', fx.runId, 'code-review', 'packages/db/src/change.ts']);
+  assert.equal(result.status, 0, result.stderr);
+  result = cli(['fix-cycle', fx.runId, 'code-review', '--evidence', mixed, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  state = JSON.parse(result.stdout);
+  const runtime = state.pipelines.app.stages['code-review'];
+  assert.equal(runtime.technical_fix_cycles, 1);
+  assert.deepEqual(runtime.defect_class_history[0].classes, ['wrong-production-contract']);
+});
+
 test('live PASS followed by bounded review findings reopens completed implementation without owner amendment', async () => {
   const fx = await fixture('live-pass-review-repair');
   const cli = args => run(fx.root, [...args, '--pipeline', 'app', '--state-root', fx.stateRoot]);
