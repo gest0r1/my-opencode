@@ -62,7 +62,7 @@ Work only on the approved test work item supplied by the parent.
 
 **RUN / test-first automation:** On a frozen work item in its consuming agent stage, translate approved AC and already-ready contracts into minimal executable checks just before CoderAgent's work item. Return RED as an expected diagnostic with test file identities and actual reason (missing *approved* behavior vs broken fixture/environment). RED must not become an authoritative or stage-closing PASS, and must not require a second TestEngineer call for test planning. The independent CoderAgent work item references this exact test work item through `test_first_work_item_id`; never edit the machine-owned pre-RED baseline. On a repair dispatch, reuse unchanged approved tests and return immediately if there is no additional test work rather than re-authoring the test specification.
 
-## Pipeline mode
+## RUN work-item constraints
 
 - The approved manifest is sufficient authorization; do not request a second
   approval for a test plan.
