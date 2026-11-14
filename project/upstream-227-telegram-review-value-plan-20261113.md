@@ -25,7 +25,7 @@
 ## VERIFIED CHECKPOINT — 2026-11-14, после OC ledger
 
 - **Закрыто:** OpenChamber source SHA `e3489d7fb53d05b7f01e82ef8ec9d9719c6a5679`, [PR CI 43634139182](https://github.com/gest0r1/openchamber-ru/actions/runs/43634139182) **PASS** (`tests`, `type-check`, `lint`, `build`); [RU 43634139212](https://github.com/gest0r1/openchamber-ru/actions/runs/43634139212) **PASS** на том же SHA. Предыдущий FAIL нового SDK-provider fixture исправлен и проверен.
-- **Документация синхронизирована:** OC `project/upstream-271-20261114/integration-ledger.md`, doc-only commit `de777c5f30022097a511eb28846bc642db9548b3`; исходники после зелёного SHA не менялись. Этот checkpoint — doc-only update master handover.
+- **Документация синхронизирована:** OC `project/upstream-271-20261114/integration-ledger.md`, doc-only commit `de777c5f30022097a511eb28846bc642db9548b3`; исходники после зелёного SHA не менялись. Этот checkpoint — doc-only update master handover. GitHub compare `e3489d7...de777c5f` подтверждает **1 doc-only commit/1 changed file (integration-ledger.md)**; PR #27 OPEN/DRAFT, mergeable, `main` неизменён; дополнительных CI runs нет (commit `[skip ci]`). Текущий master handover docs-only HEAD до этой записи `f3118aa23bd32c4ac8bc084cece0d85d851ba488`.
 - **Открыто (NOT RUN):** реальный SDK host/физический disposable Telegram send, end-to-end cutover/rollback и cross-space parity, UI smoke, my-opencode изолированный Node24/Bun1.4.4/tsx frozen install/PLAN/RUN/GateRunner/#18 installer rollback. Никаких main/SSH/prod/release/installation.
 - **Следующий исполнимый шаг:** выполнить реальные изолированные acceptance-проверки по `project/pre-install-acceptance-20261114.md` при наличии нужной среды. Без них не объявлять INSTALL READY.
 
