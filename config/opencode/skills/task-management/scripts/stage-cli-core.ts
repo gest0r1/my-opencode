@@ -1958,6 +1958,15 @@ export async function recordTechnicalFixCycle(
     if ((result.run_id && result.run_id !== runId) || (result.pipeline_id && result.pipeline_id !== pipeline.id) || (result.stage && result.stage !== stage) || (!result.stage && result.gate && result.gate !== stage)) throw new StageCliError('REPAIR_RESULT_IDENTITY_MISMATCH');
     const verdict = String(result.status ?? result.result ?? result.verdict ?? result.classification ?? '').toLowerCase();
     if (!['fail', 'failed', 'needs_revision', 'not ready', 'technical_fix', 'security_fix'].includes(verdict) && !(repairClass === 'security_fix' && result.kind === 'security_fix')) throw new StageCliError('REPAIR_RESULT_REQUIRED: PASS/partial/transport failure is not a negative review');
+    // A review's optional-only suggestions must never start a technical fix loop, even
+    // when the model accidentally writes status=needs_revision. Older unstructured
+    // findings keep their existing compatibility contract.
+    if (spec?.executors?.[stage] === 'review' &&
+        Array.isArray(result.findings) && result.findings.length > 0 &&
+        result.findings.every((finding: any) => finding && typeof finding === 'object' &&
+          finding.blocking === false && finding.classification === 'optional')) {
+      throw new StageCliError('REPAIR_RESULT_OPTIONAL_ONLY: nonblocking suggestions cannot spend a fix cycle');
+    }
     if (spec?.executors?.[stage] !== 'review' && (result.status !== 'FAIL' || result.run_id !== runId || result.pipeline_id !== pipeline.id || (result.stage ?? result.gate) !== stage || result.purpose === 'advisory')) throw new StageCliError('REPAIR_MACHINE_RESULT_REQUIRED: use failed authoritative gate evidence');
     const repairHash = sha256(repairRaw);
     if (result.purpose === 'advisory' || ['transport', 'environment'].includes(String(result.failure_type ?? '')) ||
@@ -2166,7 +2175,12 @@ function resultDefectClasses(result: any, extra: string[]): string[] {
   if (Array.isArray(result?.defect_classes)) named.push(...result.defect_classes);
   for (const list of [result?.findings, result?.blockers]) {
     if (!Array.isArray(list)) continue;
-    for (const finding of list) if (finding && typeof finding === 'object' && finding.defect_class) named.push(finding.defect_class);
+    for (const finding of list) {
+      if (!finding || typeof finding !== 'object' || !finding.defect_class) continue;
+      // Optional notes do not participate in recurring-defect accounting.
+      if (finding.blocking === false || finding.classification === 'optional') continue;
+      named.push(finding.defect_class);
+    }
   }
   return [...new Set(named.map(normalizeDefectClass))].sort();
 }
