@@ -41,6 +41,26 @@
 
 **Только запись в план; код/агенты/CLI данным решением ещё не изменялись.** Исходные изменения Test-first/review из предыдущих шагов перечислены отдельно выше, CLI integration остаётся NOT RUN. Следующий шаг: сравнение концепций разработки, аудит всех PLAN/RUN/acceptance стадий и уточнение границ ролей; новые изменения только после утверждения владельца.
 
+## УТВЕРЖДЕНО — целевая концепция pipeline (2026-11-15, реализация в работе)
+
+**Решение владельца:** BDD/ATDD → локальный TDD (RED → GREEN → refactor) + contract-first на материальных интеграциях, поставка малыми вертикальными блоками (vertical slicing), без новых обязательных повторных gate/документов. Задачи технически простые допускают TDD самого CoderAgent; независимый TestEngineer нужен по риску (существенные бизнес-правила, интеграции, контракт, регрессии). Не отключать обязательные финальные проверки.
+
+**Границы ролей:** StoryMapper — единственный автор бизнес-правил/сценариев/AC; SeniorStoryReviewer — корректность относительно Issue/решений; ArchitectureAnalyzer — owners/границы/reuse/зависимости/test levels, не тест-кейсы; ContractManager — схемы/ошибки/совместимость интерфейсов при trigger; TestEngineer PLAN — технические границы/негативные кейсы/фикстуры/уровни без новой бизнес-политики, TestEngineer RUN — минимальные исполняемые тесты в consuming lane непосредственно перед соответствующей реализацией; TaskManager — минимальный критический путь и функционально завершённые блоки, явные зависимости RED → GREEN; DevOps — среда/ресурсы, GateRunner — machine proofs, CodeReviewer/FindingsReviewer — независимая проверка и дельта.
+
+**Параллельность PLAN:** после утверждения зависимых AC и архитектурных границ можно параллельно запускать независимое исследование проверяемости TestEngineer и формальные интерфейсы ContractManager. Нельзя подписывать зависимые от конкретного API проверки до готовности контракта. Каждому артефакту один автор, review после завершения записи, SHA bound; только затронутые gates перевыполнять. Не увеличивать количество агентов ради номинального параллелизма.
+
+**RUN:** тесты будущих компонент не принадлежат предварительному test_preparation. В каждом независимом блоке готовность зависимых producers → RED (независимый TestEngineer, когда justified) → GREEN CoderAgent → impacted machine PASS → full CodeReviewer; unrelated готовые lanes параллельны. Coordinator/full gates только по замкнутым GREEN волнам/готовому source; финальный authoritative набор полный. CodeReviewer result должен быть persisted/source-bound, late negative review допускает обычный fix-cycle, но не owner amendment.
+
+**План реализации/проверки (обновлять после каждого блока):**
+1. [ ] Изменить PLAN orchestration: dependency-aware parallel artifacts, без несогласованного опережения, без искусственных stories.
+2. [ ] Уточнить инструкции StoryMapper / ArchitectureAnalyzer / ContractManager / TestEngineer (PLAN+RUN) / Senior* reviewer / TaskManager.
+3. [ ] Детерминированно проверить DAG/work-item роли и обязательный GREEN proof для выбранных RED work items; не создавать отдельные повторные проверки или новые неиспользуемые форматы.
+4. [ ] Согласовать RUN dispatch, coordinator gates, reviews/late-review и owner-acceptance с новым порядком.
+5. [ ] Targeted регрессии, при доступности Node24/Bun1.4.4/tsx изолированное интеграционное тестирование; сохранять NOT RUN без исполнения.
+6. [ ] Финальный audit: исходное ТЗ, нет дублирования работы, проверяемое состояние и дальнейшие критерии принятия, без merge/deploy.
+
+**До начала этого блока:** my-opencode feature HEAD `1d6c9303eee65b193e58f711c8dd9ac154ae0c76`; текущие review-verdict unit tests ранее заявлены 4/4 PASS на Node22, обязательные end-to-end CLI/Node24/Bun **NOT RUN**. Все дальнейшие результаты привязывать к source SHA.
+
 ## РЕЖИМ РАБОТЫ ПО HANDOVER — постоянное правило (владелец, 2026-11-14)
 
 **При каждом возобновлении:** сначала прочитать этот блок, затем самый новый checkpoint в начале handover и последний `LATEST HANDOFF` в OC integration ledger; только после этого проверить реальные HEAD, PR CI и затронутый код. Старые статусы — история, не источник текущего PASS.
