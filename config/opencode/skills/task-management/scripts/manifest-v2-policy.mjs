@@ -414,6 +414,22 @@ function validateWorkItems(manifest, root, options = {}) {
       }
     }
   }
+  // An explicit independent RED -> GREEN contract is frozen in existing work items:
+  // no new gate or test-plan artifact, and no accidental pairing of legacy TestEngineer items.
+  for (const [id, record] of records) {
+    if (record.test_first_work_item_id === undefined) continue;
+    const redId = record.test_first_work_item_id;
+    const red = records.get(redId);
+    const pipeline = pipelines.get(record.pipeline_id);
+    if (record.suggested_agent !== 'CoderAgent' || typeof redId !== 'string' || !red ||
+        red.suggested_agent !== 'TestEngineer' || record.pipeline_id !== red.pipeline_id ||
+        record.stage !== red.stage || pipeline?.executors?.[record.stage] !== 'agent' ||
+        pipeline.test_preparation === true || !Array.isArray(record.depends_on) ||
+        !record.depends_on.includes(redId) || !Array.isArray(red.allowed_change_paths) ||
+        !red.allowed_change_paths.length) {
+      throw new ManifestV2PolicyError(`TDD_TEST_FIRST_DEPENDENCY_INVALID: ${id} must depend on a TestEngineer work item in the same consuming agent stage (not test_preparation)`);
+    }
+  }
   // A RUN frozen before this check keeps running: dispatch serializes its overlapping items.
   if (!options.runtime) assertWorkItemOrder(manifest, records);
 }
