@@ -2346,8 +2346,42 @@ type ArchitectureReview = {
   kind?: unknown; run_id?: unknown; pipeline_id?: unknown; stage?: unknown; result?: unknown; summary?: unknown;
   requirements_changed?: unknown; acceptance_criteria_changed?: unknown; external_contract_changed?: unknown;
   security_boundary_changed?: unknown; destructive_change?: unknown;
-  covered_paths?: unknown; dependency_files?: unknown;
+  covered_paths?: unknown; dependency_files?: unknown; technical_review_artifact?: unknown;
 };
+
+// Evidence from the independent SeniorTechnicalPlanReviewer is required only for an actual
+// architecture redesign, not for a no-change diagnosis or an owner-bound decision.
+// Prior implementation only checked that a file existed; a negative senior verdict
+// must never silently approve another charged repair.
+function requireReadyTechnicalReview(root: string, value: unknown, prefix: string):
+  { path: string; sha256: string } {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new StageCliError(`${prefix}: technical_review_artifact is required for structural redesign`);
+  }
+  const absolute = resolve(value.startsWith('/') ? value : join(process.cwd(), value));
+  if (!absolute.startsWith(`${root}/`)) {
+    throw new StageCliError(`${prefix}: technical_review_artifact must live inside the current run directory`);
+  }
+  let raw: string;
+  try { raw = readFileSync(absolute, 'utf8'); }
+  catch { throw new StageCliError(`${prefix}: technical_review_artifact is missing`); }
+  if (!raw.trim()) throw new StageCliError(`${prefix}: technical_review_artifact is empty`);
+  let verdict = '';
+  let blocking = false;
+  try {
+    const review = JSON.parse(raw);
+    verdict = String(review.status ?? '').trim().toLowerCase();
+    blocking = [...(Array.isArray(review.findings) ? review.findings : []),
+      ...(Array.isArray(review.blockers) ? review.blockers : [])]
+      .some((finding: any) => finding && typeof finding === 'object' && finding.blocking === true);
+  } catch {
+    verdict = /^\s*(?:[-*]\s*)?(?:\*\*)?status(?:\*\*)?\s*:\s*(?:\*\*)?\s*(ready)\b/im.test(raw) ? 'ready' : '';
+  }
+  if (verdict !== 'ready' || blocking) {
+    throw new StageCliError(`${prefix}: independent technical review must be status: ready without blocking findings`);
+  }
+  return { path: absolute, sha256: sha256(raw) };
+}
 
 // Records the architecture checkpoint of a repeatedly repaired stage. Only requirements_change stops work, and only
 // this stage/pipeline; the owner resumes it through runtime-replan-propose/approve.
@@ -2386,6 +2420,9 @@ export async function recordArchitectureReview(
           review.security_boundary_changed, review.destructive_change].some((value) => value !== false)) {
       throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: apply_within_requirements needs requirements_changed, acceptance_criteria_changed, external_contract_changed, security_boundary_changed and destructive_change all false');
     }
+    const seniorProof = result === 'apply_within_requirements'
+      ? requireReadyTechnicalReview(root, review.technical_review_artifact, 'ARCHITECTURE_REVIEW_INVALID')
+      : undefined;
     const covered = verifiedReviewCoverage(review,
       runtime.architecture_review_due_paths ?? runtime.repair_paths ?? [], 'ARCHITECTURE_REVIEW_INVALID');
     runtime.architecture_review_due = false;
@@ -2393,7 +2430,8 @@ export async function recordArchitectureReview(
     runtime.architecture_reviews ??= [];
     runtime.architecture_reviews.push({
       path: absoluteEvidence, sha256: sha256(content), result,
-      after_cycle: runtime.technical_fix_cycles ?? 0, ...covered, at: now(),
+      after_cycle: runtime.technical_fix_cycles ?? 0, ...covered,
+      ...(seniorProof ? { technical_review: seniorProof } : {}), at: now(),
     });
     if (result === 'requirements_change') {
       runtime.status = 'blocked';
@@ -2640,9 +2678,9 @@ export async function recordClassReview(
   let review: ClassReview;
   try { review = JSON.parse(content) as ClassReview; } catch { throw new StageCliError('class review evidence is not valid JSON'); }
   const research = await runArtifact(root, review.research_artifact, 'research_artifact');
-  if (review.approach !== 'confirm_approach') {
-    await runArtifact(root, review.technical_review_artifact, 'technical_review_artifact');
-  }
+  const seniorProof = review.approach === 'rework_block' || review.approach === 'remove_mechanism'
+    ? requireReadyTechnicalReview(root, review.technical_review_artifact, 'CLASS_REVIEW_INVALID')
+    : undefined;
   return updateState(stateRoot, runId, (state) => {
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
@@ -2720,6 +2758,7 @@ export async function recordClassReview(
       path: absoluteEvidence, sha256: sha256(content), classes, approach, research_artifact: research,
       research_sha256: researchHash, summary_sha256: sha256(String(review.summary).trim()),
       after_cycle: runtime.technical_fix_cycles ?? 0, ...coverage,
+      ...(seniorProof ? { technical_review: seniorProof } : {}),
       diagnostic_sha256: diagnosticHash, implementation_plan_sha256: implementationPlanHash, at: now(),
     });
     if (approach === 'requirements_change') {
