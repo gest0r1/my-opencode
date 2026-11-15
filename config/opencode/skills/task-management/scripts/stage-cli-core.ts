@@ -2415,6 +2415,13 @@ export async function recordArchitectureReview(
       throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: result must be no_change, apply_within_requirements or requirements_change');
     }
     if (typeof review.summary !== 'string' || !review.summary.trim()) throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: summary is required');
+    // No-change must never silently carry an explicitly discovered PLAN/security boundary change.
+    // Older no-change diagnostic artifacts may omit these flags; an explicit true is always a blocker.
+    if (result === 'no_change' &&
+        [review.requirements_changed, review.acceptance_criteria_changed, review.external_contract_changed,
+          review.security_boundary_changed, review.destructive_change].some((value) => value === true)) {
+      throw new StageCliError('ARCHITECTURE_REVIEW_INVALID: no_change cannot report changed requirements or protected boundaries');
+    }
     if (result === 'apply_within_requirements' &&
         [review.requirements_changed, review.acceptance_criteria_changed, review.external_contract_changed,
           review.security_boundary_changed, review.destructive_change].some((value) => value !== false)) {
