@@ -13,6 +13,14 @@
 
 ---
 
+## CHECKPOINT 2026-11-15 — prompt economy (SOURCE, tests pending)
+
+- **Выполнено:** `run-worker-rules.md` `1f1778f` — удалены повторные role-specific RED/GREEN инструкции, оставлены dispatch identity/bound checks. `pipeline-run.md` `a4b95f4`, `1b880b4` — подробности роли TestEngineer/CoderAgent и рассуждения ArchitectureAnalyzer перенесены к единственным владельцам; сохранены CLI порядок, thresholds, evidence/owner review, архитектурный/class checkpoint. `pipeline-plan.md` `2ea3fd4`, `1206f5b` — избегает повтора бизнес-сценариев, анализа реестров тестов и тест-дизайна; оставляет machine contract `test_rework`, `test_first_work_item_id`, DAG. `test-engineer.md` `919a791` убирает собственный дубль RUN/дизайн, не меняя прав. Суммарно удалены ~7.9k символов из этих файлов без нового stage/gate/model call.
+- **Разделение источников:** pipeline-* владеет оркестрацией, очередью, порогами и протоколом stage-cli; agent prompt — собственным анализом, тестами и результатом; `run-worker-rules.md` — лишь общими ограничениями runtime packet/bound evidence. Структурный `class_review` требует SeniorTechnicalPlanReviewer, `confirm_approach` — нет; `architecture_review` `no_change` — без повторного senior, `apply_within_requirements` — senior review.
+- **NOT RUN:** actual Node24/Bun/tsx full repo & integration; следующий шаг — static duplicate check, доступные pure-function regressions и проверка согласованности с code gates. Не менять дефолт 5/макс 20 и пороги 3/5 без отдельного решения.
+
+---
+
 ## CURRENT STATUS — читать первым, 2026-11-15
 
 - **Принятая концепция BDD/ATDD + risk-based TDD + contract-first + vertical slices внедрена на уровне policy/roles и целевых CLI изменений в feature-ветку**, latest verified source **`e83215242c21e2b88c1a4bfcae7b4f7ca6d1fe13`** до этой doc-only записи. Новые policy/rules: StoryMapper — единственный владелец бизнес-AC; TestEngineer PLAN и RUN — техническая тестируемость и исполняемые RED по готовым зависимостям, опционально по риску; ContractManager и TestEngineer PLAN могут разрабатывать независимые артефакты одновременно, с freeze только при SHA-bound ready; TaskManager строит вертикальные блоки, Coder отвечает за GREEN. Изменений в main/production/SSH/деплое нет.
