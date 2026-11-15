@@ -21,6 +21,13 @@
 
 ---
 
+## CHECKPOINT 2026-11-15 — independent senior review proof for redesign
+
+- **Обнаружено и исправлено, без изменения fix-cycle threshold/budget:** `stage-cli-core.ts` `f5bc588`: ранее `architecture-review-record(result=apply_within_requirements)` пропускал без SeniorTechnicalPlanReviewer evidence, а `class-review-record(rework_block|remove_mechanism)` принимал любой непустой файл, даже с `needs_revision`. Новый `requireReadyTechnicalReview` проверяет run-local путь, непустой файл, **status=ready**, отсутствие JSON blocking findings и сохраняет SHA/path в stage evidence. `requirements_change` теперь не требует бесполезного senior вызова: идёт к владельцу.
+- **Контракты/тесты синхронизированы:** `pipeline-state.ts` `27dda4a` содержит optional proof; `architecture-analyzer.md` `22a8b66`, `senior-technical-plan-reviewer.md` `f535eb5`, `pipeline-run.md` `528939d` задают условный вызов только для redesign; `stage-cli-budget.test.mjs` `8682948` содержит положительные/отрицательные кейсы missing/negative senior artifact (автотест **NOT RUN**). **NEXT:** выполнить возможные точные pure-function проверки, статический audit и актуализировать итоговый handover; Node24/Bun/tsx integration без checkout остаётся NOT RUN.
+
+---
+
 ## CURRENT STATUS — читать первым, 2026-11-15
 
 - **Принятая концепция BDD/ATDD + risk-based TDD + contract-first + vertical slices внедрена на уровне policy/roles и целевых CLI изменений в feature-ветку**, latest verified source **`e83215242c21e2b88c1a4bfcae7b4f7ca6d1fe13`** до этой doc-only записи. Новые policy/rules: StoryMapper — единственный владелец бизнес-AC; TestEngineer PLAN и RUN — техническая тестируемость и исполняемые RED по готовым зависимостям, опционально по риску; ContractManager и TestEngineer PLAN могут разрабатывать независимые артефакты одновременно, с freeze только при SHA-bound ready; TaskManager строит вертикальные блоки, Coder отвечает за GREEN. Изменений в main/production/SSH/деплое нет.
