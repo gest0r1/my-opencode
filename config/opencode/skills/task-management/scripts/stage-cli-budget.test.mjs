@@ -889,22 +889,30 @@ test('the 5th charged cycle flags an architecture checkpoint; the next cycle nee
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts']);
   assert.notEqual(result.status, 0); assert.match(result.stderr, /ARCHITECTURE_REVIEW_REQUIRED: lane\/code-review/);
 
+  const technical = path.join(fx.stateRoot, fx.runId, 'checkpoint-senior-review.md');
+  await writeFile(technical, 'status: ready\n');
   const record = async (patch) => {
     const file = path.join(fx.stateRoot, fx.runId, `arch-${Math.random().toString(36).slice(2)}.json`);
     await writeFile(file, JSON.stringify({ kind: 'architecture_review', run_id: fx.runId, pipeline_id: 'lane', stage: 'code-review',
       result: 'apply_within_requirements', summary: 'extract the shared helper', requirements_changed: false, acceptance_criteria_changed: false,
-      external_contract_changed: false, security_boundary_changed: false, destructive_change: false, ...patch }));
+      external_contract_changed: false, security_boundary_changed: false, destructive_change: false,
+      technical_review_artifact: technical, ...patch }));
     return fx.cli('architecture-review-record', fx.runId, 'code-review', '--pipeline', 'lane', '--evidence', file, '--json');
   };
   result = await record({ external_contract_changed: true }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
   result = await record({ summary: ' ' }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
   result = await record({ result: 'maybe' }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
   result = await record({ stage: 'implementation' }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
+  result = await record({ technical_review_artifact: undefined }); assert.match(result.stderr, /technical_review_artifact is required/);
+  await writeFile(technical, 'status: needs_revision\n');
+  result = await record({}); assert.match(result.stderr, /independent technical review must be status: ready/);
+  await writeFile(technical, 'status: ready\n');
   result = await record({}); assert.equal(result.status, 0, result.stderr);
   const runtime = JSON.parse(result.stdout).pipelines.lane.stages['code-review'];
   assert.equal(runtime.architecture_review_due, false);
   assert.equal(runtime.architecture_reviews.length, 1);
   assert.equal(runtime.architecture_reviews[0].result, 'apply_within_requirements');
+  assert.match(runtime.architecture_reviews[0].technical_review.sha256, /^[0-9a-f]{64}$/);
   assert.match(runtime.architecture_reviews[0].sha256, /^[0-9a-f]{64}$/);
   result = await record({}); assert.match(result.stderr, /ARCHITECTURE_REVIEW_NOT_DUE/);
   result = await fx.fixCycle('lane', ['packages/lane/src/a.ts']); assert.equal(result.status, 0, result.stderr);
@@ -952,6 +960,9 @@ test('three distinct negative results of one class require a review; a new epoch
   };
   result = await record({ research_artifact: path.join(runDir, 'missing.md') }); assert.match(result.stderr, /CLASS_REVIEW_INVALID: research_artifact/);
   result = await record({ technical_review_artifact: undefined }); assert.match(result.stderr, /CLASS_REVIEW_INVALID: technical_review_artifact/);
+  await writeFile(path.join(runDir, 'class-review-tech.md'), 'status: needs_revision\n');
+  result = await record(); assert.match(result.stderr, /CLASS_REVIEW_INVALID: independent technical review must be status: ready/);
+  await writeFile(path.join(runDir, 'class-review-tech.md'), 'status: ready\n');
   result = await record({ classes: ['readme-drift'] }); assert.match(result.stderr, /CLASS_REVIEW_INVALID: classes must cover validator-laxer-than-consumer/);
   result = await record({ approach: 'patch_again' }); assert.match(result.stderr, /CLASS_REVIEW_INVALID: approach/);
   result = await record({ destructive_change: true }); assert.match(result.stderr, /CLASS_REVIEW_INVALID/);
