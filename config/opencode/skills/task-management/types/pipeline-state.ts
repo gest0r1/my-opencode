@@ -327,6 +327,8 @@ export interface ArchitectureReviewRecord {
   /** Exact authorized paths inspected, never a change permission. */
   covered_paths?: string[];
   dependency_files?: ReviewedDependency[];
+  /** Independently ready SeniorTechnicalPlanReviewer verdict for an in-scope redesign. */
+  technical_review?: FrozenArtifact;
   at: string;
 }
 
@@ -351,6 +353,8 @@ export interface ClassReviewRecord {
   implementation_plan_sha256?: string;
   research_sha256?: string;
   summary_sha256?: string;
+  /** Independently ready SeniorTechnicalPlanReviewer verdict for a structural class redesign. */
+  technical_review?: FrozenArtifact;
   /** technical_fix_cycles when recorded; the next charged cycle is the consolidated rework of these classes. */
   after_cycle: number;
   at: string;
