@@ -197,8 +197,8 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   assert.match(orchestrator, /planning\/review-ledger\.json": deny/);
   // A recurring defect class stops the RUN patch loop for research and a class review.
   assert.match(run, /CLASS_REVIEW_REQUIRED/);
-  assert.match(run, /stage-cli class-review-record <run-id> <stage> --pipeline <id> --evidence <file>/);
-  assert.match(run, /NEW research/);
+  assert.match(run, /stage-cli class-review-record <run-id> <stage> --pipeline <id> --evidence <class-review\.json>/);
+  assert.match(run, /repeat after redesign requires new research and a different design/i);
   assert.doesNotMatch(run, /CLASS_RECURRENCE_AFTER_REWORK/);
   assert.match(codeReviewer, /`defect_class` key/);
   assert.match(reviewer, /missing_prior_art/);
@@ -224,7 +224,7 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   assert.match(reviewer, /needs_owner_clarification/);
   assert.match(codeReviewer, /technical_fix \| security_fix \| replan/);
   assert.match(codeReviewer, /"privilege_expansion": false/);
-  assert.match(plan, /gate advances only on literal `status: ready`/i);
+  assert.match(plan, /Planning gate \*\*finalization\*\* follows dependency order: an artifact freezes only on literal `status: ready`/i);
 });
 
 
@@ -376,11 +376,13 @@ test('shell-running workers keep every command in the foreground until it finish
 test('PLAN instructions carry test rework, plan probe and checkpoint rules', async () => {
   const flat = async (p) => (await text(p)).replace(/\s+/g, ' ');
   const plan = await flat('config/opencode/command/pipeline-plan.md');
-  for (const re of [/test_rework: \[\{id, path, action, reason, work_item_id\}\]/, /`test_preparation: true`/, /Never raise a test timeout/,
-    /--plan-probe/, /planning\/probes\//, /PLAN_PROBE_REQUIRED/, /TEST_REWORK_\*/, /pre-publish/, /PIPELINE_SCRATCH_DIR/,
+  for (const re of [/test_rework: \[\{id, path, action, reason, work_item_id, required_by\}\]/, /`test_preparation:true`/, /A pre-existing RED baseline is repaired by the separate baseline-repair work item/,
+    /--plan-probe/, /planning\/probes\//, /PLAN_PROBE_REQUIRED/, /pre-publish/, /PIPELINE_SCRATCH_DIR/,
     /real production entry/, /openchamber_render/, /awaitAnswer/, /only the artifact's author agent edits it/]) {
     assert.match(plan, re);
   }
+  const manifestPolicy = await text('config/opencode/skills/task-management/scripts/manifest-v2-policy.mjs');
+  assert.match(manifestPolicy, /TEST_REWORK_LANE_INVALID/);
   assert.doesNotMatch(plan, /RUN may add concrete test\/support paths inside an already-approved/);
   const arch = await flat('config/opencode/agent/subagents/planning/architecture-analyzer.md');
   assert.match(arch, /Repair checkpoint mode/);
@@ -401,7 +403,8 @@ test('RUN instructions carry architecture checkpoint, cross-lane repair, bounded
   const run = await flatRun('config/opencode/command/pipeline-run.md');
   const orch = await text('config/opencode/agent/core/openstage-orchestrator.md');
   assert.match(run, /architecture_review_due.*ARCHITECTURE_REVIEW_REQUIRED.*architecture-review-record/i);
-  assert.match(run, /apply_within_requirements.*one `⚠` line.*requirements_change.*only that stage.*other runnable lane/i);
+  assert.match(run, /apply_within_requirements.*independently reviewed by SeniorTechnicalPlanReviewer.*requirements_change.*owner/i);
+  assert.match(run, /CLI requires the \*\*ready\*\* senior verdict.*Unrelated runnable lanes continue/i);
   assert.match(run, /--repair-pipeline <lane>/);
   assert.match(run, /--include-pre-run --paths/);
   assert.match(run, /OpenStage runs short sequential commands itself in the foreground/);

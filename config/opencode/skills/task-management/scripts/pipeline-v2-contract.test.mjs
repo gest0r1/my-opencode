@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -868,7 +869,10 @@ test('schema v2 freezes optional project policy and enforces protected paths', a
 
 test('stage state exposes ready and release_ready milestones before completed', async () => {
   const fx = await fixture('v2-milestones');
-  const stateRoot = path.join(fx.root, '.tmp', 'pipelines-state');
+  // Source-bound review proofs require a genuine (disposable) git inventory.
+  const git = spawnSync('git', ['init', '-b', 'main'], { cwd: fx.root, encoding: 'utf8' });
+  assert.equal(git.status, 0, git.stderr);
+  const stateRoot = path.join(fx.root, '.tmp', 'pipelines'); // canonical dispatch/review state root
 
   let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
@@ -878,7 +882,22 @@ test('stage state exposes ready and release_ready milestones before completed', 
   const complete = (stage) => {
     let current = run(fx.root, ['start', fx.manifest.run_id, stage, '--pipeline', 'app', '--state-root', stateRoot]);
     assert.equal(current.status, 0, current.stderr);
-    current = run(fx.root, ['complete', fx.manifest.run_id, stage, '--pipeline', 'app', '--state-root', stateRoot, '--json']);
+    const isReview = fx.manifest.pipelines[0].executors[stage] === 'review';
+    let evidence = null;
+    if (isReview) {
+      const dispatched = run(fx.root, ['dispatch', fx.manifest.run_id, '--pipeline', 'app', '--stage', stage,
+        '--work-item', stage, '--role', 'CodeReviewer', '--state-root', stateRoot, '--json']);
+      assert.equal(dispatched.status, 0, dispatched.stderr);
+      const packet = JSON.parse(dispatched.stdout);
+      evidence = path.join(stateRoot, fx.manifest.run_id, stage + '-ready.json');
+      // Only the actual full reviewer packet and its exact source can close a review.
+      const result = { status: 'ready', run_id: fx.manifest.run_id, pipeline_id: 'app', stage,
+        review_dispatch_id: packet.review_dispatch_id, review_source_digest: packet.review_source_digest, findings: [] };
+      // The test is async, but its stage helper is synchronous like the CLI.
+      writeFileSync(evidence, JSON.stringify(result) + '\n');
+    }
+    current = run(fx.root, ['complete', fx.manifest.run_id, stage, '--pipeline', 'app', '--state-root', stateRoot,
+      ...(evidence ? ['--evidence', evidence] : []), '--json']);
     assert.equal(current.status, 0, current.stderr);
     return JSON.parse(current.stdout);
   };
