@@ -5,6 +5,14 @@
 План размещён в отдельной ветке my-opencode; владелец 2026-11-14 разрешил реализацию в изолированных ветках, но не merge в main и не установку на сервер.
 
 
+## CHECKPOINT 2026-11-15 — audit review checkpoints / prompt dedup IN PROGRESS
+
+- **Блок архитектурной развилки выполнен:** `architecture-analyzer.md` `3e654c0` восстановлен отсутствовавший заголовок `Runtime scope clarification mode`, исключив смешение scope clarification и class review. `senior-technical-plan-reviewer.md` `bfb2db7` явно ограничивает вызов SeniorTechnicalPlanReviewer при CLASS_REVIEW реальным redesign; `pipeline-run.md` `9f56e74` устранена противоречивая фраза и восстановлен контекст выбора при исчерпании бюджета.
+- **Фактически в коде, без изменения порогов:** `DEFECT_CLASS_REVIEW_THRESHOLD=3`; класс обнаруживается по независимым negative authoritative evidence, отличные root cause ID сами по себе не обходят блок. `ARCHITECTURE_REVIEW_AFTER=5` по заряженным циклам; класс-review на том же scope может закрыть due-checkpoint; относительный отсчёт только по verified covered_paths+dependency_files, иначе fallback 5/10/15; dependency drift инициирует досрочный checkpoint. Дефолт 5, владелец может повысить до 20, bounded advisory и in-progress fixes не расходуют новый цикл. PLAN: 2 последовательных отрицательных review одного класса либо 3 неуспешные редакции → prior-art research + fresh full review; технические findings допускается carry в RUN после эскалации.
+- **Что дальше:** устранить только реальное дублирование `pipeline-*` ↔ agent prompts и RUN worker rules, сохраняя обязательные CLI-гейты; затем доступные тесты и exact SHA handoff. Изолированного полного checkout/Bun/tsx здесь нет, полные проверки не считать PASS.
+
+---
+
 ## CURRENT STATUS — читать первым, 2026-11-15
 
 - **Принятая концепция BDD/ATDD + risk-based TDD + contract-first + vertical slices внедрена на уровне policy/roles и целевых CLI изменений в feature-ветку**, latest verified source **`e83215242c21e2b88c1a4bfcae7b4f7ca6d1fe13`** до этой doc-only записи. Новые policy/rules: StoryMapper — единственный владелец бизнес-AC; TestEngineer PLAN и RUN — техническая тестируемость и исполняемые RED по готовым зависимостям, опционально по риску; ContractManager и TestEngineer PLAN могут разрабатывать независимые артефакты одновременно, с freeze только при SHA-bound ready; TaskManager строит вертикальные блоки, Coder отвечает за GREEN. Изменений в main/production/SSH/деплое нет.
