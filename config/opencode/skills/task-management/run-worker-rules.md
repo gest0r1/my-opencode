@@ -8,13 +8,10 @@ Only read this file when the **validated RUN dispatch packet** includes `run_sta
 - The role's configured permissions are already available. Do not probe random shell commands to infer rights, add an extra permission-check call, or call a parent-owned stage-cli operation. A command with `ask` requires actual owner confirmation; describing it as permitted is not confirmation.
 - Universal agent instructions still apply; this file gives only the additional constraints of this RUN stage.
 
-## Early tests, only when supplied
+## Machine evidence and recovery
 
-- For a **CoderAgent** packet with `advisory_checks[]`, each `mode=affected` entry is a mandatory completion check for the exact frozen work item after its source changes. Run its exact literal `command` with the exact provided work-item/baseline identity. Do not reconstruct a similar command from memory, guess a test profile or substitute a different baseline.
-- For a failing test, iterate narrowly using only the supplied `focus_command`, `frozen_commands[]` and explicit eligible Vitest test-file path, when present. Then finish with the bound check using the entry's `shell.timeout`, **foreground**. A diagnostic check without bound work-item/baseline identity is not completion evidence.
-- A failed advisory is corrected **inside the current implementation attempt**; it is not an authoritative gate failure and **does not consume a fix cycle**. A stopped advisory yields `INTERRUPTED`, not `PASS`; re-run using the approved command.
-- `stage-complete-cli` rejects completion if the required bound PASS is missing or stale. Never weaken a test, edit a frozen manifest or reclassify a failing check as optional to bypass it.
-- `DIAGNOSTIC_NO_PROGRESS` needs a real change or a recorded new hypothesis in the current RUN's `checks/`; use only explicitly allowed steps. Ask for independent review if the fault remains unknown; do not repeatedly retry an identical hypothesis.
+- Execute supplied tests only as the **role's own instruction** and exact dispatch packet prescribe. The CLI, not this supplemental prompt, verifies bound PASS/freshness; advisory failures are not chargeable fix-cycles.
+- `DIAGNOSTIC_NO_PROGRESS` needs a real change or a recorded new hypothesis in the current RUN's `checks/`; ask for independent review if the root cause remains unknown. Do not repeatedly retry the same hypothesis.
 
 ## Edit and evidence economy
 
