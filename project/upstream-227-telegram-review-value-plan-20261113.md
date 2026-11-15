@@ -1,3 +1,10 @@
+## HOTFIX CHECKPOINT — 2026-11-15 (pending CI)
+
+- Main merge PR #68 was 95efbf45b9dd7321a31ef64e16f7dd790dc1f0e7. Pipeline contracts run 43686292177 FAILED 10 tests. Installer PASS.
+- Hotfix branch fix/pipeline-contracts-post-merge-20261115 from main. Regression updates: pinned runtime test 2.2.7 (c6ef9bb), wording/required_by policy test (c57c6f0), source-bound CodeReviewer fixture and real git (58439ce), milestone reviews with real source-bound verdict (9871b62). Production CLI protection remains strict.
+- NEXT: PR to main, run full Pipeline contracts, fix failures; merge only after PASS. OpenChamber-RU main Linux web package passed; v2.7.1.1 draft release pending other platform jobs. No user installation verified.
+
+---
 ## MERGE STATUS — 2026-11-15
 
 - **MERGED:** PR [#68](https://github.com/gest0r1/my-opencode/pull/68) merged into `main` at `95efbf45b9dd7321a31ef64e16f7dd790dc1f0e7`; source branch head `1838367bff4a5cb3aeda6a5cf9c3593f69996bb2`. Full pipeline contract CI [43686292177](https://github.com/gest0r1/my-opencode/actions/runs/43686292177) was **IN PROGRESS** at merge; installer CI [43686292174](https://github.com/gest0r1/my-opencode/actions/runs/43686292174) PASS. Runtime installation/manual PLAN→RUN still NOT RUN.
