@@ -1,3 +1,12 @@
+## MERGE & RELEASE CHECKPOINT — 2026-11-15
+
+- Owner explicitly requested main merge and release. [PR #68](https://github.com/gest0r1/my-opencode/pull/68) created from feature branch; source before CI update `f93957cc1e465b36005df39bc6d17979510f0b20`. OpenChamber-RU [PR #27](https://github.com/gest0r1/openchamber-ru/pull/27) is the separate runtime/release branch.
+- CLI/TDD regressions `manifest-tdd.test.mjs`, `test-first-baseline.test.mjs` and `review-result-evidence.test.mjs` are explicitly added to the **existing** `Pipeline contracts` job (Node24/tsx); no new gate/workflow or repeated stage. Previous `Pipeline contracts` PASS/FAIL on older source SHA is not authoritative after this commit.
+- Installer contract on prior SHA `f93957c` was PASS. Full new contract suite, manual OpenCode PLAN→RUN acceptance and production installation remain **NOT VERIFIED** pending latest PR CI. Do not claim release/merge happened until GitHub confirms.
+- **NEXT:** verify exact SHA CI for PR #68, fix failures without broadening scope, merge into `main` if PASS; review release packaging in OpenChamber-RU PR #27 and its main-triggered release workflow. No SSH or production deploy requested.
+
+---
+
 # План: OpenCode 2.2.7 + OpenChamber 2.7.1 + Telegram extension + защита от переусложнения
 
 Дата: 2026-11-13. Последняя актуализация состояния: **2026-11-15**. Статус: **ACCEPTANCE OPEN — OpenChamber CI PASS on exact source e3489d7; isolated my-opencode runtime and real Telegram cutover NOT ACCEPTED**. Не означает готовность к merge/deploy. Актуальная точка восстановления и остаток — в ближайшем блоке; старые записи ниже исторические.
