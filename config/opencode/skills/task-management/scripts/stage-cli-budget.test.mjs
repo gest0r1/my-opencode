@@ -902,6 +902,8 @@ test('the 5th charged cycle flags an architecture checkpoint; the next cycle nee
   result = await record({ external_contract_changed: true }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
   result = await record({ summary: ' ' }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
   result = await record({ result: 'maybe' }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
+  result = await record({ result: 'no_change', requirements_changed: true, technical_review_artifact: undefined });
+  assert.match(result.stderr, /no_change cannot report changed requirements/);
   result = await record({ stage: 'implementation' }); assert.match(result.stderr, /ARCHITECTURE_REVIEW_INVALID/);
   result = await record({ technical_review_artifact: undefined }); assert.match(result.stderr, /technical_review_artifact is required/);
   await writeFile(technical, 'status: needs_revision\n');
