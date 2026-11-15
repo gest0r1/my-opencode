@@ -82,15 +82,21 @@ test('approved source move copies bytes exactly, verifies the hash, then removes
 });
 
 test('deferred owner decision lets repairs finish and blocks only the final gate', async () => {
-  const fx = await fixture('deferred-owner', ['implementation', 'code-review', 'final-test'], { implementation: 'agent', 'code-review': 'review', 'final-test': 'local_gate' });
+  const fx = await fixture('deferred-owner', ['implementation', 'code-review', 'final-test'], { implementation: 'agent', 'code-review': 'review', 'final-test': 'local_gate' }, true);
   const file = await writeReview(fx, 'decision.json', { kind: 'deferred_owner_decision', owner_decision_required: true,
     independent_repairs_safe: true, action_executed: false, summary: 'Remove data?', paths: ['data.bin'], source_stage: 'code-review', before_stage: 'final-test' });
   let result = run(fx.root, ['owner-decision-defer', fx.runId, 'delete-data', '--pipeline', 'app', '--evidence', file, '--state-root', fx.stateRoot]);
   assert.equal(result.status, 0, result.stderr);
-  for (const [command, stage] of [['complete', 'implementation'], ['start', 'code-review'], ['complete', 'code-review']]) {
+  for (const [command, stage] of [['complete', 'implementation'], ['start', 'code-review']]) {
     result = run(fx.root, [command, fx.runId, stage, '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
     assert.equal(result.status, 0, result.stderr);
   }
+  result = run(fx.root, ['dispatch', fx.runId, '--pipeline', 'app', '--stage', 'code-review',
+    '--work-item', 'code-review', '--role', 'CodeReviewer', '--state-root', fx.stateRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const ready = readyReviewEvidence(fx.root, fx.stateRoot, fx.runId, 'app', 'code-review');
+  result = run(fx.root, ['complete', fx.runId, 'code-review', '--pipeline', 'app', '--state-root', fx.stateRoot, '--evidence', ready, '--json']);
+  assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(result.stdout);
   assert.equal(state.pipelines.app.stages['final-test'].status, 'blocked');
   assert.equal(state.pipelines.app.stages.implementation.status, 'completed');
@@ -173,10 +179,10 @@ test('review repairs reopen implementation and share the initiating gate budget 
 });
 
 test('FindingsReviewer only re-checks issued findings, and a review stage closes on a full CodeReviewer', async () => {
-  const fx = await fixture('findings-review', ['implementation', 'code-review'], { implementation: 'agent', 'code-review': 'review' });
+  const fx = await fixture('findings-review', ['implementation', 'code-review'], { implementation: 'agent', 'code-review': 'review' }, true);
   const cli = (args) => run(fx.root, [...args, '--pipeline', 'app', '--state-root', fx.stateRoot]);
   const dispatch = (stage, role) => run(fx.root, ['dispatch', fx.runId, '--pipeline', 'app', '--stage', stage, '--work-item', stage === 'code-review' ? stage : 'wi-app', '--role', role]);
-  const complete = (stage) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'), 'complete', fx.runId, stage, '--pipeline', 'app'],
+  const complete = (stage, evidence = null) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'), 'complete', fx.runId, stage, '--pipeline', 'app', ...(evidence ? ['--evidence', evidence] : [])],
     { cwd: fx.root, encoding: 'utf8', env: process.env });
   // The fixture leaves implementation completed and code-review in progress.
   let result;
@@ -195,12 +201,13 @@ test('FindingsReviewer only re-checks issued findings, and a review stage closes
   result = complete('code-review');
   assert.notEqual(result.status, 0); assert.match(result.stderr, /REVIEW_CLOSING_FULL_REQUIRED: app\/code-review/);
   result = dispatch('code-review', 'CodeReviewer'); assert.equal(result.status, 0, result.stderr);
-  result = complete('code-review'); assert.equal(result.status, 0, result.stderr);
+  result = complete('code-review', readyReviewEvidence(fx.root, fx.stateRoot, fx.runId, 'app', 'code-review'));
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('advance completes a stage, starts the next stage that needs no preparation and leaves the rest waiting', async () => {
-  const fx = await fixture('advance-run', ['implementation', 'second-review', 'verify'], { implementation: 'agent', 'second-review': 'review', verify: 'git_verify' });
-  const advance = (stage) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'), 'advance', fx.runId, stage, '--pipeline', 'app'],
+  const fx = await fixture('advance-run', ['implementation', 'second-review', 'verify'], { implementation: 'agent', 'second-review': 'review', verify: 'git_verify' }, true);
+  const advance = (stage, evidence = null) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'), 'advance', fx.runId, stage, '--pipeline', 'app', ...(evidence ? ['--evidence', evidence] : [])],
     { cwd: fx.root, encoding: 'utf8', env: process.env });
   let result = advance('implementation');
   assert.equal(result.status, 0, result.stderr);
@@ -211,7 +218,7 @@ test('advance completes a stage, starts the next stage that needs no preparation
   assert.equal(out.github_sync.status, 'PASS');
   result = run(fx.root, ['dispatch', fx.runId, '--pipeline', 'app', '--stage', 'second-review', '--work-item', 'second-review', '--role', 'CodeReviewer']);
   assert.equal(result.status, 0, result.stderr);
-  result = advance('second-review');
+  result = advance('second-review', readyReviewEvidence(fx.root, fx.stateRoot, fx.runId, 'app', 'second-review'));
   assert.equal(result.status, 0, result.stderr);
   out = JSON.parse(result.stdout);
   assert.deepEqual(out.started, []);
@@ -351,6 +358,17 @@ async function recordNoChangeReview(fx) {
     result: 'no_change', summary: 'design holds; repeat findings were local' }));
   const result = run(fx.root, ['architecture-review-record', fx.runId, 'code-review', '--pipeline', 'app', '--evidence', file, '--state-root', fx.stateRoot]);
   assert.equal(result.status, 0, result.stderr);
+}
+// Full review completion must carry an actual source-bound CodeReviewer dispatch.
+function readyReviewEvidence(root, stateRoot, runId, pipelineId, stage) {
+  const dispatch = JSON.parse(readFileSync(path.join(stateRoot, runId, 'checks', 'review-dispatch',
+    `${pipelineId}--${stage}.json`), 'utf8'));
+  assert.equal(dispatch.role, 'CodeReviewer');
+  const file = path.join(stateRoot, runId, `${pipelineId}-${stage}-ready.json`);
+  writeFileSync(file, JSON.stringify({ status: 'ready', run_id: runId, pipeline_id: pipelineId,
+    stage, review_dispatch_id: dispatch.review_dispatch_id,
+    review_source_digest: dispatch.source_digest, findings: [] }) + '\n');
+  return file;
 }
 async function writeReview(fx, name, review) {
   const file = path.join(fx.stateRoot, fx.runId, name);
@@ -842,6 +860,9 @@ async function lanesFixture(runId, { sinkScope = ['packages/sink/**'], laneScope
   };
   const manifestPath = path.join(root, 'manifest.json');
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  // The review verifier snapshots git content: this is a real isolated git fixture.
+  const git = spawnSync('git', ['init', '-b', 'main'], { cwd: root, encoding: 'utf8' });
+  assert.equal(git.status, 0, git.stderr);
   const cli = (...args) => sh(root, [...args, '--state-root', stateRoot]);
   let result = cli('init', manifestPath, '--json'); assert.equal(result.status, 0, result.stderr);
   result = cli('approve', runId, '--json'); assert.equal(result.status, 0, result.stderr);
@@ -851,7 +872,17 @@ async function lanesFixture(runId, { sinkScope = ['packages/sink/**'], laneScope
     step(pipeline, stage, command) {
       const r = cli(command, runId, stage, '--pipeline', pipeline, '--json'); assert.equal(r.status, 0, `${pipeline}/${stage} ${command}: ${r.stderr}`); return JSON.parse(r.stdout);
     },
-    finish(pipeline, stage) { this.step(pipeline, stage, 'start'); return this.step(pipeline, stage, 'complete'); },
+    finish(pipeline, stage) {
+      this.step(pipeline, stage, 'start');
+      if (stage !== 'code-review') return this.step(pipeline, stage, 'complete');
+      const dispatched = cli('dispatch', runId, '--pipeline', pipeline, '--stage', stage,
+        '--work-item', stage, '--role', 'CodeReviewer', '--json');
+      assert.equal(dispatched.status, 0, dispatched.stderr);
+      const evidence = readyReviewEvidence(root, stateRoot, runId, pipeline, stage);
+      const completed = cli('complete', runId, stage, '--pipeline', pipeline, '--evidence', evidence, '--json');
+      assert.equal(completed.status, 0, completed.stderr);
+      return JSON.parse(completed.stdout);
+    },
     async evidence(pipeline, stage = 'code-review') {
       const file = path.join(root, `negative-${++seq}.json`);
       await writeFile(file, JSON.stringify({ status: 'needs_revision', run_id: runId, pipeline_id: pipeline, stage, result_id: seq }));
