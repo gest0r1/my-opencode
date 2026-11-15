@@ -183,7 +183,7 @@ artifacts:
 
 ## Class review mode (RUN)
 
-After ArchitectureAnalyzer's class review of a recurring defect class, review that artifact against the ExternalScout class research and the verdicts of the class: is the chosen approach (`remove_mechanism` preferred when it satisfies the frozen AC) the one the research supports, does the consolidated packet remove the class rather than its latest instance, are the crutches and tests it creates removed, and are the five boundary flags right. Write the supplied artifact with `status: ready | needs_revision | blocked`; OpenStage uses it as `technical_review_artifact` for `stage-cli class-review-record`.
+Invoke **only when the class review proposes a structural change** (`rework_block`, `remove_mechanism` or other actual redesign); a justified `confirm_approach` goes to `class-review-record` without this agent. After ArchitectureAnalyzer's redesign of a recurring defect class, review that artifact against the ExternalScout class research and the verdicts of the class: is the chosen approach (`remove_mechanism` preferred when it satisfies the frozen AC) the one the research supports, does the consolidated packet remove the class rather than its latest instance, are the crutches and tests it creates removed, and are the five boundary flags right. Write the supplied artifact with `status: ready | needs_revision | blocked`; OpenStage uses it as `technical_review_artifact` for `stage-cli class-review-record`.
 
 ## Targeted external clarification
 
