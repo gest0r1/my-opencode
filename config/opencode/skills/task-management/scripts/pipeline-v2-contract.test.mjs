@@ -872,7 +872,7 @@ test('stage state exposes ready and release_ready milestones before completed', 
   // Source-bound review proofs require a genuine (disposable) git inventory.
   const git = spawnSync('git', ['init', '-b', 'main'], { cwd: fx.root, encoding: 'utf8' });
   assert.equal(git.status, 0, git.stderr);
-  const stateRoot = path.join(fx.root, '.tmp', 'pipelines-state');
+  const stateRoot = path.join(fx.root, '.tmp', 'pipelines'); // canonical dispatch/review state root
 
   let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
