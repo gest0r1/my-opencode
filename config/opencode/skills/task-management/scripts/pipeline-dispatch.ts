@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { computeRunnable, validateState } from './stage-cli-core.ts';
 import { validateOwnerAmendmentEvidence } from './owner-amendment-policy.ts';
 import { resolveGateTestingFile } from './gate-testing-policy.mjs';
-import { sourceInventory } from './gate-diagnostics.mjs';
+import { sourceInventory, changedFromInventory } from './gate-diagnostics.mjs';
+import { recordTestFirstBaseline, requireTestFirstBaseline, reusableTestFirstOnRepair } from './test-first-baseline.mjs';
 import { gitReadEnv } from './git-readonly.mjs';
 import { planProbeMatches } from './manifest-v2-policy.mjs';
-import { laneReservations, leaseConflict, readLeases, readStagePaths, sameDispatch } from './dispatch-leases.mjs';
+import { laneDigest, laneScope, laneReservations, leaseConflict, readLeases, readStagePaths, sameDispatch } from './dispatch-leases.mjs';
 
 const roles = new Set(['CoderAgent', 'TestEngineer', 'BuildAgent', 'CodeReviewer', 'FindingsReviewer', 'DocWriter', 'OpenDevopsSpecialist', 'OpenFrontendSpecialist']);
 // A review stage runs a full CodeReviewer; FindingsReviewer (cheaper model) only re-checks findings a review already issued.
@@ -199,16 +200,30 @@ function sessionRegistry(root: string, run: string): any[] {
 // A result from a previous wave does not complete work reopened by an owner amendment or repair.
 // The stage start time is the wave boundary; it is persisted in machine state, not inferred from
 // a previous child session. No extra tool call is needed to check it.
-function workItemDone(state: any, registry: any[], pipelineId: string, workItemId: string, stage?: string): boolean {
+function workItemDone(state: any, registry: any[], pipelineId: string, workItemId: string, stage?: string, manifest?: any): boolean {
   const runtime = stage ? state.pipelines[pipelineId]?.stages?.[stage] : undefined;
   if (stage && runtime?.status === 'completed') return true;
   const waveStartedAt = stage ? Date.parse(String(runtime?.started_at ?? '')) : NaN;
   if (stage && !Number.isFinite(waveStartedAt)) return false;
-  return registry.some(entry =>
+  const results = registry.filter(entry =>
     entry.pipeline_id === pipelineId && entry.work_item_id === workItemId &&
-    (!stage || entry.stage === stage) && ['healthy', 'stale'].includes(entry.status) &&
-    (!stage || (Number.isFinite(Date.parse(String(entry.updated_at ?? ''))) &&
-      Date.parse(String(entry.updated_at)) >= waveStartedAt)));
+    (!stage || entry.stage === stage) && ['healthy', 'stale'].includes(entry.status));
+  if (results.some(entry =>
+    !stage || (Number.isFinite(Date.parse(String(entry.updated_at ?? ''))) &&
+      Date.parse(String(entry.updated_at)) >= waveStartedAt))) return true;
+  // Reopening a code-only repair must not repeatedly pay TestEngineer to recreate
+  // unchanged RED tests. A source/contract owner amendment or test-scope repair is not reusable.
+  if (!manifest || !stage || !runtime?.repair_origin_stage || !results.length || !state.manifest_file) return false;
+  const origin = state.pipelines[runtime.repair_origin_pipeline ?? pipelineId]?.stages?.[runtime.repair_origin_stage];
+  const unit = manifest.work_items.find((entry: any) => entry.id === workItemId && entry.pipeline_id === pipelineId);
+  if (!unit) return false;
+  const testItem = workItemRecord(manifest, state.manifest_file, unit);
+  if (testItem.suggested_agent !== 'TestEngineer') return false;
+  const consumers = manifest.work_items.filter((entry: any) => entry.pipeline_id === pipelineId)
+    .map((entry: any) => workItemRecord(manifest, state.manifest_file, entry));
+  return reusableTestFirstOnRepair({ testWorkItemId: workItemId, testItem,
+    consumerItems: consumers, repairPaths: origin?.repair_paths, sessionRegistry: results,
+    pipelineId, stage });
 }
 
 function pendingDependency(state: any, manifest: any, registry: any[], item: any, leases: any[]): string | null {
@@ -217,7 +232,7 @@ function pendingDependency(state: any, manifest: any, registry: any[], item: any
     if (!unit) continue;
     const stage = workItemStage(manifest, unit);
     if (leases.some((lease: any) => lease.pipeline_id === unit.pipeline_id && lease.work_item_id === dependency)) return dependency;
-    if (!workItemDone(state, registry, unit.pipeline_id, dependency, stage)) return dependency;
+    if (!workItemDone(state, registry, unit.pipeline_id, dependency, stage, manifest)) return dependency;
   }
   return null;
 }
@@ -278,7 +293,7 @@ export async function workItemWaves(root: string, run: string, pipelineFilter?: 
         if (item.stage !== undefined && item.stage !== stage) continue;
         const self = { pipeline_id: pipeline.id, stage, work_item_id: unit.id };
         if (leases.some((lease: any) => sameDispatch(lease, self))) { entry.running.push(unit.id); continue; }
-        if (workItemDone(state, registry, pipeline.id, unit.id, stage)) { entry.done.push(unit.id); continue; }
+        if (workItemDone(state, registry, pipeline.id, unit.id, stage, manifest)) { entry.done.push(unit.id); continue; }
         const dependency = pendingDependency(state, manifest, registry, item, leases);
         if (dependency) { entry.waiting.push({ id: unit.id, reason: `depends_on ${dependency}` }); continue; }
         if (amendmentEvidenceInvalid) {
@@ -318,12 +333,29 @@ export function reviewDispatchPath(root: string, run: string, pipelineId: string
   return join(root, '.tmp/pipelines', run, 'checks', 'review-dispatch', `${pipelineId}--${stage}.json`);
 }
 
-async function recordReviewDispatch(root: string, run: string, pipelineId: string, stage: string, role: string, loop: number) {
+async function recordReviewDispatch(root: string, run: string, pipelineId: string, stage: string, role: string,
+  loop: number, manifest: any, manifestFile: string) {
+  const runRoot = join(root, '.tmp/pipelines', run);
+  const pipeline = manifest.pipelines.find((item: any) => item.id === pipelineId);
+  // A sink review sees interactions across source lanes; a source-lane review owns only
+  // its local files. Both are pinned to the bytes the reviewer was dispatched to see.
+  const scope = pipeline?.depends_on?.length ? [] : laneScope(manifest, dirname(manifestFile), runRoot, pipelineId);
+  const inventory = await sourceInventory(root, (exe: string, argv: string[]) => inventoryInvoke(root, exe, argv), scope);
+  if (!inventory.files || !inventory.digest) throw Error('REVIEW_SOURCE_INVENTORY_UNAVAILABLE');
+  const sourceDigest = scope.length
+    ? laneDigest(inventory.files, scope, manifest.generated_paths ?? []) : inventory.digest;
+  if (!sourceDigest) throw Error('REVIEW_SOURCE_INVENTORY_UNAVAILABLE');
+  const recordedAt = new Date().toISOString();
+  const reviewDispatchId = hash(JSON.stringify([run, pipelineId, stage, role, loop, sourceDigest, recordedAt]));
+  const record = { run_id: run, pipeline_id: pipelineId, stage, role, loop,
+    source_scope: scope, source_digest: sourceDigest, review_dispatch_id: reviewDispatchId,
+    recorded_at: recordedAt };
   const target = reviewDispatchPath(root, run, pipelineId, stage);
   await mkdir(dirname(target), { recursive: true });
   const temporary = `${target}.tmp-${process.pid}`;
-  await writeFile(temporary, `${JSON.stringify({ run_id: run, pipeline_id: pipelineId, stage, role, loop, recorded_at: new Date().toISOString() }, null, 2)}\n`, 'utf8');
+  await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
   await rename(temporary, target);
+  return { review_dispatch_id: reviewDispatchId, review_source_digest: sourceDigest };
 }
 
 export async function dispatchPacket(root: string, run: string, pipelineId: string, stage: string, workItemId: string, role: string) {
@@ -404,8 +436,41 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     if (hash(await readFile(file, 'utf8')) !== repairRuntime.repair_evidence.sha256) throw Error('REPAIR_EVIDENCE_CHANGED');
     evidencePaths.push(file);
   }
+  // Only an explicitly paired TestEngineer produces the RED-before-source baseline.
+  // Do not charge an extra inventory to unrelated TestEngineer work items.
+  const isIndependentRed = role === 'TestEngineer' && pipeline.work_items.some((id: string) => {
+    const unit = manifest.work_items.find((candidate: any) => candidate.id === id);
+    if (!unit) return false;
+    const consumer = JSON.parse(readFileSync(resolve(dirname(state.manifest_file), unit.path), 'utf8'));
+    return consumer.suggested_agent === 'CoderAgent' && consumer.stage === stage &&
+      consumer.test_first_work_item_id === workItemId;
+  });
+  if (isIndependentRed) {
+    const beforeRed = await sourceInventory(root, (exe: string, argv: string[]) => inventoryInvoke(root, exe, argv));
+    if (!beforeRed.files || !beforeRed.digest) throw Error('TDD_RED_SOURCE_INVENTORY_UNAVAILABLE');
+    await recordTestFirstBaseline(root, { run_id: run, pipeline_id: pipelineId, stage,
+      work_item_id: workItemId, work_item_sha256: frozen.sha256,
+      manifest_sha256: state.manifest_sha256, source_digest: beforeRed.digest, files: beforeRed.files });
+  }
   const revision = hash(JSON.stringify({ manifest: state.manifest_sha256, runtime, repairRuntime, effectiveScope, ownerAmendments: relevantAmendments }));
   const baseChecks = affectedAdvisoryChecks(manifest, pipeline, role);
+  let redBaseline: any = null;
+  let redScope: string[] = [];
+  if (role === 'CoderAgent' && typeof item.test_first_work_item_id === 'string') {
+    const testUnit = manifest.work_items.find((unit: any) => unit.id === item.test_first_work_item_id);
+    if (!testUnit || testUnit.pipeline_id !== pipelineId) throw Error('TDD_RED_WORK_ITEM_NOT_FROZEN');
+    const testItem = JSON.parse(await readFile(resolve(dirname(state.manifest_file), testUnit.path), 'utf8'));
+    if (testItem.suggested_agent !== 'TestEngineer' || testItem.stage !== stage ||
+        !Array.isArray(item.depends_on) || !item.depends_on.includes(testUnit.id)) {
+      throw Error('TDD_RED_WORK_ITEM_DEPENDENCY_INVALID');
+    }
+    if (!baseChecks.length) throw Error('TDD_GREEN_AFFECTED_CHECK_REQUIRED: give the consuming lane a frozen affected test profile');
+    redScope = checkedScope(testItem.allowed_change_paths ?? [], effectiveScope);
+    if (!redScope.length) throw Error('TDD_RED_SCOPE_MISSING');
+    redBaseline = await requireTestFirstBaseline(root, { run_id: run, pipeline_id: pipelineId,
+      stage, work_item_id: testUnit.id, work_item_sha256: testUnit.sha256,
+      manifest_sha256: state.manifest_sha256 });
+  }
   let itemScope = role === 'CoderAgent' ? coderScope(item, effectiveScope) : [];
   if (role === 'CoderAgent' && baseChecks.length > 0 && itemScope.length === 0 && runtimeAmendmentMatch) {
     itemScope = checkedScope(amendmentPaths, effectiveScope);
@@ -420,7 +485,7 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
   // earlier PASS stale. Otherwise a PASS stays "fresh" after the repaired files change.
   const repairPaths = [...new Set([...(repairRuntime?.repair_paths ?? []), ...amendmentPaths])];
   const boundScope = role === 'CoderAgent' && itemScope.length > 0
-    ? [...new Set([...itemScope, ...checkedScope(repairPaths, effectiveScope)])] : itemScope;
+    ? [...new Set([...itemScope, ...redScope, ...checkedScope(repairPaths, effectiveScope)])] : itemScope;
   // Writers never start on paths another live worker may change, nor before their dependencies return.
   const writeScope = executor === 'agent' ? writerScope(item, boundScope, effectiveScope, readStagePaths(join(root, '.tmp/pipelines', run), pipelineId, stage)) : [];
   if (executor === 'agent' && !stageReview) {
@@ -436,6 +501,12 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
     const baseProbe = await requireBaseProbe(root, run, state.manifest_file, manifest, pipeline, baseChecks.map(check => check.gate), item, effectiveScope);
     const inventory = await sourceInventory(root, (exe: string, argv: string[]) => inventoryInvoke(root, exe, argv));
     if (!inventory.files || !inventory.digest) throw Error('ADVISORY_BASELINE_UNAVAILABLE');
+    // A CoderAgent dispatch happens after TestEngineer has already written RED tests.
+    // Compare against BEFORE those tests to make --affected pick up their exact files.
+    if (redBaseline) {
+      const testChanges = changedFromInventory(inventory.files, redBaseline.files, redScope);
+      if (!testChanges?.length) throw Error('TDD_RED_TEST_CHANGE_MISSING: TestEngineer must deliver executable tests first');
+    }
     const baseline = await writeBaseline(root, run, {
       schema_version: 1,
       run_id: run,
@@ -452,8 +523,8 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       repair_origin_stage: runtime?.repair_origin_stage ?? null,
       repair_origin_pipeline: runtime?.repair_origin_stage ? (runtime.repair_origin_pipeline ?? pipelineId) : null,
       base_probe: baseProbe,
-      source_digest: inventory.digest,
-      files: inventory.files,
+      source_digest: redBaseline?.source_digest ?? inventory.digest,
+      files: redBaseline?.files ?? inventory.files,
       recorded_at: new Date().toISOString(),
     });
     // Exact allowlisted invocations (literal `$HOME`, matching CoderAgent's bash permission): the
@@ -464,13 +535,17 @@ export async function dispatchPacket(root: string, run: string, pipelineId: stri
       // Foreground with a long timeout: the worker sees the exit itself. A background shell wakes
       // only the child session, so its completion never reached the parent.
       shell: { background: false, timeout: 3_600_000 },
-      frozen_commands: (manifest.gate_profiles[pipeline.profile][check.gate] as string[]).map((command, index) => ({ index, command })) }));
+      frozen_commands: (manifest.gate_profiles[pipeline.profile][check.gate] as string[]).map((command, index) => ({ index, command })),
+      ...(redBaseline ? { test_first_work_item_id: item.test_first_work_item_id } : {}) }));
   }
-  if (executor === 'review') await recordReviewDispatch(root, run, pipelineId, stage, role, Number(runtime?.technical_fix_cycles ?? 0));
+  const reviewProof = executor === 'review'
+    ? await recordReviewDispatch(root, run, pipelineId, stage, role, Number(runtime?.technical_fix_cycles ?? 0), manifest, state.manifest_file)
+    : undefined;
   return { run_id: run, pipeline_id: pipelineId, stage, executor, role, work_item_id: workItemId,
     // The orchestrator passes a path; only the targeted worker reads these stage rules.
     ...(executor === 'agent' && RUN_WORKER_RULE_ROLES.has(role) ? { run_stage_rules_path: RUN_WORKER_RULES } : {}),
     work_item_path: workItemPath, work_item_sha256: frozen.sha256, authoritative_paths: [state.manifest_file, state.rules_file, ...referencePaths, ...amendmentEvidence],
+    ...(reviewProof ?? {}),
     review_work_items: stageReview ? [...manifest.work_items.filter((w: any) => pipeline.work_items.includes(w.id)), ...amendmentItems].map((w: any) => ({ id: w.id, path: resolve(dirname(state.manifest_file), w.path), sha256: w.sha256 })) : undefined,
     context_paths: (item.context_files ?? []).map((p: string) => resolve(root, p)), reference_paths: (item.reference_files ?? []).map((p: string) => resolve(root, p)),
     decision_ids: item.decision_ids ?? pipeline.decision_ids ?? [], research_ids: item.research_ids ?? pipeline.research_ids ?? [], contract_ids: item.contract_ids ?? pipeline.contract_ids ?? [],

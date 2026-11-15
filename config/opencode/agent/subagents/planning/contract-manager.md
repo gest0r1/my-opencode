@@ -18,7 +18,7 @@ Run only when /pipeline-plan selected an interface-contract trigger.
 
 ## Inputs
 
-Use the supplied requirement, architecture/context/evidence and owner decisions.
+Use the supplied requirement, architecture/context/evidence and owner decisions. The effective approved Story and architecture define behavior and component boundaries; your output owns **only the interface contract** (request/response/event schema, errors, auth, compatibility). Do not copy acceptance scenarios or add product rules. You may draft concurrently with the independent TestEngineer PLAN assessment after upstream inputs freeze; no one runs executable API contract tests against an unapproved schema. If TestEngineer finds an unresolved interface ambiguity, resolve the contract at its owner, then send the frozen contract to the final technical review/TaskManager.
 Expect exact artifact_path and artifact_language. Do not delegate. If an exact
 repository/upstream fact is missing, return blocked with the gap for OpenStage.
 

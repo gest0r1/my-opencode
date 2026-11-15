@@ -140,7 +140,7 @@ fi
 
 REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 REF="${OPENCODE_CONFIG_REF:-main}"
-export OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.2.5}"
+export OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.2.7}"
 GENERATION_PATH="scripts/install-opencode-generation.sh"
 BOOTSTRAP_PATH="scripts/bootstrap-runtime-tools.sh"
 for cmd in gh mktemp rm sed systemctl; do

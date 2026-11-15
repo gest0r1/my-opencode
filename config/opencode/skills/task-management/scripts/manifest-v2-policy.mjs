@@ -333,7 +333,7 @@ function validatePlanningReadiness(manifest, root) {
 
   const required = readiness.required_artifacts;
   const mandatory = ['decision_register', 'work_items'];
-  const optional = ['technology_evidence', 'contract_inventory'];
+  const optional = ['technology_evidence', 'contract_inventory', 'test_assessment'];
   if (!required || typeof required !== 'object') {
     throw new ManifestV2PolicyError('planning_readiness.required_artifacts is required');
   }
@@ -354,6 +354,25 @@ function validatePlanningReadiness(manifest, root) {
 
   if (!Array.isArray(manifest.open_decisions) || manifest.open_decisions.length !== 0) {
     throw new ManifestV2PolicyError('schema v2 design-freeze manifest requires open_decisions=[] before init');
+  }
+}
+
+// Explicit TDD pairs use the existing frozen work-item DAG; separate validation makes
+// role/edge errors deterministic before any TestEngineer/CoderAgent dispatch.
+export function validateTestFirstWorkItems(records, pipelines) {
+  for (const [id, record] of records) {
+    if (record.test_first_work_item_id === undefined) continue;
+    const redId = record.test_first_work_item_id;
+    const red = records.get(redId);
+    const pipeline = pipelines.get(record.pipeline_id);
+    if (record.suggested_agent !== 'CoderAgent' || typeof redId !== 'string' || !red ||
+        red.suggested_agent !== 'TestEngineer' || record.pipeline_id !== red.pipeline_id ||
+        record.stage !== red.stage || pipeline?.executors?.[record.stage] !== 'agent' ||
+        pipeline.test_preparation === true || !Array.isArray(record.depends_on) ||
+        !record.depends_on.includes(redId) || !Array.isArray(red.allowed_change_paths) ||
+        !red.allowed_change_paths.length) {
+      throw new ManifestV2PolicyError(`TDD_TEST_FIRST_DEPENDENCY_INVALID: ${id} must depend on a TestEngineer work item in the same consuming agent stage (not test_preparation)`);
+    }
   }
 }
 
@@ -414,6 +433,7 @@ function validateWorkItems(manifest, root, options = {}) {
       }
     }
   }
+  validateTestFirstWorkItems(records, pipelines);
   // A RUN frozen before this check keeps running: dispatch serializes its overlapping items.
   if (!options.runtime) assertWorkItemOrder(manifest, records);
 }

@@ -17,7 +17,6 @@ import { planProbeInputDigest, requirePlanProbeManifestPath } from './plan-probe
 import { verifyDeployedServiceGate } from './dev-deploy-cli.ts';
 import { artifactDigest, outputProof, verifyOutputProof } from './build-output-proof.mjs';
 import { runLifecycleCommand } from './gate-lifecycle.mjs';
-import { isLegacySevami067Run } from './legacy-live-preflight-v067.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -597,18 +596,8 @@ async function main(): Promise<void> {
     const liveConfig = config?.live_postgres;
     if (liveConfig && liveIndexes(config).length) {
       unlock = await acquireGateLocks(stateRoot, runId, gateLock, runtimeGate ? releaseLocks : []);
-      // TEMPORARY UPSTREAM-UPGRADE COMPATIBILITY (#18): remove next upstream update.
-      // Legacy frozen RUN cannot be amended; keep its original full live-PG
-      // execution without the *new* cheap preflight. Never skip PG tests.
-      const legacyRun = isLegacySevami067Run({
-        state, manifest, pipeline, runId, gate, commands, config,
-      });
-      if (!liveConfig.preflight_command && !legacyRun) throw new GateRunnerError(
+      if (!liveConfig.preflight_command) throw new GateRunnerError(
         'RUN_LIVE_PREFLIGHT_REQUIRED: freeze live_postgres.preflight_command before RUN');
-      if (legacyRun) {
-        console.error('TEMPORARY_COMPAT_SEVAMI_067: original frozen live PostgreSQL gate retained; no preflight bypass for other RUNs');
-      }
-      if (!legacyRun) {
       // Use existing heavy->live order for both phases. The lock is visible
       // to the project before its validateOnly adapter runs, but no real PG exists.
       const heavyPreflight = await acquireHeavySlot({ run_id: runId, pipeline_id: pipelineId, gate });
@@ -653,7 +642,6 @@ async function main(): Promise<void> {
       } finally {
         try { await phaseLock?.release(); }
         finally { try { await livePreflightSlot?.release(); } finally { await heavyPreflight.release(); } }
-      }
       }
     }
 

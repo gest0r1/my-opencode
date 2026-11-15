@@ -19,6 +19,7 @@ import { sourceInventory } from './gate-diagnostics.mjs';
 import { laneDigest } from './dispatch-leases.mjs';
 import { validateOwnerAmendmentForApply } from './owner-amendment-policy.ts';
 import { refreshManifestHashes } from './manifest-refresh.mjs';
+import { readReviewVerdict } from './review-result-evidence.mjs';
 
 function stateRootFromArgs(args: string[]): string {
   const index = args.indexOf('--state-root');
@@ -243,6 +244,28 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
 
   if (executor === 'owner_acceptance') {
     throw new Error(`OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT: ${pipeline.id}/${stage}`);
+  } else if (executor === 'review') {
+    // Do not close a review stage on a child dispatch or on the chat reply:
+    // the current full CodeReviewer's persisted verdict must be ready and tied
+    // to the exact source version seen when that reviewer was dispatched.
+    const proof = readReviewVerdict({
+      stateRoot, runId, pipelineId: pipeline.id, stage,
+      evidencePath: optionFromArgs(args, '--evidence'), mode: 'ready',
+    });
+    const scope = Array.isArray(proof.dispatch.source_scope) ? proof.dispatch.source_scope : [];
+    const inventory = await sourceInventory(process.cwd(), (exe: string, argv: string[]) => {
+      const result = spawnSync(exe, argv, { cwd: process.cwd(), env: gitReadEnv(), encoding: 'utf8',
+        shell: false, maxBuffer: 2 * 1024 * 1024, timeout: 30_000 });
+      const stdout = String(result.stdout ?? '');
+      return Promise.resolve({ exit_code: result.status ?? (result.error ? 1 : 0), stdout,
+        stderr: String(result.stderr ?? ''), truncated: stdout.length >= 2 * 1024 * 1024 });
+    }, scope);
+    if (!inventory.files || !inventory.digest) throw new Error('REVIEW_SOURCE_INVENTORY_UNAVAILABLE');
+    const currentDigest = scope.length
+      ? laneDigest(inventory.files, scope, manifest.generated_paths ?? []) : inventory.digest;
+    if (currentDigest !== proof.dispatch.source_digest) {
+      throw new Error(`REVIEW_SOURCE_CHANGED: ${pipeline.id}/${stage}; dispatch a fresh CodeReviewer for the current source`);
+    }
   } else if (executor === 'local_gate') {
     evidencePath = join(stateRoot, runId, 'gates', `${pipeline.id}-${stage}.json`);
     const evidence = await readJsonEvidence(evidencePath, `${pipeline.id}/${stage}`);

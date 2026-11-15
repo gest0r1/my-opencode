@@ -75,6 +75,8 @@ fact that is not already present in the supplied evidence.
 
 ## Work
 
+Follow the TDD boundary of your frozen work item. If the same consuming lane has a completed predecessor TestEngineer RED item, do not rewrite its scenarios, fixtures or acceptance policy; implement the smallest behavior to turn those tests GREEN, then run the supplied bound affected proof. If the work item is a small low-risk change **without a TestEngineer predecessor**, create the minimal relevant test yourself before implementation when feasible; avoid speculative cases and do not use a new test document. Never weaken a valid approved test merely to obtain PASS.
+
 1. Read the work item and acceptance criteria.
 2. Read only relevant references/context.
 3. Implement the smallest change satisfying the approved scope.

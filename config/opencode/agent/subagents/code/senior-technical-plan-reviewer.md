@@ -47,6 +47,8 @@ Record independent search evidence and the reuse/drift verdict in the supplied r
 
 Absent search evidence or unjustified duplication is a blocking `technical_fix` finding. Missing repository facts are `blocked` with a specific fetch request to OpenStage. Boundary changes still follow the existing replan/stop rules; reuse does not authorize scope expansion.
 
+**PLAN custom mechanism decision.** For a material deviation, independently check the architecture `custom_mechanism_assessment` against version-specific ExternalScout sources and the frozen AC: is the mechanism needed, do upstream/library/existing functions satisfy the requirement, and is the chosen approach proportionate? Review additional states/contracts/redundant safeguards, test and future repair complexity, maintainability and release impact without fabricating monetary ROI or requesting extra tests solely for matrix completeness. A finding of `unjustified`, or material `uncertain` without the decisive fact, must be presented to the owner **before implementation** through the existing PLAN decision register; do not approve silently or force a model-selected alternative. If the owner explicitly preserves the nonstandard option, verify that decision and the residual risk are linked in technology evidence and architecture; do not block solely for preference after approval. Actual security/AC/contract defects remain blockers regardless of that choice. Do not introduce another reviewer or gate.
+
 ## Runtime scope review mode
 
 For runtime scope, read the exact architecture clarification (when one exists) plus frozen decisions/acceptance criteria and failed-gate evidence. When the paths stay inside already-approved modules and add no dependency or contract between modules (class 1), you are the only reviewer: write `"architecture_status": "not_required"` and `"module_boundary_changed": false`. Otherwise (class 2) review the ArchitectureAnalyzer artifact written before you and set `module_boundary_changed: true`; never review in parallel with the architecture step. Do not broaden the task. Write the exact supplied `.tmp/pipelines/{run-id}/runtime-scope-review-<n>.json` as JSON with:
@@ -132,15 +134,15 @@ If ordinary runtime replan changes frozen requirements/acceptance criteria, rout
 
 Even when status is `ready_for_owner_approval`, implementation must stop. Only the owner's explicit approval can later invoke `runtime-replan-approve --cycles N`.
 
-Review decisions, architecture, contracts, evidence, work decomposition and DAG for:
+Review decisions, architecture, frozen contracts, conditional TestEngineer PLAN testability assessment (when materially triggered), evidence, work decomposition and DAG for:
 
 - missing/contradictory requirements or owner decisions;
 - unsafe architecture/interface assumptions;
 - dependency cycles, un-serialized exclusive/migration/fixture conflicts;
-- lost parallelism: independent work items with disjoint paths placed in one pipeline (one stage at a time) instead of separate lanes; work items marked `parallel: true` inside one pipeline are always this finding;
+- lost parallelism and duplicate work: independent work items with disjoint paths placed in one pipeline (one stage at a time) instead of separate lanes; work items marked `parallel: true` inside one pipeline are always this finding;
 - CI mode: `github_ci_mode: off` without a local CI-parity `local_gate` as deployment validation;
-- test rework completeness: `test_rework[]` covers inventory/pin tests of what the run changes, generated-map selection-budget thresholds (recomputed with the frozen generator check), tests near their limit or with cold module import under parallel load, and helper-only tests; each entry has an exact path inside base scope, an action and a `test_preparation: true` work item, and every other lane depends on that lane. Raising a timeout instead of reworking the test is a blocking `technical_fix`. Do not demand contradictory test splitting: the "1-2 test blocks" repository rule is a size estimate and never forces tests out of the item that changes the product;
-- scenario coverage: every acceptance-criteria user path has a scenario test on the real production entry with only the provider transport stubbed (a helper-only test does not count); when the repository has a mutation/behavior-cell checker it is a frozen gate command, and a manual check replaces it only by recorded owner decision;
+- test rework completeness: `test_rework[]` covers inventory/pin tests of what the run changes, generated-map selection-budget thresholds (recomputed with the frozen generator check), tests near their limit or with cold module import under parallel load, and helper-only tests; each entry has an exact path inside base scope, an action and a `test_preparation: true` work item. Only actual `required_by` consumer lanes depend on that prep lane; independent lanes must not be serialized. Raising a timeout instead of reworking the test is a blocking `technical_fix`. Do not demand contradictory test splitting: the "1-2 test blocks" repository rule is a size estimate and never forces tests out of the item that changes the product;
+- scenario coverage **without a duplicate requirement matrix**: every acceptance-criteria user path has a scenario test on the real production entry with only the provider transport stubbed (a helper-only test does not count); when the repository has a mutation/behavior-cell checker it is a frozen gate command, and a manual check replaces it only by recorded owner decision;
 - plan probes: a PASS `planning/probes/<pipeline>-<gate>.json` exists for every pre-publish gate (matching `commands_sha256`); FAIL is accepted only with a `baseline_repair: true` work item; post-publish gates (candidate SHA, contour install) get inputs from the gate environment (`CANDIDATE_SHA`, `PIPELINE_SCRATCH_DIR`) and never from the owner shell;
 - release version: a work item bumps the version when the project versions releases;
 - single owner module per concept (including composition owners, not only helpers) and a data-model check of what is stored in which column for each creation path; shared-code adoption sits in the lane that changes the shared code, not in the sink;
@@ -179,9 +181,13 @@ artifacts:
 - <artifact_path>
 ```
 
+## Architecture checkpoint redesign review (RUN)
+
+Invoke only when ArchitectureAnalyzer's repeated-repair checkpoint proposes `apply_within_requirements`. Independently verify the exact in-scope replacement design and five boundary flags against frozen AC, relevant contracts, affected callers/tests and the observed repair history. Return a fresh explicit `status: ready | needs_revision | blocked` artifact. The coordinator supplies **only a ready verdict** as `technical_review_artifact` to `stage-cli architecture-review-record`; a `no_change` checkpoint does not call this role. Do not approve a requirements change on behalf of the owner.
+
 ## Class review mode (RUN)
 
-After ArchitectureAnalyzer's class review of a recurring defect class, review that artifact against the ExternalScout class research and the verdicts of the class: is the chosen approach (`remove_mechanism` preferred when it satisfies the frozen AC) the one the research supports, does the consolidated packet remove the class rather than its latest instance, are the crutches and tests it creates removed, and are the five boundary flags right. Write the supplied artifact with `status: ready | needs_revision | blocked`; OpenStage uses it as `technical_review_artifact` for `stage-cli class-review-record`.
+Invoke **only when the class review proposes a structural change** (`rework_block`, `remove_mechanism` or other actual redesign); a justified `confirm_approach` goes to `class-review-record` without this agent. After ArchitectureAnalyzer's redesign of a recurring defect class, review that artifact against the ExternalScout class research and the verdicts of the class: is the chosen approach (`remove_mechanism` preferred when it satisfies the frozen AC) the one the research supports, does the consolidated packet remove the class rather than its latest instance, are the crutches and tests it creates removed, and are the five boundary flags right. Write the supplied artifact with `status: ready | needs_revision | blocked`; OpenStage uses it as `technical_review_artifact` for `stage-cli class-review-record`.
 
 ## Targeted external clarification
 

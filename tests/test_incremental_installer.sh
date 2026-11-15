@@ -171,7 +171,7 @@ if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" != 1 ]]; then
   mkdir -p "$HOME/.opencode/bin"
   cat > "$HOME/.opencode/bin/opencode" <<'INNER'
 #!/usr/bin/env bash
-printf '%s\n' 'opencode 2.2.5'
+printf '%s\n' 'opencode 2.2.7'
 INNER
   chmod +x "$HOME/.opencode/bin/opencode"
 fi
@@ -225,7 +225,7 @@ package_source_sha=$PACKAGE_SOURCE_SHA
 package_fingerprint=$PACKAGE_FINGERPRINT
 package_sha256=$PACKAGE_SHA256
 openchamber_version=$OC_VERSION
-opencode_version=2.2.5
+opencode_version=2.2.7
 bind_host=172.18.0.1
 bind_port=3000
 common_env_sha=$env_sha
@@ -292,8 +292,8 @@ EOF
 }
 
 # 1. Identical invocation refreshes configuration but preserves runtime downloads.
-dir="$(run_case noop 2.2.5 "$CONFIG_SHA" "$APP_SHA" 0)"
-assert_contains "$dir/output.log" 'Config-only update: OpenCode binary 2.2.5 is unchanged'
+dir="$(run_case noop 2.2.7 "$CONFIG_SHA" "$APP_SHA" 0)"
+assert_contains "$dir/output.log" 'Config-only update: OpenCode binary 2.2.7 is unchanged'
 assert_contains "$dir/output.log" 'OpenChamber source/runtime metadata unchanged: release lookup skipped'
 assert_contains "$dir/output.log" 'OpenChamber runtime fingerprint/package unchanged: package download skipped'
 assert_contains "$dir/output.log" 'Delivery prepared:'
@@ -304,8 +304,8 @@ assert_not_contains "$dir/trace.log" 'openchamber startup enable'
 assert_not_contains "$dir/trace.log" 'UNEXPECTED bun'
 
 # 2. Config-only: fetch/run the config installer with binary installation disabled.
-dir="$(run_case config-only 2.2.5 "$OLD_APP_SHA" "$APP_SHA" 0)"
-assert_contains "$dir/output.log" 'Config-only update: OpenCode binary 2.2.5 is unchanged'
+dir="$(run_case config-only 2.2.7 "$OLD_APP_SHA" "$APP_SHA" 0)"
+assert_contains "$dir/output.log" 'Config-only update: OpenCode binary 2.2.7 is unchanged'
 assert_contains "$dir/trace.log" 'contents/install.sh?ref='
 assert_contains "$dir/trace.log" 'install skip=1'
 assert_not_contains "$dir/trace.log" 'systemctl --user restart openchamber.service'
@@ -314,7 +314,7 @@ assert_not_contains "$dir/trace.log" 'UNEXPECTED bun'
 
 # 3. Binary-only: update OpenCode, but do not fetch/reinstall OpenChamber runtime.
 dir="$(run_case binary-only 2.0.20 "$CONFIG_SHA" "$APP_SHA" 0)"
-assert_contains "$dir/output.log" 'Installing/updating OpenCode binary to 2.2.5'
+assert_contains "$dir/output.log" 'Installing/updating OpenCode binary to 2.2.7'
 assert_contains "$dir/trace.log" 'install skip=0'
 assert_contains "$dir/output.log" 'OpenChamber runtime fingerprint/package unchanged: package download skipped'
 assert_not_contains "$dir/trace.log" 'release download'
@@ -324,7 +324,7 @@ assert_not_contains "$dir/trace.log" 'systemctl --user restart openchamber.servi
 
 # 4. OpenChamber source SHA advances but runtime fingerprint points to the same
 # package source: download only the small exact-SHA manifest, not the package.
-dir="$(run_case app-sha-reuse 2.2.5 "$CONFIG_SHA" "$OLD_APP_SHA" 1)"
+dir="$(run_case app-sha-reuse 2.2.7 "$CONFIG_SHA" "$OLD_APP_SHA" 1)"
 assert_contains "$dir/trace.log" "release-manifest v2-web-package-$APP_SHA"
 assert_contains "$dir/output.log" 'OpenChamber runtime fingerprint/package unchanged: package download skipped'
 assert_not_contains "$dir/trace.log" 'unexpected-release-download'
@@ -337,7 +337,7 @@ echo 'PASS: incremental V2 execution keeps binary/config/runtime/service updates
 
 # Config-only updates inside the running console must report pending activation
 # and preserve the console instead of silently leaving stale agents live.
-dir="$(run_case config-defer 2.2.5 "$CONFIG_SHA" "$APP_SHA" 0 defer)"
+dir="$(run_case config-defer 2.2.7 "$CONFIG_SHA" "$APP_SHA" 0 defer)"
 assert_contains "$dir/home/.local/state/my-opencode/openchamber-v2-install.state" 'effective_restart_mode=defer'
 assert_contains "$dir/output.log" 'Delivery prepared:'
 assert_not_contains "$dir/trace.log" 'systemctl --user restart openchamber.service'

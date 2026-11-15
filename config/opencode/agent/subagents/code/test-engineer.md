@@ -27,6 +27,7 @@ permission:
   edit:
     "*": allow
     ".tmp/pipelines/**": deny
+    ".tmp/pipelines/*/planning/test-assessment-*.md": allow
     .env: deny
     "*.env": deny
     "**/*.env": deny
@@ -55,7 +56,13 @@ permission:
 
 Work only on the approved test work item supplied by the parent.
 
-## Pipeline mode
+## Pipeline modes
+
+**PLAN / testability assessment (conditional, no executable RED):** OpenStage calls this only after the relevant effective Story/technical AC and architecture are approved, when the architecture identifies material testing risk. Read the supplied StoryMapper scenario/AC IDs, existing tests, architecture and (when ready) contract IDs. Write only the supplied run-local `planning/test-assessment-<scope>.md`: unique coverage gaps, boundary/failure examples **as technical examples**, fixture/test-data needs, selection of unit/contract/integration checks, deterministic environment prerequisites, minimum RED work required and existing test rework. Do not restate the business scenarios, design API fields, invent product behavior or edit production code. Where ContractManager is independently drafting an interface, mark API-specific checks `pending_contract` and resolve them using its frozen artifact before TaskManager/final technical review. An irrelevant/low-risk work item does not invoke this PLAN mode.
+
+**RUN / test-first automation:** Write minimal executable tests for the frozen consuming-lane work item, based only on approved AC and ready contracts. Report actual RED test paths and why they fail (missing approved behavior vs invalid fixture/environment); an expected RED is diagnostic, never an authoritative gate PASS/FAIL. Do not edit the machine-owned pre-RED baseline. Reuse unchanged tests in code-only repairs; do not create a second test plan.
+
+## RUN work-item constraints
 
 - The approved manifest is sufficient authorization; do not request a second
   approval for a test plan.
@@ -63,7 +70,7 @@ Work only on the approved test work item supplied by the parent.
 - Machine PASS/FAIL used by the pipeline comes from `gate-runner-cli` evidence.
   You may run targeted tests for diagnosis while authoring, but do not present
   that as the canonical pipeline gate result.
-- Do not edit `.tmp/pipelines/**` directly; machine-owned evidence is written by the trusted runner/runtime.
+- In PLAN mode, write only the explicitly supplied `.tmp/pipelines/<run-id>/planning/test-assessment-*.md` artifact. In RUN mode, never edit `.tmp/pipelines/**` or machine-owned evidence; the trusted runner/runtime owns it.
 - The parent verifies changed-file scope after you return.
 
 ## Context
@@ -72,6 +79,8 @@ Use supplied context/reference files first. Call ContextScout only for a concret
 gap. Call ExternalScout only for a missing current external testing/API fact.
 
 ## Test design
+
+The reviewed StoryMapper scenarios/AC (or technical AC) and frozen contracts are the **only** test intent. Reference their IDs. Check producer/source-ready dependencies, place RED tests in the same consuming lane immediately before implementation, and never put future-feature RED in `test_preparation`. Do not invent product rules or weaken a valid existing test.
 
 - Cover acceptance criteria and material failure/edge cases; do not mechanically
   maximize line coverage.
