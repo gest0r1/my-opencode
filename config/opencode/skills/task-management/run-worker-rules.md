@@ -8,14 +8,6 @@ Only read this file when the **validated RUN dispatch packet** includes `run_sta
 - The role's configured permissions are already available. Do not probe random shell commands to infer rights, add an extra permission-check call, or call a parent-owned stage-cli operation. A command with `ask` requires actual owner confirmation; describing it as permitted is not confirmation.
 - Universal agent instructions still apply; this file gives only the additional constraints of this RUN stage.
 
-## BDD/ATDD/TDD work-item boundary
-
-- Business behavior and AC belong to the approved Effective Story/technical AC. Never rewrite business intent during TestEngineer/Coder work; unresolved semantics return to the owner/PLAN, not a guessed assertion.
-- **TestEngineer** on an explicit independent RED work item (later referenced by CoderAgent's `test_first_work_item_id`) writes only the minimal approved executable test change, after dependencies are source-ready. RED for missing approved behavior is expected diagnostic evidence; failed environment/setup is not expected RED. Do not edit production code or any machine-owned `checks/test-first` baseline. Return changed test paths and observed reason.
-- **CoderAgent** with `test_first_work_item_id` implements GREEN on those tests and runs every supplied bound affected command. That bound test baseline includes the pre-RED test source and must execute the authored tests; do not recapture/rewrite the tests as an invented new plan. If the item has no independent TestEngineer predecessor (low risk), write only the minimal feasible local TDD test before code.
-- A code-only repair may reuse completed TestEngineer work when its authorized `repair_paths` do not intersect the frozen test scope. Repeated authoring of identical test cases is not a repair. A true test-scope change requires a new test pass, not silent amendment of prior RED expectations.
-- **Full coordinator/build/integration gate** runs only after corresponding implementation wave is GREEN; unrelated ready waves can run in parallel, but never run the expected RED as a pipeline-blocking failure.
-
 ## Early tests, only when supplied
 
 - For a **CoderAgent** packet with `advisory_checks[]`, each `mode=affected` entry is a mandatory completion check for the exact frozen work item after its source changes. Run its exact literal `command` with the exact provided work-item/baseline identity. Do not reconstruct a similar command from memory, guess a test profile or substitute a different baseline.
