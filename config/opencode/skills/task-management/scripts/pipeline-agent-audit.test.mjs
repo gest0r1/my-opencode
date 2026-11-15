@@ -376,11 +376,13 @@ test('shell-running workers keep every command in the foreground until it finish
 test('PLAN instructions carry test rework, plan probe and checkpoint rules', async () => {
   const flat = async (p) => (await text(p)).replace(/\s+/g, ' ');
   const plan = await flat('config/opencode/command/pipeline-plan.md');
-  for (const re of [/test_rework: \[\{id, path, action, reason, work_item_id, required_by\}\]/, /`test_preparation: true`/, /A pre-existing RED baseline is repaired by the separate baseline-repair work item/,
-    /--plan-probe/, /planning\/probes\//, /PLAN_PROBE_REQUIRED/, /TEST_REWORK_\*/, /pre-publish/, /PIPELINE_SCRATCH_DIR/,
+  for (const re of [/test_rework: \[\{id, path, action, reason, work_item_id, required_by\}\]/, /`test_preparation:true`/, /A pre-existing RED baseline is repaired by the separate baseline-repair work item/,
+    /--plan-probe/, /planning\/probes\//, /PLAN_PROBE_REQUIRED/, /pre-publish/, /PIPELINE_SCRATCH_DIR/,
     /real production entry/, /openchamber_render/, /awaitAnswer/, /only the artifact's author agent edits it/]) {
     assert.match(plan, re);
   }
+  const manifestPolicy = await text('config/opencode/skills/task-management/scripts/manifest-v2-policy.mjs');
+  assert.match(manifestPolicy, /TEST_REWORK_LANE_INVALID/);
   assert.doesNotMatch(plan, /RUN may add concrete test\/support paths inside an already-approved/);
   const arch = await flat('config/opencode/agent/subagents/planning/architecture-analyzer.md');
   assert.match(arch, /Repair checkpoint mode/);
