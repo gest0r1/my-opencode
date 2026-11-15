@@ -198,7 +198,7 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   // A recurring defect class stops the RUN patch loop for research and a class review.
   assert.match(run, /CLASS_REVIEW_REQUIRED/);
   assert.match(run, /stage-cli class-review-record <run-id> <stage> --pipeline <id> --evidence <class-review\.json>/);
-  assert.match(run, /NEW research/);
+  assert.match(run, /repeat after redesign requires new research and a different design/i);
   assert.doesNotMatch(run, /CLASS_RECURRENCE_AFTER_REWORK/);
   assert.match(codeReviewer, /`defect_class` key/);
   assert.match(reviewer, /missing_prior_art/);
