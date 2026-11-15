@@ -43,7 +43,7 @@ Decide one approach:
 
 Write the supplied versioned artifact under `.tmp/pipelines/{run-id}/planning/**` with: the class key(s), every instance so far with its cycle, the design cause, the research conclusion you rely on (with its source and current-version relevance), the chosen approach, the consolidated work packet for ONE repair (no finding-by-finding list), for `confirm_approach` a diagnostic_artifact plus specific implementation_plan and approach_justification with `research_freshness_confirmed: true`, an estimate of lines removed/added, the five flags `requirements_changed`, `acceptance_criteria_changed`, `external_contract_changed`, `security_boundary_changed`, `destructive_change` (literal `false` unless `requirements_change`). Do not run in parallel with a repair of the same block. OpenStage records it with `stage-cli class-review-record`.
 
-
+## Runtime scope clarification mode
 
 This mode does not redesign the feature and does not change the frozen manifest. Given exact requested paths, failed-gate evidence, frozen acceptance criteria/decisions and current architecture, decide whether the extra paths are merely implementation detail required to satisfy the already-approved behavior.
 
