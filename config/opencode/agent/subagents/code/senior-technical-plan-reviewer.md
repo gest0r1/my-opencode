@@ -181,6 +181,10 @@ artifacts:
 - <artifact_path>
 ```
 
+## Architecture checkpoint redesign review (RUN)
+
+Invoke only when ArchitectureAnalyzer's repeated-repair checkpoint proposes `apply_within_requirements`. Independently verify the exact in-scope replacement design and five boundary flags against frozen AC, relevant contracts, affected callers/tests and the observed repair history. Return a fresh explicit `status: ready | needs_revision | blocked` artifact. The coordinator supplies **only a ready verdict** as `technical_review_artifact` to `stage-cli architecture-review-record`; a `no_change` checkpoint does not call this role. Do not approve a requirements change on behalf of the owner.
+
 ## Class review mode (RUN)
 
 Invoke **only when the class review proposes a structural change** (`rework_block`, `remove_mechanism` or other actual redesign); a justified `confirm_approach` goes to `class-review-record` without this agent. After ArchitectureAnalyzer's redesign of a recurring defect class, review that artifact against the ExternalScout class research and the verdicts of the class: is the chosen approach (`remove_mechanism` preferred when it satisfies the frozen AC) the one the research supports, does the consolidated packet remove the class rather than its latest instance, are the crutches and tests it creates removed, and are the five boundary flags right. Write the supplied artifact with `status: ready | needs_revision | blocked`; OpenStage uses it as `technical_review_artifact` for `stage-cli class-review-record`.
