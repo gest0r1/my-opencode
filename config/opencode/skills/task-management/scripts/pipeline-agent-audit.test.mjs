@@ -224,7 +224,7 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   assert.match(reviewer, /needs_owner_clarification/);
   assert.match(codeReviewer, /technical_fix \| security_fix \| replan/);
   assert.match(codeReviewer, /"privilege_expansion": false/);
-  assert.match(plan, /gate advances only on literal `status: ready`/i);
+  assert.match(plan, /Planning gate \*\*finalization\*\* follows dependency order: an artifact freezes only on literal `status: ready`/i);
 });
 
 
@@ -401,7 +401,8 @@ test('RUN instructions carry architecture checkpoint, cross-lane repair, bounded
   const run = await flatRun('config/opencode/command/pipeline-run.md');
   const orch = await text('config/opencode/agent/core/openstage-orchestrator.md');
   assert.match(run, /architecture_review_due.*ARCHITECTURE_REVIEW_REQUIRED.*architecture-review-record/i);
-  assert.match(run, /apply_within_requirements.*requires the \*\*ready\*\* senior verdict.*requirements_change.*owner.*unrelated runnable lanes continue/i);
+  assert.match(run, /apply_within_requirements.*independently reviewed by SeniorTechnicalPlanReviewer.*requirements_change.*owner/i);
+  assert.match(run, /CLI requires the \*\*ready\*\* senior verdict.*Unrelated runnable lanes continue/i);
   assert.match(run, /--repair-pipeline <lane>/);
   assert.match(run, /--include-pre-run --paths/);
   assert.match(run, /OpenStage runs short sequential commands itself in the foreground/);
