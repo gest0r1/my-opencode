@@ -48,6 +48,7 @@ export function resolveGateTesting(manifest, runDirectory) {
       const merged = { ...config };
       delete merged.source;
       for (const key of SOURCE_KEYS) if (snapshot[key] !== undefined && merged[key] === undefined) merged[key] = snapshot[key];
+      if (snapshot.ignored_inputs !== undefined) VERIFIED_IGNORED_SOURCE.add(merged);
       resolved[profile][gate] = merged;
       changed = true;
     }
@@ -358,14 +359,14 @@ export function selectAffectedCommands(commands, config, changed, previousFailur
   if (!config?.impact_groups || !Array.isArray(changed) || !changed.length) return full('missing impact map or change baseline');
   const isNew = typeof options.isNew === 'function' ? options.isNew : () => false;
   if (changed.some(file => !safeIgnoredPath(file))) return full('invalid or untrusted changed path');
-  if (changed.some(file => mandatoryInput(file))) return full('dependency, test contract or security change');
+  if (changed.some(file => ALWAYS_FULL_CHANGE.test(file))) return full('dependency or security change');
   // Legacy glob is accepted as frozen data for backward compatibility but never
   // grants permission to skip an unknown or newly created file.
   const rules = config.ignored_inputs;
   if (rules !== undefined && (!options.verifiedBaseline || !VERIFIED_IGNORED_SOURCE.has(config) || !Array.isArray(rules) || rules.some(rule => !safeExactIgnoredRule(rule)))) {
     return full('ignored_inputs requires frozen verified exact paths');
   }
-  const relevant = changed.filter(file => isNew(file) || !ignoredInput(rules, file));
+  const relevant = changed.filter(file => isNew(file) || mandatoryInput(file) || !ignoredInput(rules, file));
   if (!relevant.length) {
     const failed = [...new Set(previousFailures)].filter(index => Number.isInteger(index) && index >= 0 && index < commands.length)
       .map(index => ({ command: commands[index], index, test_files: [] }));
