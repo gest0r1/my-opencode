@@ -239,6 +239,27 @@ function run(cwd, args) {
 function sha(value) {
   return createHash('sha256').update(value).digest('hex');
 }
+function ensureReviewGit(root) {
+  if (spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, encoding: 'utf8' }).status === 0) return;
+  const init = spawnSync('git', ['init', '-b', 'main'], { cwd: root, encoding: 'utf8' });
+  assert.equal(init.status, 0, init.stderr);
+}
+// This is real review evidence: dispatch a full CodeReviewer and bind its ready
+// verdict to the actual source digest, rather than bypassing production checks.
+function readyReview(fx, pipeline, stage) {
+  ensureReviewGit(fx.root);
+  const dispatched = run(fx.root, ['dispatch', fx.runId, '--pipeline', pipeline, '--stage', stage, '--work-item', stage, '--role', 'CodeReviewer']);
+  assert.equal(dispatched.status, 0, dispatched.stderr);
+  const folder = path.join(fx.stateRoot, fx.runId, 'checks');
+  const packet = JSON.parse(readFileSync(path.join(folder, 'review-dispatch', `${pipeline}--${stage}.json`), 'utf8'));
+  const file = path.join(folder, `ready-${pipeline}-${stage}-${++reviewSequence}.json`);
+  writeFileSync(file, JSON.stringify({
+    status: 'ready', run_id: fx.runId, pipeline_id: pipeline, stage,
+    review_dispatch_id: packet.review_dispatch_id, review_source_digest: packet.source_digest, findings: [],
+  }));
+  return file;
+}
+
 async function frozen(root, relative, content) {
   const file = path.join(root, relative);
   await mkdir(path.dirname(file), { recursive: true });
