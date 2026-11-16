@@ -787,7 +787,16 @@ async function main(): Promise<void> {
     : await findReusableResults({ stateRoot: resolve(stateRoot), runId, gate, sourceDigest: snapshot.digest, environmentDigest,
       selected: invocations.filter(item => canReuseCommand(item.index))
         .map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
-  if (environmentDigest) {
+  // Only repeat expensive identity hashing before *reusing* results. A cold gate
+  // has no PASS to accept: its final post-execution identity check still runs.
+  // Never use path/mtime/ino as a substitute for a fresh digest on reuse.
+  const impactReuseCandidate = !lifecycle && Boolean(environmentDigest) && Boolean(treeCopy) &&
+    !args.includes('--no-reuse') && !hypothesis &&
+    previous?.status === 'PASS' && previous?.snapshot?.status === 'used' &&
+    SHA.test(previous.snapshot.commit ?? '') &&
+    previous.manifest_sha256 === state.manifest_sha256 &&
+    previous.environment_digest === environmentDigest;
+  if (environmentDigest && (reusable.size > 0 || impactReuseCandidate)) {
     let freshInputs: string[] | null = null;
     try { freshInputs = reuseLocalInputs(originalCwd); }
     catch { /* a failed input inventory invalidates reusable evidence */ }
@@ -808,8 +817,7 @@ async function main(): Promise<void> {
   // A gate that passed on an earlier snapshot and runs again (its lane files moved after it, or a plain
   // rerun) repeats only the commands that the changes between the two snapshots reach through the frozen
   // impact map; the others keep their PASS. Unmapped and dependency changes reach every command.
-  if (!lifecycle && environmentDigest && treeCopy && !args.includes('--no-reuse') && !hypothesis && previous?.status === 'PASS' && previous.snapshot?.status === 'used' &&
-      SHA.test(previous.snapshot.commit ?? '') && previous.manifest_sha256 === state.manifest_sha256 && previous.environment_digest === environmentDigest) {
+  if (impactReuseCandidate && environmentDigest) {
     const diff = await runInvocation('git', ['diff', '--name-only', '-z', '--no-renames', previous.snapshot.commit, treeCopy.commit, '--'], originalCwd, gitReadEnv({}), 30);
     if (diff.exit_code === 0 && !diff.truncated) {
       const changed = diff.stdout.split('\0').filter(Boolean);
