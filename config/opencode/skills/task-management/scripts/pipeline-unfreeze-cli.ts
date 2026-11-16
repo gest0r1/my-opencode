@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve, relative, sep, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { hasActiveStages, implementationStarted } from './plan-lifecycle.ts';
 import { readLeases } from './dispatch-leases.mjs';
@@ -55,6 +56,22 @@ function ownerAuthorization(evidence,run,sha) {
       evidence.affected_gates.some(x=>!idValid(x))) throw Error('UNFREEZE_PLANNING_GATES_REQUIRED');
   if(typeof evidence.reason!=='string'||!evidence.reason.trim())throw Error('UNFREEZE_REASON_REQUIRED');
 }
+function defaultWorktreeValidator(manifest) {
+  const run=(...argv)=>{
+    const result=spawnSync('git',argv,{cwd:process.cwd(),encoding:'utf8',shell:false,timeout:15000});
+    if(result.error || result.status!==0) throw Error('UNFREEZE_WORKTREE_INVALID: '+String(result.stderr??result.error));
+    return result.stdout.trim();
+  };
+  const branch=run('branch','--show-current');
+  if(!manifest?.git_setup?.branch || branch!==manifest.git_setup.branch)
+    throw Error('UNFREEZE_WORKTREE_BRANCH_MISMATCH');
+  const gitDir=run('rev-parse','--path-format=absolute','--git-dir');
+  const common=run('rev-parse','--path-format=absolute','--git-common-dir');
+  if(gitDir===common)throw Error('UNFREEZE_LINKED_WORKTREE_REQUIRED');
+  if(!/^[0-9a-f]{40}$/.test(manifest.git_setup.base_sha??''))
+    throw Error('UNFREEZE_BASE_SHA_INVALID');
+  run('merge-base','--is-ancestor',manifest.git_setup.base_sha,'HEAD');
+}
 async function acquire(root,fn) {
   const path=join(root,'.lock');
   const handle=await fs.open(path,'wx');
@@ -95,11 +112,12 @@ async function snapshot(root,version,c) {
   }
   return dir;
 }
-export async function beginUnfreeze(stateRoot,run,evidencePath) {
+export async function beginUnfreeze(stateRoot,run,evidencePath,{validateWorktree=defaultWorktreeValidator}={}) {
   const c=await runRoot(stateRoot,run);
   return acquire(c.root,async()=>{
     const t=await runRoot(stateRoot,run);
     if(t.state.manifest_sha256!==t.manifestHash)throw Error('UNFREEZE_MANIFEST_STALE');
+    validateWorktree(t.manifest);
     if(!implementationStarted(t.state,t.manifest))throw Error('UNFREEZE_USE_EXISTING_REVISE_BEFORE_IMPLEMENTATION');
     if(await optional(join(t.root,'planning/unfreeze-active.json')))throw Error('UNFREEZE_ALREADY_ACTIVE');
     await inFlight(t.root,t.state);
@@ -154,13 +172,14 @@ function pendingPipeline(spec,prior) {
     ...(spec.release_ready_after_stage?{release_ready_after_stage:spec.release_ready_after_stage}:{}),
   };
 }
-export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFrozenPlan = defaultFrozenPlanValidator } = {}) {
+export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFrozenPlan = defaultFrozenPlanValidator, validateWorktree = defaultWorktreeValidator } = {}) {
   const c=await runRoot(stateRoot,run);
   return acquire(c.root,async()=>{
     const t=await runRoot(stateRoot,run);
     const markerPath=join(t.root,'planning/unfreeze-active.json');
     const marker=await optional(markerPath);
     if(!marker||marker.run_id!==run)throw Error('UNFREEZE_NOT_STARTED');
+    validateWorktree(t.manifest);
     const oldRaw=await fs.readFile(join(t.root,'planning/unfreeze-revisions',marker.revision_id,'manifest.json'),'utf8');
     if(hash(oldRaw)!==marker.original_manifest_sha256)throw Error('UNFREEZE_AUDIT_CORRUPT');
     const previousManifest=JSON.parse(oldRaw);
@@ -289,13 +308,14 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
       candidate_invalidated:candidateExists};
   });
 }
-export async function abortUnfreeze(stateRoot,run,evidencePath) {
+export async function abortUnfreeze(stateRoot,run,evidencePath,{validateWorktree=defaultWorktreeValidator}={}) {
   const c=await runRoot(stateRoot,run);
   return acquire(c.root,async()=>{
     const t=await runRoot(stateRoot,run);
     const markerPath=join(t.root,'planning/unfreeze-active.json');
     const marker=await optional(markerPath);
     if(!marker||marker.run_id!==run)throw Error('UNFREEZE_NOT_STARTED');
+    validateWorktree(t.manifest);
     if(t.manifestHash!==marker.original_manifest_sha256 ||
        t.state.manifest_sha256!==marker.original_manifest_sha256)
       throw Error('UNFREEZE_CANNOT_ABORT_EDITED_MANIFEST');
