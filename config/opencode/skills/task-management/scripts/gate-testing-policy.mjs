@@ -362,7 +362,7 @@ export function selectAffectedCommands(commands, config, changed, previousFailur
   // Legacy glob is accepted as frozen data for backward compatibility but never
   // grants permission to skip an unknown or newly created file.
   const rules = config.ignored_inputs;
-  if (rules !== undefined && (!VERIFIED_IGNORED_SOURCE.has(config) || !Array.isArray(rules) || rules.some(rule => !safeExactIgnoredRule(rule)))) {
+  if (rules !== undefined && (!options.verifiedBaseline || !VERIFIED_IGNORED_SOURCE.has(config) || !Array.isArray(rules) || rules.some(rule => !safeExactIgnoredRule(rule)))) {
     return full('ignored_inputs requires frozen verified exact paths');
   }
   const relevant = changed.filter(file => isNew(file) || !ignoredInput(rules, file));
