@@ -222,7 +222,19 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
     const affected=dependencyClosure(t.manifest,direct);
     const reviewed=new Set(review.reviewed_gates??[]);
     if(auth.affected_gates.some(gate=>!reviewed.has(gate)||t.manifest.planning_readiness?.gates?.[gate]?.status!=='ready')) throw Error('UNFREEZE_AFFECTED_REVIEW_NOT_READY');
-    if(review.architecture_changed===true && (review.senior_technical_plan_review!=='ready'||!review.independent_reviewer_id))throw Error('UNFREEZE_SENIOR_TECHNICAL_REVIEW_REQUIRED');
+    if(review.architecture_changed===true) {
+      if(review.senior_technical_plan_review!=='ready' || !review.independent_reviewer_id ||
+         !safeRelative(review.senior_technical_review_path) ||
+         !/^[a-f0-9]{64}$/.test(review.senior_technical_review_sha256??''))
+        throw Error('UNFREEZE_SENIOR_TECHNICAL_REVIEW_REQUIRED');
+      const seniorRaw=await fs.readFile(inside(t.root,join(t.root,review.senior_technical_review_path)),'utf8');
+      const senior=JSON.parse(seniorRaw);
+      if(hash(seniorRaw)!==review.senior_technical_review_sha256 ||
+        senior.reviewer!=='SeniorTechnicalPlanReviewer' ||
+        senior.status!=='ready' || senior.reviewed_manifest_sha256!==t.manifestHash ||
+        (senior.blocking_findings??[]).length>0)
+        throw Error('UNFREEZE_SENIOR_TECHNICAL_REVIEW_INVALID');
+    }
     if(review.changed_story===true && review.story_review!=='ready')throw Error('UNFREEZE_STORY_REVIEW_REQUIRED');
     await validateFrozenPlan(join(t.root,'manifest.json'));
 
@@ -278,6 +290,11 @@ async function main(){
   const option=name=>{const i=args.indexOf(name);return i<0?undefined:args[i+1];};
   const stateRoot=option('--state-root')??'.tmp/pipelines';
   const evidence=option('--evidence');
+  const options=new Set(['--evidence','--state-root']);
+  for(let i=0;i<args.length;i+=2){
+    if(!options.has(args[i])||!args[i+1]||args[i+1].startsWith('--'))
+      throw Error('UNFREEZE_ARGUMENTS_INVALID: unattended/unknown options are forbidden');
+  }
   if(!run||!evidence||!['begin','finalize'].includes(command))
     throw Error('Usage: pipeline-unfreeze-cli begin|finalize RUN --evidence FILE [--state-root PATH]');
   console.log(JSON.stringify(command==='begin'?await beginUnfreeze(stateRoot,run,evidence):
