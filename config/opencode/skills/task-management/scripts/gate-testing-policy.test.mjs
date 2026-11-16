@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { selectAffectedCommands, validateGateTesting, parallelBatches, isPrePublishGate } from './gate-testing-policy.mjs';
+import { selectAffectedCommands, validateGateTesting, parallelBatches, isPrePublishGate, resolveGateTesting, commandsDigest } from './gate-testing-policy.mjs';
 import { createLivePostgres } from './live-postgres.mjs';
 import { readTestReports, sourceSnapshot, sourceInventory } from './gate-diagnostics.mjs';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -370,8 +372,24 @@ test('frozen tree release-check stays eligible for pre-publish PLAN probe and bo
   assert.equal(isPrePublishGate(manifest, 'local', gate), true); // legacy pre-publish compatibility; runner reuse still disabled
 });
 
+function verifiedIgnoredConfig(ignored, overrides = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'frozen-ignored-inputs-'));
+  try {
+    const snapshot = JSON.stringify({ ...config, ...overrides, ignored_inputs: ignored });
+    writeFileSync(join(root, 'impact.json'), snapshot);
+    const manifest = {
+      gate_profiles: { unit: { checks: commands } },
+      gate_testing: { unit: { checks: { source: {
+        snapshot: 'impact.json', sha256: createHash('sha256').update(snapshot).digest('hex'),
+        commands_sha256: commandsDigest(commands),
+      } } } },
+    };
+    return resolveGateTesting(manifest, root).gate_testing.unit.checks;
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+
 test('O8: verified exact docs-only inputs skip only incremental work, retaining failed workers and coordinator', () => {
-  const cfg = { ...config, ignored_inputs: ['docs/archive/legacy-note.md'], coordinator_only: [2] };
+  const cfg = verifiedIgnoredConfig(['docs/archive/legacy-note.md'], {coordinator_only:[2]});
   const select = (changed, fails = [], options = {}) => selectAffectedCommands(commands, cfg, changed, fails, options);
   let result = select(['docs/archive/legacy-note.md']);
   assert.deepEqual([result.selected.map(x => x.index), result.deferred], [[], []]);
@@ -395,12 +413,12 @@ test('O8: mandatory files are never excluded by exact or legacy patterns', () =>
     'scripts/testing/test-blocks.ts','apps/web/public/manifest.webmanifest','apps/web/public/icon.svg',
     'apps/web/src/style.css','apps/web/index.html','AGENTS.md','README.md','db/migrations/001.sql'];
   for (const file of critical) {
-    const cfg = { ...config, ignored_inputs: [file,'docs/archive/legacy-note.md'] };
+    const cfg = verifiedIgnoredConfig([file,'docs/archive/legacy-note.md']);
     const result = selectAffectedCommands(commands,cfg,['docs/archive/legacy-note.md',file]);
     assert.deepEqual(result.selected.map(x=>x.index),[0,1,2],file);
   }
   for (const legacy of ['**/*','docs/**','**/*.md',{ pattern:'docs/**',except:['docs/testing/**'] }]) {
-    const result = selectAffectedCommands(commands,{...config,ignored_inputs:[legacy]},['docs/archive/legacy-note.md']);
+    const result = selectAffectedCommands(commands,verifiedIgnoredConfig([legacy]),['docs/archive/legacy-note.md']);
     assert.deepEqual(result.selected.map(x=>x.index),[0,1,2],String(legacy));
   }
 });
@@ -413,4 +431,24 @@ test('O8: invalid or spoofed ignore paths fail conservative selection; empty and
   assert.equal(selectAffectedCommands(commands,{ignored_inputs:['docs/archive/legacy-note.md']},['docs/archive/legacy-note.md']).selected.length,3);
   const spoof=selectAffectedCommands(commands,{...config,ignored_inputs:['docs/archive/legacy-note.md']},['docs/archive/../archive/legacy-note.md']);
   assert.deepEqual(spoof.selected.map(x=>x.index),[0,1,2]);
+});
+
+test('O8: inline ignored_inputs cannot authorize ignored-only selection; source override rejected', () => {
+  const inline = selectAffectedCommands(commands,{...config, ignored_inputs:['docs/archive/legacy-note.md']},['docs/archive/legacy-note.md']);
+  assert.deepEqual(inline.selected.map(x=>x.index),[0,1,2]);
+  const root=mkdtempSync(join(tmpdir(),'ignored-conflict-'));
+  try {
+    const snapshot=JSON.stringify({ impact_groups: config.impact_groups, ignored_inputs:['docs/archive/legacy-note.md'] });
+    writeFileSync(join(root,'impact.json'),snapshot);
+    const manifest={
+      gate_profiles:{unit:{checks:commands}},gate_testing:{unit:{checks:{
+        source:{snapshot:'impact.json',sha256:createHash('sha256').update(snapshot).digest('hex'),commands_sha256:commandsDigest(commands)},
+        ignored_inputs:['docs/archive/other.md'],
+      }}},
+    };
+    assert.throws(()=>resolveGateTesting(manifest,root),/GATE_TESTING_SOURCE_CONFLICT/);
+    delete manifest.gate_testing.unit.checks.ignored_inputs;
+    manifest.gate_testing.unit.checks.source.sha256='f'.repeat(64);
+    assert.throws(()=>resolveGateTesting(manifest,root),/GATE_TESTING_SOURCE_CHANGED/);
+  } finally {rmSync(root,{recursive:true,force:true});}
 });
