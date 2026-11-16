@@ -680,7 +680,7 @@ async function main(): Promise<void> {
   if (affected) {
     const failures = (previous?.results ?? []).filter((result: any) => result.exit_code !== 0).map((result: any) => result.command_index);
     const known = baseline?.files && typeof baseline.files === 'object' ? baseline.files : null;
-    const impact = selectAffectedCommands(commands, config, snapshot?.changed, failures, { isNew: (file: string) => Boolean(known) && !(file in known) });
+    const impact = selectAffectedCommands(commands, config, snapshot?.changed, failures, { verifiedBaseline: Boolean(known), isNew: (file: string) => Boolean(known) && !(file in known) });
     selected = impact.selected; selectionReason = impact.reason; deferred = impact.deferred;
     // Only coordinator commands are impacted: the worker has nothing to run, and the evidence says
     // so explicitly; the wave gate and the final complete gate run those commands.
