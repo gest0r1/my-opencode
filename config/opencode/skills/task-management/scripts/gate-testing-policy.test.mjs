@@ -367,5 +367,5 @@ test('frozen tree release-check stays eligible for pre-publish PLAN probe and bo
   assert.equal(isPrePublishGate(manifest, 'local', gate), true);
   assert.doesNotThrow(() => validateGateTesting(manifest));
   delete manifest.gate_testing.local[gate].input_kind;
-  assert.equal(isPrePublishGate(manifest, 'local', gate), false);
+  assert.equal(isPrePublishGate(manifest, 'local', gate), true); // legacy pre-publish compatibility; runner reuse still disabled
 });
