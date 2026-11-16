@@ -150,6 +150,11 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath) {
     inFlight(t.root,t.state);
     if(t.state.manifest_sha256===t.manifestHash && t.manifestHash!==marker.original_manifest_sha256) {
       if(t.state.unfreeze_revision?.revision_id!==marker.revision_id)throw Error('UNFREEZE_COMMITTED_STATE_MISMATCH');
+      const finalized=await optional(join(t.root,'planning/unfreeze-revisions',marker.revision_id,'finalization.json'));
+      if(!finalized||finalized.new_manifest_sha256!==t.manifestHash)throw Error('UNFREEZE_FINALIZATION_AUDIT_MISSING');
+      if(finalized.candidate_invalidated && existsSync(join(t.root,'candidate.json')))
+        await fs.rename(join(t.root,'candidate.json'),join(t.root,'planning/unfreeze-revisions',marker.revision_id,'obsolete-candidate.json'));
+      await fs.rm(join(t.root,'git-verify.json'),{force:true});
       await fs.rm(markerPath);
       return {status:'PASS',action:'recovered_finalized_unfreeze',run_id:run,revision_id:marker.revision_id};
     }
@@ -210,6 +215,7 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath) {
       }
     }
     const nextState={...t.state,manifest_sha256:t.manifestHash,pipelines:nextPipelines,status:'in_progress',
+      reconciliations:[], // Previous records are SHA-bound to the old manifest; keep audit files, not active trust.
       active_stages:[],current_stage:undefined,
       approval_record:{subject:'final-manifest',run_id:run,decision:'approved',shown_manifest_sha256:t.manifestHash,
         current_manifest_sha256:t.manifestHash,owner_response:review.owner_response,message_id:review.owner_message_id,
@@ -219,10 +225,13 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath) {
         recorded_at:new Date().toISOString()},updated_at:new Date().toISOString()};
     // Evidence is historical; stage state is invalidated by the affected closure. For safety
     // this procedure also invalidates the candidate identity whenever a candidate exists.
+    const finalizationFile=join(t.root,'planning/unfreeze-revisions',marker.revision_id,'finalization.json');
+    const finalization={new_manifest_sha256:t.manifestHash,affected_pipelines:[...affected],review_sha256:hash(reviewRaw),
+      changed_paths:changedPaths,candidate_invalidated:candidateExists};
+    const priorFinalization=await optional(finalizationFile);
+    if(priorFinalization&&!equivalent(priorFinalization,finalization))throw Error('UNFREEZE_FINALIZATION_CONFLICT');
+    if(!priorFinalization)await fs.writeFile(finalizationFile,JSON.stringify(finalization,null,2)+'\n',{flag:'wx'});
     await atomic(join(t.root,'state.json'),nextState);
-    await fs.writeFile(join(t.root,'planning/unfreeze-revisions',marker.revision_id,'finalization.json'),
-      JSON.stringify({new_manifest_sha256:t.manifestHash,affected_pipelines:[...affected],review_sha256:hash(reviewRaw),
-        changed_paths:changedPaths,candidate_invalidated:candidateExists},null,2)+'\n',{flag:'wx'});
     if(candidateExists)await fs.rename(join(t.root,'candidate.json'),
       join(t.root,'planning/unfreeze-revisions',marker.revision_id,'obsolete-candidate.json'));
     await fs.rm(join(t.root,'git-verify.json'),{force:true});
