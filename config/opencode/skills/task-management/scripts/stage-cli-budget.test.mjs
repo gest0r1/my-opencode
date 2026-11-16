@@ -211,6 +211,7 @@ test('advance completes a stage, starts the next stage that needs no preparation
   assert.deepEqual(out.started, [{ pipeline_id: 'app', stage: 'second-review', executor: 'review' }]);
   assert.deepEqual(out.waiting, []);
   assert.equal(out.github_sync.status, 'PASS');
+  ensureReviewGit(fx.root);
   result = run(fx.root, ['dispatch', fx.runId, '--pipeline', 'app', '--stage', 'second-review', '--work-item', 'second-review', '--role', 'CodeReviewer']);
   assert.equal(result.status, 0, result.stderr);
   result = advance('second-review', readyReview(fx, 'app', 'second-review'));
