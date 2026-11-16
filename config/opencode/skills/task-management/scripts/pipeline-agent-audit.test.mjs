@@ -197,7 +197,7 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   assert.match(orchestrator, /planning\/review-ledger\.json": deny/);
   // A recurring defect class stops the RUN patch loop for research and a class review.
   assert.match(run, /CLASS_REVIEW_REQUIRED/);
-  assert.match(run, /stage-cli class-review-record <run-id> <stage> --pipeline <id> --evidence <file>/);
+  assert.match(run, /stage-cli class-review-record <run-id> <stage> --pipeline <id> --evidence <class-review\.json>/);
   assert.match(run, /NEW research/);
   assert.doesNotMatch(run, /CLASS_RECURRENCE_AFTER_REWORK/);
   assert.match(codeReviewer, /`defect_class` key/);
@@ -376,7 +376,7 @@ test('shell-running workers keep every command in the foreground until it finish
 test('PLAN instructions carry test rework, plan probe and checkpoint rules', async () => {
   const flat = async (p) => (await text(p)).replace(/\s+/g, ' ');
   const plan = await flat('config/opencode/command/pipeline-plan.md');
-  for (const re of [/test_rework: \[\{id, path, action, reason, work_item_id\}\]/, /`test_preparation: true`/, /Never raise a test timeout/,
+  for (const re of [/test_rework: \[\{id, path, action, reason, work_item_id, required_by\}\]/, /`test_preparation:\s*true/, /never raise timeouts/i,
     /--plan-probe/, /planning\/probes\//, /PLAN_PROBE_REQUIRED/, /TEST_REWORK_\*/, /pre-publish/, /PIPELINE_SCRATCH_DIR/,
     /real production entry/, /openchamber_render/, /awaitAnswer/, /only the artifact's author agent edits it/]) {
     assert.match(plan, re);
@@ -401,7 +401,7 @@ test('RUN instructions carry architecture checkpoint, cross-lane repair, bounded
   const run = await flatRun('config/opencode/command/pipeline-run.md');
   const orch = await text('config/opencode/agent/core/openstage-orchestrator.md');
   assert.match(run, /architecture_review_due.*ARCHITECTURE_REVIEW_REQUIRED.*architecture-review-record/i);
-  assert.match(run, /apply_within_requirements.*one `⚠` line.*requirements_change.*only that stage.*other runnable lane/i);
+  assert.match(run, /apply_within_requirements.*requirements_change.*Unrelated runnable lanes continue/i);
   assert.match(run, /--repair-pipeline <lane>/);
   assert.match(run, /--include-pre-run --paths/);
   assert.match(run, /OpenStage runs short sequential commands itself in the foreground/);
