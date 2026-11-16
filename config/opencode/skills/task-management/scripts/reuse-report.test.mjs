@@ -56,3 +56,16 @@ test('token and cost usage is summed per role and model from per-session deltas'
   assert.equal(summary.usage.by_model['go/deepseek'].input, 140);
   assert.equal(summary.usage.total.input, 1147);
 });
+
+test('O5 diagnostic timing distinguishes overlapping elapsed span from CPU slot waits', () => {
+  const summary=summarize([
+    {event:'gate_run',timestamp:'2026-11-16T20:00:10.000Z',duration_ms:10000,heavy_slot_wait_ms:2000,command_duration_ms:7000},
+    {event:'gate_run',timestamp:'2026-11-16T20:00:12.000Z',duration_ms:10000,heavy_slot_wait_ms:3000,command_duration_ms:6000},
+  ]);
+  assert.equal(summary.timing.gate_runs,2);
+  assert.equal(summary.timing.observed_span_ms,12000);
+  assert.equal(summary.timing.summed_gate_duration_ms,20000);
+  assert.equal(summary.timing.summed_slot_wait_ms,5000);
+  assert.equal(summary.timing.summed_command_duration_ms,13000);
+  assert.match(summary.timing.note,/not a computed critical path/);
+});
