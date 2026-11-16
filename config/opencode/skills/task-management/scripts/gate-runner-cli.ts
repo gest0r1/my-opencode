@@ -17,6 +17,7 @@ import { planProbeInputDigest, requirePlanProbeManifestPath } from './plan-probe
 import { verifyDeployedServiceGate } from './dev-deploy-cli.ts';
 import { artifactDigest, outputProof, verifyOutputProof } from './build-output-proof.mjs';
 import { runLifecycleCommand } from './gate-lifecycle.mjs';
+import { classifyGate } from './gate-classification.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -59,7 +60,6 @@ const MAX_CAPTURE = 256 * 1024;
 const SHA = /^[0-9a-f]{40}$/i;
 const SHA256 = /^[0-9a-f]{64}$/i;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const RUNTIME_GATE = /(runtime|deploy|release|smoke|install)/i;
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
@@ -473,7 +473,8 @@ async function main(): Promise<void> {
   validateGateTesting(manifest);
   const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
   const lifecycle = config?.lifecycle;
-  if (advisory && (RUNTIME_GATE.test(gate) || lifecycle)) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
+  const classification = classifyGate(gate, config, commands);
+  if (advisory && !classification.advisoryAllowed) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
   if (advisory && (['candidate', 'candidate-contour', 'build-output', 'deployed-service'].includes(config?.input_kind) || config?.artifact_output)) {
     throw new GateRunnerError('candidate/build-output/deployed-service or artifact-producing gates cannot be advisory');
   }
@@ -580,7 +581,7 @@ async function main(): Promise<void> {
   // One held RUN lane lock covers the cheap preflight and all ensuing gate
   // work. A failing preflight does not allocate a numbered attempt or scratch.
   const gateLock = `gate:${runId}:${pipelineId}:${gate}`;
-  const runtimeGate = RUNTIME_GATE.test(gate) || Boolean(lifecycle);
+  const runtimeGate = classification.runtime;
   const releaseLocks = [...(runtimeGate ? pipeline.runtime_locks ?? [] : []), gateLock];
   // Pure gates keep their original late lock acquisition, so hashing does
   // not serialize other invocations of the same lane. Live RUN alone holds
@@ -782,7 +783,7 @@ async function main(): Promise<void> {
   // Keep reuse for pure commands from the same gate, but always establish fresh live evidence.
   const liveCommandIndexes = new Set(liveIndexes(config));
   const canReuseCommand = (index: number) => !config?.artifact_output && !['build-output', 'deployed-service'].includes(config?.input_kind) && !liveCommandIndexes.has(index) && !lifecycle;
-  const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || lifecycle || !snapshot?.digest || !environmentDigest ? new Map()
+  const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || !classification.reuseAllowed || lifecycle || !snapshot?.digest || !environmentDigest ? new Map()
     : await findReusableResults({ stateRoot: resolve(stateRoot), runId, gate, sourceDigest: snapshot.digest, environmentDigest,
       selected: invocations.filter(item => canReuseCommand(item.index))
         .map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
