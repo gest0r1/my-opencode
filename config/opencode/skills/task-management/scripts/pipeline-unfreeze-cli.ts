@@ -285,6 +285,33 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
       candidate_invalidated:candidateExists};
   });
 }
+export async function abortUnfreeze(stateRoot,run,evidencePath) {
+  const c=await runRoot(stateRoot,run);
+  return acquire(c.root,async()=>{
+    const t=await runRoot(stateRoot,run);
+    const markerPath=join(t.root,'planning/unfreeze-active.json');
+    const marker=await optional(markerPath);
+    if(!marker||marker.run_id!==run)throw Error('UNFREEZE_NOT_STARTED');
+    if(t.manifestHash!==marker.original_manifest_sha256 ||
+       t.state.manifest_sha256!==marker.original_manifest_sha256)
+      throw Error('UNFREEZE_CANNOT_ABORT_EDITED_MANIFEST');
+    if(!equivalent(await inventory(t.root),marker.original_planning_files))
+      throw Error('UNFREEZE_CANNOT_ABORT_EDITED_PLAN');
+    inFlight(t.root,t.state);
+    const evidenceRaw=await fs.readFile(inside(t.root,evidencePath),'utf8');
+    const evidence=JSON.parse(evidenceRaw);
+    if(evidence.run_id!==run || evidence.manifest_sha256!==marker.original_manifest_sha256 ||
+       evidence.owner_decision!=='declined' || !evidence.owner_response?.trim() ||
+       !evidence.owner_message_id?.trim() || !evidence.owner_source_session?.trim())
+      throw Error('UNFREEZE_ABORT_OWNER_DECISION_REQUIRED');
+    await fs.writeFile(join(t.root,'planning/unfreeze-revisions',marker.revision_id,'aborted.json'),
+      JSON.stringify({reason:evidence.owner_response,evidence_sha256:hash(evidenceRaw),
+        recorded_at:new Date().toISOString()},null,2)+'\n',{flag:'wx'});
+    await fs.rm(markerPath);
+    return {status:'PASS',action:'unfreeze_aborted_without_plan_changes',run_id:run,
+      revision_id:marker.revision_id};
+  });
+}
 async function main(){
   const [command,run,...args]=process.argv.slice(2);
   const option=name=>{const i=args.indexOf(name);return i<0?undefined:args[i+1];};
@@ -295,9 +322,10 @@ async function main(){
     if(!options.has(args[i])||!args[i+1]||args[i+1].startsWith('--'))
       throw Error('UNFREEZE_ARGUMENTS_INVALID: unattended/unknown options are forbidden');
   }
-  if(!run||!evidence||!['begin','finalize'].includes(command))
-    throw Error('Usage: pipeline-unfreeze-cli begin|finalize RUN --evidence FILE [--state-root PATH]');
+  if(!run||!evidence||!['begin','finalize','abort'].includes(command))
+    throw Error('Usage: pipeline-unfreeze-cli begin|finalize|abort RUN --evidence FILE [--state-root PATH]');
   console.log(JSON.stringify(command==='begin'?await beginUnfreeze(stateRoot,run,evidence):
+    command==='abort'?await abortUnfreeze(stateRoot,run,evidence):
     await finalizeUnfreeze(stateRoot,run,evidence),null,2));
 }
 if(import.meta.url===pathToFileURL(process.argv[1]??'').href)main().catch(e=>{console.error(String(e));process.exitCode=1;});
