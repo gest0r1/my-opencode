@@ -43,7 +43,7 @@ export function resolveGateTesting(manifest, runDirectory) {
       let snapshot;
       try { snapshot = JSON.parse(raw); } catch { throw new Error(`GATE_TESTING_SOURCE_INVALID: ${source.snapshot}`); }
       const inline = Object.keys(config).filter(key => key !== 'source');
-      if (inline.some(key => SOURCE_KEYS.includes(key) && key !== 'ignored_inputs')) throw new Error(`GATE_TESTING_SOURCE_CONFLICT: ${profile}/${gate} keeps impact data only in the snapshot`);
+      if (inline.some(key => SOURCE_KEYS.includes(key))) throw new Error(`GATE_TESTING_SOURCE_CONFLICT: ${profile}/${gate} keeps impact data only in the snapshot`);
       const merged = { ...config };
       delete merged.source;
       for (const key of SOURCE_KEYS) if (snapshot[key] !== undefined && merged[key] === undefined) merged[key] = snapshot[key];
@@ -187,9 +187,8 @@ export function validateGateTesting(manifest) {
       // An unresolved source reference is validated after resolveGateTesting merges its snapshot.
       if (config.source !== undefined) continue;
       if (config.ignored_inputs !== undefined && (!Array.isArray(config.ignored_inputs) || config.ignored_inputs.some(rule => {
-        const pattern = typeof rule === 'string' ? rule : rule?.pattern;
-        const except = typeof rule === 'string' ? [] : rule?.except ?? [];
-        return typeof pattern !== 'string' || !pattern || pattern.startsWith('/') || pattern.includes('..') || !Array.isArray(except) || except.some(item => typeof item !== 'string' || !item);
+        return !safeIgnoredPath(typeof rule === 'string' ? rule : rule?.pattern) ||
+          (typeof rule !== 'string' && (!rule || !Array.isArray(rule.except ?? []) || Object.keys(rule).some(key => !['pattern', 'except'].includes(key))));
       }))) throw new Error('GATE_TESTING_INVALID: ignored_inputs holds glob patterns with optional except lists');
       if (config.report_files !== undefined && (!Array.isArray(config.report_files) || config.report_files.some(file => !safeTestPath(file) || !file.endsWith('.json') || file.includes('*')))) throw new Error('GATE_TESTING_INVALID: report_files must be relative JSON paths inside the run');
       if (config.timeout_seconds !== undefined && (!Number.isInteger(config.timeout_seconds) || config.timeout_seconds < 10 || config.timeout_seconds > 3600)) throw new Error('GATE_TESTING_INVALID: timeout must be 10..3600 seconds');
@@ -294,6 +293,31 @@ export function ignoredInput(rules, file) {
   });
 }
 
+// Only exact, reviewed paths in non-runtime documentation/handoff areas are
+// allowed to reduce incremental work. A legacy glob forces a conservative full run.
+function safeIgnoredPath(value) {
+  return typeof value === 'string' && value.length > 0 && !value.startsWith('/') &&
+    !value.includes('\\\\') && !/[\\0-\\x1f\\x7f]/.test(value) &&
+    !value.split('/').some(part => !part || part === '.' || part === '..');
+}
+const GLOB_META = /[*?\\[\\]{}]/;
+function safeExactIgnoredRule(rule) {
+  const pattern = typeof rule === 'string' ? rule : rule?.pattern;
+  if (!safeIgnoredPath(pattern) || GLOB_META.test(pattern)) return false;
+  if (typeof rule === 'object' && (!Array.isArray(rule.except) || rule.except.length > 0 ||
+      Object.keys(rule).some(key => !['pattern','except'].includes(key)))) return false;
+  return (pattern.startsWith('docs/') && !pattern.startsWith('docs/testing/') &&
+      !/(^|\\/)(pipeline-rules\\.md|AGENTS\\.md|README\\.md)$/i.test(pattern)) ||
+    pattern.startsWith('.opencode/handoff-notes/');
+}
+function mandatoryInput(file) {
+  return ALWAYS_FULL_CHANGE.test(file) ||
+    /(^|\\/)(?:AGENTS\\.md|README\\.md|(?:.*\\.)?env(?:\\..*)?|[^/]*\\.(?:test|spec)\\.[cm]?[jt]sx?|manifest\\.webmanifest)$/i.test(file) ||
+    /(^|\\/)(?:\\.github|scripts\\/testing|docs\\/testing|migrations|security|deploy|ci|auth|permissions|contracts|schema)(\\/|$)/i.test(file) ||
+    /(^|\\/)(?:vitest[^/]*|jest[^/]*|tsconfig[^/]*|Dockerfile|compose\\.[^/]*|[^/]*\\.(?:png|svg|webp|css|html|ico))$/i.test(file) ||
+    /(^|\\/)(?:gate-testing|test-blocks|pipeline|freeze|manifest|lockfile|pnpm-workspace)[^/]*$/i.test(file);
+}
+
 // The command that runs a test file nobody mapped: the owner of a test in its own directory, else
 // the single command whose tests live under the nearest parent directory (a new test folder).
 // Two commands under that parent are ambiguous and leave the file unmapped.
@@ -321,12 +345,23 @@ export function selectAffectedCommands(commands, config, changed, previousFailur
   const worker = item => !coordinatorOnly.has(item.index);
   const split = (reason, all) => ({ reason, selected: all.filter(worker), deferred: all.filter(item => !worker(item)).map(item => item.index) });
   const full = reason => split(reason, commands.map((command, index) => ({ command, index, test_files: [] })));
-  if (!config?.impact_groups || !changed?.length) return full('missing impact map or change baseline');
-  const relevant = changed.filter(file => !ignoredInput(config.ignored_inputs, file));
-  if (!relevant.length) return split('only ignored inputs changed', []);
-  if (relevant.some(file => ALWAYS_FULL_CHANGE.test(file))) return full('dependency or security change');
-  const mapped = file => config.impact_groups.some(group => group.inputs.some(input => impactMatches(input, file)));
+  if (!config?.impact_groups || !Array.isArray(changed) || !changed.length) return full('missing impact map or change baseline');
   const isNew = typeof options.isNew === 'function' ? options.isNew : () => false;
+  if (changed.some(file => !safeIgnoredPath(file))) return full('invalid or untrusted changed path');
+  if (changed.some(file => mandatoryInput(file))) return full('dependency, test contract or security change');
+  // Legacy glob is accepted as frozen data for backward compatibility but never
+  // grants permission to skip an unknown or newly created file.
+  const rules = config.ignored_inputs;
+  if (rules !== undefined && (!Array.isArray(rules) || rules.some(rule => !safeExactIgnoredRule(rule)))) {
+    return full('ignored_inputs requires reviewed exact paths');
+  }
+  const relevant = changed.filter(file => isNew(file) || !ignoredInput(rules, file));
+  if (!relevant.length) {
+    const failed = [...new Set(previousFailures)].filter(index => Number.isInteger(index) && index >= 0 && index < commands.length)
+      .map(index => ({ command: commands[index], index, test_files: [] }));
+    return split(failed.length ? 'previous failures require recheck' : 'only verified ignored inputs changed', failed);
+  }
+  const mapped = file => config.impact_groups.some(group => group.inputs.some(input => impactMatches(input, file)));
   const selected = new Map();
   const add = (index, files) => {
     const prior = selected.get(index);
