@@ -198,7 +198,7 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   // A recurring defect class stops the RUN patch loop for research and a class review.
   assert.match(run, /CLASS_REVIEW_REQUIRED/);
   assert.match(run, /stage-cli class-review-record <run-id> <stage> --pipeline <id> --evidence <class-review\.json>/);
-  assert.match(run, /NEW research/);
+  assert.match(run, /reuse validated applicable ExternalScout research or obtain current prior-art evidence/);
   assert.doesNotMatch(run, /CLASS_RECURRENCE_AFTER_REWORK/);
   assert.match(codeReviewer, /`defect_class` key/);
   assert.match(reviewer, /missing_prior_art/);
@@ -224,7 +224,7 @@ test('pipeline contracts use a five-cycle shared repair budget with owner-contro
   assert.match(reviewer, /needs_owner_clarification/);
   assert.match(codeReviewer, /technical_fix \| security_fix \| replan/);
   assert.match(codeReviewer, /"privilege_expansion": false/);
-  assert.match(plan, /gate advances only on literal `status: ready`/i);
+  assert.match(plan, /artifact freezes only on literal `status: ready`/i);
 });
 
 
