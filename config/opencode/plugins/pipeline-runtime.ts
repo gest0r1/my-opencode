@@ -362,12 +362,18 @@ function decisionMetric(ctx: RuntimeContext, role: string, decision: "fresh" | "
 // The plugin and the RUN instructions are loaded once, when OpenCode starts. A distribution
 // update during a RUN changes the files on disk but not the running hooks, so the new rules
 // would apply only "on paper". Fingerprint what was loaded and compare it with the disk.
+// Source-tree tests intentionally import the plugin before V2 layout materialization.
+// Identify a *repository source* by its installer marker, never by missing installed files.
+// A real V2 installation has only plural commands/agents, and missing files stay failures.
+const SOURCE_TREE = fs.existsSync(fileURLToPath(new URL("../../../scripts/install-opencode-generation.sh", import.meta.url)))
+  && fs.existsSync(fileURLToPath(new URL("../command/pipeline-run.md", import.meta.url)))
+  && fs.existsSync(fileURLToPath(new URL("../agent/core/openstage-orchestrator.md", import.meta.url)))
 const RUNTIME_FILES = [
   fileURLToPath(import.meta.url),
   fileURLToPath(new URL("../skills/task-management/scripts/pipeline-dispatch.ts", import.meta.url)),
-  fileURLToPath(new URL("../commands/pipeline-run.md", import.meta.url)),
+  fileURLToPath(new URL(SOURCE_TREE ? "../command/pipeline-run.md" : "../commands/pipeline-run.md", import.meta.url)),
   fileURLToPath(new URL("../skills/task-management/run-worker-rules.md", import.meta.url)),
-  fileURLToPath(new URL("../agents/OpenStageOrchestrator.md", import.meta.url)),
+  fileURLToPath(new URL(SOURCE_TREE ? "../agent/core/openstage-orchestrator.md" : "../agents/OpenStageOrchestrator.md", import.meta.url)),
 ]
 function runtimeFingerprint() {
   const records = RUNTIME_FILES.map((file) => {
