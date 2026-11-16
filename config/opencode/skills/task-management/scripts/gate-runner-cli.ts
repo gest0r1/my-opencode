@@ -1038,7 +1038,9 @@ async function main(): Promise<void> {
       await writeFile(join(resolve(stateRoot), runId, 'reuse-metrics', 'gates.jsonl'), `${JSON.stringify({ timestamp: new Date().toISOString(),
         event: 'gate_run', run_id: runId, pipeline_id: pipelineId, gate, work_item_id: workItemId ?? null, purpose: advisory ? 'advisory' : 'authoritative',
         mode: baseProbe ? 'base_probe' : coordinator ? 'coordinator' : testFiles.length ? 'focus' : affected ? 'affected' : selection >= 0 ? 'command' : 'complete',
-        status, duration_ms: Date.now() - Date.parse(startedAt), commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused: Boolean(reuse) })}\n`, { encoding: 'utf8', flag: 'a' });
+        status, duration_ms: Date.now() - Date.parse(startedAt), heavy_slot_wait_ms: slotWaitMs, live_slot_wait_ms: liveWaitMs,
+         command_duration_ms: results.reduce((sum: number, item: any) => sum + Number(item.duration_ms ?? 0), 0),
+         commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused: Boolean(reuse) })}\n`, { encoding: 'utf8', flag: 'a' });
       if (advisory && fingerprint && status !== 'INTERRUPTED') {
         ledger.attempts[fingerprint] = { status, hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])] };
         await writeFile(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8');
