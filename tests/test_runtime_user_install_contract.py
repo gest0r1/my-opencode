@@ -58,7 +58,7 @@ def main():
         require(installer, 'XDG_RUNTIME_DIR="/run/user/$runtime_uid"')
         require(installer, 'XDG_CONFIG_HOME="$HOME/.config"')
 
-    require(config_installer, 'OPENCODE_INSTALL_VERSION:-2.2.5')
+    require(config_installer, 'OPENCODE_INSTALL_VERSION:-2.2.7')
     require(config_installer, 'contents/config/systemd/opencode-web.service?ref=$CONFIG_SHA')
     unit = (ROOT / 'config/systemd/opencode-web.service').read_text()
     require(unit, 'opencode serve --port ${OPENCODE_WEB_PORT} --hostname 127.0.0.1')
