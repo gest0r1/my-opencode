@@ -67,7 +67,7 @@ test('O7: owner-authorized in-place refreeze preserves unaffected pipeline and a
     assert.equal(started.status,'PASS');
     await assert.rejects(beginUnfreeze(f.stateRoot,rootID,f.approval),/UNFREEZE_ALREADY_ACTIVE/);
     const reviewed=await f.revise();
-    const finished=await finalizeUnfreeze(f.stateRoot,rootID,reviewed);
+    const finished=await finalizeUnfreeze(f.stateRoot,rootID,reviewed,{validateFrozenPlan:async()=>{}});
     assert.equal(finished.run_id,rootID);
     assert.deepEqual(finished.affected_pipelines.sort(),['dependent','source']);
     assert.deepEqual(finished.unaffected_pipelines,['independent']);
@@ -89,12 +89,12 @@ test('O7: unapproved changes and stale reviewed SHA do not refreeze',async()=>{
     await beginUnfreeze(f.stateRoot,rootID,f.approval);
     const review=await f.revise();
     await writeFile(join(f.runDir,'planning/extra.md'),'undocumented edit');
-    await assert.rejects(finalizeUnfreeze(f.stateRoot,rootID,review),/UNFREEZE_PLAN_SCOPE_CHANGED/);
+    await assert.rejects(finalizeUnfreeze(f.stateRoot,rootID,review,{validateFrozenPlan:async()=>{}}),/UNFREEZE_PLAN_SCOPE_CHANGED/);
     await rm(join(f.runDir,'planning/extra.md'));
     const modified=JSON.parse(await readFile(review,'utf8'));
     modified.revised_manifest_sha256='0'.repeat(64);
     await writeFile(review,JSON.stringify(modified));
-    await assert.rejects(finalizeUnfreeze(f.stateRoot,rootID,review),/UNFREEZE_REVISED_OWNER_APPROVAL_OR_REVIEW_REQUIRED/);
+    await assert.rejects(finalizeUnfreeze(f.stateRoot,rootID,review,{validateFrozenPlan:async()=>{}}),/UNFREEZE_REVISED_OWNER_APPROVAL_OR_REVIEW_REQUIRED/);
   }finally{await rm(f.root,{recursive:true,force:true});}
 });
 test('O7: a published candidate cannot remain valid after refreeze',async()=>{
@@ -103,7 +103,7 @@ test('O7: a published candidate cannot remain valid after refreeze',async()=>{
     await writeFile(join(f.runDir,'candidate.json'),'{"sha":"stale"}');
     const started=await beginUnfreeze(f.stateRoot,rootID,f.approval);
     const reviewed=await f.revise();
-    const end=await finalizeUnfreeze(f.stateRoot,rootID,reviewed);
+    const end=await finalizeUnfreeze(f.stateRoot,rootID,reviewed,{validateFrozenPlan:async()=>{}});
     assert.equal(end.candidate_invalidated,true);
     await assert.rejects(readFile(join(f.runDir,'candidate.json')),/ENOENT/);
     assert.equal(JSON.parse(await readFile(join(f.runDir,'planning/unfreeze-revisions',started.revision_id,'obsolete-candidate.json'))).sha,'stale');
