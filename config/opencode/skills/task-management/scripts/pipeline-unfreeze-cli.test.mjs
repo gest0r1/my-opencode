@@ -31,7 +31,7 @@ async function fixture(opts={}) {
   const owner={run_id:rootID,manifest_sha256:hash(raw),owner_decision:'approved',
     owner_response:'Approve unfreeze of source branch',owner_message_id:'message-123',
     owner_source_session:'session-123',affected_pipelines:['source'],
-    affected_gates:['architecture'],allowed_plan_paths:['manifest.json','planning/architecture.md'],
+    affected_gates:['architecture'],allowed_plan_paths:['manifest.json','planning/architecture.md','planning/senior-review.json'],
     reason:'Structural architecture change after implementation began'};
   const approval=join(runDir,'owner/approve-unfreeze.json');
   await writeFile(approval,JSON.stringify(owner));
@@ -43,11 +43,15 @@ async function fixture(opts={}) {
     const nextRaw=JSON.stringify(next,null,2)+'\n';
     await writeFile(join(runDir,'manifest.json'),nextRaw);
     await writeFile(join(runDir,'planning/architecture.md'),'revised architecture\n');
+    const senior={reviewer:'SeniorTechnicalPlanReviewer',status:'ready',reviewed_manifest_sha256:hash(nextRaw),blocking_findings:[]};
+    const seniorRaw=JSON.stringify(senior);
+    await writeFile(join(runDir,'planning/senior-review.json'),seniorRaw);
     const review={run_id:rootID,original_manifest_sha256:hash(raw),revised_manifest_sha256:hash(nextRaw),
       owner_decision:'approved',owner_response:'Approve revised frozen contract',
       owner_message_id:'message-456',owner_source_session:'session-123',
       review_status:'ready',reviewed_gates:['architecture'],
-      architecture_changed:true,senior_technical_plan_review:'ready',independent_reviewer_id:'senior-reviewer'};
+      architecture_changed:true,senior_technical_plan_review:'ready',independent_reviewer_id:'senior-reviewer',
+      senior_technical_review_path:'planning/senior-review.json',senior_technical_review_sha256:hash(seniorRaw)};
     const file=join(runDir,'owner/final-refreeze-approval.json');
     await writeFile(file,JSON.stringify(review));
     return file;
