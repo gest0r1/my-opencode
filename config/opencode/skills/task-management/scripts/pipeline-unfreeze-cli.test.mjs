@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -186,4 +186,15 @@ test('O7: stale candidate invalidates git_verify, full gate, publish and deploy,
       assert.equal(current.stages[name].completed_at,undefined,name);
     }
   }finally{await rm(f.root,{recursive:true,force:true});}
+});
+
+test('O7: symlinked owner evidence outside RUN cannot authorize unfreeze',async()=>{
+  const f=await fixture();
+  try {
+    const outside=join(f.root,'outside-approval.json');
+    await writeFile(outside,await readFile(f.approval));
+    const link=join(f.runDir,'owner','linked-external.json');
+    await symlink(outside,link);
+    await assert.rejects(beginUnfreeze(f.stateRoot,rootID,link,{validateWorktree:()=>{}}),/UNFREEZE_EVIDENCE_OUTSIDE_RUN/);
+  } finally {await rm(f.root,{recursive:true,force:true});}
 });
