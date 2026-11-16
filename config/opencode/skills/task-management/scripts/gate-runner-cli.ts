@@ -458,6 +458,9 @@ async function main(): Promise<void> {
     throw new GateRunnerError('run has no frozen manifest metadata; re-plan with current stage-cli');
   }
 
+  await access(join(resolve(stateRoot), runId, 'planning/unfreeze-active.json')).then(() => {
+    throw new GateRunnerError('PLAN_UNFREEZE_IN_PROGRESS');
+  }, () => {});
   const manifestContent = await readFile(state.manifest_file, 'utf8');
   if (sha256(manifestContent) !== state.manifest_sha256) throw new GateRunnerError('frozen manifest hash mismatch');
   const manifest = resolveGateTestingFile(JSON.parse(manifestContent), state.manifest_file) as Manifest;
