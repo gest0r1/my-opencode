@@ -15,17 +15,24 @@ async function fixture(opts={}) {
   const stateRoot=join(root,'pipelines'),runDir=join(stateRoot,rootID);
   await mkdir(join(runDir,'owner'),{recursive:true});
   await mkdir(join(runDir,'planning'),{recursive:true});
+  const independentSpec=opts.releaseTail ? {id:'independent',
+    stages:['implementation','git_verify','local-check','git_publish','dev_deploy'],
+    executors:{implementation:'agent',git_verify:'git_verify','local-check':'local_gate',git_publish:'git_publish',dev_deploy:'dev_deploy'},depends_on:[]} : aloneSpec;
   const original={schema_version:2,run_id:rootID,git_setup:{branch:'task',base_sha:'a'.repeat(40)},
     planning_readiness:{gates:{architecture:{status:'ready'}}},
-    pipelines:[sourceSpec,depSpec,aloneSpec],gate_profiles:{},gate_testing:{}};
+    pipelines:[sourceSpec,depSpec,independentSpec],gate_profiles:{},gate_testing:{}};
   const raw=JSON.stringify(original,null,2)+'\n';
   await writeFile(join(runDir,'manifest.json'),raw);
   const runtime=(p,status)=>({id:p.id,status,stages:Object.fromEntries(p.stages.map(name=>[name,{status:'completed',completed_at:'2026-11-15T00:00:00Z'}])),stage_order:[...p.stages],depends_on:[...p.depends_on]});
   const state={schema_version:1,run_id:rootID,manifest_sha256:hash(raw),status:'in_progress',
     implementation_started_at:'2026-11-15T00:00:00Z',active_stages:[],
-    pipelines:{source:runtime(sourceSpec,'completed'),dependent:runtime(depSpec,'completed'),independent:runtime(aloneSpec,'completed')},
+    pipelines:{source:runtime(sourceSpec,'completed'),dependent:runtime(depSpec,'completed'),independent:runtime(independentSpec,'completed')},
     history:[],approval_record:{subject:'final-manifest',decision:'approved',shown_manifest_sha256:hash(raw),current_manifest_sha256:hash(raw),owner_response:'Approved',run_id:rootID}};
   if(opts.active)state.pipelines.source.stages.implementation.status='in_progress';
+  if(opts.repairHistory){
+    Object.assign(state.pipelines.source.stages.tests,{technical_fix_cycles:3,technical_fix_limit:7,
+      defect_class_history:[{cycle:3,classes:['error_a'],evidence_sha256:'b'.repeat(64)}]});
+  }
   await writeFile(join(runDir,'state.json'),JSON.stringify(state,null,2)+'\n');
   await writeFile(join(runDir,'planning/architecture.md'),'original architecture\n');
   const owner={run_id:rootID,manifest_sha256:hash(raw),owner_decision:'approved',
@@ -148,4 +155,35 @@ test('O7: production entry refuses an unverified owner worktree',async()=>{
   try {
     await assert.rejects(beginUnfreeze(f.stateRoot,rootID,f.approval),/UNFREEZE_WORKTREE_INVALID|UNFREEZE_WORKTREE_BRANCH_MISMATCH|UNFREEZE_LINKED_WORKTREE_REQUIRED/);
   } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test('O7: a reopened machine gate retains charged repair budget and defect class evidence',async()=>{
+  const f=await fixture({repairHistory:true});
+  try {
+    await beginUnfreeze(f.stateRoot,rootID,f.approval,{validateWorktree:()=>{}});
+    const review=await f.revise();
+    await finalizeUnfreeze(f.stateRoot,rootID,review,{validateFrozenPlan:async()=>{},validateWorktree:()=>{}});
+    const now=JSON.parse(await readFile(join(f.runDir,'state.json'),'utf8'));
+    const gate=now.pipelines.source.stages.tests;
+    assert.equal(gate.status,'pending');
+    assert.equal(gate.technical_fix_cycles,3);
+    assert.equal(gate.technical_fix_limit,7);
+    assert.equal(gate.defect_class_history[0].classes[0],'error_a');
+    assert.equal(gate.completed_at,undefined);
+  }finally{await rm(f.root,{recursive:true,force:true});}
+});
+test('O7: stale candidate invalidates git_verify, full gate, publish and deploy, preserving independent source',async()=>{
+  const f=await fixture({releaseTail:true});
+  try{
+    await writeFile(join(f.runDir,'candidate.json'),'{"sha":"old-candidate"}');
+    await beginUnfreeze(f.stateRoot,rootID,f.approval,{validateWorktree:()=>{}});
+    const review=await f.revise();
+    await finalizeUnfreeze(f.stateRoot,rootID,review,{validateFrozenPlan:async()=>{},validateWorktree:()=>{}});
+    const current=JSON.parse(await readFile(join(f.runDir,'state.json'),'utf8')).pipelines.independent;
+    assert.equal(current.stages.implementation.status,'completed');
+    for(const name of ['git_verify','local-check','git_publish','dev_deploy']){
+      assert.equal(current.stages[name].status,'pending',name);
+      assert.equal(current.stages[name].completed_at,undefined,name);
+    }
+  }finally{await rm(f.root,{recursive:true,force:true});}
 });
