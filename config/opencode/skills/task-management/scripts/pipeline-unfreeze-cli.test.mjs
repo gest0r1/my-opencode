@@ -60,18 +60,18 @@ async function fixture(opts={}) {
 }
 test('O7: beginning requires real owner-bound evidence and no active stage',async()=>{
   const f=await fixture({active:true});
-  try {await assert.rejects(beginUnfreeze(f.stateRoot,rootID,f.approval),/UNFREEZE_WORKER_ACTIVE/);}
+  try {await assert.rejects(beginUnfreeze(f.stateRoot,rootID,f.approval,{validateWorktree:()=>{}}),/UNFREEZE_WORKER_ACTIVE/);}
   finally{await rm(f.root,{recursive:true,force:true});}
 });
 test('O7: owner-authorized in-place refreeze preserves unaffected pipeline and audit',async()=>{
   const f=await fixture();
   try {
     const originalIndependent=JSON.stringify(f.state.pipelines.independent);
-    const started=await beginUnfreeze(f.stateRoot,rootID,f.approval);
+    const started=await beginUnfreeze(f.stateRoot,rootID,f.approval,{validateWorktree:()=>{}});
     assert.equal(started.status,'PASS');
-    await assert.rejects(beginUnfreeze(f.stateRoot,rootID,f.approval),/UNFREEZE_ALREADY_ACTIVE/);
+    await assert.rejects(beginUnfreeze(f.stateRoot,rootID,f.approval,{validateWorktree:()=>{}}),/UNFREEZE_ALREADY_ACTIVE/);
     const reviewed=await f.revise();
-    const finished=await finalizeUnfreeze(f.stateRoot,rootID,reviewed,{validateFrozenPlan:async()=>{}});
+    const finished=await finalizeUnfreeze(f.stateRoot,rootID,reviewed,{validateFrozenPlan:async()=>{},validateWorktree:()=>{}});
     assert.equal(finished.run_id,rootID);
     assert.deepEqual(finished.affected_pipelines.sort(),['dependent','source']);
     assert.deepEqual(finished.unaffected_pipelines,['independent']);
@@ -90,24 +90,24 @@ test('O7: owner-authorized in-place refreeze preserves unaffected pipeline and a
 test('O7: unapproved changes and stale reviewed SHA do not refreeze',async()=>{
   const f=await fixture();
   try {
-    await beginUnfreeze(f.stateRoot,rootID,f.approval);
+    await beginUnfreeze(f.stateRoot,rootID,f.approval,{validateWorktree:()=>{}});
     const review=await f.revise();
     await writeFile(join(f.runDir,'planning/extra.md'),'undocumented edit');
-    await assert.rejects(finalizeUnfreeze(f.stateRoot,rootID,review,{validateFrozenPlan:async()=>{}}),/UNFREEZE_PLAN_SCOPE_CHANGED/);
+    await assert.rejects(finalizeUnfreeze(f.stateRoot,rootID,review,{validateFrozenPlan:async()=>{},validateWorktree:()=>{}}),/UNFREEZE_PLAN_SCOPE_CHANGED/);
     await rm(join(f.runDir,'planning/extra.md'));
     const modified=JSON.parse(await readFile(review,'utf8'));
     modified.revised_manifest_sha256='0'.repeat(64);
     await writeFile(review,JSON.stringify(modified));
-    await assert.rejects(finalizeUnfreeze(f.stateRoot,rootID,review,{validateFrozenPlan:async()=>{}}),/UNFREEZE_REVISED_OWNER_APPROVAL_OR_REVIEW_REQUIRED/);
+    await assert.rejects(finalizeUnfreeze(f.stateRoot,rootID,review,{validateFrozenPlan:async()=>{},validateWorktree:()=>{}}),/UNFREEZE_REVISED_OWNER_APPROVAL_OR_REVIEW_REQUIRED/);
   }finally{await rm(f.root,{recursive:true,force:true});}
 });
 test('O7: a published candidate cannot remain valid after refreeze',async()=>{
   const f=await fixture();
   try{
     await writeFile(join(f.runDir,'candidate.json'),'{"sha":"stale"}');
-    const started=await beginUnfreeze(f.stateRoot,rootID,f.approval);
+    const started=await beginUnfreeze(f.stateRoot,rootID,f.approval,{validateWorktree:()=>{}});
     const reviewed=await f.revise();
-    const end=await finalizeUnfreeze(f.stateRoot,rootID,reviewed,{validateFrozenPlan:async()=>{}});
+    const end=await finalizeUnfreeze(f.stateRoot,rootID,reviewed,{validateFrozenPlan:async()=>{},validateWorktree:()=>{}});
     assert.equal(end.candidate_invalidated,true);
     await assert.rejects(readFile(join(f.runDir,'candidate.json')),/ENOENT/);
     assert.equal(JSON.parse(await readFile(join(f.runDir,'planning/unfreeze-revisions',started.revision_id,'obsolete-candidate.json'))).sha,'stale');
@@ -119,26 +119,33 @@ test('O7: a published candidate cannot remain valid after refreeze',async()=>{
 test('O7: owner can decline and abort only before any approved PLAN artifact changed',async()=>{
   const f=await fixture();
   try {
-    await beginUnfreeze(f.stateRoot,rootID,f.approval);
+    await beginUnfreeze(f.stateRoot,rootID,f.approval,{validateWorktree:()=>{}});
     const reject=join(f.runDir,'owner/decline.json');
     await writeFile(reject,JSON.stringify({run_id:rootID,manifest_sha256:hash(f.raw),
       owner_decision:'declined',owner_response:'No changes to the current plan',
       owner_message_id:'message-789',owner_source_session:'session-123'}));
-    const outcome=await abortUnfreeze(f.stateRoot,rootID,reject);
+    const outcome=await abortUnfreeze(f.stateRoot,rootID,reject,{validateWorktree:()=>{}});
     assert.equal(outcome.status,'PASS');
     await assert.rejects(readFile(join(f.runDir,'planning/unfreeze-active.json')),/ENOENT/);
-    await assert.rejects(abortUnfreeze(f.stateRoot,rootID,reject),/UNFREEZE_NOT_STARTED/);
+    await assert.rejects(abortUnfreeze(f.stateRoot,rootID,reject,{validateWorktree:()=>{}}),/UNFREEZE_NOT_STARTED/);
   } finally { await rm(f.root,{recursive:true,force:true}); }
 });
 test('O7: changed PLAN cannot silently roll back through unfreeze abort',async()=>{
   const f=await fixture();
   try {
-    await beginUnfreeze(f.stateRoot,rootID,f.approval);
+    await beginUnfreeze(f.stateRoot,rootID,f.approval,{validateWorktree:()=>{}});
     await writeFile(join(f.runDir,'planning/architecture.md'),'changed');
     const reject=join(f.runDir,'owner/decline.json');
     await writeFile(reject,JSON.stringify({run_id:rootID,manifest_sha256:hash(f.raw),
       owner_decision:'declined',owner_response:'Cancel after edit',
       owner_message_id:'message-789',owner_source_session:'session-123'}));
-    await assert.rejects(abortUnfreeze(f.stateRoot,rootID,reject),/UNFREEZE_CANNOT_ABORT_EDITED_PLAN/);
+    await assert.rejects(abortUnfreeze(f.stateRoot,rootID,reject,{validateWorktree:()=>{}}),/UNFREEZE_CANNOT_ABORT_EDITED_PLAN/);
   } finally { await rm(f.root,{recursive:true,force:true}); }
+});
+
+test('O7: production entry refuses an unverified owner worktree',async()=>{
+  const f=await fixture();
+  try {
+    await assert.rejects(beginUnfreeze(f.stateRoot,rootID,f.approval),/UNFREEZE_WORKTREE_INVALID|UNFREEZE_WORKTREE_BRANCH_MISMATCH|UNFREEZE_LINKED_WORKTREE_REQUIRED/);
+  } finally {await rm(f.root,{recursive:true,force:true});}
 });
