@@ -198,6 +198,7 @@ NODE
 # A missing command/agent must fail staging, not silently weaken runtime reload checks.
 for required_runtime_file in \
   plugins/pipeline-runtime.ts \
+  plugins/runtime-version-files.mjs \
   skills/task-management/scripts/pipeline-dispatch.ts \
   commands/pipeline-run.md \
   skills/task-management/run-worker-rules.md \
