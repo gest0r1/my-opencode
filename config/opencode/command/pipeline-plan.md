@@ -19,7 +19,7 @@ A single fully double-quoted `$ARGUMENTS` value (for example `"7"` or `"v0.6.6"`
 
 For `--revise <run-id>`, use the existing folder. Before changing manifest or gate artifacts, write a fresh independent revision review containing the current `manifest_sha256`, `owner_contract_changed: true|false`, `affected_gates[]` and `reason`, then call `pipeline-reconcile-cli.ts revise-plan <run-id> --evidence <review-path>`. It rejects revision after any source-changing agent stage actually started. Replace stories/manifest/work items in place; repeat only invalidated gates, keeping unaffected ready artifacts. Never reset state manually. If owner scope/behavior/constraints changed, obtain approval again; technical corrections reuse the previous approval when the validated revised manifest is initialized. Log a short reason/gate list, not old story versions.
 
-After implementation began, an incompatible replan uses `pipeline-reconcile-cli.ts inherit-replan <old-run-id> --new-run <new-run-id>`. The CLI copies stories/context/previous decisions/research to `planning/inherited/` only. Read them as historical context; rebuild all required gates. Never transfer old manifest/state/reviews/work-items/candidate/CI/deployment evidence as current validity. Old run remains intact. Compatible owner clarifications use RUN amendments instead.
+After implementation began, an incompatible structural PLAN replan defaults to an explicitly owner-authorized **in-place unfreeze of the same RUN**, not another plan. See `/pipeline-run` and `pipeline-unfreeze-cli.ts begin|finalize`: the authorized artifact scope, reviewed manifest SHA, selective dependency invalidation, and re-approval are mandatory. An owner-chosen new RUN or a failed safe-closure proof may still use `pipeline-reconcile-cli.ts inherit-replan <old-run-id> --new-run <new-run-id>` as a fallback. Never transfer old evidence as current validity. Compatible owner clarifications continue through ordinary RUN amendments.
 
 All distribution CLI invocations use the current runtime user's `$HOME/.config/opencode/...`; never hard-code `/root/.config/opencode/...`.
 
@@ -297,7 +297,7 @@ git-worktree-cli.ts baseline <planning-base-sha>
 
 Freeze its exact `head_sha`, sorted `changed_paths[]` and `diff_sha256` as `preserved_baseline`. Those files are allowed to remain exactly as they were at the preserved HEAD, but that does **not** grant the new RUN permission to edit them. Any post-baseline change to such a path must still match `allowed_change_paths`. This is the canonical V1→V2/existing-implementation migration contract.
 
-Lifecycle rule: before the first actual source-agent start, all plan corrections/replanning stay in this folder via `revise-plan`. Afterwards, compatible amendments stay in the current RUN, while incompatible replan uses `inherit-replan` and a new PLAN with historical context only. Never hand-copy run directories, clone approved reviews/work-items as current validity, or use the legacy `stage-cli supersede` cloning path for new replans.
+Lifecycle rule: before the first actual source-agent start, revise in the same folder via `revise-plan`. Afterwards, compatible amendments stay in the RUN; structural replan requires owner-bound begin/finalize in-place unfreeze, with `inherit-replan` only as an explicit owner-approved fallback. Never hand-copy run directories, clone approved reviews/work-items as current validity, or use the legacy `stage-cli supersede` cloning path for new replans.
 
 ## Owner approval — mandatory stop
 
