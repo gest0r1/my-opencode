@@ -403,6 +403,9 @@ test('O8: verified exact docs-only inputs skip only incremental work, retaining 
   assert.deepEqual(result.selected.map(x => x.index), [0,1]);
   assert.deepEqual(result.deferred, [2]);
   result = select(['docs/archive/legacy-note.md','apps/api/src/unknown.ts']);
+  assert.deepEqual(result.selected.map(x => x.index), [0]); // mapped by apps/api/**
+  assert.deepEqual(result.deferred, [2]);
+  result = select(['docs/archive/legacy-note.md','other/unmapped.ts']);
   assert.deepEqual(result.selected.map(x => x.index), [0,1]);
   assert.deepEqual(result.deferred, [2]);
   result = select(['docs/archive/legacy-note.md'], [], { isNew: file => file.endsWith('legacy-note.md') });
