@@ -10,6 +10,7 @@ import { readLeases, removeLease, updateLease, writeLease } from "../skills/task
 import { processAlive } from "../skills/task-management/scripts/runtime-locks.mjs"
 import { computeRunnable } from "../skills/task-management/scripts/stage-cli-core.ts"
 import { writeHandover } from "../skills/task-management/scripts/pipeline-handover.mjs"
+import { runtimeFiles, missingRuntimeFiles, fingerprintRuntimeFiles } from "./runtime-version-files.mjs"
 
 const ELIGIBLE_ROLES = new Set([
   "CoderAgent", "TestEngineer", "BuildAgent",
@@ -362,32 +363,10 @@ function decisionMetric(ctx: RuntimeContext, role: string, decision: "fresh" | "
 // The plugin and the RUN instructions are loaded once, when OpenCode starts. A distribution
 // update during a RUN changes the files on disk but not the running hooks, so the new rules
 // would apply only "on paper". Fingerprint what was loaded and compare it with the disk.
-// Source-tree tests intentionally import the plugin before V2 layout materialization.
-// Identify a *repository source* by its installer marker, never by missing installed files.
-// A real V2 installation has only plural commands/agents, and missing files stay failures.
-const SOURCE_TREE = fs.existsSync(fileURLToPath(new URL("../../../scripts/install-opencode-generation.sh", import.meta.url)))
-  && fs.existsSync(fileURLToPath(new URL("../command/pipeline-run.md", import.meta.url)))
-  && fs.existsSync(fileURLToPath(new URL("../agent/core/openstage-orchestrator.md", import.meta.url)))
-const RUNTIME_FILES = [
-  fileURLToPath(import.meta.url),
-  fileURLToPath(new URL("../skills/task-management/scripts/pipeline-dispatch.ts", import.meta.url)),
-  fileURLToPath(new URL(SOURCE_TREE ? "../command/pipeline-run.md" : "../commands/pipeline-run.md", import.meta.url)),
-  fileURLToPath(new URL("../skills/task-management/run-worker-rules.md", import.meta.url)),
-  fileURLToPath(new URL(SOURCE_TREE ? "../agent/core/openstage-orchestrator.md" : "../agents/OpenStageOrchestrator.md", import.meta.url)),
-]
-function runtimeFingerprint() {
-  const records = RUNTIME_FILES.map((file) => {
-    // Path is part of identity: two required files with the same basename must never collide.
-    try { return `${file}:${sha256(fs.readFileSync(file))}` }
-    catch { return `${file}:missing-required-runtime-file` }
-  })
-  return sha256(records.join("\n"))
-}
-function missingRuntimeFiles() {
-  return RUNTIME_FILES.filter(file => {
-    try { return !fs.statSync(file).isFile() } catch { return true }
-  })
-}
+// Resolver distinguishes source checkout fixtures from installed canonical V2 layout.
+const RUNTIME_FILES = runtimeFiles(import.meta.url)
+const runtimeFingerprint = () => fingerprintRuntimeFiles(RUNTIME_FILES)
+const missingRequiredRuntimeFiles = () => missingRuntimeFiles(RUNTIME_FILES)
 type RuntimeVersionState = { reload_required: boolean; changed_during_run: boolean; loaded: string; missing_required_runtime_files: string[] }
 function runtimeFlags(state: RuntimeVersionState) {
   return {
@@ -409,7 +388,7 @@ export default Plugin.define({
         recorded = { loaded: loadedRuntime, recorded_at: new Date().toISOString() }
         try { ensureDir(path.dirname(file)); fs.writeFileSync(file, JSON.stringify(recorded, null, 2) + "\n", "utf8") } catch {}
       }
-      const missing = missingRuntimeFiles()
+      const missing = missingRequiredRuntimeFiles()
       const state = { loaded: loadedRuntime, reload_required: runtimeFingerprint() !== loadedRuntime || missing.length > 0, changed_during_run: recorded.loaded !== loadedRuntime, missing_required_runtime_files: missing }
       if (state.reload_required || state.changed_during_run) {
         appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "runtime_version",
