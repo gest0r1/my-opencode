@@ -228,6 +228,12 @@ done
   '
 )
 
+# Write provenance from the staged bytes and the exact downloaded GitHub commit.
+# This replaces the stale source-side .runtime-source.json before the atomic swap.
+node "$SRC/scripts/installed-provenance.mjs" write \
+  "$STAGE_CONFIG" "$REPO" "$CONFIG_SHA" "$OPENCODE_INSTALL_VERSION"
+node "$SRC/scripts/installed-provenance.mjs" verify "$STAGE_CONFIG"
+
 [[ -f "$STAGE_CONFIG/AGENTS.md" ]] || {
   echo "Ошибка: global AGENTS.md missing from staged OpenCode V2 config." >&2
   exit 1
