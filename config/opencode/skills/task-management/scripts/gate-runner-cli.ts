@@ -309,8 +309,8 @@ async function planProbe(args: string[]): Promise<void> {
   const commands = manifest.gate_profiles?.[pipeline.profile]?.[gate];
   if (!Array.isArray(commands) || commands.length === 0) throw new GateRunnerError('no executable gate commands: profile=' + pipeline.profile + ' gate=' + gate);
   validateGateTesting(manifest);
-  if (!isPrePublishGate(manifest, pipeline.profile, gate)) throw new GateRunnerError('PLAN_PROBE_UNSUPPORTED: ' + gate + ' is not a pre-publish local gate');
   if (commands.some(command => command.includes('{candidate_sha}'))) throw new GateRunnerError('PLAN_PROBE_UNSUPPORTED: ' + pipeline.profile + '/' + gate + ' uses {candidate_sha}');
+  if (!isPrePublishGate(manifest, pipeline.profile, gate)) throw new GateRunnerError('PLAN_PROBE_UNSUPPORTED: ' + gate + ' is not a pre-publish local gate');
   const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
   const invocations: Invocation[] = commands.map((command, index) => {
     const tokens = tokenizeCommand(command);
