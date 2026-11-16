@@ -167,6 +167,20 @@ async function acquireGateLocks(stateRoot: string, runId: string, gateLock: stri
   try {
     if (runtimeLocks.length) visible = await acquireLockFiles(join(resolve(stateRoot), '.runtime-locks'), runtimeLocks.map(name => lockEntry(name, runId)));
   } catch (error) { await lane.release(); throw new GateRunnerError(`runtime target is locked: ${String((error as Error)?.message ?? error)}`); }
+  // Close the gap between initial manifest validation and late pure-gate lock
+  // acquisition: never execute commands after an owner starts plan unfreeze.
+  try {
+    await access(join(resolve(stateRoot), runId, 'planning/unfreeze-active.json'));
+    await visible?.release();
+    await lane.release();
+    throw new GateRunnerError('PLAN_UNFREEZE_IN_PROGRESS');
+  } catch (error) {
+    if (error instanceof GateRunnerError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      await visible?.release(); await lane.release();
+      throw error;
+    }
+  }
   return async () => { await visible?.release(); await lane.release(); };
 }
 
