@@ -5,6 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { gatePolicyError, tokenizeGateCommand, preflightPolicyError } from './gate-command-policy.mjs';
 import { validArtifactPath } from './build-output-proof.mjs';
 import { validateLifecycle } from './gate-lifecycle.mjs';
+import { classifyGate } from './gate-classification.mjs';
 
 // Keys a project-generated impact map may supply; the manifest keeps only its frozen reference.
 const SOURCE_KEYS = ['impact_groups', 'coordinator_only', 'parallel_groups', 'live_postgres', 'ignored_inputs'];
@@ -83,7 +84,7 @@ export function isPrePublishGate(manifest, profile, gate) {
   // A materializing build needs a RUN producer and an in-place artifact proof.
   // A clean-tree PLAN probe cannot stand in for that producer.
   if (config?.artifact_output || (inputKind && inputKind !== 'tree')) return false;
-  if (/(deploy|smoke)/i.test(gate)) return false;
+  if (classifyGate(gate, config, manifest.gate_profiles?.[profile]?.[gate] ?? []).runtime) return false;
   const users = (manifest.pipelines ?? []).filter(pipeline => pipeline?.profile === profile && (pipeline.stages ?? []).includes(gate));
   if (!users.length) return false;
   return users.every(pipeline => {
@@ -101,7 +102,7 @@ export function validateGateTesting(manifest) {
     for (const [gate, config] of Object.entries(gates)) {
       const commands = manifest.gate_profiles?.[profile]?.[gate];
       if (!Array.isArray(commands) || !config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`GATE_TESTING_INVALID: ${profile}/${gate}`);
-      if (/(runtime|deploy|release|smoke|install)/i.test(gate) && !isPrePublishGate(manifest, profile, gate) &&
+      if (classifyGate(gate, config, commands).runtime && !isPrePublishGate(manifest, profile, gate) &&
           Object.keys(config).some(key => !['input_kind', 'build_output', 'artifact_output', 'lifecycle', ...(config.lifecycle ? ['timeout_seconds'] : [])].includes(key))) {
         throw new Error('GATE_TESTING_INVALID: test resources cannot wrap deployment gates');
       }
