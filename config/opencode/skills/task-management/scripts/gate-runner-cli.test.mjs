@@ -1290,6 +1290,6 @@ test('cold identity avoids redundant pre-reuse hashing; reusable evidence retain
     assert.equal(result.status, 0, result.stderr);
     const changed = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
     assert.equal(JSON.parse(result.stdout).commands_run, 2);
-    assert.notEqual(changed.environment_digest, cold.environment_digest);
+    assert.notEqual(changed.source_digest, cold.source_digest, 'lockfile must invalidate source proof even if toolchain bytes are unchanged');
   } finally { process.env.PATH = oldPath; }
 });
