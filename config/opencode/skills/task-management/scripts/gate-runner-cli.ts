@@ -684,8 +684,10 @@ async function main(): Promise<void> {
     selected = impact.selected; selectionReason = impact.reason; deferred = impact.deferred;
     // Only coordinator commands are impacted: the worker has nothing to run, and the evidence says
     // so explicitly; the wave gate and the final complete gate run those commands.
-    if (!selected.length) selectionReason = `deferred to coordinator: commands ${deferred.join(', ')}`;
+    if (!selected.length && deferred.length) selectionReason = `deferred to coordinator: commands ${deferred.join(', ')}`;
   }
+  const incrementalSelectionStatus = affected && !selected.length && !deferred.length &&
+    selectionReason === 'only verified ignored inputs changed' ? 'not_applicable' : 'selected';
   const invocations = selected.map(item => {
     const tokens = substituteCandidate(tokenizeCommand(item.command), candidateSha)
       .map(token => token.replaceAll('{artifact_path}', buildOutputInput?.artifactPath ?? '{artifact_path}'));
@@ -1024,7 +1026,7 @@ async function main(): Promise<void> {
         build_output_input: buildOutputInput ? buildOutputEvidence : null,
         reuse_identity_metrics: reuseIdentityMetrics, reused_from: reuse?.path ?? null,
         hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])],
-        selection_reason: selectionReason, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
+        selection_reason: selectionReason, incremental_selection_status: incrementalSelectionStatus, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
         live_postgres: liveEvidence ?? resource?.evidence ?? null, lifecycle: lifecycleEvidence, cleanup_complete: lifecycle ? lifecycleEvidence.length === invocations.length && lifecycleEvidence.every(item => item.cleanup_complete === true) : cleanupComplete, heavy_slot: heavy, heavy_slot_wait_ms: slotWaitMs, live_slot_wait_ms: liveWaitMs,
@@ -1045,7 +1047,7 @@ async function main(): Promise<void> {
   }
   if (failure) throw failure;
   console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: workItemId ?? null, candidate_sha: candidateSha ?? null, evidence: evidenceFile,
-    heavy_slot_wait_ms: slotWaitMs, selection_reason: selectionReason, commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused_from: reuse?.path ?? null }));
+    heavy_slot_wait_ms: slotWaitMs, selection_reason: selectionReason, incremental_selection_status: incrementalSelectionStatus, commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused_from: reuse?.path ?? null }));
   } finally { await release(); }
 }
 
