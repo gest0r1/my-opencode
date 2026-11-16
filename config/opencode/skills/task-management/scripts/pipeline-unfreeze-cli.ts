@@ -33,9 +33,13 @@ async function runRoot(stateRoot,run) {
   if (state.run_id!==run || manifest.run_id!==run || manifest.schema_version!==2)throw Error('UNFREEZE_RUN_MISMATCH');
   return {root,state,manifest,manifestRaw,manifestHash:hash(manifestRaw)};
 }
-function inFlight(root,state) {
+async function inFlight(root,state) {
   if(hasActiveStages(state))throw Error('UNFREEZE_WORKER_ACTIVE');
   if(readLeases(root,{state}).length)throw Error('UNFREEZE_DISPATCH_LEASE_ACTIVE');
+  // RUN gate files are owned by the existing GateRunner. A structural replan
+  // must not mutate frozen inputs while any gate is still executing.
+  const gateLocks=await fs.readdir(resolve(root,'..','.gate-locks')).catch(e=>e.code==='ENOENT'?[]:Promise.reject(e));
+  if(gateLocks.some(file=>file.endsWith('.lock')))throw Error('UNFREEZE_GATE_LOCK_ACTIVE');
 }
 function ownerAuthorization(evidence,run,sha) {
   if(evidence?.run_id!==run||evidence?.manifest_sha256!==sha ||
@@ -98,7 +102,7 @@ export async function beginUnfreeze(stateRoot,run,evidencePath) {
     if(t.state.manifest_sha256!==t.manifestHash)throw Error('UNFREEZE_MANIFEST_STALE');
     if(!implementationStarted(t.state,t.manifest))throw Error('UNFREEZE_USE_EXISTING_REVISE_BEFORE_IMPLEMENTATION');
     if(await optional(join(t.root,'planning/unfreeze-active.json')))throw Error('UNFREEZE_ALREADY_ACTIVE');
-    inFlight(t.root,t.state);
+    await inFlight(t.root,t.state);
     const evidenceAbsolute=inside(t.root,evidencePath);
     const evidenceRaw=await fs.readFile(evidenceAbsolute,'utf8');
     const evidence=JSON.parse(evidenceRaw);
@@ -164,7 +168,7 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
     if(hash(authRaw)!==marker.authorization_sha256)throw Error('UNFREEZE_APPROVAL_CHANGED');
     const auth=JSON.parse(authRaw);
     ownerAuthorization(auth,run,marker.original_manifest_sha256);
-    inFlight(t.root,t.state);
+    await inFlight(t.root,t.state);
     if(t.state.manifest_sha256===t.manifestHash && t.manifestHash!==marker.original_manifest_sha256) {
       if(t.state.unfreeze_revision?.revision_id!==marker.revision_id)throw Error('UNFREEZE_COMMITTED_STATE_MISMATCH');
       const finalized=await optional(join(t.root,'planning/unfreeze-revisions',marker.revision_id,'finalization.json'));
@@ -297,7 +301,7 @@ export async function abortUnfreeze(stateRoot,run,evidencePath) {
       throw Error('UNFREEZE_CANNOT_ABORT_EDITED_MANIFEST');
     if(!equivalent(await inventory(t.root),marker.original_planning_files))
       throw Error('UNFREEZE_CANNOT_ABORT_EDITED_PLAN');
-    inFlight(t.root,t.state);
+    await inFlight(t.root,t.state);
     const evidenceRaw=await fs.readFile(inside(t.root,evidencePath),'utf8');
     const evidence=JSON.parse(evidenceRaw);
     if(evidence.run_id!==run || evidence.manifest_sha256!==marker.original_manifest_sha256 ||
