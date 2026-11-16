@@ -298,25 +298,34 @@ export function ignoredInput(rules, file) {
 // allowed to reduce incremental work. A legacy glob forces a conservative full run.
 function safeIgnoredPath(value) {
   return typeof value === 'string' && value.length > 0 && !value.startsWith('/') &&
-    !value.includes('\\\\') && !/[\\0-\\x1f\\x7f]/.test(value) &&
+    !value.includes('\\') && ![...value].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) &&
     !value.split('/').some(part => !part || part === '.' || part === '..');
 }
-const GLOB_META = /[*?\\[\\]{}]/;
 function safeExactIgnoredRule(rule) {
   const pattern = typeof rule === 'string' ? rule : rule?.pattern;
-  if (!safeIgnoredPath(pattern) || GLOB_META.test(pattern)) return false;
-  if (typeof rule === 'object' && (!Array.isArray(rule.except) || rule.except.length > 0 ||
-      Object.keys(rule).some(key => !['pattern','except'].includes(key)))) return false;
-  return (pattern.startsWith('docs/') && !pattern.startsWith('docs/testing/') &&
-      !/(^|\\/)(pipeline-rules\\.md|AGENTS\\.md|README\\.md)$/i.test(pattern)) ||
+  if (!safeIgnoredPath(pattern) || [...pattern].some(char => '*?[]{}'.includes(char))) return false;
+  if (typeof rule === 'object' && (!rule || !Array.isArray(rule.except ?? []) ||
+      (rule.except ?? []).length > 0 || Object.keys(rule).some(key => !['pattern', 'except'].includes(key)))) return false;
+  const name = pattern.split('/').at(-1).toLowerCase();
+  if (['agents.md', 'readme.md', 'pipeline-rules.md'].includes(name)) return false;
+  return (pattern.startsWith('docs/') && !pattern.startsWith('docs/testing/')) ||
     pattern.startsWith('.opencode/handoff-notes/');
 }
 function mandatoryInput(file) {
-  return ALWAYS_FULL_CHANGE.test(file) ||
-    /(^|\\/)(?:AGENTS\\.md|README\\.md|(?:.*\\.)?env(?:\\..*)?|[^/]*\\.(?:test|spec)\\.[cm]?[jt]sx?|manifest\\.webmanifest)$/i.test(file) ||
-    /(^|\\/)(?:\\.github|scripts\\/testing|docs\\/testing|migrations|security|deploy|ci|auth|permissions|contracts|schema)(\\/|$)/i.test(file) ||
-    /(^|\\/)(?:vitest[^/]*|jest[^/]*|tsconfig[^/]*|Dockerfile|compose\\.[^/]*|[^/]*\\.(?:png|svg|webp|css|html|ico))$/i.test(file) ||
-    /(^|\\/)(?:gate-testing|test-blocks|pipeline|freeze|manifest|lockfile|pnpm-workspace)[^/]*$/i.test(file);
+  if (ALWAYS_FULL_CHANGE.test(file)) return true;
+  const normalized = file.toLowerCase();
+  const parts = normalized.split('/');
+  const leaf = parts.at(-1);
+  if (['agents.md', 'readme.md', 'manifest.webmanifest', 'dockerfile', 'pnpm-workspace.yaml'].includes(leaf)) return true;
+  if (leaf.startsWith('vitest') || leaf.startsWith('jest') || leaf.startsWith('tsconfig')) return true;
+  if (leaf.startsWith('compose.') || leaf.includes('gate-testing') || leaf.includes('test-blocks') ||
+      leaf.includes('pipeline') || leaf.includes('freeze') || leaf.includes('manifest') || leaf.includes('lockfile')) return true;
+  if (['.png', '.svg', '.webp', '.css', '.html', '.ico'].some(ext => leaf.endsWith(ext))) return true;
+  if (leaf.includes('.test.') || leaf.includes('.spec.') || leaf === '.env' || leaf.startsWith('.env.')) return true;
+  return parts.some(part => [
+    '.github', 'scripts/testing', 'docs/testing', 'migrations', 'security', 'deploy', 'ci',
+    'auth', 'permissions', 'contracts', 'schema',
+  ].includes(part)) || normalized.startsWith('scripts/testing/') || normalized.startsWith('docs/testing/');
 }
 
 // The command that runs a test file nobody mapped: the owner of a test in its own directory, else
