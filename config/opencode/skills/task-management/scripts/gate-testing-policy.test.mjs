@@ -390,7 +390,7 @@ function verifiedIgnoredConfig(ignored, overrides = {}) {
 
 test('O8: verified exact docs-only inputs skip only incremental work, retaining failed workers and coordinator', () => {
   const cfg = verifiedIgnoredConfig(['docs/archive/legacy-note.md'], {coordinator_only:[2]});
-  const select = (changed, fails = [], options = {}) => selectAffectedCommands(commands, cfg, changed, fails, options);
+  const select = (changed, fails = [], options = {}) => selectAffectedCommands(commands, cfg, changed, fails, {verifiedBaseline:true,...options});
   let result = select(['docs/archive/legacy-note.md']);
   assert.deepEqual([result.selected.map(x => x.index), result.deferred], [[], []]);
   assert.equal(result.reason, 'only verified ignored inputs changed');
@@ -418,7 +418,7 @@ test('O8: mandatory files are never excluded by exact or legacy patterns', () =>
     assert.deepEqual(result.selected.map(x=>x.index),[0,1,2],file);
   }
   for (const legacy of ['**/*','docs/**','**/*.md',{ pattern:'docs/**',except:['docs/testing/**'] }]) {
-    const result = selectAffectedCommands(commands,verifiedIgnoredConfig([legacy]),['docs/archive/legacy-note.md']);
+    const result = selectAffectedCommands(commands,verifiedIgnoredConfig([legacy]),['docs/archive/legacy-note.md'],[],{verifiedBaseline:true});
     assert.deepEqual(result.selected.map(x=>x.index),[0,1,2],String(legacy));
   }
 });
