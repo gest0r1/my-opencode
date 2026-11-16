@@ -45,7 +45,7 @@ function ownerAuthorization(evidence,run,sha) {
       typeof evidence.owner_source_session!=='string'||!evidence.owner_source_session.trim()) throw Error('UNFREEZE_OWNER_APPROVAL_REQUIRED');
   const paths=evidence.allowed_plan_paths;
   const ids=evidence.affected_pipelines;
-  if(!Array.isArray(paths)||!paths.length||paths.some(x=>!safeRelative(x)||!(/^(?:stories\/|planning\/|manifest\.json$)/.test(x)))) throw Error('UNFREEZE_ALLOWED_PLAN_PATHS_INVALID');
+  if(!Array.isArray(paths)||!paths.length||paths.some(x=>!safeRelative(x)||!(/^(?:stories\/|planning\/|work-items\/|manifest\.json$)/.test(x)))) throw Error('UNFREEZE_ALLOWED_PLAN_PATHS_INVALID');
   if(!paths.includes('manifest.json')||!Array.isArray(ids)||!ids.length||ids.some(x=>!idValid(x))||new Set(ids).size!==ids.length)throw Error('UNFREEZE_AFFECTED_SCOPE_INVALID');
   if(!Array.isArray(evidence.affected_gates)||!evidence.affected_gates.length ||
       evidence.affected_gates.some(x=>!idValid(x))) throw Error('UNFREEZE_PLANNING_GATES_REQUIRED');
@@ -72,6 +72,7 @@ async function inventory(root) {
   };
   await walk('stories');
   await walk('planning');
+  await walk('work-items');
   return entries;
 }
 async function snapshot(root,version,c) {
@@ -177,8 +178,19 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath) {
       (allowed.endsWith('/**')&&p.startsWith(allowed.slice(0,-2))))))throw Error('UNFREEZE_PLAN_SCOPE_CHANGED');
     const oldIds=new Map(previousManifest.pipelines.map(p=>[p.id,p]));
     const newIds=new Map(t.manifest.pipelines.map(p=>[p.id,p]));
-    const direct=new Set([...new Set([...oldIds.keys(),...newIds.keys()])].filter(id=>!equivalent(oldIds.get(id),newIds.get(id))));
-    if([...direct].some(id=>!auth.affected_pipelines.includes(id)))throw Error('UNFREEZE_UNAPPROVED_PIPELINE_DELTA');
+    const changedSpecs=[...new Set([...oldIds.keys(),...newIds.keys()])].filter(id=>!equivalent(oldIds.get(id),newIds.get(id)));
+    if(changedSpecs.some(id=>!auth.affected_pipelines.includes(id)))throw Error('UNFREEZE_UNAPPROVED_PIPELINE_DELTA');
+    const direct=new Set(auth.affected_pipelines);
+    // Work-item edits are contract changes even when the pipeline's stages are unchanged.
+    const oldItems=new Map((previousManifest.work_items??[]).map(item=>[item.id,item]));
+    const newItems=new Map((t.manifest.work_items??[]).map(item=>[item.id,item]));
+    for(const id of new Set([...oldItems.keys(),...newItems.keys()])){
+      const before=oldItems.get(id),after=newItems.get(id);
+      if(equivalent(before,after))continue;
+      const owner=after?.pipeline_id??before?.pipeline_id;
+      if(!idValid(owner)||!auth.affected_pipelines.includes(owner))throw Error('UNFREEZE_UNAPPROVED_WORK_ITEM_DELTA');
+      direct.add(owner);
+    }
     // Gate profile/test policy edits may affect *any* pipeline referencing that shared profile.
     const sharedChanged=!equivalent(previousManifest.gate_profiles,t.manifest.gate_profiles)||
       !equivalent(previousManifest.gate_testing,t.manifest.gate_testing);
