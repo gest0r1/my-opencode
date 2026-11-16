@@ -9,6 +9,7 @@ import { classifyGate } from './gate-classification.mjs';
 
 // Keys a project-generated impact map may supply; the manifest keeps only its frozen reference.
 const SOURCE_KEYS = ['impact_groups', 'coordinator_only', 'parallel_groups', 'live_postgres', 'ignored_inputs'];
+const VERIFIED_IGNORED_SOURCE = new WeakSet();
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 export const commandsDigest = commands => sha256(JSON.stringify(commands));
 
@@ -352,8 +353,8 @@ export function selectAffectedCommands(commands, config, changed, previousFailur
   // Legacy glob is accepted as frozen data for backward compatibility but never
   // grants permission to skip an unknown or newly created file.
   const rules = config.ignored_inputs;
-  if (rules !== undefined && (!Array.isArray(rules) || rules.some(rule => !safeExactIgnoredRule(rule)))) {
-    return full('ignored_inputs requires reviewed exact paths');
+  if (rules !== undefined && (!VERIFIED_IGNORED_SOURCE.has(config) || !Array.isArray(rules) || rules.some(rule => !safeExactIgnoredRule(rule)))) {
+    return full('ignored_inputs requires frozen verified exact paths');
   }
   const relevant = changed.filter(file => isNew(file) || !ignoredInput(rules, file));
   if (!relevant.length) {
