@@ -84,7 +84,7 @@ export function isPrePublishGate(manifest, profile, gate) {
   // A materializing build needs a RUN producer and an in-place artifact proof.
   // A clean-tree PLAN probe cannot stand in for that producer.
   if (config?.artifact_output || (inputKind && inputKind !== 'tree')) return false;
-  if (classifyGate(gate, config, manifest.gate_profiles?.[profile]?.[gate] ?? []).runtime) return false;
+  if (!classifyGate(gate, config, manifest.gate_profiles?.[profile]?.[gate] ?? []).planProbeAllowed) return false;
   const users = (manifest.pipelines ?? []).filter(pipeline => pipeline?.profile === profile && (pipeline.stages ?? []).includes(gate));
   if (!users.length) return false;
   return users.every(pipeline => {
