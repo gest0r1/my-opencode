@@ -365,20 +365,29 @@ function decisionMetric(ctx: RuntimeContext, role: string, decision: "fresh" | "
 const RUNTIME_FILES = [
   fileURLToPath(import.meta.url),
   fileURLToPath(new URL("../skills/task-management/scripts/pipeline-dispatch.ts", import.meta.url)),
-  fileURLToPath(new URL("../command/pipeline-run.md", import.meta.url)),
+  fileURLToPath(new URL("../commands/pipeline-run.md", import.meta.url)),
   fileURLToPath(new URL("../skills/task-management/run-worker-rules.md", import.meta.url)),
-  fileURLToPath(new URL("../agent/core/openstage-orchestrator.md", import.meta.url)),
+  fileURLToPath(new URL("../agents/OpenStageOrchestrator.md", import.meta.url)),
 ]
 function runtimeFingerprint() {
-  return sha256(RUNTIME_FILES.map((file) => {
-    try { return `${path.basename(file)}:${sha256(fs.readFileSync(file))}` } catch { return `${path.basename(file)}:missing` }
-  }).join("\n"))
+  const records = RUNTIME_FILES.map((file) => {
+    // Path is part of identity: two required files with the same basename must never collide.
+    try { return `${file}:${sha256(fs.readFileSync(file))}` }
+    catch { return `${file}:missing-required-runtime-file` }
+  })
+  return sha256(records.join("\n"))
 }
-type RuntimeVersionState = { reload_required: boolean; changed_during_run: boolean; loaded: string }
+function missingRuntimeFiles() {
+  return RUNTIME_FILES.filter(file => {
+    try { return !fs.statSync(file).isFile() } catch { return true }
+  })
+}
+type RuntimeVersionState = { reload_required: boolean; changed_during_run: boolean; loaded: string; missing_required_runtime_files: string[] }
 function runtimeFlags(state: RuntimeVersionState) {
   return {
     ...(state.reload_required ? { runtime_reload_required: true } : {}),
     ...(state.changed_during_run ? { runtime_changed_during_run: true } : {}),
+    ...(state.missing_required_runtime_files.length ? { runtime_missing_required_files: state.missing_required_runtime_files } : {}),
   }
 }
 
@@ -394,10 +403,11 @@ export default Plugin.define({
         recorded = { loaded: loadedRuntime, recorded_at: new Date().toISOString() }
         try { ensureDir(path.dirname(file)); fs.writeFileSync(file, JSON.stringify(recorded, null, 2) + "\n", "utf8") } catch {}
       }
-      const state = { loaded: loadedRuntime, reload_required: runtimeFingerprint() !== loadedRuntime, changed_during_run: recorded.loaded !== loadedRuntime }
+      const missing = missingRuntimeFiles()
+      const state = { loaded: loadedRuntime, reload_required: runtimeFingerprint() !== loadedRuntime || missing.length > 0, changed_during_run: recorded.loaded !== loadedRuntime, missing_required_runtime_files: missing }
       if (state.reload_required || state.changed_during_run) {
         appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "runtime_version",
-          run_id: runID, runtime_reload_required: state.reload_required, runtime_changed_during_run: state.changed_during_run })
+          run_id: runID, runtime_reload_required: state.reload_required, runtime_changed_during_run: state.changed_during_run, missing_required_runtime_files: missing })
       }
       return state
     }
