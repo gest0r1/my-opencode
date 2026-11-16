@@ -88,7 +88,8 @@ test('deferred owner decision lets repairs finish and blocks only the final gate
   let result = run(fx.root, ['owner-decision-defer', fx.runId, 'delete-data', '--pipeline', 'app', '--evidence', file, '--state-root', fx.stateRoot]);
   assert.equal(result.status, 0, result.stderr);
   for (const [command, stage] of [['complete', 'implementation'], ['start', 'code-review'], ['complete', 'code-review']]) {
-    result = run(fx.root, [command, fx.runId, stage, '--pipeline', 'app', '--state-root', fx.stateRoot, '--json']);
+    result = run(fx.root, [command, fx.runId, stage, '--pipeline', 'app', '--state-root', fx.stateRoot, '--json',
+      ...(command === 'complete' && stage === 'code-review' ? ['--evidence', readyReview(fx, 'app', stage)] : [])]);
     assert.equal(result.status, 0, result.stderr);
   }
   const state = JSON.parse(result.stdout);
@@ -176,9 +177,10 @@ test('FindingsReviewer only re-checks issued findings, and a review stage closes
   const fx = await fixture('findings-review', ['implementation', 'code-review'], { implementation: 'agent', 'code-review': 'review' });
   const cli = (args) => run(fx.root, [...args, '--pipeline', 'app', '--state-root', fx.stateRoot]);
   const dispatch = (stage, role) => run(fx.root, ['dispatch', fx.runId, '--pipeline', 'app', '--stage', stage, '--work-item', stage === 'code-review' ? stage : 'wi-app', '--role', role]);
-  const complete = (stage) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'), 'complete', fx.runId, stage, '--pipeline', 'app'],
+  const complete = (stage, evidence) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'), 'complete', fx.runId, stage, '--pipeline', 'app', ...(evidence ? ['--evidence', evidence] : [])],
     { cwd: fx.root, encoding: 'utf8', env: process.env });
   // The fixture leaves implementation completed and code-review in progress.
+  ensureReviewGit(fx.root);
   let result;
   result = dispatch('code-review', 'FindingsReviewer');
   assert.notEqual(result.status, 0); assert.match(result.stderr, /FINDINGS_REVIEW_NEEDS_ISSUED_FINDINGS/);
@@ -195,12 +197,12 @@ test('FindingsReviewer only re-checks issued findings, and a review stage closes
   result = complete('code-review');
   assert.notEqual(result.status, 0); assert.match(result.stderr, /REVIEW_CLOSING_FULL_REQUIRED: app\/code-review/);
   result = dispatch('code-review', 'CodeReviewer'); assert.equal(result.status, 0, result.stderr);
-  result = complete('code-review'); assert.equal(result.status, 0, result.stderr);
+  result = complete('code-review', readyReview(fx, 'app', 'code-review')); assert.equal(result.status, 0, result.stderr);
 });
 
 test('advance completes a stage, starts the next stage that needs no preparation and leaves the rest waiting', async () => {
   const fx = await fixture('advance-run', ['implementation', 'second-review', 'verify'], { implementation: 'agent', 'second-review': 'review', verify: 'git_verify' });
-  const advance = (stage) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'), 'advance', fx.runId, stage, '--pipeline', 'app'],
+  const advance = (stage, evidence) => spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'), 'advance', fx.runId, stage, '--pipeline', 'app', ...(evidence ? ['--evidence', evidence] : [])],
     { cwd: fx.root, encoding: 'utf8', env: process.env });
   let result = advance('implementation');
   assert.equal(result.status, 0, result.stderr);
@@ -211,7 +213,7 @@ test('advance completes a stage, starts the next stage that needs no preparation
   assert.equal(out.github_sync.status, 'PASS');
   result = run(fx.root, ['dispatch', fx.runId, '--pipeline', 'app', '--stage', 'second-review', '--work-item', 'second-review', '--role', 'CodeReviewer']);
   assert.equal(result.status, 0, result.stderr);
-  result = advance('second-review');
+  result = advance('second-review', readyReview(fx, 'app', 'second-review'));
   assert.equal(result.status, 0, result.stderr);
   out = JSON.parse(result.stdout);
   assert.deepEqual(out.started, []);
@@ -870,7 +872,8 @@ async function lanesFixture(runId, { sinkScope = ['packages/sink/**'], laneScope
   const fx = {
     root, stateRoot, runId, cli,
     step(pipeline, stage, command) {
-      const r = cli(command, runId, stage, '--pipeline', pipeline, '--json'); assert.equal(r.status, 0, `${pipeline}/${stage} ${command}: ${r.stderr}`); return JSON.parse(r.stdout);
+      const evidence = command === 'complete' && stage === 'code-review' ? readyReview(fx, pipeline, stage) : null;
+      const r = cli(command, runId, stage, '--pipeline', pipeline, '--json', ...(evidence ? ['--evidence', evidence] : [])); assert.equal(r.status, 0, `${pipeline}/${stage} ${command}: ${r.stderr}`); return JSON.parse(r.stdout);
     },
     finish(pipeline, stage) { this.step(pipeline, stage, 'start'); return this.step(pipeline, stage, 'complete'); },
     async evidence(pipeline, stage = 'code-review') {
