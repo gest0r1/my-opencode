@@ -11,8 +11,13 @@ export function classifyGate(gate, config, commands = []) {
   const runtime = hasLifecycle || hasArtifact || hasCandidateToken || NON_TREE_KINDS.has(kind)
     || (!explicitTree && LEGACY_RUNTIME_NAME.test(gate))
     || (kind != null && !explicitTree && !NON_TREE_KINDS.has(kind));
+  // Legacy PLAN probes historically allowed pre-publish release/install checks;
+  // retain that compatibility, without enabling snapshot/result reuse for them.
+  const legacyPlanProbe = kind == null && !hasCandidateToken && !hasLifecycle && !hasArtifact
+    && !/(deploy|smoke)/i.test(gate);
   return {
     runtime,
+    planProbeAllowed: !runtime || legacyPlanProbe,
     snapshotAllowed: !runtime,
     reuseAllowed: !runtime,
     advisoryAllowed: !runtime,
