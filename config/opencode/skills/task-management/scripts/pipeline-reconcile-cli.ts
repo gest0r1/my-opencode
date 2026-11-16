@@ -102,7 +102,7 @@ export async function reconcile(stateRoot: string, run: string, evidencePath?: s
     const record = { ...observation, result: decision.result, reason: decision.reason, review_path: evidencePath ?? null, manifest_sha256: manifestHash, input_sha256: observationHash, recorded_at: new Date().toISOString() };
     const sha = await json(join(root, path), record, true);
     if (decision.result === 'PLAN_INVALID') return { status: 'PASS', result: 'PLAN_INVALID', run_id: run,
-      action: implementationStarted(state, manifest) ? 'new_plan_with_inherited_context' : 'revise_plan_in_place', evidence: path };
+      action: implementationStarted(state, manifest) ? 'owner_authorized_in_place_unfreeze_or_explicit_new_run' : 'revise_plan_in_place', evidence: path };
     if (state) {
       state.reconciliations ??= [];
       state.reconciliations.push({ path, sha256: sha });
