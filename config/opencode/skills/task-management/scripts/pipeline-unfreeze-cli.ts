@@ -1,6 +1,6 @@
 // Owner-authorized, recoverable in-place structural PLAN unfreeze.
 import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { join, resolve, relative, sep, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -22,7 +22,9 @@ async function atomic(file, object) {
 }
 function inside(root,file) {
   const absolute=resolve(file);
-  if (!absolute.startsWith(root+sep)) throw Error('UNFREEZE_EVIDENCE_OUTSIDE_RUN');
+  if (!absolute.startsWith(root+sep) ||
+      !realpathSync(absolute).startsWith(realpathSync(root)+sep))
+    throw Error('UNFREEZE_EVIDENCE_OUTSIDE_RUN');
   return absolute;
 }
 async function runRoot(stateRoot,run) {
