@@ -101,6 +101,9 @@ jobs:
             config/opencode/skills/task-management/scripts/owner-amendment-git-gate.test.mjs \
             config/opencode/skills/task-management/scripts/gate-lifecycle.test.mjs \
             config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs \
+            config/opencode/skills/task-management/scripts/gate-classification.test.mjs \
+            config/opencode/skills/task-management/scripts/gate-reuse-identity.test.mjs \
+            config/opencode/skills/task-management/scripts/pipeline-unfreeze-cli.test.mjs \
             config/opencode/skills/task-management/scripts/legacy-live-preflight-v067.test.mjs \
             config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs \
             config/opencode/skills/task-management/scripts/git-worktree-cli.test.mjs \
@@ -134,4 +137,4 @@ jobs:
           bash tests/test_openchamber_runtime_store.sh
           bash tests/test_dependency_installer.sh
           bash tests/test_generation_timeout.sh
-          node --test tests/test_user_plugins.mjs tests/generation-state.test.mjs tests/trusted-paths.test.mjs
+          node --test tests/test_user_plugins.mjs tests/generation-state.test.mjs tests/trusted-paths.test.mjs tests/installed-provenance.test.mjs tests/opencode-v2-runtime-layout.test.mjs
