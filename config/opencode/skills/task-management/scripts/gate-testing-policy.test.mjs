@@ -356,3 +356,16 @@ test('candidate-contour requires a frozen lifecycle after publish, never dev-dep
   manifest.gate_testing.release['install-check'].input_kind = 'deployed-service';
   assert.throws(() => validateGateTesting(manifest), /GATE_SERVICE_BEFORE_DEPLOY|GATE_LIFECYCLE_INVALID/);
 });
+
+test('frozen tree release-check stays eligible for pre-publish PLAN probe and bounded test resources', () => {
+  const gate = 'release-check';
+  const manifest = {
+    gate_profiles: { local: { [gate]: ['pnpm exec tsc --noEmit'] } },
+    gate_testing: { local: { [gate]: { input_kind: 'tree', timeout_seconds: 60 } } },
+    pipelines: [{ id: 'app', profile: 'local', stages: [gate], executors: { [gate]: 'local_gate' } }],
+  };
+  assert.equal(isPrePublishGate(manifest, 'local', gate), true);
+  assert.doesNotThrow(() => validateGateTesting(manifest));
+  delete manifest.gate_testing.local[gate].input_kind;
+  assert.equal(isPrePublishGate(manifest, 'local', gate), false);
+});
