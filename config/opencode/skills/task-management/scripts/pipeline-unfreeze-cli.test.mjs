@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { beginUnfreeze, finalizeUnfreeze } from './pipeline-unfreeze-cli.ts';
+import { beginUnfreeze, finalizeUnfreeze, abortUnfreeze } from './pipeline-unfreeze-cli.ts';
 const hash=raw=>createHash('sha256').update(raw).digest('hex');
 const rootID='owner-controlled-run';
 const sourceSpec={id:'source',stages:['implementation','tests'],executors:{implementation:'agent',tests:'local_gate'},depends_on:[]};
@@ -114,4 +114,31 @@ test('O7: a published candidate cannot remain valid after refreeze',async()=>{
     const current=JSON.parse(await readFile(join(f.runDir,'state.json')));
     assert.equal(current.pipelines.independent.stages.implementation.status,'completed');
   }finally{await rm(f.root,{recursive:true,force:true});}
+});
+
+test('O7: owner can decline and abort only before any approved PLAN artifact changed',async()=>{
+  const f=await fixture();
+  try {
+    await beginUnfreeze(f.stateRoot,rootID,f.approval);
+    const reject=join(f.runDir,'owner/decline.json');
+    await writeFile(reject,JSON.stringify({run_id:rootID,manifest_sha256:hash(f.raw),
+      owner_decision:'declined',owner_response:'No changes to the current plan',
+      owner_message_id:'message-789',owner_source_session:'session-123'}));
+    const outcome=await abortUnfreeze(f.stateRoot,rootID,reject);
+    assert.equal(outcome.status,'PASS');
+    await assert.rejects(readFile(join(f.runDir,'planning/unfreeze-active.json')),/ENOENT/);
+    await assert.rejects(abortUnfreeze(f.stateRoot,rootID,reject),/UNFREEZE_NOT_STARTED/);
+  } finally { await rm(f.root,{recursive:true,force:true}); }
+});
+test('O7: changed PLAN cannot silently roll back through unfreeze abort',async()=>{
+  const f=await fixture();
+  try {
+    await beginUnfreeze(f.stateRoot,rootID,f.approval);
+    await writeFile(join(f.runDir,'planning/architecture.md'),'changed');
+    const reject=join(f.runDir,'owner/decline.json');
+    await writeFile(reject,JSON.stringify({run_id:rootID,manifest_sha256:hash(f.raw),
+      owner_decision:'declined',owner_response:'Cancel after edit',
+      owner_message_id:'message-789',owner_source_session:'session-123'}));
+    await assert.rejects(abortUnfreeze(f.stateRoot,rootID,reject),/UNFREEZE_CANNOT_ABORT_EDITED_PLAN/);
+  } finally { await rm(f.root,{recursive:true,force:true}); }
 });
