@@ -81,7 +81,14 @@ async function snapshot(root,version,c) {
   for(const [name,content] of [
     ['manifest.json',c.manifestRaw],
     ['state.json',JSON.stringify(c.state,null,2)+'\n'],
-  ])await fs.writeFile(join(dir,name),content,{flag:'wx'});
+  ]){
+    const target=join(dir,name);
+    try { await fs.writeFile(target,content,{flag:'wx'}); }
+    catch(error) {
+      if(error.code!=='EEXIST'||await fs.readFile(target,'utf8')!==content)
+        throw Error('UNFREEZE_IMMUTABLE_AUDIT_CONFLICT: '+name);
+    }
+  }
   return dir;
 }
 export async function beginUnfreeze(stateRoot,run,evidencePath) {
@@ -164,7 +171,8 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
       if(!finalized||finalized.new_manifest_sha256!==t.manifestHash)throw Error('UNFREEZE_FINALIZATION_AUDIT_MISSING');
       if(finalized.candidate_invalidated && existsSync(join(t.root,'candidate.json')))
         await fs.rename(join(t.root,'candidate.json'),join(t.root,'planning/unfreeze-revisions',marker.revision_id,'obsolete-candidate.json'));
-      await fs.rm(join(t.root,'git-verify.json'),{force:true});
+      if(existsSync(join(t.root,'git-verify.json')))
+        await fs.rename(join(t.root,'git-verify.json'),join(t.root,'planning/unfreeze-revisions',marker.revision_id,'obsolete-git-verify.json'));
       await fs.rm(markerPath);
       return {status:'PASS',action:'recovered_finalized_unfreeze',run_id:run,revision_id:marker.revision_id};
     }
@@ -257,7 +265,8 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
     await atomic(join(t.root,'state.json'),nextState);
     if(candidateExists)await fs.rename(join(t.root,'candidate.json'),
       join(t.root,'planning/unfreeze-revisions',marker.revision_id,'obsolete-candidate.json'));
-    await fs.rm(join(t.root,'git-verify.json'),{force:true});
+    if(existsSync(join(t.root,'git-verify.json')))
+      await fs.rename(join(t.root,'git-verify.json'),join(t.root,'planning/unfreeze-revisions',marker.revision_id,'obsolete-git-verify.json'));
     await fs.rm(markerPath);
     return {status:'PASS',action:'re_frozen_in_place',run_id:run,revision_id:marker.revision_id,
       affected_pipelines:[...affected],unaffected_pipelines:t.manifest.pipelines.map(p=>p.id).filter(id=>!affected.has(id)),
