@@ -369,3 +369,48 @@ test('frozen tree release-check stays eligible for pre-publish PLAN probe and bo
   delete manifest.gate_testing.local[gate].input_kind;
   assert.equal(isPrePublishGate(manifest, 'local', gate), true); // legacy pre-publish compatibility; runner reuse still disabled
 });
+
+test('O8: verified exact docs-only inputs skip only incremental work, retaining failed workers and coordinator', () => {
+  const cfg = { ...config, ignored_inputs: ['docs/archive/legacy-note.md'], coordinator_only: [2] };
+  const select = (changed, fails = [], options = {}) => selectAffectedCommands(commands, cfg, changed, fails, options);
+  let result = select(['docs/archive/legacy-note.md']);
+  assert.deepEqual([result.selected.map(x => x.index), result.deferred], [[], []]);
+  assert.equal(result.reason, 'only verified ignored inputs changed');
+  result = select(['docs/archive/legacy-note.md'], [1]);
+  assert.deepEqual(result.selected.map(x => x.index), [1]);
+  assert.deepEqual(result.selected[0].test_files, []);
+  result = select(['docs/archive/legacy-note.md'], [2]);
+  assert.deepEqual(result.deferred, [2]);
+  result = select(['docs/archive/legacy-note.md','apps/api/src/orders.ts'], [1]);
+  assert.deepEqual(result.selected.map(x => x.index), [0,1]);
+  assert.deepEqual(result.deferred, [2]);
+  result = select(['docs/archive/legacy-note.md','apps/api/src/unknown.ts']);
+  assert.deepEqual(result.selected.map(x => x.index), [0,1]);
+  assert.deepEqual(result.deferred, [2]);
+  result = select(['docs/archive/legacy-note.md'], [], { isNew: file => file.endsWith('legacy-note.md') });
+  assert.deepEqual(result.selected.map(x => x.index), [0,1]);
+});
+test('O8: mandatory files are never excluded by exact or legacy patterns', () => {
+  const critical = ['package.json','pnpm-lock.yaml','apps/api/src/auth/login.ts','docs/testing/test-blocks.json',
+    'scripts/testing/test-blocks.ts','apps/web/public/manifest.webmanifest','apps/web/public/icon.svg',
+    'apps/web/src/style.css','apps/web/index.html','AGENTS.md','README.md','db/migrations/001.sql'];
+  for (const file of critical) {
+    const cfg = { ...config, ignored_inputs: [file,'docs/archive/legacy-note.md'] };
+    const result = selectAffectedCommands(commands,cfg,['docs/archive/legacy-note.md',file]);
+    assert.deepEqual(result.selected.map(x=>x.index),[0,1,2],file);
+  }
+  for (const legacy of ['**/*','docs/**','**/*.md',{ pattern:'docs/**',except:['docs/testing/**'] }]) {
+    const result = selectAffectedCommands(commands,{...config,ignored_inputs:[legacy]},['docs/archive/legacy-note.md']);
+    assert.deepEqual(result.selected.map(x=>x.index),[0,1,2],String(legacy));
+  }
+});
+test('O8: invalid or spoofed ignore paths fail conservative selection; empty and missing maps remain full', () => {
+  for (const ignored of ['/abs','../bad','a/../b','a\\\\b','a\u0000b','a\nb','docs/**','docs/testing/config.md']) {
+    const selected=selectAffectedCommands(commands,{...config,ignored_inputs:[ignored]},['docs/archive/legacy-note.md']);
+    assert.deepEqual(selected.selected.map(x=>x.index),[0,1,2],JSON.stringify(ignored));
+  }
+  assert.equal(selectAffectedCommands(commands,{...config,ignored_inputs:['docs/archive/legacy-note.md']},[]).selected.length,3);
+  assert.equal(selectAffectedCommands(commands,{ignored_inputs:['docs/archive/legacy-note.md']},['docs/archive/legacy-note.md']).selected.length,3);
+  const spoof=selectAffectedCommands(commands,{...config,ignored_inputs:['docs/archive/legacy-note.md']},['docs/archive/../archive/legacy-note.md']);
+  assert.deepEqual(spoof.selected.map(x=>x.index),[0,1,2]);
+});
