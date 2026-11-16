@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { gatePolicyError, isFrozenUvPytest, tokenizeGateCommand as tokenizeGateCommandPolicy } from './gate-command-policy.mjs';
 import { validateManifestV2Policy, validatePackageManagerContract } from './manifest-v2-policy.mjs';
 import { resolveGateTestingFile } from './gate-testing-policy.mjs';
+import { classifyGate } from './gate-classification.mjs';
 
 export class ManifestPreflightError extends Error {}
 
@@ -19,7 +20,6 @@ export function checkDeployTargetConfigured(manifest) {
   }
 }
 
-const RUNTIME_GATE = /(runtime|deploy|release|smoke|install)/i;
 const SAFE_SHA = /^[0-9a-f]{40}$/i;
 
 export function tokenizeGateCommand(command) {
@@ -186,7 +186,11 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
       for (const command of commands) {
         const tokens = tokenizeGateCommand(command);
         assertSafeGateInvocation(tokens, gate);
-        if (tokens.some((token) => token.includes('{candidate_sha}')) && !RUNTIME_GATE.test(gate)) {
+        const config = manifest.gate_testing?.[profile]?.[gate];
+        const classification = classifyGate(gate, config, commands);
+        const candidateBindingAllowed = ['candidate', 'candidate-contour', 'deployed-service'].includes(config?.input_kind)
+          || (classification.legacyFallback && classification.runtime);
+        if (tokens.some((token) => token.includes('{candidate_sha}')) && !candidateBindingAllowed) {
           throw new ManifestPreflightError(`candidate_sha may only occur in runtime gate: ${profile}/${gate}`);
         }
         invocations.push({ profile, gate, tokens });
