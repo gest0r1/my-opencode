@@ -26,6 +26,25 @@ export function summarize(events) {
     value.failed += ['FAIL', 'BLOCKED'].includes(row.status) ? 1 : 0;
     value.duration_ms += Number(row.duration_ms ?? 0); value.commands_run += Number(row.commands_run ?? 0);
   }
+  // Completion timestamps, measured durations and slot waits are telemetry, not a
+  // reconstructed DAG. Do not call their sum the RUN critical path: gates can overlap.
+  const timed = gateRuns.filter(row => Number.isFinite(Number(row.duration_ms)) &&
+    Number(row.duration_ms) >= 0 && Number.isFinite(Date.parse(row.timestamp)));
+  const intervals = timed.map(row => ({
+    start: Date.parse(row.timestamp) - Number(row.duration_ms),
+    end: Date.parse(row.timestamp),
+    duration: Number(row.duration_ms),
+    wait: Number(row.heavy_slot_wait_ms ?? 0) + Number(row.live_slot_wait_ms ?? 0),
+  }));
+  const timing = {
+    gate_runs: timed.length,
+    observed_span_ms: intervals.length ? Math.max(...intervals.map(x => x.end)) - Math.min(...intervals.map(x => x.start)) : null,
+    summed_gate_duration_ms: intervals.reduce((n, x) => n + x.duration, 0),
+    longest_gate_duration_ms: intervals.reduce((n, x) => Math.max(n, x.duration), 0),
+    summed_slot_wait_ms: intervals.reduce((n, x) => n + x.wait, 0),
+    summed_command_duration_ms: gateRuns.reduce((n, x) => n + Number(x.command_duration_ms ?? 0), 0),
+    note: 'Diagnostic lower bounds and sums only; not a computed critical path or wall-time saving.',
+  };
   // Agent session reuse and gate evidence reuse are different mechanisms with different costs:
   // keep them in separate sections and never add them up.
   const agents = {
@@ -51,7 +70,7 @@ export function summarize(events) {
     if (['subagent_complete', 'background_child_settled'].includes(e.event)) addUsage(e.role ?? 'unknown', e.usage);
     if (e.event === 'subagent_complete') addUsage('OpenStageOrchestrator', e.parent_usage);
   }
-  return { schema_version: 3, groups, agents, fallback_reasons: reasons, gates, runtime, usage,
+  return { schema_version: 3, groups, agents, fallback_reasons: reasons, gates, timing, runtime, usage,
     parent: {
       tool_calls: events.filter(e => e.event === 'parent_tool').length,
       read_bytes: events.filter(e => e.event === 'parent_read').reduce((a, e) => a + Number(e.bytes_read ?? 0), 0),
@@ -68,7 +87,7 @@ export function exportReport(runId, output) {
   const readLines = file => { try { return fs.readFileSync(path.join(root, file), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch (error) { if (error.code === 'ENOENT') return []; throw error; } };
   const events = [...readLines('reuse-metrics/events.jsonl'), ...readLines('reuse-metrics/gates.jsonl')];
   // Explicit allowlist prevents prompts, source contents, credentials and raw tool outputs entering export.
-  const allowed = ['timestamp', 'event', 'identity', 'run_id', 'pipeline_id', 'stage', 'role', 'work_item_id', 'loop', 'decision', 'fallback_reason', 'session_health', 'latency_ms', 'orientation_ms', 'prompt_bytes', 'response_bytes', 'parent_response_bytes', 'packet_bytes', 'tool_calls', 'read_calls', 'grep_calls', 'glob_calls', 'edit_calls', 'shell_calls', 'unique_files_read', 'reread_file_count', 'context_reread_ratio', 'bytes_read', 'tool', 'context_bytes', 'model_requests', 'model', 'gate', 'purpose', 'mode', 'status', 'duration_ms', 'commands_run', 'reused', 'background', 'runtime_reload_required', 'runtime_changed_during_run', 'usage', 'parent_usage'];
+  const allowed = ['timestamp', 'event', 'identity', 'run_id', 'pipeline_id', 'stage', 'role', 'work_item_id', 'loop', 'decision', 'fallback_reason', 'session_health', 'latency_ms', 'orientation_ms', 'prompt_bytes', 'response_bytes', 'parent_response_bytes', 'packet_bytes', 'tool_calls', 'read_calls', 'grep_calls', 'glob_calls', 'edit_calls', 'shell_calls', 'unique_files_read', 'reread_file_count', 'context_reread_ratio', 'bytes_read', 'tool', 'context_bytes', 'model_requests', 'model', 'gate', 'purpose', 'mode', 'status', 'duration_ms', 'heavy_slot_wait_ms', 'live_slot_wait_ms', 'command_duration_ms', 'commands_run', 'reused', 'background', 'runtime_reload_required', 'runtime_changed_during_run', 'usage', 'parent_usage'];
   const safe = events.map(e => Object.fromEntries(allowed.filter(k => k in e).map(k => [k, e[k]])));
   const summary = summarize(safe);
   fs.mkdirSync(output, { recursive: true });
