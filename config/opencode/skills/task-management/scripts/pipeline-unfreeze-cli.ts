@@ -160,11 +160,25 @@ async function defaultFrozenPlanValidator(manifestFile) {
   await preflightFile(manifestFile,{environment:false,cwd:process.cwd()});
   assertPlanReviewLedger(manuscript,manifestFile);
 }
+// Reopening a stage invalidates its PASS, not the repair budget or class history.
+// Carry only diagnostic/accounting metadata; never reuse old completion evidence.
+const REPAIR_AUDIT_FIELDS = [
+  'technical_fix_cycles', 'technical_fix_budget_grants', 'defect_class_history',
+  'architecture_reviews', 'architecture_review_due', 'architecture_review_due_paths',
+  'class_reviews', 'class_review_due', 'class_review_due_paths', 'runtime_replans',
+];
+function pendingStage(executor,previous) {
+  const audit={};
+  for(const key of REPAIR_AUDIT_FIELDS) if(previous?.[key]!==undefined) audit[key]=structuredClone(previous[key]);
+  return {status:'pending',
+    ...(!['agent','owner_acceptance','git_publish'].includes(executor)
+      ? {technical_fix_limit:previous?.technical_fix_limit??5}:{}),
+    ...audit};
+}
 function pendingPipeline(spec,prior) {
-  const stages=Object.fromEntries(spec.stages.map(stage=>[stage,{
-    status:'pending',
-    ...(!['agent','owner_acceptance','git_publish'].includes(spec.executors?.[stage]) ? {technical_fix_limit:prior?.stages?.[stage]?.technical_fix_limit??5}:{}),
-  }]));
+  const stages=Object.fromEntries(spec.stages.map(stage=>[
+    stage,pendingStage(spec.executors?.[stage],prior?.stages?.[stage]),
+  ]));
   return {id:spec.id,status:'approved',stages,stage_order:[...spec.stages],
     depends_on:[...(spec.depends_on??[])],
     ...(spec.issue_numbers?.length?{issue_numbers:[...spec.issue_numbers]}:{}),
@@ -269,12 +283,20 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
       const prior=t.state.pipelines?.[spec.id];
       nextPipelines[spec.id]=affected.has(spec.id)||!prior?pendingPipeline(spec,prior):prior;
       if(candidateExists&&!affected.has(spec.id)){
-        const publish=spec.stages.find(stage=>spec.executors?.[stage]==='git_publish');
-        if(publish){
-          const first=spec.stages.indexOf(publish);
+        // An old candidate invalidates the *whole* publication chain, including
+        // git_verify and the pre-publish authoritative local gate. Independent
+        // source/review stages keep their historical completed evidence.
+        const releaseKinds=new Set(['git_verify','git_publish','github_gates','github_dev',
+          'dev_deploy','owner_acceptance','deployment_validation']);
+        if(spec.stages.some(stage=>releaseKinds.has(spec.executors?.[stage]))){
+          const sourceBoundary=spec.stages.reduce((index,stage,i)=>
+            ['agent','review'].includes(spec.executors?.[stage])?i:index,-1);
+          const first=spec.stages.findIndex((stage,i)=>i>sourceBoundary &&
+            (releaseKinds.has(spec.executors?.[stage]) || spec.executors?.[stage]==='local_gate'));
+          if(first<0)throw Error('UNFREEZE_RELEASE_REVALIDATION_NOT_PROVABLE: '+spec.id);
           for(const stage of spec.stages.slice(first)){
             const old=nextPipelines[spec.id].stages[stage];
-            nextPipelines[spec.id].stages[stage]={status:'pending',...(old.technical_fix_limit?{technical_fix_limit:old.technical_fix_limit}:{})};
+            nextPipelines[spec.id].stages[stage]=pendingStage(spec.executors?.[stage],old);
           }
           nextPipelines[spec.id].status='approved';
         }
