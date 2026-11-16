@@ -122,6 +122,15 @@ function dependencyClosure(manifest,changed) {
   return affected;
 }
 function equivalent(a,b){return JSON.stringify(a)===JSON.stringify(b);}
+async function defaultFrozenPlanValidator(manifestFile) {
+  // The production CLI must not accept a manually written 'ready' label as evidence
+  // that PLAN source references, artifacts, commands, reviews and freeze proofs are valid.
+  const { preflightFile }=await import('./manifest-preflight.mjs');
+  const { assertPlanReviewLedger }=await import('./plan-review.ts');
+  const manuscript=await fileJSON(manifestFile);
+  await preflightFile(manifestFile,{environment:false,cwd:process.cwd()});
+  assertPlanReviewLedger(manuscript,manifestFile);
+}
 function pendingPipeline(spec,prior) {
   const stages=Object.fromEntries(spec.stages.map(stage=>[stage,{
     status:'pending',
@@ -134,7 +143,7 @@ function pendingPipeline(spec,prior) {
     ...(spec.release_ready_after_stage?{release_ready_after_stage:spec.release_ready_after_stage}:{}),
   };
 }
-export async function finalizeUnfreeze(stateRoot,run,reviewPath) {
+export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFrozenPlan = defaultFrozenPlanValidator } = {}) {
   const c=await runRoot(stateRoot,run);
   return acquire(c.root,async()=>{
     const t=await runRoot(stateRoot,run);
@@ -207,6 +216,8 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath) {
     if(auth.affected_gates.some(gate=>!reviewed.has(gate)||t.manifest.planning_readiness?.gates?.[gate]?.status!=='ready')) throw Error('UNFREEZE_AFFECTED_REVIEW_NOT_READY');
     if(review.architecture_changed===true && (review.senior_technical_plan_review!=='ready'||!review.independent_reviewer_id))throw Error('UNFREEZE_SENIOR_TECHNICAL_REVIEW_REQUIRED');
     if(review.changed_story===true && review.story_review!=='ready')throw Error('UNFREEZE_STORY_REVIEW_REQUIRED');
+    await validateFrozenPlan(join(t.root,'manifest.json'));
+
     // An existing global published candidate cannot prove the new manifest; invalidate every
     // post-publish consumer, preserving all old proof files as historical evidence only.
     const candidateExists=existsSync(join(t.root,'candidate.json'));
