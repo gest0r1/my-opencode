@@ -194,6 +194,20 @@ if (config.instructions != null && (!Array.isArray(config.instructions) || confi
 }
 NODE
 
+# Validate the exact V2 files loaded by pipeline-runtime before committing the generation.
+# A missing command/agent must fail staging, not silently weaken runtime reload checks.
+for required_runtime_file in \
+  plugins/pipeline-runtime.ts \
+  skills/task-management/scripts/pipeline-dispatch.ts \
+  commands/pipeline-run.md \
+  skills/task-management/run-worker-rules.md \
+  agents/OpenStageOrchestrator.md; do
+  [[ -f "$STAGE_CONFIG/$required_runtime_file" ]] || {
+    echo "Ошибка: required V2 runtime file missing: $required_runtime_file" >&2
+    exit 1
+  }
+done
+
 (
   cd "$STAGE_CONFIG"
   bun -e '
