@@ -389,3 +389,31 @@ EOS
 dir="$(run_failure_case)"
 assert_contains "$dir/output.log" 'simulated config installer failure'
 echo 'PASS: failed delivery is fail-closed and keeps the committed state'
+
+# Malformed source refs must be rejected before any state write, including
+# a newline attempting to prepend a duplicate trusted SHA field.
+run_bad_source_ref_case() {
+  local dir="$TMP_ROOT/unsafe-source-ref" rc=0 state previous
+  mkdir -p "$dir"
+  prepare_case "$dir" 2.2.7 "$CONFIG_SHA" "$APP_SHA"
+  state="$dir/home/.local/state/my-opencode/openchamber-v2-install.state"
+  previous="$(cat "$state")"
+  HOME="$dir/home" XDG_STATE_HOME="$dir/home/.local/state" \
+    OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCHAMBER_REF="$APP_SHA" \
+    OPENCODE_CONFIG_SOURCE_REF=$'main\\nconfig_sha=0000000000000000000000000000000000000000' \
+    bash "$CORE" > "$dir/invalid.log" 2>&1 || rc=$?
+  [[ "$rc" -ne 0 ]] || fail 'newline ref was accepted'
+  assert_contains "$dir/invalid.log" 'INSTALL_SOURCE_REF_INVALID'
+  [[ "$(cat "$state")" == "$previous" ]] || fail 'bad ref modified committed state'
+
+  rc=0
+  HOME="$dir/home" XDG_STATE_HOME="$dir/home/.local/state" \
+    OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCHAMBER_REF="$APP_SHA" \
+    OPENCHAMBER_SOURCE_REF=$'feature/v1\\rservice_restart_pending=0' \
+    bash "$CORE" > "$dir/invalid-app.log" 2>&1 || rc=$?
+  [[ "$rc" -ne 0 ]] || fail 'control characters in app source ref were accepted'
+  assert_contains "$dir/invalid-app.log" 'INSTALL_SOURCE_REF_INVALID'
+  [[ "$(cat "$state")" == "$previous" ]] || fail 'bad app ref modified committed state'
+}
+run_bad_source_ref_case
+echo 'PASS: malformed source refs cannot forge install-state fields'
