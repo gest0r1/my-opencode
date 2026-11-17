@@ -54,3 +54,13 @@ test('managed V2 files cannot disappear from provenance via symlink substitution
   assert.equal(verifyProvenance(root, record).status, 'mismatch');
   assert.throws(() => sourceProvenance(root, { revision: 'c'.repeat(40) }), /PROVENANCE_SYMLINK_NOT_ALLOWED/);
 }));
+
+// Replacing an entire managed V2 directory with a link must not silently
+// drop its contents from provenance, even when other managed files remain.
+test('managed V2 directory symlinks fail closed at inventory root', () => withFixture(root => {
+  const record = sourceProvenance(root, { revision: 'd'.repeat(40), release: '2.2.7' });
+  rmSync(path.join(root, 'plugins'), { recursive: true, force: true });
+  symlinkSync('/nonexistent/attacker/plugins', path.join(root, 'plugins'));
+  assert.equal(verifyProvenance(root, record).status, 'mismatch');
+  assert.throws(() => sourceProvenance(root, { revision: 'd'.repeat(40) }), /PROVENANCE_SYMLINK_NOT_ALLOWED/);
+}));
