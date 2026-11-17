@@ -420,6 +420,13 @@ test('O8: mandatory files are never excluded by exact or legacy patterns', () =>
     const result = selectAffectedCommands(commands,cfg,['docs/archive/legacy-note.md',file]);
     assert.deepEqual(result.selected.map(x=>x.index),[0,1,2],file);
   }
+  // A tracked path under docs/ is not automatically a safe input.
+  // Non-Markdown and contract-like Markdown keep the full frozen test set.
+  for (const file of ['docs/archive/runtime-helper.ts','docs/archive/data.json','docs/archive/theme.css',
+    'docs/security/runbook.md','docs/archive/pipeline-run.md']) {
+    const selected = selectAffectedCommands(commands, verifiedIgnoredConfig([file]), [file], [], { verifiedBaseline: true });
+    assert.deepEqual(selected.selected.map(item => item.index), [0,1,2], file);
+  }
   for (const legacy of ['**/*','docs/**','**/*.md',{ pattern:'docs/**',except:['docs/testing/**'] }]) {
     const result = selectAffectedCommands(commands,verifiedIgnoredConfig([legacy]),['docs/archive/legacy-note.md'],[],{verifiedBaseline:true});
     assert.deepEqual(result.selected.map(x=>x.index),[0,1,2],String(legacy));
