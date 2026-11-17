@@ -73,13 +73,25 @@ test('resume marks old handover stale without treating it as authority', async t
 test('handover becomes stale after an in-flight worker lease changes without a state update', async t => {
   const fx = await fixture(t);
   await writeHandover(fx.stateRoot, fx.runId, fx.root);
-  const lease = { pipeline_id: 'app', stage: 'implementation', work_item_id: 'WI-NEW',
-    role: 'CoderAgent', status: 'in_progress', scope: ['src/**'], writes: true };
+  const lease = { pipeline_id: 'app', stage: 'code-review', work_item_id: 'WI-NEW',
+    role: 'CodeReviewer', status: 'in_progress', scope: ['src/**'], writes: true };
   writeLease(fx.runRoot, lease);
   try {
     assert.equal((await checkHandover(fx.stateRoot, fx.runId, fx.root)).status, 'STALE');
   } finally { removeLease(fx.runRoot, lease); }
   assert.equal((await checkHandover(fx.stateRoot, fx.runId, fx.root)).status, 'PASS');
+});
+
+test('completed-stage leases are cleaned instead of creating a false stale handover', async t => {
+  const fx = await fixture(t);
+  await writeHandover(fx.stateRoot, fx.runId, fx.root);
+  const lease = { pipeline_id: 'app', stage: 'implementation', work_item_id: 'WI-COMPLETED',
+    role: 'CoderAgent', status: 'in_progress', scope: ['src/**'], writes: true };
+  writeLease(fx.runRoot, lease);
+  try {
+    assert.equal((await checkHandover(fx.stateRoot, fx.runId, fx.root)).status, 'PASS');
+    assert.equal((await snapshotHandover(fx.stateRoot, fx.runId, fx.root)).active_workers.length, 0);
+  } finally { removeLease(fx.runRoot, lease); }
 });
 
 test('invalid frozen manifest digest cannot produce an apparently authoritative handover', async t => {
