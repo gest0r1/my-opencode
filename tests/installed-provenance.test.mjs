@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -44,4 +44,13 @@ test('stale and missing provenance files report nonzero verification status', ()
   const record = JSON.parse(readFileSync(path.join(root, '.runtime-source.json')));
   assert.equal(record.provenance_status, 'verified-source-revision');
   assert.equal(spawnSync(process.execPath, [cli, 'verify', root]).status, 0);
+}));
+
+test('managed V2 files cannot disappear from provenance via symlink substitution', () => withFixture(root => {
+  const record = sourceProvenance(root, { revision: 'c'.repeat(40), release: '2.2.7' });
+  const file = path.join(root, 'commands/pipeline-run.md');
+  unlinkSync(file);
+  symlinkSync('/nonexistent/attacker/pipeline-run.md', file);
+  assert.equal(verifyProvenance(root, record).status, 'mismatch');
+  assert.throws(() => sourceProvenance(root, { revision: 'c'.repeat(40) }), /PROVENANCE_SYMLINK_NOT_ALLOWED/);
 }));
