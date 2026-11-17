@@ -229,7 +229,7 @@ state_value() {
 }
 if [[ "$(state_value effective_restart_mode)" == defer ]]; then
   sed -i 's/^activation_status=.*/activation_status=pending_restart/' "$STATE"
-  install_journal_event activation pending_restart "config_sha=$CONFIG_SHA" "openchamber_sha=$APP_SHA" reason=deferred_restart
+  install_journal_event activation pending_restart "config_sha=$CONFIG_SHA" "openchamber_sha=$APP_SHA" reason=deferred_restart || true
   echo 'PENDING APPLY: runtime/service restart was deferred to protect the embedded OpenChamber terminal.'
   exit 0
 fi
@@ -292,11 +292,11 @@ opencode_readiness() {
 rollback() {
   local rc=${1:-$?}
   trap - ERR INT TERM
-  oc_rollback_activation
+  oc_rollback_activation || echo 'WARN: activation rollback failed; continue state recovery' >&2
   if [[ -f "$TMP/state.before" ]]; then
-    cp -p "$TMP/state.before" "$STATE"
+    cp -p "$TMP/state.before" "$STATE" || echo 'WARN: previous install state could not be restored' >&2
   else
-    rm -f "$STATE"
+    rm -f "$STATE" || true
   fi
 
   # Restore the previously committed user runtime when possible. There is no
@@ -359,7 +359,7 @@ sed -i -e 's/^service_restart_pending=.*/service_restart_pending=0/' \
   -e 's/^activation_status=.*/activation_status=activated/' \
   -e 's/^installation_status=.*/installation_status=delivered/' "$STATE"
 install_journal_event activation activated "config_ref=$CONFIG_SOURCE_REF" "config_sha=$CONFIG_SHA" \
-  "openchamber_ref=$APP_SOURCE_REF" "openchamber_sha=$APP_SHA" "runtime=$(readlink -f "$OPENCHAMBER_CURRENT")"
+  "openchamber_ref=$APP_SOURCE_REF" "openchamber_sha=$APP_SHA" "runtime=$(readlink -f "$OPENCHAMBER_CURRENT")" || true
 echo "OpenChamber runtime committed: $(readlink -f "$OPENCHAMBER_CURRENT")"
 echo "Autostart enabled for OpenCode and OpenChamber under user $RUNTIME_USER."
 

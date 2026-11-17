@@ -63,6 +63,7 @@ def main():
     require(core, 'bun run --cwd packages/web build', "explicit source fallback")
 
     # Always refresh settings; unchanged binary remains independently reusable.
+    require(config_bootstrap, 'OPENCODE_CONFIG_REF|MY_OPENCODE_REF) continue', 'bootstrap pinned ref cannot be overwritten')
     require(config_bootstrap, 'GENERATION_PATH="scripts/install-opencode-generation.sh"', 'generation installer split')
     require(config_bootstrap, 'export OPENCODE_SKIP_BINARY_INSTALL=1', 'unchanged binary skip')
     require(config_bootstrap, 'contents/$GENERATION_PATH?ref=$CONFIG_SHA', 'exact generation fetch')

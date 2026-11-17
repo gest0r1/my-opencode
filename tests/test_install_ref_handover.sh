@@ -22,11 +22,13 @@ sed -i "s|\$HOME_FAKE|$HOME_FAKE|" "$BIN/getent"
 cat > "$BIN/sudo" <<EOS
 #!/bin/sh
 printf '%s\\n' "\$*" >> "$TRACE"
+case "\$*" in *"gh auth status"*) exit 1 ;; esac
 exit 0
 EOS
 cat > "$BIN/gh" <<EOS
 #!/bin/sh
-if [ "\$1" = auth ]; then exit 0; fi
+if [ "\$1" = auth ] && [ "\$2" = status ]; then exit 0; fi
+if [ "\$1" = auth ] && [ "\$2" = token ]; then echo 'super-secret-token'; exit 0; fi
 case "\$*" in
   *repos/*openchamber-ru/commits/*) echo "$APP_SHA" ;;
   *repos/*my-opencode/commits/*) echo "$CONFIG_SHA" ;;
