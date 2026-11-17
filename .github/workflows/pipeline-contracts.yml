@@ -81,6 +81,7 @@ jobs:
           bash tests/test_agent_installation.sh
           bash tests/test_binary_only_installer.sh
           bash tests/test_incremental_installer.sh
+          bash tests/test_install_ref_handover.sh
           bash tests/test_native_activation.sh
           bash tests/test_openchamber_runtime_store.sh
           bash tests/test_dependency_installer.sh

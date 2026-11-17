@@ -97,7 +97,8 @@ test('actual nested ignored Git read-set invalidates reuse on byte and membershi
   } finally { await rm(fx.cwd, { recursive: true, force: true }); }
 });
 
-test('polluted PATH with a root-owned nvm link fails closed for reuse', async () => {
+test('polluted PATH with a root-owned nvm link fails closed for reuse', async (t) => {
+  if (process.getuid?.() === 0) return t.skip('root can traverse /root; fixture asserts unprivileged access');
   const fx = await fixture();
   try {
     const rootNvm = join(fx.cwd, 'root-nvm');

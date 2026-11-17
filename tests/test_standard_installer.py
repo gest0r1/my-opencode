@@ -41,6 +41,7 @@ def main():
     require(wrapper, 'OPENCHAMBER_REF="$APP_SHA"', "pinned app ref")
     require(wrapper, 'OPENCODE_CONFIG_SOURCE_REF=$REQUESTED_CONFIG_REF', "requested config ref preserved across user switch")
     require(wrapper, 'OPENCHAMBER_SOURCE_REF=$REQUESTED_APP_REF', "requested app ref preserved across user switch")
+    require(wrapper, 'OPENCHAMBER_REF=$REQUESTED_APP_REF', "app ref is forwarded with the pinned SHA")
     require(wrapper, 'OPENCODE_CONFIG_SOURCE_REF|OPENCHAMBER_SOURCE_REF) continue', "mutable refs cannot overwrite pinned refs")
     assert wrapper.index('OPENCHAMBER_REF="$APP_SHA"') < wrapper.index('bash +h "$TMP/install-openchamber-v2-core.sh"')
 

@@ -59,13 +59,14 @@ def main():
             assert not os.readlink(home / ".local/bin" / name).startswith("/root/")
 
         # Polluted PATH with a root-only nvm entry must not win over the usable node dir.
-        polluted = Path(tmp) / "root-nvm"
-        polluted.mkdir()
-        for name in ("node", "npm", "npx"):
-            (polluted / name).symlink_to("/root/.nvm/versions/node/v22.23.2/bin/" + name)
-        result = run(home, tools, str(polluted) + ":")
-        assert result.returncode == 0, result.stderr
-        assert os.readlink(home / ".local/bin/npm") == str(tools / "npm")
+        if os.geteuid() != 0:
+            polluted = Path(tmp) / "root-nvm"
+            polluted.mkdir()
+            for name in ("node", "npm", "npx"):
+                (polluted / name).symlink_to("/root/.nvm/versions/node/v22.23.2/bin/" + name)
+            result = run(home, tools, str(polluted) + ":")
+            assert result.returncode == 0, result.stderr
+            assert os.readlink(home / ".local/bin/npm") == str(tools / "npm")
 
         # No usable npm and no network path: fail closed with a concrete diagnostic.
         bare = Path(tmp) / "bare"

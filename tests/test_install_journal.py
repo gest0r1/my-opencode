@@ -37,7 +37,7 @@ def main():
         assert "token" not in line.lower() and "password" not in line.lower()
 
         # Newlines and tabs cannot forge extra journal records or fields.
-        run(home, 'install_journal_event activation activated "config_ref=main\\nstatus=fake" "note=a\\tb"')
+        run(home, "install_journal_event activation activated $'config_ref=main\nstatus=fake' $'note=a\tb'")
         lines = journal.read_text().splitlines()
         assert len(lines) == 2, lines
         assert "status=fake" not in lines[1] and "\t" not in lines[1]
@@ -54,6 +54,7 @@ def main():
     # Ref provenance survives the sudo user switch and reaches core state.
     assert 'OPENCODE_CONFIG_SOURCE_REF=$REQUESTED_CONFIG_REF' in wrapper
     assert 'OPENCHAMBER_SOURCE_REF=$REQUESTED_APP_REF' in wrapper
+    assert 'OPENCHAMBER_REF=$REQUESTED_APP_REF' in wrapper
     assert 'OPENCODE_CONFIG_SOURCE_REF|OPENCHAMBER_SOURCE_REF) continue' in wrapper
     assert 'install_journal_event install start' in wrapper
     assert 'install_journal_event activation pending_restart' in wrapper

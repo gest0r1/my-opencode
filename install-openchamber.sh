@@ -60,7 +60,8 @@ reexec_as_runtime_user() {
 
   local runtime_uid script_copy rc token name source_file token_file=''
   local -a pass_env=("OPENCODE_CONFIG_REF=$provision_sha" "MY_OPENCODE_REF=$provision_sha"
-    "OPENCODE_CONFIG_SOURCE_REF=$REQUESTED_CONFIG_REF" "OPENCHAMBER_SOURCE_REF=$REQUESTED_APP_REF")
+    "OPENCODE_CONFIG_SOURCE_REF=$REQUESTED_CONFIG_REF" "OPENCHAMBER_SOURCE_REF=$REQUESTED_APP_REF"
+    "OPENCHAMBER_REF=$REQUESTED_APP_REF")
   runtime_uid="$(id -u "$RUNTIME_USER")"
   sudo loginctl enable-linger "$RUNTIME_USER" >/dev/null
   sudo systemctl start "user@${runtime_uid}.service"
@@ -215,7 +216,13 @@ export BUN_INSTALL="$RELEASE_DIR"
 export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:$PATH"
 
 [[ ! -f "$STATE" ]] || cp -p "$STATE" "$TMP/state.before"
-bash +h "$TMP/install-openchamber-v2-core.sh" "$@"
+core_rc=0
+bash +h "$TMP/install-openchamber-v2-core.sh" "$@" || core_rc=$?
+if (( core_rc != 0 )); then
+  install_journal_event install failed "config_ref=$CONFIG_SOURCE_REF" "config_sha=$CONFIG_SHA" \
+    "openchamber_ref=$APP_SOURCE_REF" "openchamber_sha=$APP_SHA" "exit_code=$core_rc" reason=core_failure || true
+  exit "$core_rc"
+fi
 
 state_value() {
   [[ ! -f "$STATE" ]] || sed -n "s/^$1=//p" "$STATE" | head -1
@@ -285,8 +292,6 @@ opencode_readiness() {
 rollback() {
   local rc=${1:-$?}
   trap - ERR INT TERM
-  (( rc == 0 )) || install_journal_event install failed "config_ref=$CONFIG_SOURCE_REF" "config_sha=$CONFIG_SHA" \
-    "openchamber_ref=$APP_SOURCE_REF" "openchamber_sha=$APP_SHA" "exit_code=$rc" reason=rollback
   oc_rollback_activation
   if [[ -f "$TMP/state.before" ]]; then
     cp -p "$TMP/state.before" "$STATE"
@@ -302,6 +307,8 @@ rollback() {
     native_startup || true
     readiness || true
   fi
+  (( rc == 0 )) || install_journal_event install failed "config_ref=$CONFIG_SOURCE_REF" "config_sha=$CONFIG_SHA" \
+    "openchamber_ref=$APP_SOURCE_REF" "openchamber_sha=$APP_SHA" "exit_code=$rc" reason=rollback || true
   exit "$rc"
 }
 trap 'rollback $?' ERR

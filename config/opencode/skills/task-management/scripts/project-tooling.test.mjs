@@ -31,7 +31,8 @@ test('diagnostics distinguish absent, broken, non-executable and failed commands
   } finally {rmSync(f.root, {recursive: true, force: true});}
 });
 
-test('polluted PATH pointing into another user home is never accepted', () => {
+test('polluted PATH pointing into another user home is never accepted', (t) => {
+  if (process.getuid?.() === 0) return t.skip('root can traverse /root; fixture asserts unprivileged access');
   const f = fixture();
   try {
     const rootNvm = join(f.root, 'root-nvm'); mkdirSync(rootNvm);

@@ -62,7 +62,10 @@ ensure_runtime_node() {
 
 ensure_runtime_toolchain() {
   local minimum="${1:-22.0.0}" node_real node_dir tool bundled current wanted
-  ensure_runtime_node "$minimum" || return 1
+  ensure_runtime_node "$minimum" || {
+    echo "RUNTIME_TOOLCHAIN_UNUSABLE: no compatible Node runtime is available at or above $minimum" >&2
+    return 1
+  }
   node_real="$(readlink -f "$(command -v node)")"
   node_dir="$(dirname "$node_real")"
   if ! runtime_tool_usable "$node_dir/npm" || ! runtime_tool_usable "$node_dir/npx"; then

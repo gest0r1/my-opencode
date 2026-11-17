@@ -74,6 +74,7 @@ reexec_as_runtime_user() {
 
   for name in $(compgen -e); do
     case "$name" in
+      OPENCODE_CONFIG_REF|MY_OPENCODE_REF) continue ;;
       OPENCODE_*|OPENCHAMBER_*|MY_OPENCODE_REF|EXPECTED_OPENCHAMBER_VERSION|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
         pass_env+=("$name=${!name}")
         ;;
