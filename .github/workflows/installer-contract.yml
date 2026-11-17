@@ -31,6 +31,8 @@ on:
       - tests/test_runtime_toolchain.py
       - tests/test_node_runtime_floor.py
       - tests/test_install_ref_handover.sh
+      - tests/test_install_ref_state_handover.sh
+      - tests/test_install_rollback.sh
       - tests/test_binary_only_installer.sh
       - tests/test_native_activation.sh
       - tests/test_openchamber_runtime_store.sh
@@ -67,6 +69,8 @@ on:
       - tests/test_runtime_toolchain.py
       - tests/test_node_runtime_floor.py
       - tests/test_install_ref_handover.sh
+      - tests/test_install_ref_state_handover.sh
+      - tests/test_install_rollback.sh
       - tests/test_binary_only_installer.sh
       - tests/test_native_activation.sh
       - tests/test_openchamber_runtime_store.sh
@@ -142,6 +146,8 @@ jobs:
           set -Eeuo pipefail
           bash tests/test_incremental_installer.sh
           bash tests/test_install_ref_handover.sh
+          bash tests/test_install_ref_state_handover.sh
+          bash tests/test_install_rollback.sh
           python3 tests/test_install_journal.py
           python3 tests/test_node_runtime_floor.py
           python3 tests/test_runtime_toolchain.py
