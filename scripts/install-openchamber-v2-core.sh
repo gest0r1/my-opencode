@@ -9,7 +9,16 @@ CONFIG_REF="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
 CONFIG_SOURCE_REF="${OPENCODE_CONFIG_SOURCE_REF:-$CONFIG_REF}"
 APP_REPO="${OPENCHAMBER_REPO:-gest0r1/openchamber-ru}"
 APP_REF="${OPENCHAMBER_REF:-main}"
+# Refs are written verbatim into a line-based state file. Refuse line/field
+# injection (and malformed Git refs) before any install side effect.
+valid_install_source_ref() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$ ]] &&
+    [[ "$1" != *..* && "$1" != *//* && "$1" != */ ]]
+}
 APP_SOURCE_REF="${OPENCHAMBER_SOURCE_REF:-$APP_REF}"
+for source_ref in "$CONFIG_SOURCE_REF" "$APP_SOURCE_REF" "$CONFIG_REF" "$APP_REF"; do
+  valid_install_source_ref "$source_ref" || { echo 'INSTALL_SOURCE_REF_INVALID: unsafe source or resolved ref' >&2; exit 2; }
+done
 OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.2.7}"
 EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.7.1}"
 OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}"
