@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 wrapper = (ROOT / "install-openchamber.sh").read_text()
 core = (ROOT / "scripts/install-openchamber-v2-core.sh").read_text()
 runtime_store = (ROOT / "scripts/openchamber-runtime-store.sh").read_text()
+journal = (ROOT / "scripts/install-journal.sh").read_text()
 config_bootstrap = (ROOT / "install.sh").read_text()
 config_generation = (ROOT / "scripts/install-opencode-generation.sh").read_text()
 installer = wrapper + "\n" + core
@@ -34,10 +35,13 @@ def main():
             "exact config SHA resolution")
     require(wrapper, 'APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"',
             "exact OpenChamber SHA resolution")
-    require(wrapper, 'install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py', "exact core fetch")
+    require(wrapper, 'install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py install-journal.sh', "exact core fetch")
     require(wrapper, 'contents/scripts/$file?ref=$CONFIG_SHA', "exact runtime helper fetch")
     require(wrapper, 'export OPENCODE_CONFIG_REF="$CONFIG_SHA"', "pinned config ref")
     require(wrapper, 'OPENCHAMBER_REF="$APP_SHA"', "pinned app ref")
+    require(wrapper, 'OPENCODE_CONFIG_SOURCE_REF=$REQUESTED_CONFIG_REF', "requested config ref preserved across user switch")
+    require(wrapper, 'OPENCHAMBER_SOURCE_REF=$REQUESTED_APP_REF', "requested app ref preserved across user switch")
+    require(wrapper, 'OPENCODE_CONFIG_SOURCE_REF|OPENCHAMBER_SOURCE_REF) continue', "mutable refs cannot overwrite pinned refs")
     assert wrapper.index('OPENCHAMBER_REF="$APP_SHA"') < wrapper.index('bash +h "$TMP/install-openchamber-v2-core.sh"')
 
     # 1.x-style independent incremental decisions.
@@ -105,6 +109,22 @@ def main():
             "current symlink")
     require(runtime_store, 'mv -Tf "$link_tmp" "$OPENCHAMBER_CURRENT"', "atomic current publish")
     require(runtime_store, 'oc_rollback_activation()', "runtime rollback")
+
+    # Auditable install provenance and bounded journal.
+    require(core, '"config_ref=$CONFIG_SOURCE_REF"', "config source ref persisted")
+    require(core, '"openchamber_ref=$APP_SOURCE_REF"', "app source ref persisted")
+    require(core, '"installed_at=$(date -u', "install timestamp persisted")
+    require(core, '"installation_status=delivered"', "delivery status persisted")
+    require(core, 'activation_status=$activation_status', "activation status persisted")
+    require(wrapper, 'install_journal_event install start', "journal start")
+    require(wrapper, 'install_journal_event activation pending_restart', "deferred activation is distinct")
+    require(wrapper, 'install_journal_event activation activated', "successful activation is distinct")
+    require(wrapper, 'install_journal_event install failed', "rollback is journaled")
+    require(journal, 'umask 077', "journal private creation")
+    require(journal, 'chmod 600 "$file"', "journal private mode")
+    require(journal, 'INSTALL_JOURNAL_MAX_BYTES', "journal bounded rotation")
+    forbid(journal, 'GH_TOKEN', "journal never records tokens")
+    forbid(journal, 'OPENCHAMBER_UI_PASSWORD', "journal never records passwords")
 
     print("PASS: V2 installer contract is incremental, ref-pinned, atomic and v2-only")
 

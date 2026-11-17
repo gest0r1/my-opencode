@@ -166,7 +166,7 @@ gh api -H 'Accept: application/vnd.github.raw' \
 gh api -H 'Accept: application/vnd.github.raw' \
   "repos/$REPO/contents/$BOOTSTRAP_PATH?ref=$CONFIG_SHA" > "$BOOTSTRAP"
 source "$BOOTSTRAP"
-ensure_runtime_node
+ensure_runtime_toolchain
 
 OPENCODE_BIN="$HOME/.opencode/bin/opencode"
 if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" != 1 &&

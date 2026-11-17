@@ -5,16 +5,19 @@ export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:/usr/local/bin:
 export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
 cd "$HOME"
 
-ensure_runtime_node() {
-  local minimum="${1:-22.0.0}"
-  local check='const a=process.versions.node.split(".").map(Number),b=process.argv[1].split(".").map(Number);process.exit(a[0]>b[0]||(a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>=b[2])))?0:1)'
-  if command -v node >/dev/null 2>&1 && node -e "$check" "$minimum" 2>/dev/null; then return 0; fi
-  # Pin the supported LTS bootstrap; an existing compatible runtime is retained.
+install_pinned_runtime_node() {
+  # Install the pinned LTS into the user's own prefix. Never touch system Node.
   local version=24.21.0 arch archive tmp dest
   case "$(uname -m)" in x86_64) arch=x64;; *) echo 'Node bootstrap supports Linux x86_64 only' >&2; return 1;; esac
+  dest="$HOME/.local/share/my-opencode/node-v$version"
+  if [[ -x "$dest/bin/node" && -f "$dest/bin/npm" && -f "$dest/bin/npx" ]]; then
+    mkdir -p "$HOME/.local/bin"
+    for tool in node npm npx; do ln -sfn "$dest/bin/$tool" "$HOME/.local/bin/$tool"; done
+    hash -r
+    return 0
+  fi
   archive="node-v$version-linux-$arch.tar.xz"
   tmp="$(mktemp -d)"
-  dest="$HOME/.local/share/my-opencode/node-v$version"
   if ! (
     cd "$tmp"
     curl -fsSLO "https://nodejs.org/dist/v$version/$archive" || exit 1
@@ -24,14 +27,74 @@ ensure_runtime_node() {
     sha256sum -c checksum || exit 1
     tar -xJf "$archive" || exit 1
     "node-v$version-linux-$arch/bin/node" --version || exit 1
+    [[ -f "node-v$version-linux-$arch/bin/npm" && -f "node-v$version-linux-$arch/bin/npx" ]] || exit 1
     mkdir -p "$(dirname "$dest")" "$HOME/.local/bin" || exit 1
     [[ ! -e "$dest" ]] || { echo 'Incomplete Node bootstrap exists; inspect before retry' >&2; exit 1; }
     mv "node-v$version-linux-$arch" "$dest" || exit 1
-    for tool in node npm npx; do ln -sfn "$dest/bin/$tool" "$HOME/.local/bin/$tool" || exit 1; done
   ); then rm -rf -- "$tmp"; return 1; fi
   rm -rf -- "$tmp"
+  for tool in node npm npx; do ln -sfn "$dest/bin/$tool" "$HOME/.local/bin/$tool" || return 1; done
   hash -r
-  node -e "$check" "$minimum"
+}
+
+node_version_ok() {
+  local minimum="${1:-22.0.0}"
+  local check='const a=process.versions.node.split(".").map(Number),b=process.argv[1].split(".").map(Number);process.exit(a[0]>b[0]||(a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>=b[2])))?0:1)'
+  command -v node >/dev/null 2>&1 && node -e "$check" "$minimum" 2>/dev/null
+}
+
+# A tool is usable only when it executes for this user and does not resolve into
+# another user's home (the classic /usr/local/bin -> /root/.nvm failure).
+runtime_tool_usable() {
+  local tool=$1 target
+  [[ -n "$tool" && ( -f "$tool" || -L "$tool" ) && -x "$tool" ]] || return 1
+  target="$(readlink -f "$tool" 2>/dev/null)" || return 1
+  [[ "$target" != /root/* ]] || return 1
+  "$tool" --version >/dev/null 2>&1
+}
+
+ensure_runtime_node() {
+  local minimum="${1:-22.0.0}"
+  if node_version_ok "$minimum"; then return 0; fi
+  install_pinned_runtime_node
+  node_version_ok "$minimum"
+}
+
+ensure_runtime_toolchain() {
+  local minimum="${1:-22.0.0}" node_real node_dir tool bundled current wanted
+  ensure_runtime_node "$minimum" || return 1
+  node_real="$(readlink -f "$(command -v node)")"
+  node_dir="$(dirname "$node_real")"
+  if ! runtime_tool_usable "$node_dir/npm" || ! runtime_tool_usable "$node_dir/npx"; then
+    bundled="$HOME/.local/share/my-opencode/node-v24.21.0/bin"
+    if runtime_tool_usable "$bundled/npm" && runtime_tool_usable "$bundled/npx"; then
+      node_dir="$bundled"
+    else
+      install_pinned_runtime_node || {
+        echo "RUNTIME_TOOLCHAIN_UNUSABLE: npm/npx are not executable beside $(command -v node) and the pinned user-local runtime could not be installed" >&2
+        return 1
+      }
+      node_dir="$HOME/.local/share/my-opencode/node-v24.21.0/bin"
+    fi
+  fi
+  mkdir -p "$HOME/.local/bin"
+  for tool in npm npx; do
+    [[ -e "$node_dir/$tool" ]] || {
+      echo "RUNTIME_TOOLCHAIN_UNUSABLE: $tool missing beside $(command -v node) and no compatible pinned runtime is available" >&2
+      return 1
+    }
+    current="$(readlink -f "$HOME/.local/bin/$tool" 2>/dev/null || true)"
+    wanted="$(readlink -f "$node_dir/$tool")"
+    if [[ "$current" == "$wanted" ]] && runtime_tool_usable "$HOME/.local/bin/$tool"; then continue; fi
+    ln -sfn "$node_dir/$tool" "$HOME/.local/bin/$tool" || return 1
+  done
+  hash -r
+  for tool in npm npx; do
+    runtime_tool_usable "$HOME/.local/bin/$tool" || {
+      echo "RUNTIME_TOOLCHAIN_UNUSABLE: user-local $tool is not executable" >&2
+      return 1
+    }
+  done
 }
 
 ensure_claude_cli() {

@@ -6,8 +6,10 @@ set -Eeuo pipefail
 
 CONFIG_REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 CONFIG_REF="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
+CONFIG_SOURCE_REF="${OPENCODE_CONFIG_SOURCE_REF:-$CONFIG_REF}"
 APP_REPO="${OPENCHAMBER_REPO:-gest0r1/openchamber-ru}"
 APP_REF="${OPENCHAMBER_REF:-main}"
+APP_SOURCE_REF="${OPENCHAMBER_SOURCE_REF:-$APP_REF}"
 OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.2.7}"
 EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.7.1}"
 OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}"
@@ -145,9 +147,16 @@ validate_bind_host() {
 write_state() {
   local runtime_pending=$1 service_pending=$2 package_source=$3 package_fingerprint=$4 package_sha256=$5
   local tmp="${STATE}.tmp.${BASHPID}"
+  local activation_status=pending
+  [[ "$effective_restart_mode" != defer && "$runtime_pending" == 0 && "$service_pending" == 0 ]] || activation_status=pending_restart
   printf '%s\n' \
+    "config_ref=$CONFIG_SOURCE_REF" \
     "config_sha=$CONFIG_SHA" \
+    "openchamber_ref=$APP_SOURCE_REF" \
     "openchamber_sha=$APP_SHA" \
+    "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "installation_status=delivered" \
+    "activation_status=$activation_status" \
     "package_source_sha=$package_source" \
     "package_fingerprint=$package_fingerprint" \
     "package_sha256=$package_sha256" \

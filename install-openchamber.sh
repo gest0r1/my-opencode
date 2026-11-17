@@ -12,6 +12,8 @@ for cmd in id getent cut; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing prerequisite: $cmd" >&2; exit 1; }
 done
 
+REQUESTED_CONFIG_REF="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
+REQUESTED_APP_REF="${OPENCHAMBER_REF:-main}"
 CURRENT_USER="$(id -un)"
 RUNTIME_HOME="$(getent passwd "$RUNTIME_USER" | cut -d: -f6 || true)"
 [[ -n "$RUNTIME_HOME" || "$CURRENT_USER" != "$RUNTIME_USER" ]] || {
@@ -36,7 +38,7 @@ reexec_as_runtime_user() {
   # helper from the same immutable configuration SHA.
   local provision_dir provision_sha provision_repo provision_ref file
   provision_repo="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
-  provision_ref="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
+  provision_ref="$REQUESTED_CONFIG_REF"
   provision_sha="$(gh api "repos/$provision_repo/commits/$provision_ref" --jq .sha)"
   [[ "$provision_sha" =~ ^[a-f0-9]{40}$ ]] || exit 1
   provision_dir="$(mktemp -d /tmp/my-opencode-provision.XXXXXXXX)"
@@ -57,7 +59,8 @@ reexec_as_runtime_user() {
   }
 
   local runtime_uid script_copy rc token name source_file token_file=''
-  local -a pass_env=("OPENCODE_CONFIG_REF=$provision_sha" "MY_OPENCODE_REF=$provision_sha")
+  local -a pass_env=("OPENCODE_CONFIG_REF=$provision_sha" "MY_OPENCODE_REF=$provision_sha"
+    "OPENCODE_CONFIG_SOURCE_REF=$REQUESTED_CONFIG_REF" "OPENCHAMBER_SOURCE_REF=$REQUESTED_APP_REF")
   runtime_uid="$(id -u "$RUNTIME_USER")"
   sudo loginctl enable-linger "$RUNTIME_USER" >/dev/null
   sudo systemctl start "user@${runtime_uid}.service"
@@ -74,7 +77,8 @@ reexec_as_runtime_user() {
 
   for name in $(compgen -e); do
     case "$name" in
-      OPENCODE_*|OPENCHAMBER_*|MY_OPENCODE_REF|EXPECTED_OPENCHAMBER_VERSION|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
+      OPENCODE_CONFIG_REF|MY_OPENCODE_REF|OPENCHAMBER_REF|OPENCODE_CONFIG_SOURCE_REF|OPENCHAMBER_SOURCE_REF) continue ;;
+      OPENCODE_*|OPENCHAMBER_*|EXPECTED_OPENCHAMBER_VERSION|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
         pass_env+=("$name=${!name}")
         ;;
     esac
@@ -139,8 +143,10 @@ fi
 
 CONFIG_REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
 CONFIG_REF="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
+CONFIG_SOURCE_REF="${OPENCODE_CONFIG_SOURCE_REF:-$REQUESTED_CONFIG_REF}"
 APP_REPO="${OPENCHAMBER_REPO:-gest0r1/openchamber-ru}"
 APP_REF="${OPENCHAMBER_REF:-main}"
+APP_SOURCE_REF="${OPENCHAMBER_SOURCE_REF:-$REQUESTED_APP_REF}"
 export OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.2.7}"
 export OPENCHAMBER_EXPECTED_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.7.1}"
 EXPECTED_OPENCHAMBER_VERSION="$OPENCHAMBER_EXPECTED_VERSION"
@@ -150,7 +156,7 @@ STATE="$STATE_ROOT/openchamber-v2-install.state"
 HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"
 PORT="${OPENCHAMBER_BIND_PORT:-3000}"
 
-for cmd in gh mktemp readlink ln mv cp rm sed flock curl systemctl; do
+for cmd in gh mktemp readlink ln mv cp rm sed flock curl systemctl date stat; do
   command -v "$cmd" >/dev/null || { echo "Missing prerequisite: $cmd" >&2; exit 1; }
 done
 
@@ -164,15 +170,17 @@ APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"
   exit 1
 }
 
-for file in install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py; do
+for file in install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py install-journal.sh; do
   gh api -H 'Accept: application/vnd.github.raw' \
     "repos/$CONFIG_REPO/contents/scripts/$file?ref=$CONFIG_SHA" > "$TMP/$file"
 done
 
 source "$TMP/bootstrap-runtime-tools.sh"
-ensure_runtime_node 24.14.0
+ensure_runtime_toolchain 24.14.0
+source "$TMP/install-journal.sh"
 
 export OPENCODE_CONFIG_REF="$CONFIG_SHA" MY_OPENCODE_REF="$CONFIG_SHA" OPENCHAMBER_REF="$APP_SHA"
+export OPENCODE_CONFIG_SOURCE_REF="$CONFIG_SOURCE_REF" OPENCHAMBER_SOURCE_REF="$APP_SOURCE_REF"
 export EXPECTED_OPENCHAMBER_VERSION OPENCHAMBER_RUNTIME_ROOT
 source "$TMP/openchamber-runtime-store.sh"
 oc_runtime_init
@@ -180,6 +188,10 @@ oc_runtime_init
 mkdir -p "$STATE_ROOT"
 exec 8>"$STATE_ROOT/openchamber-v2-atomic.lock"
 flock -x 8
+
+install_journal_event install start "config_ref=$CONFIG_SOURCE_REF" "config_sha=$CONFIG_SHA" \
+  "openchamber_ref=$APP_SOURCE_REF" "openchamber_sha=$APP_SHA" \
+  "restart_mode=${OPENCHAMBER_RESTART_MODE:-auto}"
 
 # Preserve native configuration; explicit caller values win.
 NATIVE_ENV="$HOME/.config/openchamber/startup.env"
@@ -209,6 +221,8 @@ state_value() {
   [[ ! -f "$STATE" ]] || sed -n "s/^$1=//p" "$STATE" | head -1
 }
 if [[ "$(state_value effective_restart_mode)" == defer ]]; then
+  sed -i 's/^activation_status=.*/activation_status=pending_restart/' "$STATE"
+  install_journal_event activation pending_restart "config_sha=$CONFIG_SHA" "openchamber_sha=$APP_SHA" reason=deferred_restart
   echo 'PENDING APPLY: runtime/service restart was deferred to protect the embedded OpenChamber terminal.'
   exit 0
 fi
@@ -271,6 +285,8 @@ opencode_readiness() {
 rollback() {
   local rc=${1:-$?}
   trap - ERR INT TERM
+  (( rc == 0 )) || install_journal_event install failed "config_ref=$CONFIG_SOURCE_REF" "config_sha=$CONFIG_SHA" \
+    "openchamber_ref=$APP_SOURCE_REF" "openchamber_sha=$APP_SHA" "exit_code=$rc" reason=rollback
   oc_rollback_activation
   if [[ -f "$TMP/state.before" ]]; then
     cp -p "$TMP/state.before" "$STATE"
@@ -332,7 +348,11 @@ oc_commit_activation
 trap - ERR INT TERM
 
 # Core metadata is committed only after native startup readiness.
-sed -i 's/^service_restart_pending=.*/service_restart_pending=0/' "$STATE"
+sed -i -e 's/^service_restart_pending=.*/service_restart_pending=0/' \
+  -e 's/^activation_status=.*/activation_status=activated/' \
+  -e 's/^installation_status=.*/installation_status=delivered/' "$STATE"
+install_journal_event activation activated "config_ref=$CONFIG_SOURCE_REF" "config_sha=$CONFIG_SHA" \
+  "openchamber_ref=$APP_SOURCE_REF" "openchamber_sha=$APP_SHA" "runtime=$(readlink -f "$OPENCHAMBER_CURRENT")"
 echo "OpenChamber runtime committed: $(readlink -f "$OPENCHAMBER_CURRENT")"
 echo "Autostart enabled for OpenCode and OpenChamber under user $RUNTIME_USER."
 
