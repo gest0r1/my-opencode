@@ -128,6 +128,17 @@ def main():
     forbid(journal, 'GH_TOKEN', "journal never records tokens")
     forbid(journal, 'OPENCHAMBER_UI_PASSWORD', "journal never records passwords")
 
+    # Managed commands must never execute a CLI from root's private home.
+    # A prose-only prohibition in pipeline-plan.md is intentionally allowed.
+    command_dir = ROOT / 'config/opencode/command'
+    for command in sorted(command_dir.glob('*.md')):
+        for lineno, line in enumerate(command.read_text().splitlines(), 1):
+            if '/root/.config/opencode/' in line and 'never hard-code' not in line:
+                raise AssertionError(f"{command.relative_to(ROOT)}:{lineno}: hard-coded root CLI path")
+    require((command_dir / 'pipeline-run.md').read_text(),
+            'node $HOME/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs sync <run-id>',
+            'GitHub outbox sync uses runtime HOME')
+
     print("PASS: V2 installer contract is incremental, ref-pinned, atomic and v2-only")
 
 
