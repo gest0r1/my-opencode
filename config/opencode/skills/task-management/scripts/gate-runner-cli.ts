@@ -17,6 +17,7 @@ import { planProbeInputDigest, requirePlanProbeManifestPath } from './plan-probe
 import { verifyDeployedServiceGate } from './dev-deploy-cli.ts';
 import { artifactDigest, outputProof, verifyOutputProof } from './build-output-proof.mjs';
 import { runLifecycleCommand } from './gate-lifecycle.mjs';
+import { classifyGate } from './gate-classification.mjs';
 
 type PipelineSpec = {
   id: string;
@@ -59,7 +60,6 @@ const MAX_CAPTURE = 256 * 1024;
 const SHA = /^[0-9a-f]{40}$/i;
 const SHA256 = /^[0-9a-f]{64}$/i;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const RUNTIME_GATE = /(runtime|deploy|release|smoke|install)/i;
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
@@ -167,6 +167,20 @@ async function acquireGateLocks(stateRoot: string, runId: string, gateLock: stri
   try {
     if (runtimeLocks.length) visible = await acquireLockFiles(join(resolve(stateRoot), '.runtime-locks'), runtimeLocks.map(name => lockEntry(name, runId)));
   } catch (error) { await lane.release(); throw new GateRunnerError(`runtime target is locked: ${String((error as Error)?.message ?? error)}`); }
+  // Close the gap between initial manifest validation and late pure-gate lock
+  // acquisition: never execute commands after an owner starts plan unfreeze.
+  try {
+    await access(join(resolve(stateRoot), runId, 'planning/unfreeze-active.json'));
+    await visible?.release();
+    await lane.release();
+    throw new GateRunnerError('PLAN_UNFREEZE_IN_PROGRESS');
+  } catch (error) {
+    if (error instanceof GateRunnerError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      await visible?.release(); await lane.release();
+      throw error;
+    }
+  }
   return async () => { await visible?.release(); await lane.release(); };
 }
 
@@ -309,8 +323,8 @@ async function planProbe(args: string[]): Promise<void> {
   const commands = manifest.gate_profiles?.[pipeline.profile]?.[gate];
   if (!Array.isArray(commands) || commands.length === 0) throw new GateRunnerError('no executable gate commands: profile=' + pipeline.profile + ' gate=' + gate);
   validateGateTesting(manifest);
-  if (!isPrePublishGate(manifest, pipeline.profile, gate)) throw new GateRunnerError('PLAN_PROBE_UNSUPPORTED: ' + gate + ' is not a pre-publish local gate');
   if (commands.some(command => command.includes('{candidate_sha}'))) throw new GateRunnerError('PLAN_PROBE_UNSUPPORTED: ' + pipeline.profile + '/' + gate + ' uses {candidate_sha}');
+  if (!isPrePublishGate(manifest, pipeline.profile, gate)) throw new GateRunnerError('PLAN_PROBE_UNSUPPORTED: ' + gate + ' is not a pre-publish local gate');
   const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
   const invocations: Invocation[] = commands.map((command, index) => {
     const tokens = tokenizeCommand(command);
@@ -458,6 +472,9 @@ async function main(): Promise<void> {
     throw new GateRunnerError('run has no frozen manifest metadata; re-plan with current stage-cli');
   }
 
+  await access(join(resolve(stateRoot), runId, 'planning/unfreeze-active.json')).then(() => {
+    throw new GateRunnerError('PLAN_UNFREEZE_IN_PROGRESS');
+  }, () => {});
   const manifestContent = await readFile(state.manifest_file, 'utf8');
   if (sha256(manifestContent) !== state.manifest_sha256) throw new GateRunnerError('frozen manifest hash mismatch');
   const manifest = resolveGateTestingFile(JSON.parse(manifestContent), state.manifest_file) as Manifest;
@@ -473,7 +490,8 @@ async function main(): Promise<void> {
   validateGateTesting(manifest);
   const config = manifest.gate_testing?.[pipeline.profile]?.[gate];
   const lifecycle = config?.lifecycle;
-  if (advisory && (RUNTIME_GATE.test(gate) || lifecycle)) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
+  const classification = classifyGate(gate, config, commands);
+  if (advisory && !classification.advisoryAllowed) throw new GateRunnerError('advisory checks cannot run runtime/deployment/install gates');
   if (advisory && (['candidate', 'candidate-contour', 'build-output', 'deployed-service'].includes(config?.input_kind) || config?.artifact_output)) {
     throw new GateRunnerError('candidate/build-output/deployed-service or artifact-producing gates cannot be advisory');
   }
@@ -580,7 +598,7 @@ async function main(): Promise<void> {
   // One held RUN lane lock covers the cheap preflight and all ensuing gate
   // work. A failing preflight does not allocate a numbered attempt or scratch.
   const gateLock = `gate:${runId}:${pipelineId}:${gate}`;
-  const runtimeGate = RUNTIME_GATE.test(gate) || Boolean(lifecycle);
+  const runtimeGate = classification.runtime;
   const releaseLocks = [...(runtimeGate ? pipeline.runtime_locks ?? [] : []), gateLock];
   // Pure gates keep their original late lock acquisition, so hashing does
   // not serialize other invocations of the same lane. Live RUN alone holds
@@ -679,12 +697,14 @@ async function main(): Promise<void> {
   if (affected) {
     const failures = (previous?.results ?? []).filter((result: any) => result.exit_code !== 0).map((result: any) => result.command_index);
     const known = baseline?.files && typeof baseline.files === 'object' ? baseline.files : null;
-    const impact = selectAffectedCommands(commands, config, snapshot?.changed, failures, { isNew: (file: string) => Boolean(known) && !(file in known) });
+    const impact = selectAffectedCommands(commands, config, snapshot?.changed, failures, { verifiedBaseline: Boolean(known), isNew: (file: string) => Boolean(known) && !(file in known) });
     selected = impact.selected; selectionReason = impact.reason; deferred = impact.deferred;
     // Only coordinator commands are impacted: the worker has nothing to run, and the evidence says
     // so explicitly; the wave gate and the final complete gate run those commands.
-    if (!selected.length) selectionReason = `deferred to coordinator: commands ${deferred.join(', ')}`;
+    if (!selected.length && deferred.length) selectionReason = `deferred to coordinator: commands ${deferred.join(', ')}`;
   }
+  const incrementalSelectionStatus = affected && !selected.length && !deferred.length &&
+    selectionReason === 'only verified ignored inputs changed' ? 'not_applicable' : 'selected';
   const invocations = selected.map(item => {
     const tokens = substituteCandidate(tokenizeCommand(item.command), candidateSha)
       .map(token => token.replaceAll('{artifact_path}', buildOutputInput?.artifactPath ?? '{artifact_path}'));
@@ -782,11 +802,20 @@ async function main(): Promise<void> {
   // Keep reuse for pure commands from the same gate, but always establish fresh live evidence.
   const liveCommandIndexes = new Set(liveIndexes(config));
   const canReuseCommand = (index: number) => !config?.artifact_output && !['build-output', 'deployed-service'].includes(config?.input_kind) && !liveCommandIndexes.has(index) && !lifecycle;
-  const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || RUNTIME_GATE.test(gate) || lifecycle || !snapshot?.digest || !environmentDigest ? new Map()
+  const reusable = args.includes('--no-reuse') || baseProbe || hypothesis || usesCandidate || !classification.reuseAllowed || lifecycle || !snapshot?.digest || !environmentDigest ? new Map()
     : await findReusableResults({ stateRoot: resolve(stateRoot), runId, gate, sourceDigest: snapshot.digest, environmentDigest,
       selected: invocations.filter(item => canReuseCommand(item.index))
         .map(item => ({ index: item.index, command: item.command, test_files: item.test_files })) });
-  if (environmentDigest) {
+  // Only repeat expensive identity hashing before *reusing* results. A cold gate
+  // has no PASS to accept: its final post-execution identity check still runs.
+  // Never use path/mtime/ino as a substitute for a fresh digest on reuse.
+  const impactReuseCandidate = !lifecycle && Boolean(environmentDigest) && Boolean(treeCopy) &&
+    !args.includes('--no-reuse') && !hypothesis &&
+    previous?.status === 'PASS' && previous?.snapshot?.status === 'used' &&
+    SHA.test(previous.snapshot.commit ?? '') &&
+    previous.manifest_sha256 === state.manifest_sha256 &&
+    previous.environment_digest === environmentDigest;
+  if (environmentDigest && (reusable.size > 0 || impactReuseCandidate)) {
     let freshInputs: string[] | null = null;
     try { freshInputs = reuseLocalInputs(originalCwd); }
     catch { /* a failed input inventory invalidates reusable evidence */ }
@@ -807,8 +836,7 @@ async function main(): Promise<void> {
   // A gate that passed on an earlier snapshot and runs again (its lane files moved after it, or a plain
   // rerun) repeats only the commands that the changes between the two snapshots reach through the frozen
   // impact map; the others keep their PASS. Unmapped and dependency changes reach every command.
-  if (!lifecycle && environmentDigest && treeCopy && !args.includes('--no-reuse') && !hypothesis && previous?.status === 'PASS' && previous.snapshot?.status === 'used' &&
-      SHA.test(previous.snapshot.commit ?? '') && previous.manifest_sha256 === state.manifest_sha256 && previous.environment_digest === environmentDigest) {
+  if (impactReuseCandidate && environmentDigest) {
     const diff = await runInvocation('git', ['diff', '--name-only', '-z', '--no-renames', previous.snapshot.commit, treeCopy.commit, '--'], originalCwd, gitReadEnv({}), 30);
     if (diff.exit_code === 0 && !diff.truncated) {
       const changed = diff.stdout.split('\0').filter(Boolean);
@@ -1015,7 +1043,7 @@ async function main(): Promise<void> {
         build_output_input: buildOutputInput ? buildOutputEvidence : null,
         reuse_identity_metrics: reuseIdentityMetrics, reused_from: reuse?.path ?? null,
         hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])],
-        selection_reason: selectionReason, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
+        selection_reason: selectionReason, incremental_selection_status: incrementalSelectionStatus, deferred_to_coordinator: deferred, base_probe: probe, source_digest: snapshot?.digest ?? null, scoped_source_digest: snapshot?.scoped_digest ?? null,
         changed_paths: snapshot?.changed ?? null,
         started_at: startedAt, completed_at: new Date().toISOString(), duration_ms: Date.now() - Date.parse(startedAt),
         live_postgres: liveEvidence ?? resource?.evidence ?? null, lifecycle: lifecycleEvidence, cleanup_complete: lifecycle ? lifecycleEvidence.length === invocations.length && lifecycleEvidence.every(item => item.cleanup_complete === true) : cleanupComplete, heavy_slot: heavy, heavy_slot_wait_ms: slotWaitMs, live_slot_wait_ms: liveWaitMs,
@@ -1027,7 +1055,9 @@ async function main(): Promise<void> {
       await writeFile(join(resolve(stateRoot), runId, 'reuse-metrics', 'gates.jsonl'), `${JSON.stringify({ timestamp: new Date().toISOString(),
         event: 'gate_run', run_id: runId, pipeline_id: pipelineId, gate, work_item_id: workItemId ?? null, purpose: advisory ? 'advisory' : 'authoritative',
         mode: baseProbe ? 'base_probe' : coordinator ? 'coordinator' : testFiles.length ? 'focus' : affected ? 'affected' : selection >= 0 ? 'command' : 'complete',
-        status, duration_ms: Date.now() - Date.parse(startedAt), commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused: Boolean(reuse) })}\n`, { encoding: 'utf8', flag: 'a' });
+        status, duration_ms: Date.now() - Date.parse(startedAt), heavy_slot_wait_ms: slotWaitMs, live_slot_wait_ms: liveWaitMs,
+         command_duration_ms: results.reduce((sum: number, item: any) => sum + Number(item.duration_ms ?? 0), 0),
+         commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused: Boolean(reuse) })}\n`, { encoding: 'utf8', flag: 'a' });
       if (advisory && fingerprint && status !== 'INTERRUPTED') {
         ledger.attempts[fingerprint] = { status, hypothesis_hashes: [...new Set([...previousHypotheses, ...(hypothesis ? [hypothesis] : [])])] };
         await writeFile(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8');
@@ -1036,7 +1066,7 @@ async function main(): Promise<void> {
   }
   if (failure) throw failure;
   console.log(JSON.stringify({ status, gate, pipeline_id: pipelineId, work_item_id: workItemId ?? null, candidate_sha: candidateSha ?? null, evidence: evidenceFile,
-    heavy_slot_wait_ms: slotWaitMs, selection_reason: selectionReason, commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused_from: reuse?.path ?? null }));
+    heavy_slot_wait_ms: slotWaitMs, selection_reason: selectionReason, incremental_selection_status: incrementalSelectionStatus, commands_run: results.filter(item => !item.reused_from).length, commands_reused: reusable.size, reused_from: reuse?.path ?? null }));
   } finally { await release(); }
 }
 

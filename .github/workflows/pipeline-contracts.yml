@@ -70,6 +70,19 @@ jobs:
       - name: Install pinned V2 runtime for behavioral tests
         run: npm install --prefix config/opencode --ignore-scripts --no-package-lock --no-save tsx@4.23.15
 
+      - name: Verify permanent installer contracts
+        run: |
+          python3 tests/test_standard_installer.py
+          python3 tests/test_runtime_user_install_contract.py
+          python3 tests/test_runtime_processes.py
+          bash tests/test_agent_installation.sh
+          bash tests/test_binary_only_installer.sh
+          bash tests/test_incremental_installer.sh
+          bash tests/test_native_activation.sh
+          bash tests/test_openchamber_runtime_store.sh
+          bash tests/test_dependency_installer.sh
+          bash tests/test_generation_timeout.sh
+          node --test tests/test_user_plugins.mjs tests/generation-state.test.mjs tests/trusted-paths.test.mjs tests/installed-provenance.test.mjs tests/opencode-v2-runtime-layout.test.mjs
       - name: Run pipeline contract tests
         env:
           NODE_NO_WARNINGS: '1'
@@ -101,8 +114,12 @@ jobs:
             config/opencode/skills/task-management/scripts/owner-amendment-git-gate.test.mjs \
             config/opencode/skills/task-management/scripts/gate-lifecycle.test.mjs \
             config/opencode/skills/task-management/scripts/gate-runner-cli.test.mjs \
+            config/opencode/skills/task-management/scripts/gate-classification.test.mjs \
+            config/opencode/skills/task-management/scripts/gate-reuse-identity.test.mjs \
+            config/opencode/skills/task-management/scripts/pipeline-unfreeze-cli.test.mjs \
             config/opencode/skills/task-management/scripts/legacy-live-preflight-v067.test.mjs \
             config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs \
+            config/opencode/skills/task-management/scripts/gate-testing-freeze-ignored.test.mjs \
             config/opencode/skills/task-management/scripts/git-worktree-cli.test.mjs \
             config/opencode/skills/task-management/scripts/worktree-refresh.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-replan-cli.test.mjs \
@@ -122,16 +139,3 @@ jobs:
             config/opencode/skills/task-management/scripts/reuse-report.test.mjs \
             config/opencode/skills/task-management/scripts/project-tooling.test.mjs
 
-      - name: Verify permanent installer contracts
-        run: |
-          python3 tests/test_standard_installer.py
-          python3 tests/test_runtime_user_install_contract.py
-          python3 tests/test_runtime_processes.py
-          bash tests/test_agent_installation.sh
-          bash tests/test_binary_only_installer.sh
-          bash tests/test_incremental_installer.sh
-          bash tests/test_native_activation.sh
-          bash tests/test_openchamber_runtime_store.sh
-          bash tests/test_dependency_installer.sh
-          bash tests/test_generation_timeout.sh
-          node --test tests/test_user_plugins.mjs tests/generation-state.test.mjs tests/trusted-paths.test.mjs

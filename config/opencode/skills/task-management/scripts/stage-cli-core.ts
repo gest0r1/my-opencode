@@ -899,6 +899,8 @@ export async function initFromManifest(
 
 export async function validateState(stateRoot: string, runId: string): Promise<PipelineState> {
   const state = await readState(stateRoot, runId);
+  if (await fileExists(join(stateDir(stateRoot, runId), 'planning/unfreeze-active.json')))
+    throw new StageCliError('PLAN_UNFREEZE_IN_PROGRESS: dispatch and stage transitions are blocked until refreeze');
   const source: RulesSource = state.rules_source ?? 'project';
   const effectiveRulesFile = source === 'opencode_default' ? DEFAULT_RULES_PATH : state.rules_file;
   const rules = await loadResolvedRules(effectiveRulesFile, source);

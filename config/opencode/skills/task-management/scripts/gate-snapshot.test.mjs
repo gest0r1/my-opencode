@@ -12,7 +12,7 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
 
 // A git checkout with a two-command gate whose fake pnpm reads src/ in its working directory. The
 // script it runs is passed in by each test; it gets the original checkout as ORIGINAL_ROOT.
-async function snapshotFixture(script) {
+async function snapshotFixture(script, gate = 'build') {
   const root = await mkdtemp(path.join(os.tmpdir(), 'gate-snapshot-'));
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const runId = 'snap-run';
@@ -41,12 +41,12 @@ async function snapshotFixture(script) {
   const manifest = {
     schema_version: 1, run_id: runId,
     git_setup: { base_sha: git('rev-parse', 'HEAD').stdout.trim() },
-    pipelines: [{ id: 'app', stages: ['build'], profile: 'default' }],
-    gate_profiles: { default: { build: [
+    pipelines: [{ id: 'app', stages: [gate], profile: 'default', executors: { [gate]: 'local_gate' } }],
+    gate_profiles: { default: { [gate]: [
       'pnpm exec vitest run --config vitest.unit.ts --passWithNoTests=false',
       'pnpm exec vitest run --config vitest.web.ts --passWithNoTests=false',
     ] } },
-    gate_testing: { default: { build: { impact_groups: [
+    gate_testing: { default: { [gate]: { ...(gate === 'release-check' ? { input_kind: 'tree' } : {}), impact_groups: [
       { inputs: ['src/value.txt'], command_index: 0 },
       { inputs: ['src/other.txt'], command_index: 1 },
     ] } } },
@@ -63,11 +63,11 @@ async function snapshotFixture(script) {
     // NODE_PATH was supplied by the review runner loader, not by this
     // project's actual gate environment. Do not leak its untracked tool path.
     delete env.NODE_PATH;
-    return spawnSync('npx', ['--yes', 'tsx', RUNNER, runId, 'app', 'build', '--state-root', stateRoot, ...(reuse ? [] : ['--no-reuse'])], {
+    return spawnSync('npx', ['--yes', 'tsx', RUNNER, runId, 'app', gate, '--state-root', stateRoot, ...(reuse ? [] : ['--no-reuse'])], {
       cwd: root, encoding: 'utf8', env,
     });
   };
-  return { root, stateRoot, runId, git, runGate, evidence: async () => JSON.parse(await readFile(path.join(stateRoot, runId, 'gates/app-build.json'), 'utf8')) };
+  return { root, stateRoot, runId, git, runGate, evidence: async () => JSON.parse(await readFile(path.join(stateRoot, runId, `gates/app-${gate}.json`), 'utf8')) };
 }
 
 test('a full gate runs on a snapshot of the working tree and leaves the checkout untouched', async () => {
@@ -217,5 +217,22 @@ fs.appendFileSync(path.join(process.env.PIPELINE_SCRATCH_DIR, 'seen.jsonl'), JSO
     assert.equal(evidence.snapshot, null);
     const seen = (await readFile(path.join(evidence.scratch_dir, 'seen.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
     assert.equal(seen[0].cwd, fx.root);
+  } finally { await rm(fx.root, { recursive: true, force: true }); }
+});
+
+test('typed release-check uses isolated tree snapshot despite gate name', async () => {
+  const fx = await snapshotFixture(`
+const fs = require('node:fs');
+if (fs.existsSync('.tmp/pipelines/snap-run/state.json')) process.exit(41);
+fs.appendFileSync(process.env.PIPELINE_SCRATCH_DIR + '/isolated.log', process.cwd() + '\\n');
+`, 'release-check');
+  try {
+    const result = fx.runGate();
+    assert.equal(result.status, 0, result.stderr);
+    const evidence = await fx.evidence();
+    assert.equal(evidence.status, 'PASS');
+    assert.equal(evidence.snapshot.status, 'used');
+    assert.ok(evidence.scratch_dir);
+    assert.equal((await readFile(path.join(evidence.scratch_dir, 'isolated.log'), 'utf8')).trim().split('\\n').length, 2);
   } finally { await rm(fx.root, { recursive: true, force: true }); }
 });

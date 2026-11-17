@@ -194,6 +194,21 @@ if (config.instructions != null && (!Array.isArray(config.instructions) || confi
 }
 NODE
 
+# Validate the exact V2 files loaded by pipeline-runtime before committing the generation.
+# A missing command/agent must fail staging, not silently weaken runtime reload checks.
+for required_runtime_file in \
+  plugins/pipeline-runtime.ts \
+  plugins/runtime-version-files.mjs \
+  skills/task-management/scripts/pipeline-dispatch.ts \
+  commands/pipeline-run.md \
+  skills/task-management/run-worker-rules.md \
+  agents/OpenStageOrchestrator.md; do
+  [[ -f "$STAGE_CONFIG/$required_runtime_file" ]] || {
+    echo "Ошибка: required V2 runtime file missing: $required_runtime_file" >&2
+    exit 1
+  }
+done
+
 (
   cd "$STAGE_CONFIG"
   bun -e '
@@ -213,6 +228,12 @@ NODE
     }
   '
 )
+
+# Write provenance from the staged bytes and the exact downloaded GitHub commit.
+# This replaces the stale source-side .runtime-source.json before the atomic swap.
+node "$SRC/scripts/installed-provenance.mjs" write \
+  "$STAGE_CONFIG" "$REPO" "$CONFIG_SHA" "$OPENCODE_INSTALL_VERSION"
+node "$SRC/scripts/installed-provenance.mjs" verify "$STAGE_CONFIG"
 
 [[ -f "$STAGE_CONFIG/AGENTS.md" ]] || {
   echo "Ошибка: global AGENTS.md missing from staged OpenCode V2 config." >&2

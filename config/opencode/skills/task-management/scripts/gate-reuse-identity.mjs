@@ -19,7 +19,14 @@ function findExecutable(name, env) {
       if (!info.isFile() && !info.isSymbolicLink()) continue;
       accessSync(candidate, constants.X_OK);
       return resolve(candidate);
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    } catch (error) {
+      // A PATH entry that exists as a symlink but has no executable target is
+      // ambiguous: a later executable must not silently authorize PASS reuse.
+      if (error.code === 'ENOENT') {
+        try { if (lstatSync(candidate).isSymbolicLink()) throw new Error(`PATH executable symlink target missing: ${candidate}`); }
+        catch (probe) { if (probe.code !== 'ENOENT') throw probe; }
+      } else throw error;
+    }
   }
   throw new Error(`executable is absent from PATH: ${name}`);
 }

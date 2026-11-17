@@ -131,3 +131,26 @@ test('Corepack routing overrides and a conflicting devEngines pin fail closed fo
     assert.match(conflict.reason, /devEngines\.packageManager/);
   } finally { await rm(fx.cwd, { recursive: true, force: true }); }
 });
+
+test('O6: inaccessible stale Node symlink and PATH/runtime mismatch fail closed', async () => {
+  const fx=await fixture();
+  try {
+    const bin=join(fx.cwd,'shadow-bin');
+    await mkdir(bin);
+    await symlink('/nonexistent/runtime/node',join(bin,'node'));
+    let identity=await resolveReuseIdentity({cwd:fx.cwd,invocations:[fx.invocation],env:{...fx.env,PATH:bin+':'+fx.env.PATH}});
+    assert.equal(identity.digest,null);
+    assert.ok(identity.reason);
+    await rm(join(bin,'node'));
+    await symlink(process.execPath,join(bin,'node'));
+    identity=await resolveReuseIdentity({cwd:fx.cwd,invocations:[fx.invocation],env:{...fx.env,PATH:bin+':'+fx.env.PATH}});
+    assert.ok(identity.digest,identity.reason);
+    const fakeNode=join(bin,'fake-node');
+    await writeFile(fakeNode,'#!/bin/sh\\nexit 0\\n',{mode:0o755});
+    await rm(join(bin,'node'));
+    await symlink(fakeNode,join(bin,'node'));
+    identity=await resolveReuseIdentity({cwd:fx.cwd,invocations:[fx.invocation],env:{...fx.env,PATH:bin+':'+fx.env.PATH}});
+    assert.equal(identity.digest,null);
+    assert.match(identity.reason,/PATH node differs/);
+  } finally { await rm(fx.cwd,{recursive:true,force:true}); }
+});

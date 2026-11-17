@@ -1,7 +1,7 @@
 # Pipeline: краткий навигатор (PLAN → RUN → PR)
 
-> **Нормативный источник, а не этот обзор:** [`command/pipeline-plan.md`](command/pipeline-plan.md)
-> и [`command/pipeline-run.md`](command/pipeline-run.md).
+> **Нормативный источник, а не этот обзор:** [`command/pipeline-plan.md`](commands/pipeline-plan.md)
+> и [`command/pipeline-run.md`](commands/pipeline-run.md).
 > Детерминированные ограничения, formats и проверки реализованы в
 > [`skills/task-management/scripts/`](skills/task-management/scripts/).
 > При противоречии обзора команде или валидатору использовать действующий контракт,
@@ -102,7 +102,7 @@ docs-only задачи. Документационный стандарт опр
 - Переход gate допускается только по `ready` и проверяемым path/SHA;
   full review на freeze, bounded fix/repair, без модели «PASS по словам агента».
 - Scope, destructive/security stop, Git и secrets — правила текущих
-  [PLAN](command/pipeline-plan.md) / [RUN](command/pipeline-run.md).
+  [PLAN](commands/pipeline-plan.md) / [RUN](commands/pipeline-run.md).
 - GitHub audit и PR handoff имеют идемпотентные события, исходные
   требования проверяются заново; PR создаётся без автоматического merge.
 - Токены/время и качество сравнивать на сопоставимых задачах по

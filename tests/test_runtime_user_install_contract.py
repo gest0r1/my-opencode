@@ -58,7 +58,7 @@ def main():
         require(installer, 'XDG_RUNTIME_DIR="/run/user/$runtime_uid"')
         require(installer, 'XDG_CONFIG_HOME="$HOME/.config"')
 
-    require(config_installer, 'OPENCODE_INSTALL_VERSION:-2.2.5')
+    require(config_installer, 'OPENCODE_INSTALL_VERSION:-2.2.7')
     require(config_installer, 'contents/config/systemd/opencode-web.service?ref=$CONFIG_SHA')
     unit = (ROOT / 'config/systemd/opencode-web.service').read_text()
     require(unit, 'opencode serve --port ${OPENCODE_WEB_PORT} --hostname 127.0.0.1')
@@ -67,7 +67,7 @@ def main():
     require(config_installer, 'ensure_claude_cli')
     require(config_installer, 'configure_server_browser')
 
-    require(combined_installer, 'OPENCHAMBER_EXPECTED_VERSION:-2.6.1')
+    require(combined_installer, 'OPENCHAMBER_EXPECTED_VERSION:-2.7.1')
     # --no-env-snapshot keeps OPENCODE_BINARY out of startup.env; the managed binary is pinned in the drop-in.
     require(combined_installer, 'Environment="OPENCODE_BINARY=$OPENCODE_BINARY"')
     require(combined_installer, 'systemctl --user is-enabled --quiet opencode-web.service')

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
@@ -868,7 +869,11 @@ test('schema v2 freezes optional project policy and enforces protected paths', a
 
 test('stage state exposes ready and release_ready milestones before completed', async () => {
   const fx = await fixture('v2-milestones');
-  const stateRoot = path.join(fx.root, '.tmp', 'pipelines-state');
+  const stateRoot = path.join(fx.root, '.tmp', 'pipelines');
+  // Review dispatch validates actual Git source inventory; do not replace the
+  // source-bound CodeReviewer verdict with an unproven stage completion.
+  const git = spawnSync('git', ['init', '-b', 'main'], { cwd: fx.root, encoding: 'utf8' });
+  assert.equal(git.status, 0, git.stderr);
 
   let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
@@ -878,7 +883,18 @@ test('stage state exposes ready and release_ready milestones before completed', 
   const complete = (stage) => {
     let current = run(fx.root, ['start', fx.manifest.run_id, stage, '--pipeline', 'app', '--state-root', stateRoot]);
     assert.equal(current.status, 0, current.stderr);
-    current = run(fx.root, ['complete', fx.manifest.run_id, stage, '--pipeline', 'app', '--state-root', stateRoot, '--json']);
+    let reviewEvidence = [];
+    if (stage.endsWith('review')) {
+      const dispatch = run(fx.root, ['dispatch', fx.manifest.run_id, '--pipeline', 'app', '--stage', stage,
+        '--work-item', stage, '--role', 'CodeReviewer']);
+      assert.equal(dispatch.status, 0, dispatch.stderr);
+      const record = JSON.parse(readFileSync(path.join(stateRoot, fx.manifest.run_id, 'checks', 'review-dispatch', `app--${stage}.json`), 'utf8'));
+      const evidence = path.join(stateRoot, fx.manifest.run_id, 'checks', `ready-${stage}.json`);
+      writeFileSync(evidence, JSON.stringify({ status: 'ready', run_id: fx.manifest.run_id, pipeline_id: 'app', stage,
+        review_dispatch_id: record.review_dispatch_id, review_source_digest: record.source_digest, findings: [] }));
+      reviewEvidence = ['--evidence', evidence];
+    }
+    current = run(fx.root, ['complete', fx.manifest.run_id, stage, '--pipeline', 'app', '--state-root', stateRoot, '--json', ...reviewEvidence]);
     assert.equal(current.status, 0, current.stderr);
     return JSON.parse(current.stdout);
   };

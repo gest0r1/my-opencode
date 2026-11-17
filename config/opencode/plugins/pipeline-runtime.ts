@@ -10,6 +10,7 @@ import { readLeases, removeLease, updateLease, writeLease } from "../skills/task
 import { processAlive } from "../skills/task-management/scripts/runtime-locks.mjs"
 import { computeRunnable } from "../skills/task-management/scripts/stage-cli-core.ts"
 import { writeHandover } from "../skills/task-management/scripts/pipeline-handover.mjs"
+import { runtimeFiles, missingRuntimeFiles, fingerprintRuntimeFiles } from "./runtime-version-files.mjs"
 
 const ELIGIBLE_ROLES = new Set([
   "CoderAgent", "TestEngineer", "BuildAgent",
@@ -362,23 +363,16 @@ function decisionMetric(ctx: RuntimeContext, role: string, decision: "fresh" | "
 // The plugin and the RUN instructions are loaded once, when OpenCode starts. A distribution
 // update during a RUN changes the files on disk but not the running hooks, so the new rules
 // would apply only "on paper". Fingerprint what was loaded and compare it with the disk.
-const RUNTIME_FILES = [
-  fileURLToPath(import.meta.url),
-  fileURLToPath(new URL("../skills/task-management/scripts/pipeline-dispatch.ts", import.meta.url)),
-  fileURLToPath(new URL("../command/pipeline-run.md", import.meta.url)),
-  fileURLToPath(new URL("../skills/task-management/run-worker-rules.md", import.meta.url)),
-  fileURLToPath(new URL("../agent/core/openstage-orchestrator.md", import.meta.url)),
-]
-function runtimeFingerprint() {
-  return sha256(RUNTIME_FILES.map((file) => {
-    try { return `${path.basename(file)}:${sha256(fs.readFileSync(file))}` } catch { return `${path.basename(file)}:missing` }
-  }).join("\n"))
-}
-type RuntimeVersionState = { reload_required: boolean; changed_during_run: boolean; loaded: string }
+// Resolver distinguishes source checkout fixtures from installed canonical V2 layout.
+const RUNTIME_FILES = runtimeFiles(import.meta.url)
+const runtimeFingerprint = () => fingerprintRuntimeFiles(RUNTIME_FILES)
+const missingRequiredRuntimeFiles = () => missingRuntimeFiles(RUNTIME_FILES)
+type RuntimeVersionState = { reload_required: boolean; changed_during_run: boolean; loaded: string; missing_required_runtime_files: string[] }
 function runtimeFlags(state: RuntimeVersionState) {
   return {
     ...(state.reload_required ? { runtime_reload_required: true } : {}),
     ...(state.changed_during_run ? { runtime_changed_during_run: true } : {}),
+    ...(state.missing_required_runtime_files.length ? { runtime_missing_required_files: state.missing_required_runtime_files } : {}),
   }
 }
 
@@ -394,10 +388,11 @@ export default Plugin.define({
         recorded = { loaded: loadedRuntime, recorded_at: new Date().toISOString() }
         try { ensureDir(path.dirname(file)); fs.writeFileSync(file, JSON.stringify(recorded, null, 2) + "\n", "utf8") } catch {}
       }
-      const state = { loaded: loadedRuntime, reload_required: runtimeFingerprint() !== loadedRuntime, changed_during_run: recorded.loaded !== loadedRuntime }
+      const missing = missingRequiredRuntimeFiles()
+      const state = { loaded: loadedRuntime, reload_required: runtimeFingerprint() !== loadedRuntime || missing.length > 0, changed_during_run: recorded.loaded !== loadedRuntime, missing_required_runtime_files: missing }
       if (state.reload_required || state.changed_during_run) {
         appendJsonLine(metricsFile(root, runID), { timestamp: new Date().toISOString(), event: "runtime_version",
-          run_id: runID, runtime_reload_required: state.reload_required, runtime_changed_during_run: state.changed_during_run })
+          run_id: runID, runtime_reload_required: state.reload_required, runtime_changed_during_run: state.changed_during_run, missing_required_runtime_files: missing })
       }
       return state
     }

@@ -3,9 +3,10 @@
 // checks that its command indexes were generated for exactly the frozen command array, and
 // records only {snapshot, sha256} in the manifest.
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, lstatSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve, sep } from 'node:path';
-import { commandsDigest, resolveGateTesting, safeTestPath, snapshotPath, validateGateTesting } from './gate-testing-policy.mjs';
+import { commandsDigest, resolveGateTesting, safeTestPath, safeExactIgnoredRule, snapshotPath, validateGateTesting } from './gate-testing-policy.mjs';
 
 const SOURCE_KEYS = ['impact_groups', 'coordinator_only', 'parallel_groups', 'live_postgres'];
 const sha256 = value => createHash('sha256').update(value).digest('hex');
@@ -36,6 +37,27 @@ function ignoredRules(json) {
   return rules;
 }
 
+// An exact rule can narrow tests only if the file exists and is Git-tracked
+// at PLAN freeze. Legacy globs stay syntactically accepted but select full checks.
+function verifyExactIgnoredInputs(cwd, rules) {
+  for (const entry of rules) {
+    const pattern = typeof entry === 'string' ? entry : entry?.pattern;
+    if (typeof pattern !== 'string' || !safeTestPath(pattern) ||
+        pattern.split('/').some(part => part === '.' || part === '..' || part === ''))
+      throw Error('GATE_TESTING_FREEZE_IGNORED_PATH_INVALID');
+    if (!safeExactIgnoredRule(entry)) continue;
+    const absolute = resolve(cwd, pattern);
+    let info;
+    try { info = lstatSync(absolute); }
+    catch { throw Error('GATE_TESTING_FREEZE_IGNORED_MISSING: ' + pattern); }
+    if (!info.isFile() || info.isSymbolicLink())
+      throw Error('GATE_TESTING_FREEZE_IGNORED_NOT_REGULAR: ' + pattern);
+    const tracked = spawnSync('git', ['ls-files', '--error-unmatch', '--', pattern], { cwd, encoding: 'utf8', timeout: 10000 });
+    if (tracked.status !== 0 || tracked.error)
+      throw Error('GATE_TESTING_FREEZE_IGNORED_NOT_TRACKED: ' + pattern);
+  }
+}
+
 export function freezeGateTesting({ manifestPath, profile, gate, source, commands, ignored, cwd = process.cwd() }) {
   const manifestFile = resolve(manifestPath);
   const runDirectory = dirname(manifestFile);
@@ -58,7 +80,11 @@ export function freezeGateTesting({ manifestPath, profile, gate, source, command
 
   const snapshot = {};
   for (const key of SOURCE_KEYS) if (config[key] !== undefined) snapshot[key] = config[key];
-  if (ignored) snapshot.ignored_inputs = ignoredRules(readRepoJson(cwd, ignored, 'ignored').json);
+  if (ignored) {
+    const rules = ignoredRules(readRepoJson(cwd, ignored, 'ignored').json);
+    verifyExactIgnoredInputs(cwd, rules);
+    snapshot.ignored_inputs = rules;
+  }
   const content = `${JSON.stringify(snapshot, null, 2)}\n`;
   const relative = snapshotPath(profile, gate);
   const target = join(runDirectory, relative);

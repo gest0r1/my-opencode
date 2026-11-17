@@ -174,12 +174,23 @@ non-narrowing contract that runs the whole suite on every work item.
    It snapshots the map into `planning/gate-testing/<p>.<g>.json`, checks the
    command array, and records only `gate_testing[p][g].source` (snapshot path,
    SHA-256, command-array digest). `--ignored` takes an array, `ignored_inputs` or
-   `ignored_input_rules` (patterns with optional `except`), for example the
-   project's documentation and asset rules.
+   `ignored_input_rules` (legacy patterns with optional `except`). For new
+   freezes use **reviewed exact repo-relative documentation/handoff paths**.
+   A glob or unverified rule remains compatible but cannot narrow test selection:
+   it triggers a conservative full fallback. Do not include webmanifest/icons,
+   test contracts, CI or AGENTS.md as excluded inputs.
 3. Preflight, dispatch, the runner and completion all read the snapshot; a changed
    snapshot or command array blocks with `GATE_TESTING_SOURCE_*`.
 
-Selection with a bound map: ignored inputs select nothing; a new test file runs
+Selection with a bound map: ignored inputs remove only known exact *incremental*
+work-item changes after SHA validation of the frozen source and a verified baseline.
+Inline `ignored_inputs` beside `source` is rejected (`GATE_TESTING_SOURCE_CONFLICT`).
+Mandatory security/dependency/test-contract changes take precedence over exclusions;
+`previousFailures` are rechecked even for an ignored-only diff. Ignored-only
+selection has `incremental_selection_status: not_applicable` (not a full-gate PASS);
+unbound, invalid, legacy-glob or unknown/new changes conservatively select full
+checks. Coordinator-only and final gates retain their frozen commands.
+A new test file runs
 alone with the command owning its directory; a new source file counts as reached
 through the changed mapped files that import it (alone it selects the complete
 set); other unmapped paths, dependency manifests and auth paths select the complete

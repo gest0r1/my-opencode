@@ -1232,3 +1232,64 @@ if (action === 'provision') {
   const actions = (await readFile(path.join(fx.root, '.tmp/lifecycle-actions.log'), 'utf8')).trim().split('\n');
   assert.deepEqual(actions.slice(-3), ['reap', 'provision', 'down']);
 });
+
+test('typed release-check reuses unchanged tree evidence and invalidates source changes', async () => {
+  const fx = await diagnosticFixture(); const oldPath = process.env.PATH;
+  const statePath = path.join(fx.stateRoot, fx.runId, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  const manifest = JSON.parse(await readFile(state.manifest_file, 'utf8'));
+  const commands = manifest.gate_profiles.default.build;
+  manifest.gate_profiles.default['release-check'] = commands;
+  delete manifest.gate_profiles.default.build;
+  manifest.gate_testing.default['release-check'] = { ...manifest.gate_testing.default.build, input_kind: 'tree' };
+  delete manifest.gate_testing.default.build;
+  manifest.pipelines[0].stages = ['release-check'];
+  manifest.pipelines[0].executors = { 'release-check': 'local_gate' };
+  const bytes = JSON.stringify(manifest);
+  await writeFile(state.manifest_file, bytes);
+  state.manifest_sha256 = sha256(bytes);
+  await writeFile(statePath, JSON.stringify(state));
+  const args = [fx.runId, 'app', 'release-check', '--state-root', fx.stateRoot];
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, args);
+    assert.equal(result.status, 0, result.stderr);
+    let out = JSON.parse(result.stdout);
+    assert.equal(out.commands_run, 2);
+    result = run(fx.root, args);
+    assert.equal(result.status, 0, result.stderr);
+    out = JSON.parse(result.stdout);
+    assert.equal(out.commands_run, 0);
+    assert.equal(out.commands_reused, 2);
+    await writeFile(path.join(fx.root, 'src/orders.ts'), 'changed-again\n');
+    result = run(fx.root, args);
+    assert.equal(result.status, 0, result.stderr);
+    out = JSON.parse(result.stdout);
+    assert.equal(out.commands_run, 2);
+  } finally { process.env.PATH = oldPath; }
+});
+
+test('cold identity avoids redundant pre-reuse hashing; reusable evidence retains byte revalidation', async () => {
+  const fx = await diagnosticFixture();
+  const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fx.bin}:${oldPath}`;
+    let result = run(fx.root, fx.args);
+    assert.equal(result.status, 0, result.stderr);
+    const cold = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(cold.commands_run ?? cold.results.length, 2);
+    assert.equal(cold.reuse_identity_metrics.passes, 2, 'cold: initial + post-command byte checks, no pre-reuse pass');
+    result = run(fx.root, fx.args);
+    assert.equal(result.status, 0, result.stderr);
+    const hot = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(JSON.parse(result.stdout).commands_run, 0);
+    assert.equal(hot.reuse_identity_metrics.passes, 3, 'reuse must validate before and after using cached PASS');
+    assert.ok(hot.reuse_identity_metrics.bytes_read > cold.reuse_identity_metrics.bytes_read);
+    await writeFile(path.join(fx.root, 'pnpm-lock.yaml'), 'lockfileVersion: "9.0"\\n# identity changed\\n');
+    result = run(fx.root, fx.args);
+    assert.equal(result.status, 0, result.stderr);
+    const changed = JSON.parse(await readFile(JSON.parse(result.stdout).evidence, 'utf8'));
+    assert.equal(JSON.parse(result.stdout).commands_run, 2);
+    assert.notEqual(changed.source_digest, cold.source_digest, 'lockfile must invalidate source proof even if toolchain bytes are unchanged');
+  } finally { process.env.PATH = oldPath; }
+});
