@@ -67,7 +67,7 @@ def main():
     require(config_installer, 'ensure_claude_cli')
     require(config_installer, 'configure_server_browser')
 
-    require(combined_installer, 'OPENCHAMBER_EXPECTED_VERSION:-2.6.1')
+    require(combined_installer, 'OPENCHAMBER_EXPECTED_VERSION:-2.7.1')
     # --no-env-snapshot keeps OPENCODE_BINARY out of startup.env; the managed binary is pinned in the drop-in.
     require(combined_installer, 'Environment="OPENCODE_BINARY=$OPENCODE_BINARY"')
     require(combined_installer, 'systemctl --user is-enabled --quiet opencode-web.service')
