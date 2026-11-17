@@ -235,6 +235,9 @@ fs.appendFileSync(process.env.PIPELINE_SCRATCH_DIR + '/isolated.log', process.cw
     assert.equal(evidence.status, 'PASS');
     assert.equal(evidence.snapshot.status, 'used');
     assert.ok(evidence.scratch_dir);
-    assert.equal((await readFile(path.join(evidence.scratch_dir, 'isolated.log'), 'utf8')).trim().split('\\n').length, 2);
+    assert.deepEqual(evidence.results.map(item => [item.command_index, item.exit_code]), [[0, 0], [1, 0]]);
+    const isolated = (await readFile(path.join(evidence.scratch_dir, 'isolated.log'), 'utf8')).trim().split('\n');
+    assert.equal(isolated.length, 2);
+    for (const cwd of isolated) assert.notEqual(cwd, fx.root);
   } finally { await rm(fx.root, { recursive: true, force: true }); }
 });
