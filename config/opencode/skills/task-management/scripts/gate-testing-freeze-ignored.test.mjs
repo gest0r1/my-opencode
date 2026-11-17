@@ -57,6 +57,15 @@ test('O8 freeze cannot whitelist nonexistent, untracked or symlinked exact docum
   symlinkSync('/tmp/foreign-ignored-doc',path.join(fx.cwd,'docs/archive/note.md'));
   assert.throws(()=>freeze(fx),/GATE_TESTING_FREEZE_IGNORED_NOT_REGULAR/);
 }));
+test('O8 an exact data or executable document path never reduces tests',()=>fixture(fx=>{
+  fx.make('maps/ignored.json',JSON.stringify(['docs/archive/config.json']));
+  assert.equal(freeze(fx).status,'PASS'); // conservative frozen legacy fallback
+  const m=resolveGateTestingFile(JSON.parse(readFileSync(fx.manifestPath,'utf8')),fx.manifestPath);
+  const selected=selectAffectedCommands(fx.commands,m.gate_testing.local['release-check'],
+    ['docs/archive/config.json'],[],{verifiedBaseline:true});
+  assert.equal(selected.selected.length,1);
+  assert.match(selected.reason,/requires frozen verified exact paths/);
+}));
 test('O8 legacy glob still freezes but must choose full checks',()=>fixture(fx=>{
   fx.make('maps/ignored.json',JSON.stringify(['docs/**']));
   assert.equal(freeze(fx).status,'PASS');
