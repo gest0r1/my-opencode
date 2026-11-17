@@ -302,7 +302,7 @@ function safeIgnoredPath(value) {
     !value.includes('\\') && ![...value].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) &&
     !value.split('/').some(part => !part || part === '.' || part === '..');
 }
-function safeExactIgnoredRule(rule) {
+export function safeExactIgnoredRule(rule) {
   const pattern = typeof rule === 'string' ? rule : rule?.pattern;
   if (!safeIgnoredPath(pattern) || [...pattern].some(char => '*?[]{}'.includes(char))) return false;
   if (typeof rule === 'object' && (!rule || !Array.isArray(rule.except ?? []) ||
