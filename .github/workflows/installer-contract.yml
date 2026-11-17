@@ -8,6 +8,8 @@ on:
       - tests/test_user_plugins.mjs
       - install-openchamber.sh
       - install.sh
+      - scripts/bootstrap-runtime-tools.sh
+      - scripts/install-journal.sh
       - scripts/install-opencode-generation.sh
       - scripts/install-opencode-dependencies.sh
       - config/systemd/opencode-web.service
@@ -25,6 +27,12 @@ on:
       - scripts/normalize-opencode-agent-permissions.mjs
       - tests/test_standard_installer.py
       - tests/test_incremental_installer.sh
+      - tests/test_install_journal.py
+      - tests/test_runtime_toolchain.py
+      - tests/test_node_runtime_floor.py
+      - tests/test_install_ref_handover.sh
+      - tests/test_install_ref_state_handover.sh
+      - tests/test_install_rollback.sh
       - tests/test_binary_only_installer.sh
       - tests/test_native_activation.sh
       - tests/test_openchamber_runtime_store.sh
@@ -38,6 +46,8 @@ on:
       - tests/test_user_plugins.mjs
       - install-openchamber.sh
       - install.sh
+      - scripts/bootstrap-runtime-tools.sh
+      - scripts/install-journal.sh
       - scripts/install-opencode-generation.sh
       - scripts/install-opencode-dependencies.sh
       - config/systemd/opencode-web.service
@@ -55,6 +65,12 @@ on:
       - scripts/normalize-opencode-agent-permissions.mjs
       - tests/test_standard_installer.py
       - tests/test_incremental_installer.sh
+      - tests/test_install_journal.py
+      - tests/test_runtime_toolchain.py
+      - tests/test_node_runtime_floor.py
+      - tests/test_install_ref_handover.sh
+      - tests/test_install_ref_state_handover.sh
+      - tests/test_install_rollback.sh
       - tests/test_binary_only_installer.sh
       - tests/test_native_activation.sh
       - tests/test_openchamber_runtime_store.sh
@@ -125,10 +141,16 @@ jobs:
           bash tests/test_dependency_installer.sh
           sudo bash tests/test_deploy_sudo.sh
           bash tests/test_generation_timeout.sh
-      - name: Verify incremental installer execution
+      - name: Verify incremental installer execution and audit handover
         run: |
           set -Eeuo pipefail
           bash tests/test_incremental_installer.sh
+          bash tests/test_install_ref_handover.sh
+          bash tests/test_install_ref_state_handover.sh
+          bash tests/test_install_rollback.sh
+          python3 tests/test_install_journal.py
+          python3 tests/test_node_runtime_floor.py
+          python3 tests/test_runtime_toolchain.py
       - name: Verify OpenChamber/OpenCode v2 installer contract
         run: |
           set -Eeuo pipefail

@@ -13,7 +13,7 @@ function fixture() {
   mkdirSync(bin, {recursive: true}); mkdirSync(project);
   symlinkSync(process.execPath, join(bin, 'node'));
   writeFileSync(join(project, 'package.json'), JSON.stringify({packageManager: 'pnpm@11.17.0', engines: {node: '>=22', pnpm: '>=11'}}));
-  return {root, home, project, bin, env: {...process.env, HOME: home, PATH: `${bin}:/usr/bin:/bin`}};
+  return {root, home, project, bin, env: {...process.env, HOME: home, PATH: `${bin}`}};
 }
 
 test('diagnostics distinguish absent, broken, non-executable and failed commands', () => {
@@ -28,6 +28,18 @@ test('diagnostics distinguish absent, broken, non-executable and failed commands
     rmSync(join(f.bin, 'pnpm'));
     writeFileSync(join(f.bin, 'pnpm'), '#!/bin/sh\nexit 42\n', {mode: 0o755});
     assert.throws(() => checkProjectTooling(f.project, f.env), /EXECUTABLE_START_FAILED/);
+  } finally {rmSync(f.root, {recursive: true, force: true});}
+});
+
+test('polluted PATH pointing into another user home is never accepted', (t) => {
+  if (process.getuid?.() === 0) return t.skip('root can traverse /root; fixture asserts unprivileged access');
+  const f = fixture();
+  try {
+    const rootNvm = join(f.root, 'root-nvm'); mkdirSync(rootNvm);
+    symlinkSync('/root/.nvm/versions/node/v22.23.2/bin/pnpm', join(rootNvm, 'pnpm'));
+    f.env.PATH = `${rootNvm}:${f.bin}`;
+    assert.throws(() => executablePath('pnpm', f.env), /EXECUTABLE_(?:BROKEN_SYMLINK|NOT_ACCESSIBLE)/);
+    assert.throws(() => checkProjectTooling(f.project, f.env), /EXECUTABLE_(?:BROKEN_SYMLINK|NOT_ACCESSIBLE)/);
   } finally {rmSync(f.root, {recursive: true, force: true});}
 });
 
@@ -50,7 +62,7 @@ test('user preparation repairs a broken global pnpm and keeps project files unch
   try {
     const global = join(f.root, 'global'); mkdirSync(global);
     symlinkSync('/root/inaccessible/pnpm', join(global, 'pnpm'));
-    f.env.PATH += ':' + global;
+    f.env.PATH = `${f.bin}:/usr/bin:/bin:${global}`;
     writeFileSync(join(f.bin, 'npm'), `#!/bin/sh
 if [ "$1" = view ]; then echo '{"node":">=22"}'; exit 0; fi
 prefix=''; spec=''
@@ -134,7 +146,7 @@ test('dependency restore reports a failing install with a redacted output tail',
 
 test('stage-cli prepare-environment accepts only the --dependencies flag', () => {
   const cli = join(import.meta.dirname, 'stage-cli.ts');
-  const result = spawnSync('npx', ['--yes', 'tsx', cli, 'prepare-environment', 'm.json', '--bogus'], {encoding: 'utf8'});
+  const result = spawnSync(process.execPath, [cli, 'prepare-environment', 'm.json', '--bogus'], {encoding: 'utf8'});
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /prepare-environment <manifest\.json> \[--dependencies\]/);
 });

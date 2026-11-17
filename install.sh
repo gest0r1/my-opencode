@@ -74,6 +74,7 @@ reexec_as_runtime_user() {
 
   for name in $(compgen -e); do
     case "$name" in
+      OPENCODE_CONFIG_REF|MY_OPENCODE_REF) continue ;;
       OPENCODE_*|OPENCHAMBER_*|MY_OPENCODE_REF|EXPECTED_OPENCHAMBER_VERSION|GH_HOST|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)
         pass_env+=("$name=${!name}")
         ;;
@@ -166,7 +167,7 @@ gh api -H 'Accept: application/vnd.github.raw' \
 gh api -H 'Accept: application/vnd.github.raw' \
   "repos/$REPO/contents/$BOOTSTRAP_PATH?ref=$CONFIG_SHA" > "$BOOTSTRAP"
 source "$BOOTSTRAP"
-ensure_runtime_node
+ensure_runtime_toolchain
 
 OPENCODE_BIN="$HOME/.opencode/bin/opencode"
 if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" != 1 &&

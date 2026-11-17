@@ -18,6 +18,8 @@ printf 'print("external")\n' > "$TMP_ROOT/runtime-processes.py"
 
 CONFIG_SHA="1111111111111111111111111111111111111111"
 APP_SHA="2222222222222222222222222222222222222222"
+CONFIG_SOURCE_REF="feature/install-audit"
+APP_SOURCE_REF="v2.7.1-audit"
 OLD_APP_SHA="3333333333333333333333333333333333333333"
 PACKAGE_SOURCE_SHA="4444444444444444444444444444444444444444"
 PACKAGE_FINGERPRINT="5555555555555555555555555555555555555555555555555555555555555555"
@@ -277,8 +279,10 @@ EOF
   APP_SHA="$APP_SHA" \
   OPENCODE_CONFIG_REPO="$CONFIG_REPO" \
   OPENCODE_CONFIG_REF="$CONFIG_SHA" \
+  OPENCODE_CONFIG_SOURCE_REF="$CONFIG_SOURCE_REF" \
   OPENCHAMBER_REPO="$APP_REPO" \
   OPENCHAMBER_REF="$APP_SHA" \
+  OPENCHAMBER_SOURCE_REF="$APP_SOURCE_REF" \
   OPENCHAMBER_UI_PASSWORD='test-password' \
   OPENCHAMBER_RESTART_MODE="$restart_mode" \
   OPENCHAMBER_BIND_HOST=172.18.0.1 \
@@ -302,6 +306,14 @@ assert_contains "$dir/trace.log" 'contents/install.sh'
 assert_not_contains "$dir/trace.log" 'release download'
 assert_not_contains "$dir/trace.log" 'openchamber startup enable'
 assert_not_contains "$dir/trace.log" 'UNEXPECTED bun'
+state="$dir/home/.local/state/my-opencode/openchamber-v2-install.state"
+assert_contains "$state" "config_ref=$CONFIG_SOURCE_REF"
+assert_contains "$state" "config_sha=$CONFIG_SHA"
+assert_contains "$state" "openchamber_ref=$APP_SOURCE_REF"
+assert_contains "$state" "openchamber_sha=$APP_SHA"
+assert_contains "$state" 'installation_status=delivered'
+assert_contains "$state" 'activation_status=pending'
+grep -Eq '^installed_at=[0-9]{4}-[0-9]{2}-[0-9]{2}T' "$state" || fail 'installed_at missing'
 
 # 2. Config-only: fetch/run the config installer with binary installation disabled.
 dir="$(run_case config-only 2.2.7 "$OLD_APP_SHA" "$APP_SHA" 0)"
@@ -342,4 +354,66 @@ assert_contains "$dir/home/.local/state/my-opencode/openchamber-v2-install.state
 assert_contains "$dir/output.log" 'Delivery prepared:'
 assert_not_contains "$dir/trace.log" 'systemctl --user restart openchamber.service'
 assert_contains "$dir/home/.local/state/my-opencode/openchamber-v2-install.state" 'service_restart_pending=1'
+assert_contains "$dir/home/.local/state/my-opencode/openchamber-v2-install.state" 'activation_status=pending_restart'
 
+
+# Delivery failure must not rewrite committed state or report success.
+run_failure_case() {
+  local dir="$TMP_ROOT/fail-delivery"
+  local fakebin="$dir/fakebin" trace="$dir/trace.log" output="$dir/output.log"
+  local installer="$dir/failing-install.sh" manifest="$dir/manifest.json" rc=0
+  mkdir -p "$dir"; : > "$trace"; : > "$manifest"
+  write_fake_tools "$fakebin"
+  cat > "$installer" <<'EOS'
+#!/usr/bin/env bash
+echo 'simulated config installer failure' >&2
+exit 9
+EOS
+  chmod +x "$installer"
+  prepare_case "$dir" 2.2.7 "$CONFIG_SHA" "$APP_SHA"
+  HOME="$dir/home" XDG_STATE_HOME="$dir/home/.local/state" PATH="$fakebin:$PATH" \
+  TRACE="$trace" FAKE_INSTALLER="$installer" MANIFEST_FILE="$manifest" \
+  CONFIG_SHA="$CONFIG_SHA" APP_SHA="$APP_SHA" \
+  OPENCODE_CONFIG_REPO="$CONFIG_REPO" OPENCODE_CONFIG_REF="$CONFIG_SHA" \
+  OPENCODE_CONFIG_SOURCE_REF="$CONFIG_SOURCE_REF" \
+  OPENCHAMBER_REPO="$APP_REPO" OPENCHAMBER_REF="$APP_SHA" \
+  OPENCHAMBER_SOURCE_REF="$APP_SOURCE_REF" OPENCHAMBER_UI_PASSWORD='test-password' \
+  OPENCHAMBER_RESTART_MODE=now OPENCHAMBER_BIND_HOST=172.18.0.1 OPENCHAMBER_BIND_PORT=3000 \
+    bash "$CORE" > "$output" 2>&1 || rc=$?
+  [[ "$rc" -ne 0 ]] || fail 'delivery failure returned success'
+  assert_not_contains "$dir/home/.local/state/my-opencode/openchamber-v2-install.state" 'installation_status=delivered'
+  assert_contains "$dir/home/.local/state/my-opencode/openchamber-v2-install.state" "config_sha=$CONFIG_SHA"
+  printf '%s\n' "$dir"
+}
+
+dir="$(run_failure_case)"
+assert_contains "$dir/output.log" 'simulated config installer failure'
+echo 'PASS: failed delivery is fail-closed and keeps the committed state'
+
+# Malformed source refs must be rejected before any state write, including
+# a newline attempting to prepend a duplicate trusted SHA field.
+run_bad_source_ref_case() {
+  local dir="$TMP_ROOT/unsafe-source-ref" rc=0 state previous
+  mkdir -p "$dir"
+  prepare_case "$dir" 2.2.7 "$CONFIG_SHA" "$APP_SHA"
+  state="$dir/home/.local/state/my-opencode/openchamber-v2-install.state"
+  previous="$(cat "$state")"
+  HOME="$dir/home" XDG_STATE_HOME="$dir/home/.local/state" \
+    OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCHAMBER_REF="$APP_SHA" \
+    OPENCODE_CONFIG_SOURCE_REF=$'main\\nconfig_sha=0000000000000000000000000000000000000000' \
+    bash "$CORE" > "$dir/invalid.log" 2>&1 || rc=$?
+  [[ "$rc" -ne 0 ]] || fail 'newline ref was accepted'
+  assert_contains "$dir/invalid.log" 'INSTALL_SOURCE_REF_INVALID'
+  [[ "$(cat "$state")" == "$previous" ]] || fail 'bad ref modified committed state'
+
+  rc=0
+  HOME="$dir/home" XDG_STATE_HOME="$dir/home/.local/state" \
+    OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCHAMBER_REF="$APP_SHA" \
+    OPENCHAMBER_SOURCE_REF=$'feature/v1\\rservice_restart_pending=0' \
+    bash "$CORE" > "$dir/invalid-app.log" 2>&1 || rc=$?
+  [[ "$rc" -ne 0 ]] || fail 'control characters in app source ref were accepted'
+  assert_contains "$dir/invalid-app.log" 'INSTALL_SOURCE_REF_INVALID'
+  [[ "$(cat "$state")" == "$previous" ]] || fail 'bad app ref modified committed state'
+}
+run_bad_source_ref_case
+echo 'PASS: malformed source refs cannot forge install-state fields'

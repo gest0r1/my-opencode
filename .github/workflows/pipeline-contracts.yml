@@ -73,11 +73,17 @@ jobs:
       - name: Verify permanent installer contracts
         run: |
           python3 tests/test_standard_installer.py
+          python3 tests/test_install_journal.py
+          python3 tests/test_node_runtime_floor.py
+          python3 tests/test_runtime_toolchain.py
           python3 tests/test_runtime_user_install_contract.py
           python3 tests/test_runtime_processes.py
           bash tests/test_agent_installation.sh
           bash tests/test_binary_only_installer.sh
           bash tests/test_incremental_installer.sh
+          bash tests/test_install_ref_handover.sh
+          bash tests/test_install_ref_state_handover.sh
+          bash tests/test_install_rollback.sh
           bash tests/test_native_activation.sh
           bash tests/test_openchamber_runtime_store.sh
           bash tests/test_dependency_installer.sh

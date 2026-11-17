@@ -25,7 +25,9 @@ async function fixture() {
   await symlink('../vitest/bin/vitest.mjs', join(cwd, 'node_modules/.bin/vitest'));
   await writeFile(join(managerRoot, 'bin/pnpm.cjs'), '#!/usr/bin/env node\nmodule.exports = 1;\n', { mode: 0o755 });
   await symlink('../node_modules/pnpm/bin/pnpm.cjs', join(bin, 'pnpm'));
-  const env = { ...process.env, PATH: `${bin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}` };
+  await symlink(process.execPath, join(bin, 'node'));
+  await writeFile(join(bin, 'npx'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const env = { ...process.env, PATH: bin };
   for (const key of ['NODE_PATH', 'NODE_OPTIONS', 'BASH_ENV', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'PNPM_HOME']) delete env[key];
   const invocation = { exe: 'pnpm', args: ['exec', 'vitest', 'run'], command: 'pnpm exec vitest run', index: 0, test_files: [] };
   return { cwd, env, invocation, managerFile: join(managerRoot, 'bin/pnpm.cjs') };
@@ -92,6 +94,22 @@ test('actual nested ignored Git read-set invalidates reuse on byte and membershi
       join(fx.cwd, '.local-config/nested/renamed.txt'));
     const renamed = await read();
     assert.notEqual(renamed.digest, added.digest);
+  } finally { await rm(fx.cwd, { recursive: true, force: true }); }
+});
+
+test('polluted PATH with a root-owned nvm link fails closed for reuse', async (t) => {
+  if (process.getuid?.() === 0) return t.skip('root can traverse /root; fixture asserts unprivileged access');
+  const fx = await fixture();
+  try {
+    const rootNvm = join(fx.cwd, 'root-nvm');
+    await mkdir(rootNvm);
+    await symlink('/root/.nvm/versions/node/v22.23.2/bin/npx', join(rootNvm, 'npx'));
+    const identity = await resolveReuseIdentity({ cwd: fx.cwd,
+      invocations: [{ ...fx.invocation, exe: 'npx', args: ['--yes', 'vitest'] }],
+      env: { ...fx.env, PATH: `${rootNvm}:${fx.env.PATH}` } });
+    assert.equal(identity.digest, null);
+    assert.ok(identity.reason);
+    assert.doesNotMatch(identity.reason, /bounded dependency identity/);
   } finally { await rm(fx.cwd, { recursive: true, force: true }); }
 });
 

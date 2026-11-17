@@ -32,7 +32,8 @@ mkdir -p "$TASK_TMP/home/.local/bin"
 cp "$TASK_TMP/bin/"* "$TASK_TMP/home/.local/bin/"
 ln -s "$(command -v node)" "$TASK_TMP/home/.local/bin/node"
 rc=0
-env HOME="$TASK_TMP/home" PATH="$TASK_TMP/bin:$PATH" SOURCE_ARCHIVE="$TASK_TMP/source.tar.gz" \
+env -u XDG_STATE_HOME -u XDG_CONFIG_HOME -u XDG_DATA_HOME \
+  HOME="$TASK_TMP/home" PATH="$TASK_TMP/bin:$PATH" SOURCE_ARCHIVE="$TASK_TMP/source.tar.gz" \
   OPENCODE_RESOLVED_CONFIG_SHA=1111111111111111111111111111111111111111 OPENCODE_SKIP_BINARY_INSTALL=1 \
   OPENCODE_DEPENDENCY_TIMEOUT_SECONDS=1 bash "$ROOT/scripts/install-opencode-generation.sh" > "$TASK_TMP/output" 2>&1 || rc=$?
 [[ "$rc" == 124 ]] || { cat "$TASK_TMP/output"; exit 1; }
