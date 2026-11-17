@@ -99,6 +99,28 @@ def main():
             assert result.returncode == 0, result.stderr
             assert os.readlink(home / ".local/bin/npm") == str(tools / "npm")
 
+        # The pinned Node bootstrap uses the same non-overwrite rule. It must
+        # not replace an unmanaged ~/.local/bin/node even when the PATH node fails.
+        home_node = Path(tmp) / "home-node"
+        home_node.mkdir()
+        user_bin = home_node / ".local/bin"
+        user_bin.mkdir(parents=True)
+        tool(user_bin / "node", "echo user-owned-node\\n")
+        original_node = (user_bin / "node").read_bytes()
+        pinned_bin = home_node / ".local/share/my-opencode/node-v24.21.0/bin"
+        pinned_bin.mkdir(parents=True)
+        tool(pinned_bin / "node", f'exec "{REAL_NODE}" "$@"\\n')
+        tool(pinned_bin / "npm", "echo pinned-npm\\n")
+        tool(pinned_bin / "npx", "echo pinned-npx\\n")
+        bad_tools = Path(tmp) / "bad-node"
+        bad_tools.mkdir()
+        tool(bad_tools / "node", "exit 1\\n")
+        blocked = run(home_node, bad_tools)
+        assert blocked.returncode != 0
+        assert "RUNTIME_TOOLCHAIN_CONFLICT" in blocked.stderr, blocked.stderr
+        assert (user_bin / "node").read_bytes() == original_node
+        assert not (user_bin / "node").is_symlink()
+
         # No usable npm and no network path: fail closed with a concrete diagnostic.
         bare = Path(tmp) / "bare"
         bare.mkdir()
