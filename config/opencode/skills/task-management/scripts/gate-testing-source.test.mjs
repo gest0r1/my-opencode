@@ -17,10 +17,14 @@ const map = {
 };
 const ignored = { ignored_input_rules: [{ pattern: 'docs/**', except: ['docs/testing/**'] }, '**/*.md'] };
 
-test('ignored inputs select nothing; docs/testing stays mapped', () => {
+test('legacy glob ignored_inputs never grants unverified incremental skips', () => {
   const config = { ...map, ignored_inputs: ignored.ignored_input_rules };
-  assert.equal(selectAffectedCommands(commands, config, ['docs/features/a.md', 'README.md']).selected.length, 0);
-  assert.equal(selectAffectedCommands(commands, config, ['docs/testing/blocks.json']).reason, 'unmapped change: docs/testing/blocks.json');
+  for (const changed of [['docs/features/a.md', 'README.md'], ['docs/testing/blocks.json']]) {
+    const selected = selectAffectedCommands(commands, config, changed);
+    assert.equal(selected.reason, 'ignored_inputs requires frozen verified exact paths');
+    assert.deepEqual(selected.selected.map(item => item.index), [1, 2]);
+    assert.deepEqual(selected.deferred, [0]);
+  }
 });
 
 test('a new test file runs alone with the command owning its directory', () => {
