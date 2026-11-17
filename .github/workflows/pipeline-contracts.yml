@@ -119,6 +119,7 @@ jobs:
             config/opencode/skills/task-management/scripts/pipeline-unfreeze-cli.test.mjs \
             config/opencode/skills/task-management/scripts/legacy-live-preflight-v067.test.mjs \
             config/opencode/skills/task-management/scripts/gate-testing-policy.test.mjs \
+            config/opencode/skills/task-management/scripts/gate-testing-freeze-ignored.test.mjs \
             config/opencode/skills/task-management/scripts/git-worktree-cli.test.mjs \
             config/opencode/skills/task-management/scripts/worktree-refresh.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-replan-cli.test.mjs \
