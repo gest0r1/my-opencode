@@ -49,6 +49,37 @@ def main():
         assert run(home, tools).returncode == 0
         assert first == {name: os.readlink(home / ".local/bin" / name) for name in ("npm", "npx")}
 
+        # An executable placed by another user/tool is not ours to replace.
+        # Preflight both links first: an npm conflict must not alter npx either.
+        npm_link = home / ".local/bin/npm"
+        npx_link = home / ".local/bin/npx"
+        npm_link.unlink()
+        npx_link.unlink()
+        tool(npm_link, "echo user-owned-npm\\n")
+        npx_link.symlink_to("/root/.nvm/versions/node/v22/bin/npx")
+        original_npm = npm_link.read_bytes()
+        original_npx = os.readlink(npx_link)
+        blocked = run(home, tools)
+        assert blocked.returncode != 0
+        assert "RUNTIME_TOOLCHAIN_CONFLICT" in blocked.stderr, blocked.stderr
+        assert npm_link.is_file() and not npm_link.is_symlink()
+        assert npm_link.read_bytes() == original_npm
+        assert os.readlink(npx_link) == original_npx
+        npm_link.unlink()
+        npx_link.unlink()
+
+        # An unrelated *working* symlink is also preserved, never adopted.
+        foreign_npx = Path(tmp) / "foreign-npx"
+        tool(foreign_npx, "echo another-owner\\n")
+        npx_link.symlink_to(foreign_npx)
+        blocked = run(home, tools)
+        assert blocked.returncode != 0
+        assert "RUNTIME_TOOLCHAIN_CONFLICT" in blocked.stderr, blocked.stderr
+        assert os.readlink(npx_link) == str(foreign_npx)
+        assert not npm_link.exists(), "preflight must not partially install npm"
+        npx_link.unlink()
+        assert run(home, tools).returncode == 0
+
         # A stale root-owned link in the user bin must be replaced, not trusted.
         for name in ("npm", "npx"):
             (home / ".local/bin" / name).unlink()
