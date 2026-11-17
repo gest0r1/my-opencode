@@ -68,6 +68,7 @@ STORE
     cat <<'CORE'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode/openchamber-v2-install.state"
 mkdir -p "$(dirname "$STATE")"
 printf 'config_ref=%s\nconfig_sha=%s\nopenchamber_ref=%s\nopenchamber_sha=%s\neffective_restart_mode=defer\nactivation_status=pending_restart\n' \
   "$OPENCODE_CONFIG_SOURCE_REF" "$OPENCODE_CONFIG_REF" "$OPENCHAMBER_SOURCE_REF" "$OPENCHAMBER_REF" > "$STATE"
