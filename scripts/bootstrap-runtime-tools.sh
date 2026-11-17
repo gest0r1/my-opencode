@@ -5,15 +5,53 @@ export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.bun/bin:/usr/local/bin:
 export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
 cd "$HOME"
 
+# Mutate only our managed links or links already broken for this user.
+# Never silently replace an unrelated executable in ~/.local/bin.
+runtime_install_links() {
+  local prefix=$1 tool dest link current wanted temp
+  shift
+  mkdir -p "$HOME/.local/bin" || return 1
+  # Preflight the entire batch before touching any links.
+  for tool in "$@"; do
+    dest="$prefix/$tool"
+    [[ -f "$dest" && -x "$dest" ]] || {
+      echo "RUNTIME_TOOLCHAIN_UNUSABLE: missing executable $dest" >&2; return 1;
+    }
+    link="$HOME/.local/bin/$tool"
+    if [[ -L "$link" ]]; then
+      current="$(readlink -f "$link" 2>/dev/null || true)"
+      wanted="$(readlink -f "$dest" 2>/dev/null || true)"
+      if [[ -n "$current" && "$current" != "$wanted" &&
+            "$current" != /root/* && "$current" != "$HOME/.local/share/my-opencode/"* ]]; then
+        echo "RUNTIME_TOOLCHAIN_CONFLICT: refusing to overwrite unmanaged link $link" >&2; return 1
+      fi
+    elif [[ -e "$link" ]]; then
+      echo "RUNTIME_TOOLCHAIN_CONFLICT: refusing to overwrite unmanaged file $link" >&2; return 1
+    fi
+  done
+  for tool in "$@"; do
+    dest="$prefix/$tool"
+    link="$HOME/.local/bin/$tool"
+    if [[ -L "$link" && "$(readlink -f "$link" 2>/dev/null || true)" == "$(readlink -f "$dest")" ]]; then
+      continue
+    fi
+    temp="$HOME/.local/bin/.$tool.my-opencode-${BASHPID}"
+    [[ ! -e "$temp" && ! -L "$temp" ]] || {
+      echo "RUNTIME_TOOLCHAIN_CONFLICT: temporary link already exists: $temp" >&2; return 1
+    }
+    ln -s -- "$dest" "$temp" || return 1
+    mv -Tf -- "$temp" "$link" || { rm -f -- "$temp"; return 1; }
+  done
+  hash -r
+}
+
 install_pinned_runtime_node() {
   # Install the pinned LTS into the user's own prefix. Never touch system Node.
   local version=24.21.0 arch archive tmp dest
   case "$(uname -m)" in x86_64) arch=x64;; *) echo 'Node bootstrap supports Linux x86_64 only' >&2; return 1;; esac
   dest="$HOME/.local/share/my-opencode/node-v$version"
   if [[ -x "$dest/bin/node" && -f "$dest/bin/npm" && -f "$dest/bin/npx" ]]; then
-    mkdir -p "$HOME/.local/bin"
-    for tool in node npm npx; do ln -sfn "$dest/bin/$tool" "$HOME/.local/bin/$tool"; done
-    hash -r
+    runtime_install_links "$dest/bin" node npm npx || return 1
     return 0
   fi
   archive="node-v$version-linux-$arch.tar.xz"
@@ -33,8 +71,7 @@ install_pinned_runtime_node() {
     mv "node-v$version-linux-$arch" "$dest" || exit 1
   ); then rm -rf -- "$tmp"; return 1; fi
   rm -rf -- "$tmp"
-  for tool in node npm npx; do ln -sfn "$dest/bin/$tool" "$HOME/.local/bin/$tool" || return 1; done
-  hash -r
+  runtime_install_links "$dest/bin" node npm npx || return 1
 }
 
 node_version_ok() {
@@ -80,18 +117,7 @@ ensure_runtime_toolchain() {
       node_dir="$HOME/.local/share/my-opencode/node-v24.21.0/bin"
     fi
   fi
-  mkdir -p "$HOME/.local/bin"
-  for tool in npm npx; do
-    [[ -e "$node_dir/$tool" ]] || {
-      echo "RUNTIME_TOOLCHAIN_UNUSABLE: $tool missing beside $(command -v node) and no compatible pinned runtime is available" >&2
-      return 1
-    }
-    current="$(readlink -f "$HOME/.local/bin/$tool" 2>/dev/null || true)"
-    wanted="$(readlink -f "$node_dir/$tool")"
-    if [[ "$current" == "$wanted" ]] && runtime_tool_usable "$HOME/.local/bin/$tool"; then continue; fi
-    ln -sfn "$node_dir/$tool" "$HOME/.local/bin/$tool" || return 1
-  done
-  hash -r
+  runtime_install_links "$node_dir" npm npx || return 1
   for tool in npm npx; do
     runtime_tool_usable "$HOME/.local/bin/$tool" || {
       echo "RUNTIME_TOOLCHAIN_UNUSABLE: user-local $tool is not executable" >&2
