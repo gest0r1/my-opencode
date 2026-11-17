@@ -12,8 +12,17 @@ for cmd in id getent cut; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing prerequisite: $cmd" >&2; exit 1; }
 done
 
+# Refs are written verbatim into a line-based state file. Refuse line/field
+# injection (and malformed Git refs) before any install side effect.
+valid_install_source_ref() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$ ]] &&
+    [[ "$1" != *..* && "$1" != *//* && "$1" != */ ]]
+}
 REQUESTED_CONFIG_REF="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
 REQUESTED_APP_REF="${OPENCHAMBER_REF:-main}"
+for source_ref in "$REQUESTED_CONFIG_REF" "$REQUESTED_APP_REF"; do
+  valid_install_source_ref "$source_ref" || { echo 'INSTALL_SOURCE_REF_INVALID: requested ref contains unsafe characters' >&2; exit 2; }
+done
 CURRENT_USER="$(id -un)"
 RUNTIME_HOME="$(getent passwd "$RUNTIME_USER" | cut -d: -f6 || true)"
 [[ -n "$RUNTIME_HOME" || "$CURRENT_USER" != "$RUNTIME_USER" ]] || {
@@ -148,6 +157,9 @@ CONFIG_SOURCE_REF="${OPENCODE_CONFIG_SOURCE_REF:-$REQUESTED_CONFIG_REF}"
 APP_REPO="${OPENCHAMBER_REPO:-gest0r1/openchamber-ru}"
 APP_REF="${OPENCHAMBER_REF:-main}"
 APP_SOURCE_REF="${OPENCHAMBER_SOURCE_REF:-$REQUESTED_APP_REF}"
+for source_ref in "$CONFIG_SOURCE_REF" "$APP_SOURCE_REF" "$CONFIG_REF" "$APP_REF"; do
+  valid_install_source_ref "$source_ref" || { echo 'INSTALL_SOURCE_REF_INVALID: unsafe forwarded or pinned ref' >&2; exit 2; }
+done
 export OPENCODE_INSTALL_VERSION="${OPENCODE_INSTALL_VERSION:-2.2.7}"
 export OPENCHAMBER_EXPECTED_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.7.1}"
 EXPECTED_OPENCHAMBER_VERSION="$OPENCHAMBER_EXPECTED_VERSION"
