@@ -15,6 +15,8 @@ function inventory(root) {
       const next = relative ? relative + '/' + item.name : item.name;
       if (next === 'node_modules' || next.startsWith('node_modules/')) continue;
       const abs = path.join(root, next);
+      if (item.isSymbolicLink() && essential(next))
+        throw new Error('PROVENANCE_SYMLINK_NOT_ALLOWED: ' + next);
       if (item.isDirectory()) walk(next);
       else if (item.isFile() && essential(next)) entries.push({ path: next, sha256: hash(fs.readFileSync(abs)) });
     }
@@ -41,7 +43,9 @@ export function sourceProvenance(root, { repository, revision, release, installe
 export function verifyProvenance(root, metadata) {
   if (!metadata || metadata.schema_version !== 2 || metadata.layout !== 'opencode-v2-plural' ||
       !Array.isArray(metadata.files) || !metadata.files.length) return { status: 'unknown', reason: 'legacy_or_missing_provenance' };
-  const current = inventory(root);
+  let current;
+  try { current = inventory(root); }
+  catch (error) { return { status: 'mismatch', reason: 'installed_inventory_unreadable_or_symlink', detail: String(error?.message ?? error) }; }
   if (hash(JSON.stringify(current)) !== metadata.install_manifest_sha256 ||
       JSON.stringify(current) !== JSON.stringify(metadata.files)) return { status: 'mismatch', reason: 'installed_files_changed' };
   return { status: metadata.provenance_status === 'verified-source-revision' ? 'verified' : 'unknown',
