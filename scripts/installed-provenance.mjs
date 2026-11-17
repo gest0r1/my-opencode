@@ -5,7 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-const essential = relative => /^(?:plugins\/|commands\/|agents\/|skills\/|tools\/)/.test(relative)
+const essential = relative => /^(?:plugins|commands|agents|skills|tools)(?:\/|$)/.test(relative)
   || ['AGENTS.md', 'PIPELINE.md', 'opencode.json', 'package.json', 'bun.lock', 'plugin-policy.json'].includes(relative);
 function inventory(root) {
   const entries = [];
