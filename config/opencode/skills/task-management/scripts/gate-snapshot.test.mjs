@@ -63,7 +63,7 @@ async function snapshotFixture(script, gate = 'build') {
     // NODE_PATH was supplied by the review runner loader, not by this
     // project's actual gate environment. Do not leak its untracked tool path.
     delete env.NODE_PATH;
-    return spawnSync('npx', ['--yes', 'tsx', RUNNER, runId, 'app', gate, '--state-root', stateRoot, ...(reuse ? [] : ['--no-reuse'])], {
+    return spawnSync(process.execPath, [RUNNER, runId, 'app', gate, '--state-root', stateRoot, ...(reuse ? [] : ['--no-reuse'])], {
       cwd: root, encoding: 'utf8', env,
     });
   };
@@ -154,6 +154,7 @@ fs.appendFileSync(path.join(process.env.ORIGINAL_ROOT, '.tmp/calls.log'), (proce
   try {
     assert.equal(fx.runGate().status, 0);
     const first = await fx.evidence();
+    assert.ok(first.environment_digest, `reuse test requires a verified baseline identity: ${JSON.stringify({ reason: first.reuse_disabled_reason, diagnostics: first.diagnostics })}`);
     await writeFile(path.join(fx.root, 'src/other.txt'), 'moved on\n');
     const result = fx.runGate({ reuse: true });
     assert.equal(result.status, 0, result.stderr);
@@ -210,7 +211,7 @@ test('--in-place runs the gate in the checkout without an environment prefix', a
 const fs = require('node:fs'); const path = require('node:path');
 fs.appendFileSync(path.join(process.env.PIPELINE_SCRATCH_DIR, 'seen.jsonl'), JSON.stringify({ cwd: process.cwd() }) + '\\n');`);
   try {
-    const result = spawnSync('npx', ['--yes', 'tsx', RUNNER, fx.runId, 'app', 'build', '--state-root', fx.stateRoot, '--in-place'], {
+    const result = spawnSync(process.execPath, [RUNNER, fx.runId, 'app', 'build', '--state-root', fx.stateRoot, '--in-place'], {
       cwd: fx.root, encoding: 'utf8', env: { ...process.env, PATH: `${path.join(fx.root, 'bin')}:${process.env.PATH}`, PIPELINE_HEAVY_LOCK_DIR: path.join(fx.root, '.locks') } });
     assert.equal(result.status, 0, result.stderr);
     const evidence = await fx.evidence();
@@ -223,7 +224,8 @@ fs.appendFileSync(path.join(process.env.PIPELINE_SCRATCH_DIR, 'seen.jsonl'), JSO
 test('typed release-check uses isolated tree snapshot despite gate name', async () => {
   const fx = await snapshotFixture(`
 const fs = require('node:fs');
-if (fs.existsSync('.tmp/pipelines/snap-run/state.json')) process.exit(41);
+if (process.cwd() === process.env.ORIGINAL_ROOT) process.exit(41);
+if (!fs.existsSync('.tmp/pipelines/snap-run/state.json')) process.exit(42);
 fs.appendFileSync(process.env.PIPELINE_SCRATCH_DIR + '/isolated.log', process.cwd() + '\\n');
 `, 'release-check');
   try {
