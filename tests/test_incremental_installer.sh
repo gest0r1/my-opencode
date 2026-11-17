@@ -312,6 +312,7 @@ assert_contains "$state" "config_sha=$CONFIG_SHA"
 assert_contains "$state" "openchamber_ref=$APP_SOURCE_REF"
 assert_contains "$state" "openchamber_sha=$APP_SHA"
 assert_contains "$state" 'installation_status=delivered'
+[[ "$(stat -c %a "$state")" == 600 ]] || fail 'install state must be private (0600)'
 assert_contains "$state" 'activation_status=pending'
 grep -Eq '^installed_at=[0-9]{4}-[0-9]{2}-[0-9]{2}T' "$state" || fail 'installed_at missing'
 
