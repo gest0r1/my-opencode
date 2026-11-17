@@ -308,7 +308,9 @@ export function safeExactIgnoredRule(rule) {
   if (typeof rule === 'object' && (!rule || !Array.isArray(rule.except ?? []) ||
       (rule.except ?? []).length > 0 || Object.keys(rule).some(key => !['pattern', 'except'].includes(key)))) return false;
   const name = pattern.split('/').at(-1).toLowerCase();
-  if (['agents.md', 'readme.md', 'pipeline-rules.md'].includes(name)) return false;
+  // A reviewed directory is not enough: executable, data and contract inputs
+  // can be stored under docs/ and must not become test-freeze exclusions.
+  if (!name.endsWith('.md') || mandatoryInput(pattern)) return false;
   return (pattern.startsWith('docs/') && !pattern.startsWith('docs/testing/')) ||
     pattern.startsWith('.opencode/handoff-notes/');
 }
