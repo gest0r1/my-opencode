@@ -178,6 +178,7 @@ write_state() {
     "service_restart_pending=$service_pending" \
     "effective_restart_mode=$effective_restart_mode" \
     > "$tmp"
+  chmod 600 "$tmp"
   mv -f "$tmp" "$STATE"
 }
 
