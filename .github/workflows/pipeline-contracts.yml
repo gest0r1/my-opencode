@@ -89,6 +89,14 @@ jobs:
           bash tests/test_dependency_installer.sh
           bash tests/test_generation_timeout.sh
           node --test tests/test_user_plugins.mjs tests/generation-state.test.mjs tests/trusted-paths.test.mjs tests/installed-provenance.test.mjs tests/opencode-v2-runtime-layout.test.mjs
+      - name: Verify formerly orphaned pipeline tests
+        env:
+          NODE_NO_WARNINGS: '1'
+        run: |
+          node --test \
+            config/opencode/skills/task-management/scripts/gate-testing-source.test.mjs \
+            config/opencode/skills/task-management/scripts/pipeline-handover.test.mjs \
+            config/opencode/skills/task-management/scripts/gate-snapshot.test.mjs
       - name: Run pipeline contract tests
         env:
           NODE_NO_WARNINGS: '1'
