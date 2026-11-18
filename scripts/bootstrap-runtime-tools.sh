@@ -126,31 +126,6 @@ ensure_runtime_toolchain() {
   done
 }
 
-ensure_claude_cli() {
-  # Claude Code is a native OpenCode 2.2.3+ provider: there is no longer a
-  # subscription plugin to detect. A pre-existing CLI/login is preserved.
-  # Opt-in bootstrap for new hosts; an absent optional CLI does not fail install.
-  if ! command -v claude >/dev/null 2>&1; then
-    if [[ "${OPENCODE_INSTALL_CLAUDE_CLI:-0}" == 1 ]]; then
-      npm install --global --prefix "$HOME/.local" @anthropic-ai/claude-code
-      hash -r
-    else
-      echo 'Claude CLI not installed (optional native provider). To enable: set OPENCODE_INSTALL_CLAUDE_CLI=1 or install the CLI manually.'
-      return 0
-    fi
-  fi
-  claude --version
-  local status auth_rc=0 parsed_rc=0
-  status="$(claude auth status)" || auth_rc=$?
-  printf '%s' "$status" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const v=JSON.parse(s);process.exit(v.loggedIn===true?0:v.loggedIn===false?2:1)}catch{process.exit(1)}})' || parsed_rc=$?
-  if (( parsed_rc == 2 )); then
-    echo 'CLAUDE_LOGIN_REQUIRED: run claude auth login --claudeai as opencode' >&2
-  elif (( parsed_rc != 0 || auth_rc != 0 )); then
-    echo 'Claude CLI auth check failed; inspect native Claude provider separately' >&2
-    return 1
-  fi
-}
-
 configure_server_browser() {
   local config="$HOME/.config/openchamber/extensions/server-browser/config.json"
   [[ -f "$config" ]] || return 0
