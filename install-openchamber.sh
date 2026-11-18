@@ -327,7 +327,6 @@ trap 'rollback $?' ERR
 trap 'rollback 130' INT
 trap 'rollback 143' TERM
 
-ensure_claude_cli
 configure_server_browser
 
 systemctl --user daemon-reload

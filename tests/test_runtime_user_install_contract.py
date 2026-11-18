@@ -64,7 +64,7 @@ def main():
     require(unit, 'opencode serve --port ${OPENCODE_WEB_PORT} --hostname 127.0.0.1')
     forbid(unit, '0.0.0.0')
     require(config_installer, 'systemctl --user enable opencode-web.service')
-    require(config_installer, 'ensure_claude_cli')
+    forbid(config_installer, 'ensure_' + 'claude_cli')
     require(config_installer, 'configure_server_browser')
 
     require(combined_installer, 'OPENCHAMBER_EXPECTED_VERSION:-2.7.1')

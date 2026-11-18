@@ -1,7 +1,6 @@
 {
   "excluded": [
-    "./plugins/opencode-web-reboot",
-    "@openchamber/opencode-claude"
+    "./plugins/opencode-web-reboot"
   ],
   "excluded_local": [
     "shell-strategy",
