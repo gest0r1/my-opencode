@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { validateGateManifest } from './manifest-preflight.mjs';
 import { readRoleEditPolicy, roleCanEdit, validateWorkItemOutputContract,
   verifyCompletedWorkItemOutputs } from './work-item-output-policy.mjs';
 
@@ -74,4 +75,39 @@ test('RUN refuses missing, empty, stale and foreign output; accepts valid frozen
     await writeFile(join(dir, 'work-items/wi-doc.json'), raw + ' ');
     assert.throws(complete, /WORK_ITEM_CHANGED/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('stage-cli preflight draft path catches impossible output before any closing review', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'o10-draft-'));
+  const old = process.env.OPENCODE_AGENT_POLICY_DIR;
+  try {
+    const dir = join(root, 'agents');
+    const runRoot = join(root, '.tmp/pipelines/draft');
+    await mkdir(join(runRoot, 'work-items'), { recursive: true });
+    await mkdir(dir);
+    await writeFile(join(dir, 'DocWriter.md'), policy('DocWriter',
+      '    "*": deny\\n    "**/*.md": allow\\n    ".tmp/pipelines/**": deny'));
+    process.env.OPENCODE_AGENT_POLICY_DIR = dir;
+    const item = { id: 'doc', pipeline_id: 'p', stage: 'implementation', suggested_agent: 'DocWriter',
+      allowed_change_paths: ['.tmp/pipelines/**'], required_outputs: ['.tmp/pipelines/draft/validation/report.md'] };
+    const raw = JSON.stringify(item);
+    await writeFile(join(runRoot, 'work-items/doc.json'), raw);
+    const manifest = { schema_version: 2, run_id: 'draft', allowed_change_paths: ['.tmp/pipelines/**'],
+      gate_profiles: {}, planning_readiness: { design_freeze: false },
+      work_items: [{ id: 'doc', pipeline_id: 'p', path: 'work-items/doc.json', sha256: sha(raw) }],
+      pipelines: [{ id: 'p', stages: ['implementation'], executors: { implementation: 'agent' },
+        work_items: ['doc'], decision_ids: [], research_ids: [], contract_ids: [] }] };
+    const check = () => validateGateManifest(manifest, { cwd: root, manifestPath: join(runRoot, 'manifest.json') });
+    assert.throws(check, /WORK_ITEM_OUTPUT_ROLE_DENIED/);
+    item.allowed_change_paths = ['docs/**']; item.required_outputs = ['docs/report.md'];
+    manifest.allowed_change_paths = ['docs/**'];
+    const updated = JSON.stringify(item);
+    await writeFile(join(runRoot, 'work-items/doc.json'), updated);
+    manifest.work_items[0].sha256 = sha(updated);
+    assert.equal(check().status, 'DRAFT_READY');
+  } finally {
+    if (old === undefined) delete process.env.OPENCODE_AGENT_POLICY_DIR;
+    else process.env.OPENCODE_AGENT_POLICY_DIR = old;
+    await rm(root, { recursive: true, force: true });
+  }
 });
