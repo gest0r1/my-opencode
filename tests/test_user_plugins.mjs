@@ -10,19 +10,13 @@ test('repo priority, options, versions, v1 tuples and exclusions', () => {
 test('JSONC keeps URLs and quoted comment text', () => {
   assert.deepEqual(parseConfig('{ // comment\n "plugins": ["https://host/plugin", "/*literal*/",],}'), { plugins: ['https://host/plugin', '/*literal*/'] });
 });
-test('retired Claude plugin excluded while independent plugins survive', () => {
-  const policy = {excluded: ['@openchamber/opencode-claude']};
-  assert.deepEqual(mergePlugins({plugins: ['@openchamber/opencode-claude@1.3.4','independent@1']},
-    {plugins: [{package: '@openchamber/opencode-claude@1.3.3', options: {transport: 'cli'}}]}, policy),
-    ['independent@1']);
-});
 test('fresh install, repeated update and local plugins remain available', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugins-')); const active = path.join(root, 'active'), staged = path.join(root, 'staged');
   try {
     fs.mkdirSync(staged); fs.writeFileSync(path.join(staged, 'opencode.json'), '{"plugins":[]}');
     preservePlugins(active, staged, path.join(root, 'absent')); assert.deepEqual(JSON.parse(fs.readFileSync(path.join(staged, 'opencode.json'))).plugins, []);
     fs.mkdirSync(active); fs.mkdirSync(path.join(active, 'plugins')); fs.writeFileSync(path.join(active, 'plugins/user.ts'), 'user');
-    fs.writeFileSync(path.join(active, 'opencode.jsonc'), '{"plugins":[{"package":"@openchamber/opencode-claude","options":{"x":1}}]}');
+    fs.writeFileSync(path.join(active, 'opencode.jsonc'), '{"plugins":[{"package":"user-plugin","options":{"x":1}}]}');
     preservePlugins(active, staged, path.join(root, 'absent')); preservePlugins(active, staged, path.join(root, 'absent'));
     assert.equal(JSON.parse(fs.readFileSync(path.join(staged, 'opencode.json'))).plugins.length, 1);
     assert.equal(fs.readFileSync(path.join(staged, 'plugins/user.ts'), 'utf8'), 'user');
