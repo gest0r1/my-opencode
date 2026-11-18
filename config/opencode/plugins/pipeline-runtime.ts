@@ -1,4 +1,5 @@
 import { dispatchPacket } from "../skills/task-management/scripts/pipeline-dispatch.ts"
+import { resultContentFromEvent } from "../skills/task-management/scripts/subagent-result-content.mjs"
 import { Plugin } from "@opencode/plugin"
 import fs from "node:fs"
 import path from "node:path"
@@ -223,7 +224,7 @@ function compactDispatchShellResult(root: string, event: any, runtimeState: (run
   if (event.status !== "completed" || event.tool !== "shell") return
   const command = String(event.input?.command ?? "")
   if (!/stage-cli\.ts\s+dispatch\b/.test(command)) return
-  const raw = String(event.result?.content ?? event.result?.output ?? "")
+  const raw = resultContentFromEvent(event.result)
   let packet: any
   try { packet = JSON.parse(raw) } catch { return }
   if (!packet?.run_id || !packet?.pipeline_id || !packet?.stage || !packet?.work_item_id || !packet?.state_revision) return
@@ -839,7 +840,7 @@ export default Plugin.define({
       // Any background child of an OpenStage session (worker, reviewer, GateRunner) keeps the wake
       // timer quiet until it settles: its completion notification is the parent's next event.
       if (event.status === "completed") {
-        const ack = BACKGROUND_ACK_RE.exec(String(event.result?.content ?? event.result?.output ?? ""))?.[1]
+        const ack = BACKGROUND_ACK_RE.exec(resultContentFromEvent(event.result))?.[1]
         if (ack && orchestratorRun.has(String(event.sessionID))) trackChild(String(event.sessionID), ack)
       }
       const invocation = invocationByCallID.get(callID)
@@ -847,7 +848,7 @@ export default Plugin.define({
       const ctx = invocation.ctx
       const role = String((event.input as any)?.agent ?? ctx.role)
       const reusedID = String((event.input as any)?.sessionID ?? "")
-      const rawContent = event.status === "completed" ? String(event.result?.content ?? event.result?.output ?? "") : ""
+      const rawContent = event.status === "completed" ? resultContentFromEvent(event.result) : ""
       const ackID = BACKGROUND_ACK_RE.exec(rawContent)?.[1] ?? ""
       const resultID = event.status === "completed" ? String(event.result?.metadata?.sessionID ?? "") || ackID : ""
       const childID = resultID || reusedID
@@ -862,7 +863,7 @@ export default Plugin.define({
       const priorFiles = new Set(invocation.prior_files_read)
       const rereadFiles = currentFiles.filter((file) => priorFiles.has(file))
       const rawResult = event.status === "completed"
-        ? String(event.result?.content ?? event.result?.output ?? "")
+        ? resultContentFromEvent(event.result)
         : String(event.error?.message ?? "")
       const resultPath = writeJsonHandoff(
         root,
