@@ -111,6 +111,24 @@ export function validateWorkItemOutputContract(record, manifest, { policyDir, ca
   }
 }
 
+
+export function validatePlanningAssessmentOutput(manifest, { policyDir, cache } = {}) {
+  const assessment = manifest.planning_readiness?.required_artifacts?.test_assessment;
+  if (assessment === undefined) return;
+  const runId = manifest.run_id;
+  if (typeof runId !== 'string' || !/^[A-Za-z0-9._-]+$/.test(runId) ||
+      typeof assessment?.path !== 'string' || !safePath(assessment.path)) {
+    throw new WorkItemOutputError('PLAN_TEST_ASSESSMENT_PATH_INVALID');
+  }
+  // Planning evidence is run-owned, not a project source file. Verify the real
+  // OpenCode-relative path against the installed TestEngineer exception.
+  const outputPath = `.tmp/pipelines/${runId}/${assessment.path}`;
+  if (!safePath(outputPath) ||
+      !roleCanEdit(readRoleEditPolicy('TestEngineer', { policyDir, cache }), outputPath)) {
+    throw new WorkItemOutputError('PLAN_TEST_ASSESSMENT_ROLE_DENIED: ' + outputPath);
+  }
+}
+
 export function verifyCompletedWorkItemOutputs({ manifest, pipeline, stage, manifestFile, runId, startedAt, projectRoot = process.cwd() }) {
   const root = resolve(projectRoot);
   const runRoot = resolve(manifestFile, '..');
