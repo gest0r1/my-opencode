@@ -111,3 +111,29 @@ test('stage-cli preflight draft path catches impossible output before any closin
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('agent permission order matches OpenCode last-matching-rule semantics', () => {
+  const specificAllowThenGlobalDeny = [
+    { glob: 'docs/safe.md', access: 'allow' },
+    { glob: '*', access: 'deny' },
+  ];
+  assert.equal(roleCanEdit(specificAllowThenGlobalDeny, 'docs/safe.md'), false);
+  const denyThenSpecificAllow = [
+    { glob: '*', access: 'deny' },
+    { glob: 'docs/safe.md', access: 'allow' },
+  ];
+  assert.equal(roleCanEdit(denyThenSpecificAllow, 'docs/safe.md'), true);
+  assert.equal(roleCanEdit([{ glob: '*', access: 'allow' }, { glob: '*.md', access: 'ask' }], 'docs/file.md'), true);
+  assert.equal(roleCanEdit([{ glob: '*', access: 'allow' }, { glob: 'docs/**', access: 'ask' }], 'docs/file.md'), false);
+});
+
+test('unsupported agent edit policies block PLAN instead of ignoring a restrictive rule', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'o10-unknown-policy-'));
+  try {
+    await writeFile(join(root, 'DocWriter.md'), policy('DocWriter',
+      '    "*": allow\n    "docs/[abc]*.md": deny'));
+    assert.throws(() => readRoleEditPolicy('DocWriter', { policyDir: root }), /AGENT_EDIT_POLICY_UNSUPPORTED/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
