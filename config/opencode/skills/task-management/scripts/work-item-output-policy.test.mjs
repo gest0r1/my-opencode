@@ -19,7 +19,7 @@ test('PLAN rejects DocWriter run-local output under deny and permits scoped docu
     await writeFile(join(dir, 'DocWriter.md'), policy('DocWriter',
       '    "*": deny\n    "**/*.md": allow\n    ".tmp/pipelines/**": deny'));
     const opts = { policyDir: dir, cache: new Map() };
-    const manifest = { allowed_change_paths: ['.tmp/pipelines/**', 'docs/**'] };
+    const manifest = { work_item_output_contract_version: 1, allowed_change_paths: ['.tmp/pipelines/**', 'docs/**'] };
     const record = { id: 'doc', stage: 'impl', suggested_agent: 'DocWriter',
       allowed_change_paths: ['.tmp/pipelines/**', 'docs/**'] };
     assert.throws(() => validateWorkItemOutputContract(record, manifest, opts),
@@ -92,7 +92,7 @@ test('stage-cli preflight draft path catches impossible output before any closin
       allowed_change_paths: ['.tmp/pipelines/**'], required_outputs: ['.tmp/pipelines/draft/validation/report.md'] };
     const raw = JSON.stringify(item);
     await writeFile(join(runRoot, 'work-items/doc.json'), raw);
-    const manifest = { schema_version: 2, run_id: 'draft', allowed_change_paths: ['.tmp/pipelines/**'],
+    const manifest = { schema_version: 2, run_id: 'draft', work_item_output_contract_version: 1, allowed_change_paths: ['.tmp/pipelines/**'],
       gate_profiles: {}, planning_readiness: { design_freeze: false },
       work_items: [{ id: 'doc', pipeline_id: 'p', path: 'work-items/doc.json', sha256: sha(raw) }],
       pipelines: [{ id: 'p', stages: ['implementation'], executors: { implementation: 'agent' },
