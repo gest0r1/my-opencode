@@ -290,7 +290,7 @@ test('agent stage cannot transition to DONE before its frozen required output ex
   const agents = path.join(root, 'agents');
   await mkdir(agents, { recursive: true });
   await writeFile(path.join(agents, 'CoderAgent.md'),
-    '---\\nname: CoderAgent\\npermission:\\n  edit:\\n    "*": allow\\n    ".tmp/pipelines/**": deny\\n---\\n');
+    '---\nname: CoderAgent\npermission:\n  edit:\n    "*": allow\n    ".tmp/pipelines/**": deny\n---\n');
   process.env.OPENCODE_AGENT_POLICY_DIR = agents;
   try {
     const stateRoot = path.join(root, '.tmp', 'pipelines');
@@ -317,7 +317,7 @@ test('agent stage cannot transition to DONE before its frozen required output ex
     const blockedState = JSON.parse(await readFile(path.join(stateRoot, manifest.run_id, 'state.json'), 'utf8'));
     assert.equal(blockedState.pipelines.a.stages.implementation.status, 'in_progress');
     await mkdir(path.join(root, 'docs'), { recursive: true });
-    await writeFile(path.join(root, 'docs/completed.md'), '# Completed\\n');
+    await writeFile(path.join(root, 'docs/completed.md'), '# Completed\n');
     result = run(root, ['complete', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
     assert.equal(result.status, 0, result.stderr);
   } finally {
