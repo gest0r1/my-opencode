@@ -24,7 +24,7 @@ Build the smallest useful **vertical, independently reviewable functionality sli
 only accepted architecture deltas in order, or technical AC for technical-only
 Issues. If approval evidence is missing or changed after its review, return
 `needs_revision`; never infer acceptance from the decision register alone.
-For changed normative project documents include the actual documentation path in
+For every new docs-only DocWriter work item freeze a nonempty `required_outputs: [<exact repo-relative Markdown path>, ...]` list in its work-item JSON. Each output must be inside both the manifest scope and the work item's `allowed_change_paths`, and writable by the installed role edit policy. Do not assign DocWriter an output in `.tmp/pipelines/**` (denied); if a machine-owned run-local artifact is required, select an existing trusted writer/executor rather than widening agent permissions. PLAN `stage-cli preflight` rejects impossible role/output contracts; RUN `stage-cli complete` checks that declared files were actually produced.\n\nFor changed normative project documents include the actual documentation path in
 the same source CoderAgent work item's frozen allowed paths; a separate DocWriter
 work item is for docs-only work, not a second executor of a source WI.
 Report the safe parallelism/critical path and collision constraints before
