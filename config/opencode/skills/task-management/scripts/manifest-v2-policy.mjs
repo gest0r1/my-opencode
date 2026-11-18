@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { validateGateTesting, resolveGateTesting, commandsDigest, isPrePublishGate } from './gate-testing-policy.mjs';
 import { planProbeInputDigest } from './plan-probe-identity.mjs';
 import { validateGenerators } from './generator-cli.mjs';
-import { validateWorkItemOutputContract } from './work-item-output-policy.mjs';
+import { validateWorkItemOutputContract, validatePlanningAssessmentOutput } from './work-item-output-policy.mjs';
 
 export class ManifestV2PolicyError extends Error {}
 
@@ -440,6 +440,7 @@ export function validateWorkItems(manifest, root, options = {}) {
     assertWorkItemOrder(manifest, records);
     const rolePolicyCache = new Map();
     for (const record of records.values()) validateWorkItemOutputContract(record, manifest, { cache: rolePolicyCache });
+    validatePlanningAssessmentOutput(manifest, { cache: rolePolicyCache });
   }
 }
 
