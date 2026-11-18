@@ -169,12 +169,6 @@ rm -rf -- "$STAGE_CONFIG/skills/telegram-send" "$STAGE_SKILLS/telegram-send"
 # Merge user plugins before validation/atomic commit; parsing errors preserve active config.
 node "$SRC/scripts/merge-user-plugins.mjs" "$CONFIG_HOME" "$STAGE_CONFIG" "$SRC/config/opencode/plugin-policy.json"
 
-# Native Claude provider ID is claude-agent (legacy plugin ID was claude-code).
-# Apply only to staging; verify each selected model with the installed CLI
-# before committing any config to disk. A failure leaves active config intact.
-CLAUDE_MIGRATION_REPORT="$TMP_DIR/claude-migration.json"
-node "$SRC/scripts/migrate-claude-provider.mjs" "$STAGE_CONFIG" "$CLAUDE_MIGRATION_REPORT"
-
 # V2 local plugins resolve external dependencies from the config directory.
 # Install them before commit so an unavailable/incompatible dependency cannot
 # corrupt the active configuration.
@@ -269,20 +263,6 @@ if [[ "$installed_version" != "$OPENCODE_INSTALL_VERSION" ]]; then
   exit 1
 fi
 echo "OpenCode binary validated: $installed_version"
-
-if node - "$CLAUDE_MIGRATION_REPORT" <<'NODE'
-const fs = require('node:fs');
-const entries = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-process.exit(entries.length ? 0 : 1);
-NODE
-then
-  command -v timeout >/dev/null 2>&1 || { echo 'Claude preflight needs timeout command' >&2; exit 1; }
-  if ! timeout 40s "$OPENCODE_BIN" models claude-agent > "$TMP_DIR/claude-models.txt"; then
-    echo 'CLAUDE_NATIVE_MIGRATION_BLOCKED: cannot list native Claude Agent models; active configuration kept.' >&2
-    exit 1
-  fi
-  node "$SRC/scripts/verify-claude-models.mjs" "$CLAUDE_MIGRATION_REPORT" < "$TMP_DIR/claude-models.txt"
-fi
 
 # ---- Atomic commit ---------------------------------------------------------
 
