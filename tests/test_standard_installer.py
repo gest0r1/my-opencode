@@ -87,6 +87,14 @@ def main():
             "V2 instruction contract")
     require(config_generation, 'legacy singular command path still active', "legacy command rejection")
 
+    # Installation must be provider-neutral. User-selected models remain managed
+    # by the independent preference-preservation code.
+    bootstrap = (ROOT / "scripts/bootstrap-runtime-tools.sh").read_text()
+    forbid(bootstrap, "ensure_" + "claude_cli", "no provider-specific bootstrap")
+    forbid(config_installer + "\\n" + wrapper, "ensure_" + "claude_cli", "no provider-specific installer calls")
+    forbid(config_generation, "migrate-" + "claude-provider", "no provider migration step")
+    forbid(config_generation, "verify-" + "claude-models", "no provider migration preflight")
+
     # Atomic binary transaction and self-preserving embedded-terminal mode.
     require(wrapper, 'exec 8>"$STATE_ROOT/openchamber-v2-atomic.lock"',
             "outer transaction lock")
