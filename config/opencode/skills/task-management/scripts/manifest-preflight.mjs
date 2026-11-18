@@ -229,8 +229,9 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
   if (redundant.length && manifestPath && !existsSync(join(dirname(resolve(manifestPath)), 'state.json'))) {
     throw new ManifestPreflightError(`GATE_COMMAND_REDUNDANT: ${redundant.join('; ')}; drop the repeated or contained command`);
   }
-  return { status: manifest.planning_readiness?.design_freeze === false && !environment ? 'DRAFT_READY' : 'PASS',
-    draft_only: manifest.planning_readiness?.design_freeze === false && !environment,
+  const draftOnly = manifest.planning_readiness?.design_freeze === false && !environment;
+  return { status: draftOnly ? 'DRAFT_READY' : 'PASS',
+    ...(draftOnly ? { draft_only: true } : {}),
     checked_commands: invocations.length, environment_checked: environment, ...(redundant.length ? { warnings: redundant.map(item => `GATE_COMMAND_REDUNDANT: ${item}`) } : {}) };
 }
 
