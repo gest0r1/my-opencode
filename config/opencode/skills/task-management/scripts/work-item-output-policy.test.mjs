@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { validateGateManifest } from './manifest-preflight.mjs';
-import { readRoleEditPolicy, roleCanEdit, validateWorkItemOutputContract,
+import { readRoleEditPolicy, roleCanEdit, validateWorkItemOutputContract, validatePlanningAssessmentOutput,
   verifyCompletedWorkItemOutputs } from './work-item-output-policy.mjs';
 
 const sha = raw => createHash('sha256').update(raw).digest('hex');
@@ -136,4 +136,21 @@ test('unsupported agent edit policies block PLAN instead of ignoring a restricti
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('PLAN assessment output must use the installed TestEngineer exception, not arbitrary run-local files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'o10-assessment-'));
+  try {
+    await writeFile(join(root, 'TestEngineer.md'), policy('TestEngineer',
+      '    "*": allow\n    ".tmp/pipelines/**": deny\n    ".tmp/pipelines/*/planning/test-assessment-*.md": allow'));
+    const manifest = { run_id: 'run-1', planning_readiness: {
+      required_artifacts: { test_assessment: { path: 'planning/test-assessment-web.md', sha256: 'a'.repeat(64) } } } };
+    assert.doesNotThrow(() => validatePlanningAssessmentOutput(manifest, { policyDir: root }));
+    manifest.planning_readiness.required_artifacts.test_assessment.path = 'validation/report.md';
+    assert.throws(() => validatePlanningAssessmentOutput(manifest, { policyDir: root }),
+      /PLAN_TEST_ASSESSMENT_ROLE_DENIED/);
+    manifest.planning_readiness.required_artifacts.test_assessment.path = '../private.md';
+    assert.throws(() => validatePlanningAssessmentOutput(manifest, { policyDir: root }),
+      /PLAN_TEST_ASSESSMENT_PATH_INVALID/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
