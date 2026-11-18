@@ -378,6 +378,9 @@ export function validateTestFirstWorkItems(records, pipelines) {
 }
 
 export function validateWorkItems(manifest, root, options = {}) {
+  if (manifest.work_item_output_contract_version !== undefined && manifest.work_item_output_contract_version !== 1) {
+    throw new ManifestV2PolicyError('WORK_ITEM_OUTPUT_CONTRACT_VERSION_UNSUPPORTED');
+  }
   if (!Array.isArray(manifest.work_items) || manifest.work_items.length === 0) {
     throw new ManifestV2PolicyError('schema v2 manifest requires frozen work_items');
   }
