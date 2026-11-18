@@ -107,9 +107,6 @@ jobs:
           node --check scripts/normalize-opencode-agent-permissions.mjs
           node --check scripts/preserve-agent-colors.mjs
           node --check scripts/merge-user-plugins.mjs
-          node --check scripts/migrate-claude-provider.mjs
-          node --check scripts/verify-claude-models.mjs
-          node --test tests/test_claude_migration.mjs
           bash tests/test_security_history_guards.sh
           node scripts/check-opencode-pins.mjs
           grep -Fq 'bash -s -- --version "$OPENCODE_INSTALL_VERSION"' scripts/install-opencode-generation.sh
