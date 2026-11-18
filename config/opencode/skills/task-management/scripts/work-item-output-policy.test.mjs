@@ -86,7 +86,7 @@ test('stage-cli preflight draft path catches impossible output before any closin
     await mkdir(join(runRoot, 'work-items'), { recursive: true });
     await mkdir(dir);
     await writeFile(join(dir, 'DocWriter.md'), policy('DocWriter',
-      '    "*": deny\\n    "**/*.md": allow\\n    ".tmp/pipelines/**": deny'));
+      '    "*": deny\n    "**/*.md": allow\n    ".tmp/pipelines/**": deny'));
     process.env.OPENCODE_AGENT_POLICY_DIR = dir;
     const item = { id: 'doc', pipeline_id: 'p', stage: 'implementation', suggested_agent: 'DocWriter',
       allowed_change_paths: ['.tmp/pipelines/**'], required_outputs: ['.tmp/pipelines/draft/validation/report.md'] };
