@@ -377,7 +377,7 @@ export function validateTestFirstWorkItems(records, pipelines) {
   }
 }
 
-function validateWorkItems(manifest, root, options = {}) {
+export function validateWorkItems(manifest, root, options = {}) {
   if (!Array.isArray(manifest.work_items) || manifest.work_items.length === 0) {
     throw new ManifestV2PolicyError('schema v2 manifest requires frozen work_items');
   }
