@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { validateGateTesting, resolveGateTesting, commandsDigest, isPrePublishGate } from './gate-testing-policy.mjs';
 import { planProbeInputDigest } from './plan-probe-identity.mjs';
 import { validateGenerators } from './generator-cli.mjs';
+import { validateWorkItemOutputContract, validatePlanningAssessmentOutput } from './work-item-output-policy.mjs';
 
 export class ManifestV2PolicyError extends Error {}
 
@@ -376,7 +377,10 @@ export function validateTestFirstWorkItems(records, pipelines) {
   }
 }
 
-function validateWorkItems(manifest, root, options = {}) {
+export function validateWorkItems(manifest, root, options = {}) {
+  if (manifest.work_item_output_contract_version !== undefined && manifest.work_item_output_contract_version !== 1) {
+    throw new ManifestV2PolicyError('WORK_ITEM_OUTPUT_CONTRACT_VERSION_UNSUPPORTED');
+  }
   if (!Array.isArray(manifest.work_items) || manifest.work_items.length === 0) {
     throw new ManifestV2PolicyError('schema v2 manifest requires frozen work_items');
   }
@@ -435,7 +439,12 @@ function validateWorkItems(manifest, root, options = {}) {
   }
   validateTestFirstWorkItems(records, pipelines);
   // A RUN frozen before this check keeps running: dispatch serializes its overlapping items.
-  if (!options.runtime) assertWorkItemOrder(manifest, records);
+  if (!options.runtime) {
+    assertWorkItemOrder(manifest, records);
+    const rolePolicyCache = new Map();
+    for (const record of records.values()) validateWorkItemOutputContract(record, manifest, { cache: rolePolicyCache });
+    validatePlanningAssessmentOutput(manifest, { cache: rolePolicyCache });
+  }
 }
 
 // Work items of one pipeline are dispatched together unless depends_on orders them. Two items that

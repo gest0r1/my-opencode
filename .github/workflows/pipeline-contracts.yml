@@ -110,6 +110,8 @@ jobs:
             config/opencode/skills/task-management/scripts/capability-preflight.test.mjs \
             config/opencode/skills/task-management/scripts/github-actions-pr.test.mjs \
             config/opencode/skills/task-management/scripts/pipeline-v2-contract.test.mjs \
+            config/opencode/skills/task-management/scripts/subagent-result-content.test.mjs \
+            config/opencode/skills/task-management/scripts/work-item-output-policy.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-rules.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-scope.test.mjs \
             config/opencode/skills/task-management/scripts/stage-cli-budget.test.mjs \

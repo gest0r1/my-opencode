@@ -283,3 +283,45 @@ test('github issue source rejects an unmapped issue', async () => {
   assert.match(result.stderr, /Source issue #47 is not mapped/);
 });
 
+
+test('agent stage cannot transition to DONE before its frozen required output exists', async () => {
+  const root = await tempProject();
+  const previous = process.env.OPENCODE_AGENT_POLICY_DIR;
+  const agents = path.join(root, 'agents');
+  await mkdir(agents, { recursive: true });
+  await writeFile(path.join(agents, 'CoderAgent.md'),
+    '---\nname: CoderAgent\npermission:\n  edit:\n    "*": allow\n    ".tmp/pipelines/**": deny\n---\n');
+  process.env.OPENCODE_AGENT_POLICY_DIR = agents;
+  try {
+    const stateRoot = path.join(root, '.tmp', 'pipelines');
+    const manifest = await baseManifest(root, 'output-completion-run', [
+      { id: 'a', stages: ['implementation'] },
+    ]);
+    manifest.allowed_change_paths = ['docs/**'];
+    manifest.work_item_output_contract_version = 1;
+    const itemRaw = JSON.stringify({ id: 'wi-a', pipeline_id: 'a', stage: 'implementation',
+      suggested_agent: 'CoderAgent', allowed_change_paths: ['docs/**'],
+      required_outputs: ['docs/completed.md'] });
+    await writeFile(path.join(root, 'work-items/wi-a.json'), itemRaw);
+    manifest.work_items[0].sha256 = sha(itemRaw);
+    const manifestPath = await writeManifest(root, manifest);
+    let result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
+    assert.equal(result.status, 0, result.stderr);
+    result = run(root, ['approve', manifest.run_id, '--state-root', stateRoot]);
+    assert.equal(result.status, 0, result.stderr);
+    result = run(root, ['start', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
+    assert.equal(result.status, 0, result.stderr);
+    result = run(root, ['complete', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /WORK_ITEM_OUTPUT_MISSING/);
+    const blockedState = JSON.parse(await readFile(path.join(stateRoot, manifest.run_id, 'state.json'), 'utf8'));
+    assert.equal(blockedState.pipelines.a.stages.implementation.status, 'in_progress');
+    await mkdir(path.join(root, 'docs'), { recursive: true });
+    await writeFile(path.join(root, 'docs/completed.md'), '# Completed\n');
+    result = run(root, ['complete', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_AGENT_POLICY_DIR;
+    else process.env.OPENCODE_AGENT_POLICY_DIR = previous;
+  }
+});
