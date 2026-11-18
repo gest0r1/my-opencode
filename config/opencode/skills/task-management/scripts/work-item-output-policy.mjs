@@ -48,15 +48,22 @@ export function readRoleEditPolicy(role, { policyDir, cache = new Map() } = {}) 
     if (/^permission:\s*$/.test(line)) { permission = true; edit = false; continue; }
     if (/^[^\s]/.test(line)) { permission = false; edit = false; continue; }
     if (!permission) continue;
-    const section = /^  ([A-Za-z_]+):\s*(allow|deny)?\s*$/.exec(line);
+    const section = /^  ([A-Za-z_]+):\s*(allow|deny|ask)?\s*(?:#.*)?$/.exec(line);
     if (section) {
       edit = section[1] === 'edit';
       if (edit && section[2]) rules.push({ glob: '*', access: section[2] });
       continue;
     }
     if (edit) {
-      const pair = /^    (.+?):\s*(allow|deny)\s*$/.exec(line);
-      if (pair) rules.push({ glob: pair[1].replace(/^(['"])(.*)\1$/, '$2'), access: pair[2] });
+      const pair = /^    (.+?):\s*(allow|deny|ask)\s*(?:#.*)?$/.exec(line);
+      if (pair) {
+        const glob = pair[1].replace(/^(['"])(.*)\1$/, '$2');
+        // Never silently miss a deny because this lightweight matcher cannot parse its syntax.
+        if (/[\[\]{}]/.test(glob)) throw new WorkItemOutputError('AGENT_EDIT_POLICY_UNSUPPORTED: ' + role);
+        rules.push({ glob, access: pair[2] });
+      } else if (line.trim() && !line.trimStart().startsWith('#')) {
+        throw new WorkItemOutputError('AGENT_EDIT_POLICY_UNSUPPORTED: ' + role);
+      }
     }
   }
   if (!rules.length) throw new WorkItemOutputError('AGENT_EDIT_POLICY_UNAVAILABLE: ' + role);
@@ -65,14 +72,11 @@ export function readRoleEditPolicy(role, { policyDir, cache = new Map() } = {}) 
 }
 
 export function roleCanEdit(rules, path) {
-  const matches = rules.filter(rule => globMatches(rule.glob, path));
-  if (!matches.length) return false;
-  // Exact/narrow rules override broad globs. At equal specificity, deny wins.
-  matches.sort((a, b) => {
-    const score = rule => rule.glob.replace(/[?*]/g, '').length;
-    return score(b) - score(a) || (a.access === 'deny' ? -1 : 1);
-  });
-  return matches[0].access === 'allow';
+  // OpenCode evaluates ordered agent permissions with last-match-wins.
+  // An unmatched or "ask" result is not independently executable in PLAN.
+  let permission = 'deny';
+  for (const rule of rules) if (globMatches(rule.glob, path)) permission = rule.access;
+  return permission === 'allow';
 }
 
 export function validateWorkItemOutputContract(record, manifest, { policyDir, cache } = {}) {
