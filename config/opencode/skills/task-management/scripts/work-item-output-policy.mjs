@@ -79,7 +79,9 @@ export function validateWorkItemOutputContract(record, manifest, { policyDir, ca
   const declared = record.required_outputs;
   if (declared === undefined) {
     // Historical frozen WIs without outputs retain their previous behavior.
-    if (record.suggested_agent === 'DocWriter') throw new WorkItemOutputError('WORK_ITEM_OUTPUT_DECLARATION_REQUIRED: ' + record.id);
+    if (record.suggested_agent === 'DocWriter' && manifest.work_item_output_contract_version === 1) {
+      throw new WorkItemOutputError('WORK_ITEM_OUTPUT_DECLARATION_REQUIRED: ' + record.id);
+    }
     return;
   }
   if (!Array.isArray(declared) || !declared.length || new Set(declared).size !== declared.length) {
