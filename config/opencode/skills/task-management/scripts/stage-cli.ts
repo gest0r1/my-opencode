@@ -20,6 +20,7 @@ import { laneDigest } from './dispatch-leases.mjs';
 import { validateOwnerAmendmentForApply } from './owner-amendment-policy.ts';
 import { refreshManifestHashes } from './manifest-refresh.mjs';
 import { readReviewVerdict } from './review-result-evidence.mjs';
+import { verifyCompletedWorkItemOutputs } from './work-item-output-policy.mjs';
 
 function stateRootFromArgs(args: string[]): string {
   const index = args.indexOf('--state-root');
@@ -242,7 +243,10 @@ async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
   const artifactRoot = dirname(manifestFile);
   let evidencePath: string | undefined;
 
-  if (executor === 'owner_acceptance') {
+  if (executor === 'agent') {
+    verifyCompletedWorkItemOutputs({ manifest, pipeline, stage, manifestFile, runId,
+      startedAt: state.pipelines?.[pipeline.id]?.stages?.[stage]?.started_at });
+  } else if (executor === 'owner_acceptance') {
     throw new Error(`OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT: ${pipeline.id}/${stage}`);
   } else if (executor === 'review') {
     // Do not close a review stage on a child dispatch or on the chat reply:
