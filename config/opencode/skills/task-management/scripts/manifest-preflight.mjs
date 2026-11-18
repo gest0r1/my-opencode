@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { gatePolicyError, isFrozenUvPytest, tokenizeGateCommand as tokenizeGateCommandPolicy } from './gate-command-policy.mjs';
-import { validateManifestV2Policy, validatePackageManagerContract } from './manifest-v2-policy.mjs';
+import { validateManifestV2Policy, validatePackageManagerContract, validateWorkItems } from './manifest-v2-policy.mjs';
 import { resolveGateTestingFile } from './gate-testing-policy.mjs';
 import { classifyGate } from './gate-classification.mjs';
 
@@ -200,7 +200,12 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
   const used = new Set(manifest.pipelines.map((pipeline) => pipeline.profile).filter(Boolean));
   const usedInvocations = invocations.filter(({ profile }) => used.has(profile));
   try {
-    validateManifestV2Policy(manifest, { cwd, manifestPath });
+    // A draft WI may be checked before costly closing reviews; this is not PLAN approval.
+    // The full plan-check/init path still enforces complete planning readiness.
+    if (manifest.planning_readiness?.design_freeze === false && !environment) {
+      if (!manifestPath) throw new ManifestPreflightError('DRAFT_PREFLIGHT_MANIFEST_PATH_REQUIRED');
+      validateWorkItems(manifest, dirname(resolve(manifestPath)), { runtime: false });
+    } else validateManifestV2Policy(manifest, { cwd, manifestPath });
     validatePackageManagerContract(usedInvocations, { cwd, environment, executableOnPath });
   } catch (error) {
     throw new ManifestPreflightError(error instanceof Error ? error.message : String(error));
@@ -224,7 +229,9 @@ export function validateGateManifest(manifest, { environment = false, cwd = proc
   if (redundant.length && manifestPath && !existsSync(join(dirname(resolve(manifestPath)), 'state.json'))) {
     throw new ManifestPreflightError(`GATE_COMMAND_REDUNDANT: ${redundant.join('; ')}; drop the repeated or contained command`);
   }
-  return { status: 'PASS', checked_commands: invocations.length, environment_checked: environment, ...(redundant.length ? { warnings: redundant.map(item => `GATE_COMMAND_REDUNDANT: ${item}`) } : {}) };
+  return { status: manifest.planning_readiness?.design_freeze === false && !environment ? 'DRAFT_READY' : 'PASS',
+    draft_only: manifest.planning_readiness?.design_freeze === false && !environment,
+    checked_commands: invocations.length, environment_checked: environment, ...(redundant.length ? { warnings: redundant.map(item => `GATE_COMMAND_REDUNDANT: ${item}`) } : {}) };
 }
 
 export async function preflightFile(path, options = {}) {
