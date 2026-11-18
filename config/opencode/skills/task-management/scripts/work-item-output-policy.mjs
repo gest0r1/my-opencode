@@ -101,8 +101,8 @@ export function validateWorkItemOutputContract(record, manifest, { policyDir, ca
   }
 }
 
-export function verifyCompletedWorkItemOutputs({ manifest, pipeline, stage, manifestFile, runId, startedAt }) {
-  const root = resolve(manifest.project_root ?? process.cwd());
+export function verifyCompletedWorkItemOutputs({ manifest, pipeline, stage, manifestFile, runId, startedAt, projectRoot = process.cwd() }) {
+  const root = resolve(projectRoot);
   const runRoot = resolve(manifestFile, '..');
   for (const frozen of manifest.work_items ?? []) {
     if (frozen.pipeline_id !== pipeline.id || !pipeline.work_items?.includes(frozen.id)) continue;
