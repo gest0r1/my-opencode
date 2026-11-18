@@ -178,7 +178,6 @@ if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" != 1 &&
 fi
 
 bash "$GENERATION" "$@"
-ensure_claude_cli
 configure_server_browser
 
 # OpenCode is a persistent user service owned by opencode.
