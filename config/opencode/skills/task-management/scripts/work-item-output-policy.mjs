@@ -80,6 +80,10 @@ export function roleCanEdit(rules, path) {
 }
 
 export function validateWorkItemOutputContract(record, manifest, { policyDir, cache } = {}) {
+  if (manifest.work_item_output_contract_version === 1 &&
+      (typeof record.suggested_agent !== 'string' || !record.suggested_agent)) {
+    throw new WorkItemOutputError('WORK_ITEM_ROLE_REQUIRED: ' + record.id);
+  }
   const declared = record.required_outputs;
   if (declared === undefined) {
     // Historical frozen WIs without outputs retain their previous behavior.
