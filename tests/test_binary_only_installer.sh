@@ -52,7 +52,7 @@ if [[ "${1:-}" == api ]]; then
     exit 0
   fi
   if [[ "$*" == *"contents/scripts/bootstrap-runtime-tools.sh?ref="* ]]; then
-    printf 'ensure_runtime_node() { :; }\nensure_runtime_toolchain() { :; }\nensure_claude_cli() { :; }\nconfigure_server_browser() { :; }\n'
+    printf 'ensure_runtime_node() { :; }\nensure_runtime_toolchain() { :; }\nconfigure_server_browser() { :; }\n'
     exit 0
   fi
   if [[ "$*" == *"contents/scripts/install-opencode-generation.sh?ref="* ]]; then
