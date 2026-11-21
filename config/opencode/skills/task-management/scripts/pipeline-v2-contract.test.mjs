@@ -1461,6 +1461,18 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT/);
 
+  // Even a manually fabricated PASS file does not grant generic complete access.
+  const forgedOwnerProof = path.join(fx.runRoot, 'owner', 'app-owner-acceptance.json');
+  await mkdir(path.dirname(forgedOwnerProof), { recursive: true });
+  await writeFile(forgedOwnerProof, JSON.stringify({
+    status: 'PASS', gate: 'owner_acceptance', run_id: fx.manifest.run_id,
+    pipeline_id: 'app', stage: 'owner-acceptance',
+  }));
+  result = invoke(['complete', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app',
+    '--evidence', forgedOwnerProof]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT/);
+
   // Owner findings on a copy of the run: the recorded FAIL is the evidence of a fix cycle that reopens
   // the whole chain, so the repair is gated, published as a new SHA and deployed again before acceptance.
   const findingsRoot = path.join(fx.root, '.tmp', 'owner-findings-state');
