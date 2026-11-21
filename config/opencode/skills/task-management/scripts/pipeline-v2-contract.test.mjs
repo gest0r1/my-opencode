@@ -1494,6 +1494,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
     '--result', 'pass', '--message', 'owner tested deployed candidate',
   ]);
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Pipeline run:/);
 
   result = invoke(['status', fx.manifest.run_id, '--json']);
   assert.equal(result.status, 0, result.stderr);
