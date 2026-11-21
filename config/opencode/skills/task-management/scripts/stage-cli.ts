@@ -82,13 +82,14 @@ export async function enforcePublishedEvidenceCurrent(args: string[]): Promise<v
   }
 
   const gitHead = gitValue(['rev-parse', 'HEAD']);
-  if (gitHead !== undefined) {
-    const gitBranch = gitValue(['branch', '--show-current']);
-    const dirty = gitValue(['status', '--porcelain', '--untracked-files=all']);
-    if (String(gitHead).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
-        gitBranch !== candidate.branch || dirty !== '') {
-      throw new Error('CANDIDATE_STALE_SOURCE: working tree no longer equals published candidate; verify and publish a new candidate');
-    }
+  if (!gitHead) {
+    throw new Error('CANDIDATE_SOURCE_UNAVAILABLE: published evidence requires a verifiable git worktree');
+  }
+  const gitBranch = gitValue(['branch', '--show-current']);
+  const dirty = gitValue(['status', '--porcelain', '--untracked-files=all']);
+  if (String(gitHead).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
+      gitBranch !== candidate.branch || dirty !== '') {
+    throw new Error('CANDIDATE_STALE_SOURCE: working tree no longer equals published candidate; verify and publish a new candidate');
   }
 
   for (const pipeline of manifest.pipelines ?? []) {
