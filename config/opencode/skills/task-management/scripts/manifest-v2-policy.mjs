@@ -413,7 +413,8 @@ export function validateWorkItems(manifest, root, options = {}) {
     if (!Object.values(pipeline.executors ?? {}).includes('agent')) throw new ManifestV2PolicyError(`WORK_ITEM_NOT_EXECUTABLE: ${item.id}`);
   }
   const records = new Map(manifest.work_items.map(item => [item.id, JSON.parse(readFileSync(resolve(root, item.path), 'utf8'))]));
-  for (const frozen of manifest.work_items) {
+  if (manifest.work_item_output_contract_version === 1 || !options.runtime) {
+    for (const frozen of manifest.work_items) {
     const record = records.get(frozen.id);
     const pipeline = pipelines.get(frozen.pipeline_id);
     if (record.pipeline_id !== frozen.pipeline_id || typeof record.stage !== 'string' ||
@@ -428,6 +429,7 @@ export function validateWorkItems(manifest, root, options = {}) {
         throw new ManifestV2PolicyError(`AGENT_STAGE_WITHOUT_WORK_ITEM: ${pipeline.id}/${stage}`);
       }
     }
+  }
   }
   const visited = new Set(), visiting = new Set();
   const visit = id => {
