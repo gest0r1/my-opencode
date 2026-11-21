@@ -54,14 +54,20 @@ async function baseManifest(root, runId, pipelines) {
   const workItems = [];
   const normalized = [];
   for (const pipeline of pipelines) {
-    const id = `wi-${pipeline.id}`;
-    const artifact = await frozen(root, `work-items/${id}.json`, JSON.stringify({ id, pipeline_id: pipeline.id }));
-    workItems.push({ id, pipeline_id: pipeline.id, ...artifact });
+    const executors = { ...Object.fromEntries(pipeline.stages.map((stage) => [stage, 'agent'])), ...pipeline.executors };
+    const ids = [];
+    for (const [index, stage] of pipeline.stages.filter(s => executors[s] === 'agent').entries()) {
+      const id = index === 0 ? `wi-${pipeline.id}` : `wi-${pipeline.id}-${stage}`;
+      const artifact = await frozen(root, `work-items/${id}.json`,
+        JSON.stringify({ id, pipeline_id: pipeline.id, stage, suggested_agent: 'CoderAgent' }));
+      workItems.push({ id, pipeline_id: pipeline.id, ...artifact });
+      ids.push(id);
+    }
     normalized.push({
       ...pipeline,
       deployable: false,
-      executors: Object.fromEntries(pipeline.stages.map((stage) => [stage, 'agent'])),
-      work_items: [id],
+      executors,
+      work_items: ids,
       decision_ids: [],
       research_ids: [],
       contract_ids: [],
@@ -69,6 +75,7 @@ async function baseManifest(root, runId, pipelines) {
   }
   return {
     schema_version: 2,
+    work_item_output_contract_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,
@@ -172,10 +179,9 @@ test('late blocker after source-ready does not freeze downstream work', async ()
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const manifest = await baseManifest(root, 'dag-late-blocker', [
-    { id: 'a', stages: ['implementation', 'late-validation'], ready_after_stage: 'implementation' },
+    { id: 'a', stages: ['implementation', 'late-validation'], ready_after_stage: 'implementation', executors: { 'late-validation': 'review' } },
     { id: 'b', stages: ['implementation'], depends_on: ['a'] },
   ]);
-  manifest.pipelines[0].executors['late-validation'] = 'review';
   const manifestPath = await writeManifest(root, manifest);
 
   let result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
