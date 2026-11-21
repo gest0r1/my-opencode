@@ -2810,8 +2810,14 @@ export async function recordClassReview(
 function parseOptions(args: string[]): { positional: string[]; options: StageCommandOptions } {
   const positional: string[] = [];
   const options: StageCommandOptions = { json: false, stateRoot: DEFAULT_STATE_ROOT };
+  const seenSecurityOptions = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
+    if (argument === '--pipeline' || argument === '--state-root') {
+      if (seenSecurityOptions.has(argument)) throw new StageCliError(`DUPLICATE_SECURITY_OPTION: ${argument}`);
+      seenSecurityOptions.add(argument);
+      if (!args[index + 1] || args[index + 1].startsWith('--')) throw new StageCliError(`OPTION_VALUE_REQUIRED: ${argument}`);
+    }
     if (argument === '--json') options.json = true;
     else if (argument === '--chart') options.chart = true;
     else if (argument === '--state-root') options.stateRoot = args[++index] ?? DEFAULT_STATE_ROOT;
