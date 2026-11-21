@@ -391,3 +391,32 @@ test('init cannot inherit owner approval from two unsourced revision flags', asy
   assert.match(result.stderr, /APPROVAL_CARRY_EVIDENCE_REQUIRED/);
   await assert.rejects(readFile(path.join(stateRoot, manifest.run_id, 'state.json')), /ENOENT/);
 });
+
+test('canonical complete preserves locally verified gate evidence link', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await baseManifest(root, 'gate-evidence-run', [
+    { id: 'p', stages: ['implementation', 'validate'],
+      executors: { validate: 'local_gate' }, profile: 'local' },
+  ]);
+  manifest.gate_profiles = { local: { validate: ['bash -n check.sh'] } };
+  const manifestFile = await writeManifest(root, manifest);
+  let result = run(root, ['init', manifestFile, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['approve', manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['start', manifest.run_id, 'implementation', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['complete', manifest.run_id, 'implementation', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['start', manifest.run_id, 'validate', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  const gateFile = path.join(stateRoot, manifest.run_id, 'gates', 'p-validate.json');
+  await mkdir(path.dirname(gateFile), { recursive: true });
+  await writeFile(gateFile, JSON.stringify({ status: 'PASS', run_id: manifest.run_id,
+    pipeline_id: 'p', gate: 'validate' }));
+  result = run(root, ['complete', manifest.run_id, 'validate', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(await readFile(path.join(stateRoot, manifest.run_id, 'state.json'), 'utf8'));
+  assert.deepEqual(state.pipelines.p.stages.validate.evidence.artifacts, [gateFile]);
+});
