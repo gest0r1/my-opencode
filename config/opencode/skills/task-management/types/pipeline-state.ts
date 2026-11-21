@@ -459,6 +459,7 @@ export interface PipelineState {
   schema_version: number;
   run_id: string;
   manifest_file?: string;
+  worktree_root?: string;
   manifest_sha256?: string;
   rules_file: string;
   rules_origin_file?: string;
