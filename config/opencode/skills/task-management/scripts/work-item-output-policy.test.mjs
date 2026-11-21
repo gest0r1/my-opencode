@@ -181,7 +181,20 @@ test('fresh DocWriter PLAN without output contract is not mistaken for frozen le
       work_items: [{ id: 'doc', pipeline_id: 'p', path: 'work-items/doc.json', sha256: sha(raw) }],
       pipelines: [{ id: 'p', stages: ['implementation'], executors: { implementation: 'agent' },
         work_items: ['doc'], decision_ids: [], research_ids: [], contract_ids: [] }] };
-    assert.throws(() => validateGateManifest(manifest, { cwd: root, manifestPath: join(runRoot, 'manifest.json') }),
-      /WORK_ITEM_OUTPUT_CONTRACT_VERSION_REQUIRED/);
+    const check = () => validateGateManifest(manifest, { cwd: root, manifestPath: join(runRoot, 'manifest.json') });
+    assert.throws(check, /WORK_ITEM_OUTPUT_CONTRACT_VERSION_REQUIRED/);
+    manifest.work_item_output_contract_version = 1;
+    item.stage = 'not-in-pipeline';
+    let updated = JSON.stringify(item);
+    await writeFile(join(runRoot, 'work-items/doc.json'), updated);
+    manifest.work_items[0].sha256 = sha(updated);
+    assert.throws(check, /WORK_ITEM_STAGE_INVALID/);
+    item.stage = 'implementation';
+    updated = JSON.stringify(item);
+    await writeFile(join(runRoot, 'work-items/doc.json'), updated);
+    manifest.work_items[0].sha256 = sha(updated);
+    manifest.pipelines[0].stages = ['implementation', 'review'];
+    manifest.pipelines[0].executors.review = 'agent';
+    assert.throws(check, /AGENT_STAGE_WITHOUT_WORK_ITEM/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
