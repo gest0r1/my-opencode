@@ -102,7 +102,7 @@ async function fixture() {
   const workItemArtifact = await frozen(
     artifactRoot,
     'work-items/WI-OWNER-1.json',
-    JSON.stringify({ id: 'WI-OWNER-1', pipeline_id: 'onboarding' }),
+    JSON.stringify({ id: 'WI-OWNER-1', pipeline_id: 'onboarding', stage: 'implementation', suggested_agent: 'CoderAgent' }),
   );
   const deploymentTarget = await frozen(
     artifactRoot,
@@ -122,6 +122,7 @@ async function fixture() {
 
   const manifest = {
     schema_version: 2,
+    work_item_output_contract_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,
