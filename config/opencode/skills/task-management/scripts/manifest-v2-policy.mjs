@@ -400,6 +400,22 @@ export function validateWorkItems(manifest, root, options = {}) {
     if (!Object.values(pipeline.executors ?? {}).includes('agent')) throw new ManifestV2PolicyError(`WORK_ITEM_NOT_EXECUTABLE: ${item.id}`);
   }
   const records = new Map(manifest.work_items.map(item => [item.id, JSON.parse(readFileSync(resolve(root, item.path), 'utf8'))]));
+  for (const frozen of manifest.work_items) {
+    const record = records.get(frozen.id);
+    const pipeline = pipelines.get(frozen.pipeline_id);
+    if (record.pipeline_id !== frozen.pipeline_id || typeof record.stage !== 'string' ||
+        !pipeline?.stages?.includes(record.stage) || pipeline.executors?.[record.stage] !== 'agent') {
+      throw new ManifestV2PolicyError(`WORK_ITEM_STAGE_INVALID: ${frozen.id}/${String(record.stage)}`);
+    }
+  }
+  for (const pipeline of manifest.pipelines ?? []) {
+    for (const stage of pipeline.stages ?? []) {
+      if (pipeline.executors?.[stage] === 'agent' &&
+          !(pipeline.work_items ?? []).some(id => records.get(id)?.stage === stage)) {
+        throw new ManifestV2PolicyError(`AGENT_STAGE_WITHOUT_WORK_ITEM: ${pipeline.id}/${stage}`);
+      }
+    }
+  }
   const visited = new Set(), visiting = new Set();
   const visit = id => {
     if (visiting.has(id)) throw new ManifestV2PolicyError(`WORK_ITEM_DEPENDENCY_CYCLE: ${id}`);
