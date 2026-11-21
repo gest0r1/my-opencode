@@ -1440,13 +1440,20 @@ export async function completeStage(
       enforceCompletionEvidence } = await import('./stage-cli.ts');
     await enforcePublishedEvidenceCurrent(args);
     await rejectDirectOwnerAcceptanceTransition(args);
-    await enforceCompletionEvidence(args);
+    const checkedArgs = await enforceCompletionEvidence(args);
+    // The legacy facade attaches an authoritative evidence artifact for gate,
+    // CI and publish stages. Preserve that contract after moving checks inside
+    // the transition rather than silently completing without an artifact link.
+    const evidenceIndex = checkedArgs.indexOf('--evidence');
+    const effectiveOptions = { ...options,
+      ...(evidenceIndex >= 0 && checkedArgs[evidenceIndex + 1] &&
+          !options.evidencePath ? { evidencePath: checkedArgs[evidenceIndex + 1] } : {}) };
     const { verifyAgentAdvisoryCompletion, verifyReviewClosing } = await import('./stage-complete-cli.ts');
-    await verifyAgentAdvisoryCompletion(root, args);
-    await verifyReviewClosing(root, args);
+    await verifyAgentAdvisoryCompletion(root, checkedArgs);
+    await verifyReviewClosing(root, checkedArgs);
     runtime.status = 'completed';
     runtime.completed_at = now();
-    runtime.evidence = buildEvidence(stage, 'completed', options);
+    runtime.evidence = buildEvidence(stage, 'completed', effectiveOptions);
     addHistory(state, pipeline.id, stage, 'completed', options.message);
 
     const stageDone = (name: string | undefined): boolean => {
