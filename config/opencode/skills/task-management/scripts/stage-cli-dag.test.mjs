@@ -320,11 +320,29 @@ test('agent stage cannot transition to DONE before its frozen required output ex
     result = run(root, ['complete', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /WORK_ITEM_OUTPUT_MISSING/);
+    const directCore = spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-cli-core.ts'),
+      'complete', manifest.run_id, 'implementation', '--state-root', stateRoot], { cwd: root, encoding: 'utf8' });
+    assert.notEqual(directCore.status, 0);
+    assert.match(directCore.stderr, /WORK_ITEM_OUTPUT_MISSING/);
+    const wrapped = spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'),
+      'complete', manifest.run_id, 'implementation', '--state-root', stateRoot], { cwd: root, encoding: 'utf8' });
+    assert.notEqual(wrapped.status, 0);
+    assert.match(wrapped.stderr, /STAGE_COMPLETE_DELEGATE_FAILED/);
+    const intruder = await tempProject();
+    await mkdir(path.join(intruder, 'docs'), { recursive: true });
+    await writeFile(path.join(intruder, 'docs/completed.md'), '# fake evidence\n');
+    const fromForeign = run(intruder, ['complete', manifest.run_id, 'implementation', '--state-root', stateRoot]);
+    assert.notEqual(fromForeign.status, 0);
+    assert.match(fromForeign.stderr, /RUN_WORKTREE_ROOT_MISMATCH/);
+    result = run(root, ['complete', manifest.run_id, 'implementation', '--pipeline', 'a',
+      '--pipeline', 'a', '--state-root', stateRoot]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /DUPLICATE_SECURITY_OPTION/);
     const blockedState = JSON.parse(await readFile(path.join(stateRoot, manifest.run_id, 'state.json'), 'utf8'));
     assert.equal(blockedState.pipelines.a.stages.implementation.status, 'in_progress');
     await mkdir(path.join(root, 'docs'), { recursive: true });
     await writeFile(path.join(root, 'docs/completed.md'), '# Completed\n');
-    result = run(root, ['complete', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
+    result = run(root, ['complete', manifest.run_id, 'implementation', '--state-root', stateRoot]);
     assert.equal(result.status, 0, result.stderr);
   } finally {
     if (previous === undefined) delete process.env.OPENCODE_AGENT_POLICY_DIR;
