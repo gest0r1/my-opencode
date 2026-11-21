@@ -1440,6 +1440,11 @@ export async function completeStage(
       enforceCompletionEvidence } = await import('./stage-cli.ts');
     await enforcePublishedEvidenceCurrent(args);
     await rejectDirectOwnerAcceptanceTransition(args);
+    const { verifyAgentAdvisoryCompletion, verifyReviewClosing } = await import('./stage-complete-cli.ts');
+    // Former stage-complete facade enforced these before attempting core DONE:
+    // keep the same actionable errors and require advisory on every entrypoint.
+    await verifyAgentAdvisoryCompletion(root, args);
+    await verifyReviewClosing(root, args);
     const checkedArgs = await enforceCompletionEvidence(args);
     // The legacy facade attaches an authoritative evidence artifact for gate,
     // CI and publish stages. Preserve that contract after moving checks inside
@@ -1448,9 +1453,6 @@ export async function completeStage(
     const effectiveOptions = { ...options,
       ...(evidenceIndex >= 0 && checkedArgs[evidenceIndex + 1] &&
           !options.evidencePath ? { evidencePath: checkedArgs[evidenceIndex + 1] } : {}) };
-    const { verifyAgentAdvisoryCompletion, verifyReviewClosing } = await import('./stage-complete-cli.ts');
-    await verifyAgentAdvisoryCompletion(root, checkedArgs);
-    await verifyReviewClosing(root, checkedArgs);
     runtime.status = 'completed';
     runtime.completed_at = now();
     runtime.evidence = buildEvidence(stage, 'completed', effectiveOptions);
