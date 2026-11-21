@@ -349,3 +349,45 @@ test('agent stage cannot transition to DONE before its frozen required output ex
     else process.env.OPENCODE_AGENT_POLICY_DIR = previous;
   }
 });
+
+test('authoritative completion blocks advisory evidence bypass for core, facade and implicit pipeline', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await baseManifest(root, 'advisory-protected', [
+    { id: 'p', stages: ['implementation'], profile: 'local' },
+  ]);
+  manifest.gate_profiles = { local: { tests: ['bash -n run.sh'] } };
+  manifest.gate_testing = { local: { tests: { impact_groups: [{ inputs: ['docs/**'], command_index: 0 }] } } };
+  const manifestFile = await writeManifest(root, manifest);
+  let result = run(root, ['init', manifestFile, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['approve', manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['start', manifest.run_id, 'implementation', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  const entries = ['stage-cli.ts', 'stage-cli-core.ts', 'stage-complete-cli.ts'];
+  for (const entry of entries) {
+    result = spawnSync('npx', ['--yes', 'tsx', path.join(HERE, entry),
+      'complete', manifest.run_id, 'implementation', '--state-root', stateRoot], { cwd: root, encoding: 'utf8' });
+    assert.notEqual(result.status, 0, `completion bypass through ${entry}`);
+    if (entry !== 'stage-complete-cli.ts') assert.match(result.stderr, /ADVISORY_DISPATCH_BASELINE_REQUIRED/);
+    const state = JSON.parse(await readFile(path.join(stateRoot, manifest.run_id, 'state.json'), 'utf8'));
+    assert.equal(state.pipelines.p.stages.implementation.status, 'in_progress', entry);
+  }
+});
+
+test('init cannot inherit owner approval from two unsourced revision flags', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await baseManifest(root, 'approval-carry-negative', [
+    { id: 'p', stages: ['implementation'] },
+  ]);
+  const manifestFile = await writeManifest(root, manifest);
+  await writeFile(path.join(root, 'planning', 'revision.json'), JSON.stringify({
+    previous_approval: true, owner_contract_changed: false,
+  }));
+  let result = run(root, ['init', manifestFile, '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /APPROVAL_CARRY_EVIDENCE_REQUIRED/);
+  await assert.rejects(readFile(path.join(stateRoot, manifest.run_id, 'state.json')), /ENOENT/);
+});
