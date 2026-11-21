@@ -387,8 +387,9 @@ export function validateWorkItems(manifest, root, options = {}) {
     let frozenLegacy = false;
     try {
       const state = JSON.parse(readFileSync(join(root, 'state.json'), 'utf8'));
-      const manifestFile = resolve(root, 'manifest.json');
+      const manifestFile = options.manifestPath ? resolve(options.manifestPath) : resolve(root, 'manifest.json');
       frozenLegacy = state.run_id === manifest.run_id &&
+        typeof state.manifest_file === 'string' &&
         resolve(state.manifest_file) === manifestFile &&
         state.manifest_sha256 === sha256(readFileSync(manifestFile, 'utf8'));
     } catch { /* absence or mismatch is a fresh PLAN, never implicit legacy */ }
@@ -413,23 +414,23 @@ export function validateWorkItems(manifest, root, options = {}) {
     if (!Object.values(pipeline.executors ?? {}).includes('agent')) throw new ManifestV2PolicyError(`WORK_ITEM_NOT_EXECUTABLE: ${item.id}`);
   }
   const records = new Map(manifest.work_items.map(item => [item.id, JSON.parse(readFileSync(resolve(root, item.path), 'utf8'))]));
-  if (manifest.work_item_output_contract_version === 1 || !options.runtime) {
+  if (manifest.work_item_output_contract_version === 1) {
     for (const frozen of manifest.work_items) {
-    const record = records.get(frozen.id);
-    const pipeline = pipelines.get(frozen.pipeline_id);
-    if (record.pipeline_id !== frozen.pipeline_id || typeof record.stage !== 'string' ||
-        !pipeline?.stages?.includes(record.stage) || pipeline.executors?.[record.stage] !== 'agent') {
-      throw new ManifestV2PolicyError(`WORK_ITEM_STAGE_INVALID: ${frozen.id}/${String(record.stage)}`);
-    }
-  }
-  for (const pipeline of manifest.pipelines ?? []) {
-    for (const stage of pipeline.stages ?? []) {
-      if (pipeline.executors?.[stage] === 'agent' &&
-          !(pipeline.work_items ?? []).some(id => records.get(id)?.stage === stage)) {
-        throw new ManifestV2PolicyError(`AGENT_STAGE_WITHOUT_WORK_ITEM: ${pipeline.id}/${stage}`);
+      const record = records.get(frozen.id);
+      const pipeline = pipelines.get(frozen.pipeline_id);
+      if (record.pipeline_id !== frozen.pipeline_id || typeof record.stage !== 'string' ||
+          !pipeline?.stages?.includes(record.stage) || pipeline.executors?.[record.stage] !== 'agent') {
+        throw new ManifestV2PolicyError(`WORK_ITEM_STAGE_INVALID: ${frozen.id}/${String(record.stage)}`);
       }
     }
-  }
+    for (const pipeline of manifest.pipelines ?? []) {
+      for (const stage of pipeline.stages ?? []) {
+        if (pipeline.executors?.[stage] === 'agent' &&
+            !(pipeline.work_items ?? []).some(id => records.get(id)?.stage === stage)) {
+          throw new ManifestV2PolicyError(`AGENT_STAGE_WITHOUT_WORK_ITEM: ${pipeline.id}/${stage}`);
+        }
+      }
+    }
   }
   const visited = new Set(), visiting = new Set();
   const visit = id => {
