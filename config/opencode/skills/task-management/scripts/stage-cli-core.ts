@@ -1415,12 +1415,15 @@ function buildEvidence(
   };
 }
 
-export async function completeStage(
+// Only the explicit owner-accept command may take this internal completion path.
+// A generic complete call must still reject an owner_acceptance executor.
+async function completeStageTransition(
   stateRoot: string,
   runId: string,
   stage: string,
-  pipelineId?: string,
-  options: StageCommandOptions = { json: false, stateRoot },
+  pipelineId: string | undefined,
+  options: StageCommandOptions,
+  explicitOwnerPass: boolean,
 ): Promise<PipelineState> {
   return updateState(stateRoot, runId, async (state) => {
     const pipeline = getPipeline(state, pipelineId);
@@ -1439,13 +1442,30 @@ export async function completeStage(
     const { enforcePublishedEvidenceCurrent, rejectDirectOwnerAcceptanceTransition,
       enforceCompletionEvidence } = await import('./stage-cli.ts');
     await enforcePublishedEvidenceCurrent(args);
-    await rejectDirectOwnerAcceptanceTransition(args);
+    if (explicitOwnerPass) {
+      const frozen = readFrozenManifestFromState(state);
+      const executor = frozen.pipelines?.find((item) => item.id === pipeline.id)?.executors?.[stage];
+      if (executor !== 'owner_acceptance' || !state.manifest_file || !options.evidencePath) {
+        throw new StageCliError('OWNER_ACCEPTANCE_EXPLICIT_PROOF_REQUIRED');
+      }
+      const expectedPath = resolve(dirname(state.manifest_file), 'owner', `${pipeline.id}-${stage}.json`);
+      if (resolve(options.evidencePath) !== expectedPath) {
+        throw new StageCliError('OWNER_ACCEPTANCE_EVIDENCE_PATH_INVALID');
+      }
+      let proof: any;
+      try { proof = JSON.parse(await readFile(expectedPath, 'utf8')); }
+      catch { throw new StageCliError('OWNER_ACCEPTANCE_EVIDENCE_MISSING_OR_INVALID'); }
+      if (proof.status !== 'PASS' || proof.gate !== 'owner_acceptance' ||
+          proof.run_id !== runId || proof.pipeline_id !== pipeline.id || proof.stage !== stage) {
+        throw new StageCliError('OWNER_ACCEPTANCE_EVIDENCE_INVALID');
+      }
+    } else {
+      await rejectDirectOwnerAcceptanceTransition(args);
+    }
     const { verifyAgentAdvisoryCompletion, verifyReviewClosing } = await import('./stage-complete-cli.ts');
-    // Former stage-complete facade enforced these before attempting core DONE:
-    // keep the same actionable errors and require advisory on every entrypoint.
     await verifyAgentAdvisoryCompletion(root, args);
     await verifyReviewClosing(root, args);
-    const checkedArgs = await enforceCompletionEvidence(args);
+    const checkedArgs = explicitOwnerPass ? args : await enforceCompletionEvidence(args);
     // The legacy facade attaches an authoritative evidence artifact for gate,
     // CI and publish stages. Preserve that contract after moving checks inside
     // the transition rather than silently completing without an artifact link.
@@ -1477,6 +1497,28 @@ export async function completeStage(
     else pipeline.status = 'in_progress';
     if (allCompleted) pipeline.current_stage = undefined;
   });
+}
+
+export async function completeStage(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  pipelineId?: string,
+  options: StageCommandOptions = { json: false, stateRoot },
+): Promise<PipelineState> {
+  return completeStageTransition(stateRoot, runId, stage, pipelineId, options, false);
+}
+
+// Used solely by the explicit owner-accept CLI path after it records a PASS.
+// Not reachable through a generic complete or a CLI option.
+export async function completeExplicitOwnerStage(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  pipelineId: string,
+  options: StageCommandOptions,
+): Promise<PipelineState> {
+  return completeStageTransition(stateRoot, runId, stage, pipelineId, options, true);
 }
 
 function technicalFixLimit(runtime: StageRuntime): number {
