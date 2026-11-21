@@ -38,13 +38,17 @@ async function fixture(runId = 'v2-run') {
   const artifacts = {
     decision_register: await frozen('decision-register.md', '# decisions\n'),
     architecture,
-    work_items: await frozen('work-items/index.json', '{"items":["wi-1"]}\n'),
+    work_items: await frozen('work-items/index.json', '{"items":["wi-1","wi-finalize"]}\n'),
   };
   const review = await frozen('reviews/architecture-review-1.md', '# review\n');
-  const item = await frozen('work-items/wi-1.json', '{"id":"wi-1"}\n');
+  const item = await frozen('work-items/wi-1.json',
+    JSON.stringify({ id: 'wi-1', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
+  const finalize = await frozen('work-items/wi-finalize.json',
+    JSON.stringify({ id: 'wi-finalize', pipeline_id: 'app', stage: 'finalize', suggested_agent: 'CoderAgent' }) + '\n');
 
   const manifest = {
     schema_version: 2,
+    work_item_output_contract_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,
@@ -77,19 +81,60 @@ async function fixture(runId = 'v2-run') {
         'candidate-review': 'review',
         finalize: 'agent',
       },
-      work_items: ['wi-1'],
+      work_items: ['wi-1', 'wi-finalize'],
       decision_ids: [],
       research_ids: [],
       contract_ids: [],
       ready_after_stage: 'functional-review',
       release_ready_after_stage: 'candidate-review',
     }],
-    work_items: [{ id: 'wi-1', pipeline_id: 'app', ...item }],
+    work_items: [{ id: 'wi-1', pipeline_id: 'app', ...item }, { id: 'wi-finalize', pipeline_id: 'app', ...finalize }],
     gate_profiles: {},
   };
   const manifestPath = path.join(runRoot, 'manifest.json');
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   return { root, runRoot, manifest, manifestPath, frozen };
+}
+
+
+async function alignFixtureWorkItems(fx) {
+  // Tests that replace pipeline stages must also replace the frozen work-item map.
+  // Only valid fixtures can test later gate/deploy/owner contracts meaningfully.
+  const pipeline = fx.manifest.pipelines[0];
+  const item = fx.manifest.work_items.find(entry => entry.id === 'wi-finalize');
+  if (!item) return;
+  const otherAgentStages = pipeline.stages.filter(stage =>
+    stage !== 'implementation' && pipeline.executors?.[stage] === 'agent');
+  if (!otherAgentStages.length) {
+    pipeline.work_items = pipeline.work_items.filter(id => id !== 'wi-finalize');
+    fx.manifest.work_items = fx.manifest.work_items.filter(entry => entry.id !== 'wi-finalize');
+  } else if (otherAgentStages[0] !== 'finalize') {
+    const content = JSON.stringify({ id: 'wi-finalize', pipeline_id: 'app',
+      stage: otherAgentStages[0], suggested_agent: 'CoderAgent' }) + '\n';
+    await writeFile(path.join(fx.runRoot, item.path), content);
+    item.sha256 = sha(content);
+  }
+}
+
+
+// Real disposable Git fixture: published evidence must match the local HEAD,
+// selected branch and clean worktree. Never weaken that production guard for tests.
+async function publishedFixtureHead(fx) {
+  await writeFile(path.join(fx.root, '.gitignore'), '.tmp/\n');
+  const git = (...args) => {
+    const result = spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
+    assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`);
+    return result.stdout.trim();
+  };
+  git('init', '-b', 'feature/test');
+  git('config', 'user.name', 'Pipeline fixture');
+  git('config', 'user.email', 'pipeline-fixture@example.invalid');
+  git('add', '.');
+  git('commit', '-m', 'frozen candidate fixture');
+  const head = git('rev-parse', 'HEAD');
+  fx.manifest.git_setup.base_sha = head;
+  await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
+  return head;
 }
 
 function run(root, args) {
@@ -209,7 +254,8 @@ test('schema v2 rejects changed planning evidence by SHA-256', async () => {
 
 test('schema v2 requires an explicit executor for every stage', async () => {
   const fx = await fixture('v2-executor-coverage');
-  delete fx.manifest.pipelines[0].executors.finalize;
+  delete fx.manifest.pipelines[0].executors.finalize;;
+  await alignFixtureWorkItems(fx)
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /EXECUTOR_STAGE_MISMATCH/,
@@ -225,6 +271,7 @@ test('schema v2 rejects planned source mutation after candidate publication', as
     publish: 'git_publish',
     'late-docs': 'agent',
   };
+  await alignFixtureWorkItems(fx)
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /SOURCE_STAGE_AFTER_PUBLISH/,
@@ -285,7 +332,7 @@ test('schema v2 allows deterministic local test/build gates before final GitHub 
 
 test('schema v2 freezes CI bootstrap work item and workflow scope', async () => {
   const fx = await fixture('v2-ci-bootstrap');
-  const bootstrap = await fx.frozen('work-items/wi-ci.json', '{"id":"wi-ci"}\n');
+  const bootstrap = await fx.frozen('work-items/wi-ci.json', JSON.stringify({ id: 'wi-ci', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   fx.manifest.work_items.push({ id: 'wi-ci', pipeline_id: 'app', ...bootstrap });
   fx.manifest.pipelines[0].work_items.push('wi-ci');
   fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'build');
@@ -408,7 +455,7 @@ test('schema v2 protects stateful DEV behind trusted default-branch workflow', a
 
 test('schema v2 keeps new stateful DEV workflow deferred until it becomes trusted', async () => {
   const fx = await fixture('v2-stateful-bootstrap');
-  const bootstrap = await fx.frozen('work-items/wi-dev.json', '{"id":"wi-dev"}\n');
+  const bootstrap = await fx.frozen('work-items/wi-dev.json', JSON.stringify({ id: 'wi-dev', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   fx.manifest.work_items.push({ id: 'wi-dev', pipeline_id: 'app', ...bootstrap });
   fx.manifest.pipelines[0].work_items.push('wi-dev');
   fx.manifest.allowed_change_paths.push('.github/workflows/dev.yml');
@@ -470,7 +517,7 @@ test('schema v2 keeps new stateful DEV workflow deferred until it becomes truste
 
 test('schema v2 serializes declared conflict groups through the DAG', async () => {
   const fx = await fixture('v2-conflict');
-  const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
+  const secondItem = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...secondItem });
   fx.manifest.pipelines[0].conflict_group = 'admin';
   fx.manifest.pipelines.push({
@@ -499,7 +546,7 @@ test('schema v2 serializes declared conflict groups through the DAG', async () =
 
 test('schema v2 requires source-ready milestone on depended-on pipelines', async () => {
   const fx = await fixture('v2-source-ready-required');
-  const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
+  const secondItem = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...secondItem });
   delete fx.manifest.pipelines[0].ready_after_stage;
   delete fx.manifest.pipelines[0].release_ready_after_stage;
@@ -522,7 +569,7 @@ test('schema v2 requires source-ready milestone on depended-on pipelines', async
 
 test('schema v2 rejects source-mutating agent stages after source-ready boundary', async () => {
   const fx = await fixture('v2-source-ready-no-late-agent');
-  const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
+  const secondItem = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...secondItem });
   fx.manifest.pipelines.push({
     id: 'b',
@@ -662,6 +709,7 @@ test('GitHub-driven OpenCode-host deployment still requires trusted probe eviden
     dev: 'github_dev',
     'owner-acceptance': 'owner_acceptance',
   };
+  await alignFixtureWorkItems(fx)
   pipeline.deployable = true;
   pipeline.decision_ids.push('decision-testing-strategy');
   pipeline.deployment_validation = {
@@ -772,6 +820,7 @@ test('hybrid uses local post-CI deployment without GitHub-to-host probe', async 
     tests: 'github_ci',
     'local-deploy': 'local_gate',
   };
+  await alignFixtureWorkItems(fx)
   pipeline.profile = 'default';
   fx.manifest.gate_profiles = {
     default: {
@@ -812,6 +861,7 @@ test('a versioned run must end with publish, local candidate gate, dev_deploy an
 
   pipeline.stages = ['implementation', 'git-verify', 'publish', 'candidate', 'dev', 'accept'];
   pipeline.executors = { implementation: 'agent', 'git-verify': 'git_verify', publish: 'git_publish', candidate: 'local_gate', dev: 'dev_deploy', accept: 'owner_acceptance' };
+  await alignFixtureWorkItems(fx)
   pipeline.profile = 'default';
   fx.manifest.gate_profiles = { default: { candidate: ['pnpm test'] } };
   pipeline.deployable = true;
@@ -977,6 +1027,7 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   const fx = await fixture('v2-github-evidence');
   fx.manifest.pipelines[0].stages = ['implementation', 'git-verify', 'publish', 'tests'];
   fx.manifest.pipelines[0].executors = { implementation: 'agent', 'git-verify': 'git_verify', publish: 'git_publish', tests: 'github_ci' };
+  await alignFixtureWorkItems(fx)
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
@@ -989,6 +1040,7 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/test' };
   await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
 
+  const candidateHead = await publishedFixtureHead(fx);
   const stateRoot = path.join(fx.root, '.tmp', 'github-evidence-state');
   let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
@@ -1013,7 +1065,7 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   result = run(fx.root, ['complete', fx.manifest.run_id, 'git-verify', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 
-  const candidateSha = 'c'.repeat(40);
+  const candidateSha = candidateHead;
   result = run(fx.root, ['start', fx.manifest.run_id, 'publish', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
@@ -1064,6 +1116,7 @@ test('stage-cli accepts artifactless stateful DEV evidence bound to exact source
     tests: 'github_ci',
     dev: 'github_dev',
   };
+  await alignFixtureWorkItems(fx)
   fx.manifest.pipelines[0].deployable = true;
   fx.manifest.pipelines[0].decision_ids.push('decision-testing-strategy');
   fx.manifest.pipelines[0].testing_strategy = {
@@ -1100,6 +1153,7 @@ test('stage-cli accepts artifactless stateful DEV evidence bound to exact source
   fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/test' };
   await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
 
+  const candidateHead = await publishedFixtureHead(fx);
   const stateRoot = path.join(fx.root, '.tmp', 'stateful-dev-state');
   let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
@@ -1124,7 +1178,7 @@ test('stage-cli accepts artifactless stateful DEV evidence bound to exact source
   result = run(fx.root, ['complete', fx.manifest.run_id, 'git-verify', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 
-  const candidateSha = 'e'.repeat(40);
+  const candidateSha = candidateHead;
   result = run(fx.root, ['start', fx.manifest.run_id, 'publish', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
@@ -1169,7 +1223,7 @@ test('stage-cli accepts artifactless stateful DEV evidence bound to exact source
   }, null, 2));
   result = run(fx.root, ['start', fx.manifest.run_id, 'dev', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /EVIDENCE_INVALID_OR_STALE/);
+  assert.match(result.stderr, /EVIDENCE_INVALID_OR_STALE|CANDIDATE_STALE_SOURCE/);
 
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
     status: 'PASS',
@@ -1223,6 +1277,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
     dev: 'github_dev',
     'owner-acceptance': 'owner_acceptance',
   };
+  await alignFixtureWorkItems(fx)
   pipeline.deployable = true;
   pipeline.decision_ids.push('decision-testing-strategy');
   pipeline.deployment_validation = {
@@ -1300,6 +1355,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
   );
   await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
 
+  const candidateHead = await publishedFixtureHead(fx);
   const stateRoot = path.join(fx.root, '.tmp', 'owner-acceptance-state');
   const invoke = (args) => run(fx.root, [...args, '--state-root', stateRoot]);
   let result = invoke(['init', fx.manifestPath]);
@@ -1325,7 +1381,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
   result = invoke(['complete', fx.manifest.run_id, 'git-verify', '--pipeline', 'app']);
   assert.equal(result.status, 0, result.stderr);
 
-  const candidateSha = 'c'.repeat(40);
+  const candidateSha = candidateHead;
   result = invoke(['start', fx.manifest.run_id, 'publish', '--pipeline', 'app']);
   assert.equal(result.status, 0, result.stderr);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
@@ -1405,6 +1461,18 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT/);
 
+  // Even a manually fabricated PASS file does not grant generic complete access.
+  const forgedOwnerProof = path.join(fx.runRoot, 'owner', 'app-owner-acceptance.json');
+  await mkdir(path.dirname(forgedOwnerProof), { recursive: true });
+  await writeFile(forgedOwnerProof, JSON.stringify({
+    status: 'PASS', gate: 'owner_acceptance', run_id: fx.manifest.run_id,
+    pipeline_id: 'app', stage: 'owner-acceptance',
+  }));
+  result = invoke(['complete', fx.manifest.run_id, 'owner-acceptance', '--pipeline', 'app',
+    '--evidence', forgedOwnerProof]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /OWNER_ACCEPTANCE_REQUIRES_EXPLICIT_OWNER_RESULT/);
+
   // Owner findings on a copy of the run: the recorded FAIL is the evidence of a fix cycle that reopens
   // the whole chain, so the repair is gated, published as a new SHA and deployed again before acceptance.
   const findingsRoot = path.join(fx.root, '.tmp', 'owner-findings-state');
@@ -1426,6 +1494,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
     '--result', 'pass', '--message', 'owner tested deployed candidate',
   ]);
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Pipeline run:/);
 
   result = invoke(['status', fx.manifest.run_id, '--json']);
   assert.equal(result.status, 0, result.stderr);
@@ -1444,6 +1513,7 @@ test('technical fix after publish reopens source, verify and publish before GitH
     publish: 'git_publish',
     tests: 'github_ci',
   };
+  await alignFixtureWorkItems(fx)
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
@@ -1456,6 +1526,7 @@ test('technical fix after publish reopens source, verify and publish before GitH
   fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/test' };
   await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
 
+  const candidateHead = await publishedFixtureHead(fx);
   const stateRoot = path.join(fx.root, '.tmp', 'fix-invalidation-state');
   const invoke = (args) => run(fx.root, [...args, '--state-root', stateRoot]);
   let result = invoke(['init', fx.manifestPath]);
@@ -1487,8 +1558,8 @@ test('technical fix after publish reopens source, verify and publish before GitH
     status: 'PASS',
     run_id: fx.manifest.run_id,
     branch: 'feature/test',
-    candidate_sha: 'c'.repeat(40),
-    remote_sha: 'c'.repeat(40),
+    candidate_sha: candidateHead,
+    remote_sha: candidateHead,
     published_at: new Date(Date.now() + 1000).toISOString(),
   }, null, 2));
   result = invoke(['complete', fx.manifest.run_id, 'publish', '--pipeline', 'app']);
@@ -1632,7 +1703,7 @@ test('schema v2 validates preserved baseline shape and reason-coded lineage', as
 test('PLAN rejects orphaned work items, missing dependencies, cycles and reversed order before init', async () => {
   const fx = await fixture('complete-work-item-catalog');
   const itemFile = path.join(fx.runRoot, 'work-items/wi-2.json');
-  const content = JSON.stringify({id:'wi-2',pipeline_id:'app',depends_on:['wi-1']});
+  const content = JSON.stringify({id:'wi-2',pipeline_id:'app',stage:'implementation',suggested_agent:'CoderAgent',depends_on:['wi-1']});
   await writeFile(itemFile, content);
   fx.manifest.work_items.push({id:'wi-2',pipeline_id:'app',path:'work-items/wi-2.json',sha256:sha(content)});
   assert.throws(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}), /UNBOUND_WORK_ITEM/);
@@ -1642,8 +1713,8 @@ test('PLAN rejects orphaned work items, missing dependencies, cycles and reverse
   assert.throws(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}), /DEPENDENCY_ORDER/);
   fx.manifest.pipelines[0].work_items.reverse();
   for (const dependency of ['missing','wi-2']) {
-    const data = JSON.stringify({id:'wi-2',pipeline_id:'app',depends_on:[dependency]});
-    await writeFile(itemFile, data); fx.manifest.work_items[1].sha256=sha(data);
+    const data = JSON.stringify({id:'wi-2',pipeline_id:'app',stage:'implementation',suggested_agent:'CoderAgent',depends_on:[dependency]});
+    await writeFile(itemFile, data); fx.manifest.work_items.find(item => item.id === 'wi-2').sha256=sha(data);
     assert.throws(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}), dependency==='missing' ? /UNKNOWN_WORK_ITEM_DEPENDENCY/ : /DEPENDENCY_CYCLE/);
   }
 });
@@ -1653,7 +1724,7 @@ test('PLAN allows independent source lanes beside prep and enforces only named p
   const file = 'tests/obsolete.test.ts';
   fx.manifest.allowed_change_paths.push(file);
   const prepItem = await fx.frozen('work-items/wi-prep.json', JSON.stringify({
-    id: 'wi-prep', pipeline_id: 'prep', stage: 'implementation', allowed_change_paths: [file],
+    id: 'wi-prep', pipeline_id: 'prep', stage: 'implementation', suggested_agent: 'TestEngineer', allowed_change_paths: [file],
   }));
   fx.manifest.work_items.push({ id: 'wi-prep', pipeline_id: 'prep', ...prepItem });
   fx.manifest.pipelines.push({
@@ -1679,9 +1750,9 @@ test('PLAN allows independent source lanes beside prep and enforces only named p
 
 test('schema v2 rejects parallel pipelines whose work items may change the same paths', async () => {
   const fx = await fixture('v2-parallel-scope');
-  const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', allowed_change_paths: ['src/api/**', 'vitest.config.ts'] }));
+  const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/api/**', 'vitest.config.ts'] }));
   fx.manifest.work_items[0] = { id: 'wi-1', pipeline_id: 'app', ...first };
-  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/web/**', 'vitest.config.ts'] }));
+  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/web/**', 'vitest.config.ts'] }));
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...second });
   fx.manifest.pipelines.push({
     id: 'b', deployable: false, stages: ['implementation'], executors: { implementation: 'agent' },
@@ -1691,27 +1762,27 @@ test('schema v2 rejects parallel pipelines whose work items may change the same 
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /PARALLEL_SCOPE_OVERLAP: app and b .*vitest\.config\.ts/,
   );
-  const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/web/**'] }));
-  fx.manifest.work_items[1] = { id: 'wi-2', pipeline_id: 'b', ...disjoint };
+  const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/web/**'] }));
+  fx.manifest.work_items[fx.manifest.work_items.findIndex(item => item.id === 'wi-2')] = { id: 'wi-2', pipeline_id: 'b', ...disjoint };
   assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
 });
 
 test('PLAN rejects two work items of one pipeline that may change the same path unless depends_on orders them', async () => {
   const fx = await fixture('v2-item-scope');
-  const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', allowed_change_paths: ['scripts/testing/**', 'src/a.ts'] }));
+  const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['scripts/testing/**', 'src/a.ts'] }));
   fx.manifest.work_items[0] = { id: 'wi-1', pipeline_id: 'app', ...first };
-  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
+  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'app', ...second });
   fx.manifest.pipelines[0].work_items.push('wi-2');
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /WORK_ITEM_SCOPE_OVERLAP: wi-1 and wi-2 of app may both change scripts\/testing\/\*\*/,
   );
-  const ordered = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', depends_on: ['wi-1'], allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
-  fx.manifest.work_items[1] = { id: 'wi-2', pipeline_id: 'app', ...ordered };
+  const ordered = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', depends_on: ['wi-1'], allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
+  fx.manifest.work_items[fx.manifest.work_items.findIndex(item => item.id === 'wi-2')] = { id: 'wi-2', pipeline_id: 'app', ...ordered };
   assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
-  const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/b.ts'] }));
-  fx.manifest.work_items[1] = { id: 'wi-2', pipeline_id: 'app', ...disjoint };
+  const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/b.ts'] }));
+  fx.manifest.work_items[fx.manifest.work_items.findIndex(item => item.id === 'wi-2')] = { id: 'wi-2', pipeline_id: 'app', ...disjoint };
   assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
 });
 
@@ -1755,14 +1826,14 @@ test('a FAIL plan probe passes only with a baseline_repair work item on the prof
   await fx.writeProbe({ status: 'FAIL' });
   const check = () => validatePlanProbes(fx.manifest, { manifestPath: fx.manifestPath, cwd: fx.root });
   assert.throws(check, /PLAN_PROBE_REQUIRED/);
-  const repaired = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', baseline_repair: true }));
+  const repaired = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', baseline_repair: true }));
   fx.manifest.work_items[0] = { id: 'wi-1', pipeline_id: 'app', ...repaired };
   assert.doesNotThrow(check);
 });
 
 test('pipelines sharing profile and gate share one plan probe; runtime and candidate gates need none', async () => {
   const fx = await planProbeFixture('v2-plan-probe-shared');
-  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/b/**'] }));
+  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/b/**'] }));
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...second });
   fx.manifest.pipelines.push({ id: 'b', deployable: false, profile: 'default', stages: ['implementation', 'fast-tests'],
     executors: { implementation: 'agent', 'fast-tests': 'local_gate' }, work_items: ['wi-2'], decision_ids: [], research_ids: [], contract_ids: [] });

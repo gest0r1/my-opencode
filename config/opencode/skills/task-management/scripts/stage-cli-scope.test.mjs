@@ -40,9 +40,10 @@ async function fixture(runId = 'scope-run', extra = {}, mutate = () => {}) {
     accepted_risks: await frozen(root, 'accepted-risks.md', '# risks\n'),
     work_items: await frozen(root, 'work-items/index.json', '{"schema":2}\n'),
   };
-  const item = await frozen(root, 'work-items/wi-app.json', '{"id":"wi-app","pipeline_id":"app"}\n');
+  const item = await frozen(root, 'work-items/wi-app.json', JSON.stringify({ id: 'wi-app', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   const manifest = {
     schema_version: 2,
+    work_item_output_contract_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,
@@ -305,7 +306,9 @@ test('scope-check never auto-authorizes protected paths as test siblings', async
 });
 
 async function withTestPreparation(manifest, root, reworkPath = 'tools/gen/inventory.test.mjs') {
-  const prep = await frozen(root, 'work-items/wi-prep.json', '{"id":"wi-prep","pipeline_id":"prep"}\n');
+  const prep = await frozen(root, 'work-items/wi-prep.json', JSON.stringify({
+    id: 'wi-prep', pipeline_id: 'prep', stage: 'implementation', suggested_agent: 'TestEngineer',
+  }) + '\n');
   manifest.test_rework = [{ id: 'tr-1', path: reworkPath, action: 'update', reason: 'pins the list this run changes', work_item_id: 'wi-prep' }];
   manifest.pipelines.unshift({
     id: 'prep', deployable: false, test_preparation: true, stages: ['implementation', 'code-review'],

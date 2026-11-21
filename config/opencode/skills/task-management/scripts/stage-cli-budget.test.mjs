@@ -282,9 +282,11 @@ async function fixture(runId, stages = ['implementation', 'code-review'], execut
     accepted_risks: await frozen(root, 'accepted-risks.md', '# risks\n'),
     work_items: await frozen(root, 'work-items/index.json', '{"schema":2}\n'),
   };
-  const item = await frozen(root, 'work-items/wi-app.json', '{"id":"wi-app","pipeline_id":"app"}\n');
+  const item = await frozen(root, 'work-items/wi-app.json',
+    JSON.stringify({ id: 'wi-app', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   const manifest = {
     schema_version: 2,
+    work_item_output_contract_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,
@@ -844,7 +846,7 @@ async function lanesFixture(runId, { sinkScope = ['packages/sink/**'], laneScope
   const scopes = { lane: laneScope, sink: sinkScope, other: ['packages/other/**'] };
   const workItems = [];
   for (const id of ['lane', 'sink', 'other']) {
-    const artifact = await frozen(root, `work-items/wi-${id}.json`, JSON.stringify({ id: `wi-${id}`, pipeline_id: id, allowed_change_paths: scopes[id] }));
+    const artifact = await frozen(root, `work-items/wi-${id}.json`, JSON.stringify({ id: `wi-${id}`, pipeline_id: id, stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: scopes[id] }));
     workItems.push({ id: `wi-${id}`, pipeline_id: id, ...artifact });
   }
   const gated = ['implementation', 'code-review'];
@@ -852,7 +854,7 @@ async function lanesFixture(runId, { sinkScope = ['packages/sink/**'], laneScope
   const pipeline = (id, extra = {}) => ({ id, deployable: false, stages: gated, executors, work_items: [`wi-${id}`],
     decision_ids: [], research_ids: [], contract_ids: [], ...extra });
   const manifest = {
-    schema_version: 2, run_id: runId, rules_file: 'docs/pipeline-rules.md', rules_version: 2, planning_mode: 'design-freeze',
+    schema_version: 2, work_item_output_contract_version: 1, run_id: runId, rules_file: 'docs/pipeline-rules.md', rules_version: 2, planning_mode: 'design-freeze',
     planning_readiness: { design_freeze: true, required_gates: ['architecture'],
       gates: { architecture: { required: true, status: 'ready', cycles: 1, artifact: architecture, review, blocking_decision_ids: [] } },
       required_artifacts: requiredArtifacts },

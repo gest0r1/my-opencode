@@ -9,7 +9,7 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { applyOwnerAmendment, runCli, validateApprovalRecord } from './stage-cli-core.ts';
+import { applyOwnerAmendment, runCli, validateApprovalRecord, completeExplicitOwnerStage } from './stage-cli-core.ts';
 import { prepareProjectTooling, restoreDependencies } from './project-tooling.mjs';
 import { preflightFile } from './manifest-preflight.mjs';
 import { freezeGateTesting } from './gate-testing-freeze.mjs';
@@ -46,7 +46,7 @@ function gitValue(args: string[]): string | undefined {
   return String(result.stdout ?? '').trim();
 }
 
-async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
+export async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
   if (!['start', 'complete'].includes(args[0] ?? '')) return;
   const runId = args[1];
   const stage = args[2];
@@ -82,13 +82,14 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
   }
 
   const gitHead = gitValue(['rev-parse', 'HEAD']);
-  if (gitHead !== undefined) {
-    const gitBranch = gitValue(['branch', '--show-current']);
-    const dirty = gitValue(['status', '--porcelain', '--untracked-files=all']);
-    if (String(gitHead).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
-        gitBranch !== candidate.branch || dirty !== '') {
-      throw new Error('CANDIDATE_STALE_SOURCE: working tree no longer equals published candidate; verify and publish a new candidate');
-    }
+  if (!gitHead) {
+    throw new Error('CANDIDATE_SOURCE_UNAVAILABLE: published evidence requires a verifiable git worktree');
+  }
+  const gitBranch = gitValue(['branch', '--show-current']);
+  const dirty = gitValue(['status', '--porcelain', '--untracked-files=all']);
+  if (String(gitHead).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
+      gitBranch !== candidate.branch || dirty !== '') {
+    throw new Error('CANDIDATE_STALE_SOURCE: working tree no longer equals published candidate; verify and publish a new candidate');
   }
 
   for (const pipeline of manifest.pipelines ?? []) {
@@ -156,7 +157,7 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
   }
 }
 
-async function rejectDirectOwnerAcceptanceTransition(args: string[]): Promise<void> {
+export async function rejectDirectOwnerAcceptanceTransition(args: string[]): Promise<void> {
   if (!['complete', 'fail', 'block', 'resume'].includes(args[0] ?? '')) return;
   const runId = args[1];
   const stage = args[2];
@@ -214,12 +215,19 @@ async function ownerAcceptance(args: string[]): Promise<boolean> {
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
 
   const common = [runId, stage, '--pipeline', pipelineId, '--state-root', stateRoot, '--evidence', evidencePath];
-  if (result === 'pass') await runCli(['complete', ...common, ...(message ? ['--message', message] : [])]);
-  else await runCli(['block', ...common, ...(message ? ['--message', message] : [])]);
+  if (result === 'pass') {
+    // The explicit owner command is a distinct entrypoint. Generic complete
+    // remains forbidden for owner_acceptance, including direct core callers.
+    await completeExplicitOwnerStage(stateRoot, runId, stage, pipelineId, {
+      json: false, stateRoot, pipelineId, evidencePath, ...(message ? { message } : {}),
+    });
+    // Preserve the former CLI completion output for owner workflows.
+    await runCli(['status', runId, '--state-root', stateRoot]);
+  } else await runCli(['block', ...common, ...(message ? ['--message', message] : [])]);
   return true;
 }
 
-async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
+export async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
   if (args[0] !== 'complete') return args;
   const runId = args[1];
   const stage = args[2];
@@ -575,9 +583,14 @@ async function main(args: string[]): Promise<void> {
     if (!state.manifest_file) throw new Error('approved manifest path is missing');
     await preflightFile(state.manifest_file, { environment: true });
   }
+  if (args[0] === 'complete') {
+    // Authoritative guard lives in stage-cli-core::completeStage under the RUN lock.
+    await runCli(args);
+    return;
+  }
   await enforcePublishedEvidenceCurrent(args);
   await rejectDirectOwnerAcceptanceTransition(args);
-  await runCli(await enforceCompletionEvidence(args));
+  await runCli(args);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

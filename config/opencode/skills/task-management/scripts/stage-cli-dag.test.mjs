@@ -54,14 +54,20 @@ async function baseManifest(root, runId, pipelines) {
   const workItems = [];
   const normalized = [];
   for (const pipeline of pipelines) {
-    const id = `wi-${pipeline.id}`;
-    const artifact = await frozen(root, `work-items/${id}.json`, JSON.stringify({ id, pipeline_id: pipeline.id }));
-    workItems.push({ id, pipeline_id: pipeline.id, ...artifact });
+    const executors = { ...Object.fromEntries(pipeline.stages.map((stage) => [stage, 'agent'])), ...pipeline.executors };
+    const ids = [];
+    for (const [index, stage] of pipeline.stages.filter(s => executors[s] === 'agent').entries()) {
+      const id = index === 0 ? `wi-${pipeline.id}` : `wi-${pipeline.id}-${stage}`;
+      const artifact = await frozen(root, `work-items/${id}.json`,
+        JSON.stringify({ id, pipeline_id: pipeline.id, stage, suggested_agent: 'CoderAgent' }));
+      workItems.push({ id, pipeline_id: pipeline.id, ...artifact });
+      ids.push(id);
+    }
     normalized.push({
       ...pipeline,
       deployable: false,
-      executors: Object.fromEntries(pipeline.stages.map((stage) => [stage, 'agent'])),
-      work_items: [id],
+      executors,
+      work_items: ids,
       decision_ids: [],
       research_ids: [],
       contract_ids: [],
@@ -69,6 +75,7 @@ async function baseManifest(root, runId, pipelines) {
   }
   return {
     schema_version: 2,
+    work_item_output_contract_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,
@@ -172,10 +179,9 @@ test('late blocker after source-ready does not freeze downstream work', async ()
   const root = await tempProject();
   const stateRoot = path.join(root, '.tmp', 'pipelines');
   const manifest = await baseManifest(root, 'dag-late-blocker', [
-    { id: 'a', stages: ['implementation', 'late-validation'], ready_after_stage: 'implementation' },
+    { id: 'a', stages: ['implementation', 'late-validation'], ready_after_stage: 'implementation', executors: { 'late-validation': 'review' } },
     { id: 'b', stages: ['implementation'], depends_on: ['a'] },
   ]);
-  manifest.pipelines[0].executors['late-validation'] = 'review';
   const manifestPath = await writeManifest(root, manifest);
 
   let result = run(root, ['init', manifestPath, '--state-root', stateRoot]);
@@ -314,14 +320,103 @@ test('agent stage cannot transition to DONE before its frozen required output ex
     result = run(root, ['complete', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /WORK_ITEM_OUTPUT_MISSING/);
+    const directCore = spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-cli-core.ts'),
+      'complete', manifest.run_id, 'implementation', '--state-root', stateRoot], { cwd: root, encoding: 'utf8' });
+    assert.notEqual(directCore.status, 0);
+    assert.match(directCore.stderr, /WORK_ITEM_OUTPUT_MISSING/);
+    const wrapped = spawnSync('npx', ['--yes', 'tsx', path.join(HERE, 'stage-complete-cli.ts'),
+      'complete', manifest.run_id, 'implementation', '--state-root', stateRoot], { cwd: root, encoding: 'utf8' });
+    assert.notEqual(wrapped.status, 0);
+    assert.match(wrapped.stderr, /STAGE_COMPLETE_DELEGATE_FAILED/);
+    const intruder = await tempProject();
+    await mkdir(path.join(intruder, 'docs'), { recursive: true });
+    await writeFile(path.join(intruder, 'docs/completed.md'), '# fake evidence\n');
+    const fromForeign = run(intruder, ['complete', manifest.run_id, 'implementation', '--state-root', stateRoot]);
+    assert.notEqual(fromForeign.status, 0);
+    assert.match(fromForeign.stderr, /RUN_WORKTREE_ROOT_MISMATCH/);
+    result = run(root, ['complete', manifest.run_id, 'implementation', '--pipeline', 'a',
+      '--pipeline', 'a', '--state-root', stateRoot]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /DUPLICATE_SECURITY_OPTION/);
     const blockedState = JSON.parse(await readFile(path.join(stateRoot, manifest.run_id, 'state.json'), 'utf8'));
     assert.equal(blockedState.pipelines.a.stages.implementation.status, 'in_progress');
     await mkdir(path.join(root, 'docs'), { recursive: true });
     await writeFile(path.join(root, 'docs/completed.md'), '# Completed\n');
-    result = run(root, ['complete', manifest.run_id, 'implementation', '--pipeline', 'a', '--state-root', stateRoot]);
+    result = run(root, ['complete', manifest.run_id, 'implementation', '--state-root', stateRoot]);
     assert.equal(result.status, 0, result.stderr);
   } finally {
     if (previous === undefined) delete process.env.OPENCODE_AGENT_POLICY_DIR;
     else process.env.OPENCODE_AGENT_POLICY_DIR = previous;
   }
+});
+
+test('authoritative completion blocks advisory evidence bypass for core, facade and implicit pipeline', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await baseManifest(root, 'advisory-protected', [
+    { id: 'p', stages: ['implementation'], profile: 'local' },
+  ]);
+  manifest.gate_profiles = { local: { tests: ['bash -n run.sh'] } };
+  manifest.gate_testing = { local: { tests: { impact_groups: [{ inputs: ['docs/**'], command_index: 0 }] } } };
+  const manifestFile = await writeManifest(root, manifest);
+  let result = run(root, ['init', manifestFile, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['approve', manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['start', manifest.run_id, 'implementation', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  const entries = ['stage-cli.ts', 'stage-cli-core.ts', 'stage-complete-cli.ts'];
+  for (const entry of entries) {
+    result = spawnSync('npx', ['--yes', 'tsx', path.join(HERE, entry),
+      'complete', manifest.run_id, 'implementation', '--state-root', stateRoot], { cwd: root, encoding: 'utf8' });
+    assert.notEqual(result.status, 0, `completion bypass through ${entry}`);
+    if (entry !== 'stage-complete-cli.ts') assert.match(result.stderr, /ADVISORY_DISPATCH_BASELINE_REQUIRED/);
+    const state = JSON.parse(await readFile(path.join(stateRoot, manifest.run_id, 'state.json'), 'utf8'));
+    assert.equal(state.pipelines.p.stages.implementation.status, 'in_progress', entry);
+  }
+});
+
+test('init cannot inherit owner approval from two unsourced revision flags', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await baseManifest(root, 'approval-carry-negative', [
+    { id: 'p', stages: ['implementation'] },
+  ]);
+  const manifestFile = await writeManifest(root, manifest);
+  await writeFile(path.join(root, 'planning', 'revision.json'), JSON.stringify({
+    previous_approval: true, owner_contract_changed: false,
+  }));
+  let result = run(root, ['init', manifestFile, '--state-root', stateRoot]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /APPROVAL_CARRY_EVIDENCE_REQUIRED/);
+  await assert.rejects(readFile(path.join(stateRoot, manifest.run_id, 'state.json')), /ENOENT/);
+});
+
+test('canonical complete preserves locally verified gate evidence link', async () => {
+  const root = await tempProject();
+  const stateRoot = path.join(root, '.tmp', 'pipelines');
+  const manifest = await baseManifest(root, 'gate-evidence-run', [
+    { id: 'p', stages: ['implementation', 'validate'],
+      executors: { validate: 'local_gate' }, profile: 'local' },
+  ]);
+  manifest.gate_profiles = { local: { validate: ['bash -n check.sh'] } };
+  const manifestFile = await writeManifest(root, manifest);
+  let result = run(root, ['init', manifestFile, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['approve', manifest.run_id, '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['start', manifest.run_id, 'implementation', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['complete', manifest.run_id, 'implementation', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(root, ['start', manifest.run_id, 'validate', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  const gateFile = path.join(stateRoot, manifest.run_id, 'gates', 'p-validate.json');
+  await mkdir(path.dirname(gateFile), { recursive: true });
+  await writeFile(gateFile, JSON.stringify({ status: 'PASS', run_id: manifest.run_id,
+    pipeline_id: 'p', gate: 'validate' }));
+  result = run(root, ['complete', manifest.run_id, 'validate', '--state-root', stateRoot]);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(await readFile(path.join(stateRoot, manifest.run_id, 'state.json'), 'utf8'));
+  assert.deepEqual(state.pipelines.p.stages.validate.evidence.artifacts, [gateFile]);
 });

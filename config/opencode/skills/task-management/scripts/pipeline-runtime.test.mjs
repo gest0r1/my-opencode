@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm, readdir } from 'node:fs/promises';
+import { sourceInventory, scopedInventoryDigest } from './gate-diagnostics.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,54 @@ function run(cwd, args) {
  const result = spawnSync('npx',['--yes','tsx',STAGE_CLI,...withApprovalArgs(cwd,args)], {cwd,encoding:'utf8',env:process.env});
  assert.equal(result.status,0,result.stderr); return result;
 }
+// Runtime/session tests intentionally mock GateRunner with baseline- and source-bound PASS
+// while exercising the actual completion contract, not bypassing its guard.
+async function writeFixtureAdvisoryPasses(root, runId, pipelineId, stage) {
+  const manifest = JSON.parse(await readFile(path.join(root, 'manifest.json'), 'utf8'));
+  const pipeline = manifest.pipelines.find(item => item.id === pipelineId);
+  const runRoot = path.join(root, '.tmp/pipelines', runId);
+  const baselineDir = path.join(runRoot, 'checks/baselines');
+  await mkdir(baselineDir, { recursive: true });
+  const existing = (await readdir(baselineDir).catch(() => [])).filter(name => name.endsWith('.json'));
+  const baselineRecords = [];
+  for (const name of existing) {
+    const file = path.join(baselineDir, name);
+    const raw = await readFile(file, 'utf8');
+    const record = JSON.parse(raw);
+    if (record.run_id === runId && record.pipeline_id === pipelineId && record.stage === stage) {
+      baselineRecords.push({ file, raw, record });
+    }
+  }
+  for (const frozen of manifest.work_items.filter(item => item.pipeline_id === pipelineId)) {
+    const item = JSON.parse(await readFile(path.join(root, frozen.path), 'utf8'));
+    if (item.stage !== stage || item.suggested_agent !== 'CoderAgent' ||
+        baselineRecords.some(entry => entry.record.work_item_id === frozen.id)) continue;
+    const file = path.join(baselineDir, 'fixture-' + frozen.id + '.json');
+    const record = { schema_version: 1, run_id: runId, pipeline_id: pipelineId, stage,
+      work_item_id: frozen.id, allowed_change_paths: item.allowed_change_paths ?? ['src/**'] };
+    const raw = JSON.stringify(record);
+    await writeFile(file, raw);
+    baselineRecords.push({ file, raw, record });
+  }
+  const inventory = await sourceInventory(root, (exe, argv) => {
+    const result = spawnSync(exe, argv, { cwd: root, shell: false, encoding: 'utf8' });
+    return Promise.resolve({ exit_code: result.status ?? 1, stdout: String(result.stdout ?? ''),
+      stderr: String(result.stderr ?? ''), truncated: false });
+  });
+  assert.ok(inventory.files, 'fixture requires Git inventory');
+  const gates = Object.keys(manifest.gate_testing?.[pipeline.profile] ?? {});
+  for (const { raw, record } of baselineRecords) {
+    for (const gate of gates) {
+      const evidence = { status: 'PASS', purpose: 'advisory', run_id: runId,
+        pipeline_id: pipelineId, dispatch_stage: stage, work_item_id: record.work_item_id,
+        gate, baseline_sha256: sha(raw),
+        scoped_source_digest: scopedInventoryDigest(inventory.files, record.allowed_change_paths) };
+      await writeFile(path.join(runRoot, 'checks', 'fixture-' + record.work_item_id + '-' + gate + '.json'),
+        JSON.stringify(evidence));
+    }
+  }
+}
+
 async function tempProject() {
   return mkdtemp(path.join(os.tmpdir(), 'stage-cli-dag-'));
 }
@@ -56,7 +105,7 @@ async function baseManifest(root, runId, pipelines) {
     normalized.push({
       ...pipeline,
       deployable: false,
-      executors: Object.fromEntries(pipeline.stages.map((stage) => [stage, 'agent'])),
+      executors: { ...Object.fromEntries(pipeline.stages.map((stage) => [stage, 'agent'])), ...pipeline.executors },
       work_items: [id],
       decision_ids: [],
       research_ids: [],
@@ -65,6 +114,7 @@ async function baseManifest(root, runId, pipelines) {
   }
   return {
     schema_version: 2,
+    work_item_output_contract_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,
@@ -116,7 +166,7 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   spawnSync('git',['add','src'],{cwd:root});
   spawnSync('git',['commit','-m','base'],{cwd:root});
 
-  const manifest = await baseManifest(root,'runtime-test',[{id:'p',stages:['implementation', 'code-review']}]);
+  const manifest = await baseManifest(root,'runtime-test',[{id:'p',stages:['implementation', 'code-review'],executors:{'code-review':'review'}}]);
   manifest.allowed_change_paths=['src/**'];
   manifest.pipelines[0].executors['code-review']='review';
   manifest.pipelines[0].profile='local';
@@ -232,6 +282,7 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   assert.equal(other.input.sessionID,undefined);
 
   await writeFile(path.join(root,'review.json'),'{"status":"technical_fix"}');
+  await writeFixtureAdvisoryPasses(root, 'runtime-test', 'p', 'implementation');
   run(root,['complete','runtime-test','implementation','--pipeline','p']);
   run(root,['start','runtime-test','code-review','--pipeline','p']);
   const reviewPacket = await dispatchPacket(root,'runtime-test','p','code-review','code-review','CodeReviewer');
@@ -333,7 +384,7 @@ test('a repair dispatch binds its authorized repair paths into the advisory base
   await mkdir(path.join(root,'src'),{recursive:true}); await mkdir(path.join(root,'test'),{recursive:true});
   await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n'); await writeFile(path.join(root,'test','a.test.ts'),'// base\n');
   spawnSync('git',['add','src','test'],{cwd:root}); spawnSync('git',['commit','-m','base'],{cwd:root});
-  const manifest = await baseManifest(root,'repair-scope',[{id:'p',stages:['implementation','code-review']}]);
+  const manifest = await baseManifest(root,'repair-scope',[{id:'p',stages:['implementation','code-review'],executors:{'code-review':'review'}}]);
   manifest.allowed_change_paths=['src/**','test/**'];
   manifest.pipelines[0].executors['code-review']='review';
   manifest.pipelines[0].profile='local';
@@ -343,7 +394,8 @@ test('a repair dispatch binds its authorized repair paths into the advisory base
   await writeFile(path.join(root,manifest.work_items[0].path),workItemRaw); manifest.work_items[0].sha256=sha(workItemRaw);
   const manifestPath=await writeManifest(root,manifest);
   run(root,['init',manifestPath]); run(root,['approve','repair-scope']); run(root,['start','repair-scope','implementation','--pipeline','p']);
-  assert.equal(run(root,['complete','repair-scope','implementation','--pipeline','p']).status,0);
+  await writeFixtureAdvisoryPasses(root, 'repair-scope', 'p', 'implementation');
+   assert.equal(run(root,['complete','repair-scope','implementation','--pipeline','p']).status,0);
   assert.equal(run(root,['start','repair-scope','code-review','--pipeline','p']).status,0);
   assert.equal(run(root,['scope-check','repair-scope','code-review','test/a.test.ts','--pipeline','p']).status,0);
   const review=path.join(root,'.tmp/pipelines/repair-scope/review-1.json');
@@ -836,7 +888,7 @@ test('a gate passed on a tree snapshot completes only while the lane files still
   await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
   await writeFile(path.join(root,'src','b.ts'),'export const b = 1;\n');
   git('add','src'); git('commit','-m','base');
-  const manifest = await baseManifest(root,'lane-run',[{id:'p',stages:['implementation','fail-fast']}]);
+  const manifest = await baseManifest(root,'lane-run',[{id:'p',stages:['implementation','fail-fast'],executors:{'fail-fast':'local_gate'}}]);
   manifest.allowed_change_paths=['src/**'];
   manifest.pipelines[0].executors['fail-fast']='local_gate';
   manifest.pipelines[0].profile='local';
@@ -871,7 +923,7 @@ test('a lane in its gate or review reserves its planned files, not shared runtim
   await mkdir(path.join(root,'src'),{recursive:true});
   await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
   git('add','src'); git('commit','-m','base');
-  const manifest = await baseManifest(root,'reserve-run',[{id:'p',stages:['implementation','fail-fast'],ready_after_stage:'fail-fast'},{id:'q',stages:['implementation']}]);
+  const manifest = await baseManifest(root,'reserve-run',[{id:'p',stages:['implementation','fail-fast'],executors:{'fail-fast':'local_gate'},ready_after_stage:'fail-fast'},{id:'q',stages:['implementation']}]);
   manifest.allowed_change_paths=['src/**'];
   manifest.generated_paths=['src/p/gen.json'];
   manifest.pipelines[0].executors['fail-fast']='local_gate';
@@ -1079,7 +1131,7 @@ test('owner amendment releases stale repair paths; reopened wave ignores prior c
     await writeFile(path.join(root, 'src', 'base.ts'), 'export const ready = true;\n');
     git('add', 'src'); git('commit', '-m', 'base');
     const runId = 'amend-reopened-wave';
-    const manifest = await baseManifest(root, runId, [{ id: 'p', stages: ['implementation', 'code-review'] }]);
+    const manifest = await baseManifest(root, runId, [{ id: 'p', stages: ['implementation', 'code-review'],executors:{'code-review':'review'} }]);
     manifest.allowed_change_paths = ['src/**'];
     manifest.pipelines[0].executors = {
       implementation: 'agent', 'code-review': 'review',

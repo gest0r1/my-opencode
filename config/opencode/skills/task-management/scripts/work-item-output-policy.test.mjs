@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { validateGateManifest } from './manifest-preflight.mjs';
+import { validateWorkItems } from './manifest-v2-policy.mjs';
 import { readRoleEditPolicy, roleCanEdit, validateWorkItemOutputContract, validatePlanningAssessmentOutput,
   verifyCompletedWorkItemOutputs } from './work-item-output-policy.mjs';
 
@@ -123,7 +124,7 @@ test('agent permission order matches OpenCode last-matching-rule semantics', () 
     { glob: 'docs/safe.md', access: 'allow' },
   ];
   assert.equal(roleCanEdit(denyThenSpecificAllow, 'docs/safe.md'), true);
-  assert.equal(roleCanEdit([{ glob: '*', access: 'allow' }, { glob: '*.md', access: 'ask' }], 'docs/file.md'), true);
+  assert.equal(roleCanEdit([{ glob: '*', access: 'allow' }, { glob: '*.md', access: 'ask' }], 'docs/file.md'), false);
   assert.equal(roleCanEdit([{ glob: '*', access: 'allow' }, { glob: 'docs/**', access: 'ask' }], 'docs/file.md'), false);
 });
 
@@ -152,5 +153,76 @@ test('PLAN assessment output must use the installed TestEngineer exception, not 
     manifest.planning_readiness.required_artifacts.test_assessment.path = '../private.md';
     assert.throws(() => validatePlanningAssessmentOutput(manifest, { policyDir: root }),
       /PLAN_TEST_ASSESSMENT_PATH_INVALID/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('PLAN permission glob follows OpenCode: **/ requires a directory; * includes slash', () => {
+  const doc = [
+    { glob: '*', access: 'deny' },
+    { glob: '**/*.md', access: 'allow' },
+    { glob: '.tmp/pipelines/**', access: 'deny' },
+  ];
+  assert.equal(roleCanEdit(doc, 'README.md'), false);
+  assert.equal(roleCanEdit(doc, 'docs/README.md'), true);
+  assert.equal(roleCanEdit(doc, '.tmp/pipelines/run/validation/result.md'), false);
+  assert.equal(roleCanEdit([{ glob: '*', access: 'deny' }, { glob: 'docs/*.md', access: 'allow' }], 'docs/nested/file.md'), true);
+});
+
+test('fresh DocWriter PLAN without output contract is not mistaken for frozen legacy', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'o10-fresh-contract-'));
+  try {
+    const runRoot = join(root, '.tmp/pipelines/plan-new');
+    await mkdir(join(runRoot, 'work-items'), { recursive: true });
+    const item = { id: 'doc', pipeline_id: 'p', stage: 'implementation', suggested_agent: 'DocWriter',
+      allowed_change_paths: ['docs/**'] };
+    const raw = JSON.stringify(item);
+    await writeFile(join(runRoot, 'work-items/doc.json'), raw);
+    const manifest = { schema_version: 2, run_id: 'plan-new', allowed_change_paths: ['docs/**'],
+      planning_readiness: { design_freeze: false }, gate_profiles: {},
+      work_items: [{ id: 'doc', pipeline_id: 'p', path: 'work-items/doc.json', sha256: sha(raw) }],
+      pipelines: [{ id: 'p', stages: ['implementation'], executors: { implementation: 'agent' },
+        work_items: ['doc'], decision_ids: [], research_ids: [], contract_ids: [] }] };
+    const check = () => validateGateManifest(manifest, { cwd: root, manifestPath: join(runRoot, 'manifest.json') });
+    assert.throws(check, /WORK_ITEM_OUTPUT_CONTRACT_VERSION_REQUIRED/);
+    manifest.work_item_output_contract_version = 1;
+    item.stage = 'not-in-pipeline';
+    let updated = JSON.stringify(item);
+    await writeFile(join(runRoot, 'work-items/doc.json'), updated);
+    manifest.work_items[0].sha256 = sha(updated);
+    assert.throws(check, /WORK_ITEM_STAGE_INVALID/);
+    item.stage = 'implementation';
+    updated = JSON.stringify(item);
+    await writeFile(join(runRoot, 'work-items/doc.json'), updated);
+    manifest.work_items[0].sha256 = sha(updated);
+    manifest.pipelines[0].stages = ['implementation', 'review'];
+    manifest.pipelines[0].executors.review = 'agent';
+    assert.throws(check, /AGENT_STAGE_WITHOUT_WORK_ITEM/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('only an existing SHA-verified frozen legacy RUN may omit the v1 output contract', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'o10-legacy-frozen-'));
+  try {
+    const runRoot = join(root, '.tmp/pipelines/old-run');
+    await mkdir(join(runRoot, 'work-items'), { recursive: true });
+    const raw = JSON.stringify({ id: 'old-wi', pipeline_id: 'p' }); // historical WI: no stage or outputs
+    await writeFile(join(runRoot, 'work-items/old-wi.json'), raw);
+    const manifest = {
+      schema_version: 2, run_id: 'old-run',
+      work_items: [{ id: 'old-wi', pipeline_id: 'p', path: 'work-items/old-wi.json', sha256: sha(raw) }],
+      pipelines: [{ id: 'p', stages: ['implementation'], executors: { implementation: 'agent' },
+        work_items: ['old-wi'], decision_ids: [], research_ids: [], contract_ids: [] }],
+    };
+    const manifestFile = join(runRoot, 'historic-manifest.json');
+    const content = JSON.stringify(manifest);
+    await writeFile(manifestFile, content);
+    const stateFile = join(runRoot, 'state.json');
+    const state = { run_id: 'old-run', manifest_file: manifestFile, manifest_sha256: sha(content) };
+    await writeFile(stateFile, JSON.stringify(state));
+    assert.doesNotThrow(() => validateWorkItems(manifest, runRoot, { manifestPath: manifestFile }));
+    state.manifest_sha256 = '0'.repeat(64);
+    await writeFile(stateFile, JSON.stringify(state));
+    assert.throws(() => validateWorkItems(manifest, runRoot, { manifestPath: manifestFile }),
+      /WORK_ITEM_OUTPUT_CONTRACT_VERSION_REQUIRED/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

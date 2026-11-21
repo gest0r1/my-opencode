@@ -32,9 +32,10 @@ async function fixture() {
   const review = await frozen('reviews/architecture.md', '# review\n');
   const decision = await frozen('decision-register.md', '# decisions\n');
   const index = await frozen('work-items/index.json', '{"items":["wi"]}\n');
-  const item = await frozen('work-items/wi.json', '{"id":"wi"}\n');
+  const item = await frozen('work-items/wi.json', JSON.stringify({ id: 'wi', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   const spec = {
     schema_version: 2,
+    work_item_output_contract_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,

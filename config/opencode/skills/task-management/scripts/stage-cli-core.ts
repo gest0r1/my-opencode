@@ -818,6 +818,7 @@ export async function initFromManifest(
     run_id: manifest.run_id,
     manifest_file: absoluteManifestPath,
     manifest_sha256: sha256(manifestContent),
+    worktree_root: realpathSync(process.cwd()),
     rules_file: rules.path,
     rules_source: rules.source,
     rules_version: rules.metadata.rules_version,
@@ -855,11 +856,16 @@ export async function initFromManifest(
     throw error;
   });
   if (revision?.previous_approval === true && revision.owner_contract_changed === false) {
-    state.status = 'approved';
-    for (const pipeline of Object.values(state.pipelines)) pipeline.status = 'approved';
-    if (revision.approval_carry) {
+    if (!revision.approval_carry || typeof revision.manifest_sha256 !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(revision.manifest_sha256)) {
+      throw new StageCliError('APPROVAL_CARRY_EVIDENCE_REQUIRED');
+    }
+    {
       if (!revision.approval_carry.revision_evidence_path || !revision.approval_carry.revision_evidence_sha256 ||
-          !revision.approval_carry.revision_reviewed_manifest_sha256) throw new StageCliError('APPROVAL_CARRY_EVIDENCE_REQUIRED');
+          !revision.approval_carry.revision_reviewed_manifest_sha256 ||
+          revision.approval_carry.revision_reviewed_manifest_sha256 !== revision.manifest_sha256) {
+        throw new StageCliError('APPROVAL_CARRY_EVIDENCE_REQUIRED');
+      }
       const carried = validateApprovalRecord(revision.approval_carry, manifest.run_id, revision.approval_carry.shown_manifest_sha256);
       const runRoot = resolve(dirname(absoluteManifestPath));
       const evidencePath = resolve(runRoot, revision.approval_carry.revision_evidence_path);
@@ -883,6 +889,8 @@ export async function initFromManifest(
       };
       if (Array.isArray(revision.approval_outbox)) state.github_outbox = revision.approval_outbox;
     }
+    state.status = 'approved';
+    for (const pipeline of Object.values(state.pipelines)) pipeline.status = 'approved';
   }
 
   const unlock = await acquireLock(stateRoot, manifest.run_id);
@@ -1139,7 +1147,7 @@ function queuePipelineStatusTransitions(
 async function updateState(
   stateRoot: string,
   runId: string,
-  updater: (state: PipelineState) => void,
+  updater: (state: PipelineState) => void | Promise<void>,
 ): Promise<PipelineState> {
   const unlock = await acquireLock(stateRoot, runId);
   try {
@@ -1148,7 +1156,7 @@ async function updateState(
       throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
     }
     const before = new Map(Object.values(state.pipelines).map((pipeline) => [pipeline.id, pipeline.status]));
-    updater(state);
+    await updater(state);
     for (const decision of state.deferred_decisions ?? []) {
       if (decision.status !== 'pending') continue;
       const pipeline = state.pipelines[decision.pipeline_id];
@@ -1407,22 +1415,67 @@ function buildEvidence(
   };
 }
 
-export async function completeStage(
+// Only the explicit owner-accept command may take this internal completion path.
+// A generic complete call must still reject an owner_acceptance executor.
+async function completeStageTransition(
   stateRoot: string,
   runId: string,
   stage: string,
-  pipelineId?: string,
-  options: StageCommandOptions = { json: false, stateRoot },
+  pipelineId: string | undefined,
+  options: StageCommandOptions,
+  explicitOwnerPass: boolean,
 ): Promise<PipelineState> {
-  return updateState(stateRoot, runId, (state) => {
+  return updateState(stateRoot, runId, async (state) => {
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
     if (!runtime || runtime.status !== 'in_progress') {
       throw new StageCliError(`Stage is not in progress: ${pipeline.id}/${stage}`);
     }
+    // The state machine, not a caller-specific facade, owns the authoritative
+    // completion guard. This also covers direct stage-cli-core invocation.
+    const root = realpathSync(process.cwd());
+    if (state.worktree_root && root !== realpathSync(state.worktree_root)) {
+      throw new StageCliError('RUN_WORKTREE_ROOT_MISMATCH: completion must execute in the adopted worktree');
+    }
+    const args = ['complete', runId, stage, '--pipeline', pipeline.id, '--state-root', resolve(stateRoot),
+      ...(options.evidencePath ? ['--evidence', options.evidencePath] : [])];
+    const { enforcePublishedEvidenceCurrent, rejectDirectOwnerAcceptanceTransition,
+      enforceCompletionEvidence } = await import('./stage-cli.ts');
+    await enforcePublishedEvidenceCurrent(args);
+    if (explicitOwnerPass) {
+      const frozen = readFrozenManifestFromState(state);
+      const executor = frozen.pipelines?.find((item) => item.id === pipeline.id)?.executors?.[stage];
+      if (executor !== 'owner_acceptance' || !state.manifest_file || !options.evidencePath) {
+        throw new StageCliError('OWNER_ACCEPTANCE_EXPLICIT_PROOF_REQUIRED');
+      }
+      const expectedPath = resolve(dirname(state.manifest_file), 'owner', `${pipeline.id}-${stage}.json`);
+      if (resolve(options.evidencePath) !== expectedPath) {
+        throw new StageCliError('OWNER_ACCEPTANCE_EVIDENCE_PATH_INVALID');
+      }
+      let proof: any;
+      try { proof = JSON.parse(await readFile(expectedPath, 'utf8')); }
+      catch { throw new StageCliError('OWNER_ACCEPTANCE_EVIDENCE_MISSING_OR_INVALID'); }
+      if (proof.status !== 'PASS' || proof.gate !== 'owner_acceptance' ||
+          proof.run_id !== runId || proof.pipeline_id !== pipeline.id || proof.stage !== stage) {
+        throw new StageCliError('OWNER_ACCEPTANCE_EVIDENCE_INVALID');
+      }
+    } else {
+      await rejectDirectOwnerAcceptanceTransition(args);
+    }
+    const { verifyAgentAdvisoryCompletion, verifyReviewClosing } = await import('./stage-complete-cli.ts');
+    await verifyAgentAdvisoryCompletion(root, args);
+    await verifyReviewClosing(root, args);
+    const checkedArgs = explicitOwnerPass ? args : await enforceCompletionEvidence(args);
+    // The legacy facade attaches an authoritative evidence artifact for gate,
+    // CI and publish stages. Preserve that contract after moving checks inside
+    // the transition rather than silently completing without an artifact link.
+    const evidenceIndex = checkedArgs.indexOf('--evidence');
+    const effectiveOptions = { ...options,
+      ...(evidenceIndex >= 0 && checkedArgs[evidenceIndex + 1] &&
+          !options.evidencePath ? { evidencePath: checkedArgs[evidenceIndex + 1] } : {}) };
     runtime.status = 'completed';
     runtime.completed_at = now();
-    runtime.evidence = buildEvidence(stage, 'completed', options);
+    runtime.evidence = buildEvidence(stage, 'completed', effectiveOptions);
     addHistory(state, pipeline.id, stage, 'completed', options.message);
 
     const stageDone = (name: string | undefined): boolean => {
@@ -1444,6 +1497,28 @@ export async function completeStage(
     else pipeline.status = 'in_progress';
     if (allCompleted) pipeline.current_stage = undefined;
   });
+}
+
+export async function completeStage(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  pipelineId?: string,
+  options: StageCommandOptions = { json: false, stateRoot },
+): Promise<PipelineState> {
+  return completeStageTransition(stateRoot, runId, stage, pipelineId, options, false);
+}
+
+// Used solely by the explicit owner-accept CLI path after it records a PASS.
+// Not reachable through a generic complete or a CLI option.
+export async function completeExplicitOwnerStage(
+  stateRoot: string,
+  runId: string,
+  stage: string,
+  pipelineId: string,
+  options: StageCommandOptions,
+): Promise<PipelineState> {
+  return completeStageTransition(stateRoot, runId, stage, pipelineId, options, true);
 }
 
 function technicalFixLimit(runtime: StageRuntime): number {
@@ -2786,8 +2861,14 @@ export async function recordClassReview(
 function parseOptions(args: string[]): { positional: string[]; options: StageCommandOptions } {
   const positional: string[] = [];
   const options: StageCommandOptions = { json: false, stateRoot: DEFAULT_STATE_ROOT };
+  const seenSecurityOptions = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
+    if (argument === '--pipeline' || argument === '--state-root') {
+      if (seenSecurityOptions.has(argument)) throw new StageCliError(`DUPLICATE_SECURITY_OPTION: ${argument}`);
+      seenSecurityOptions.add(argument);
+      if (!args[index + 1] || args[index + 1].startsWith('--')) throw new StageCliError(`OPTION_VALUE_REQUIRED: ${argument}`);
+    }
     if (argument === '--json') options.json = true;
     else if (argument === '--chart') options.chart = true;
     else if (argument === '--state-root') options.stateRoot = args[++index] ?? DEFAULT_STATE_ROOT;
