@@ -46,7 +46,7 @@ function gitValue(args: string[]): string | undefined {
   return String(result.stdout ?? '').trim();
 }
 
-async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
+export async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
   if (!['start', 'complete'].includes(args[0] ?? '')) return;
   const runId = args[1];
   const stage = args[2];
@@ -156,7 +156,7 @@ async function enforcePublishedEvidenceCurrent(args: string[]): Promise<void> {
   }
 }
 
-async function rejectDirectOwnerAcceptanceTransition(args: string[]): Promise<void> {
+export async function rejectDirectOwnerAcceptanceTransition(args: string[]): Promise<void> {
   if (!['complete', 'fail', 'block', 'resume'].includes(args[0] ?? '')) return;
   const runId = args[1];
   const stage = args[2];
@@ -219,7 +219,7 @@ async function ownerAcceptance(args: string[]): Promise<boolean> {
   return true;
 }
 
-async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
+export async function enforceCompletionEvidence(args: string[]): Promise<string[]> {
   if (args[0] !== 'complete') return args;
   const runId = args[1];
   const stage = args[2];
@@ -575,9 +575,14 @@ async function main(args: string[]): Promise<void> {
     if (!state.manifest_file) throw new Error('approved manifest path is missing');
     await preflightFile(state.manifest_file, { environment: true });
   }
+  if (args[0] === 'complete') {
+    // Authoritative guard lives in stage-cli-core::completeStage under the RUN lock.
+    await runCli(args);
+    return;
+  }
   await enforcePublishedEvidenceCurrent(args);
   await rejectDirectOwnerAcceptanceTransition(args);
-  await runCli(await enforceCompletionEvidence(args));
+  await runCli(args);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
