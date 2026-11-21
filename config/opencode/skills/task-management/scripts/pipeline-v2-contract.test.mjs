@@ -116,6 +116,27 @@ async function alignFixtureWorkItems(fx) {
   }
 }
 
+
+// Real disposable Git fixture: published evidence must match the local HEAD,
+// selected branch and clean worktree. Never weaken that production guard for tests.
+async function publishedFixtureHead(fx) {
+  await writeFile(path.join(fx.root, '.gitignore'), '.tmp/\n');
+  const git = (...args) => {
+    const result = spawnSync('git', args, { cwd: fx.root, encoding: 'utf8' });
+    assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`);
+    return result.stdout.trim();
+  };
+  git('init', '-b', 'feature/test');
+  git('config', 'user.name', 'Pipeline fixture');
+  git('config', 'user.email', 'pipeline-fixture@example.invalid');
+  git('add', '.');
+  git('commit', '-m', 'frozen candidate fixture');
+  const head = git('rev-parse', 'HEAD');
+  fx.manifest.git_setup.base_sha = head;
+  await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
+  return head;
+}
+
 function run(root, args) {
   const fixtureBin = path.join(root, '.fixture-bin');
   return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...withApprovalArgs(root, args)], {
@@ -1019,6 +1040,7 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/test' };
   await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
 
+  const candidateHead = await publishedFixtureHead(fx);
   const stateRoot = path.join(fx.root, '.tmp', 'github-evidence-state');
   let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
@@ -1043,7 +1065,7 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   result = run(fx.root, ['complete', fx.manifest.run_id, 'git-verify', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 
-  const candidateSha = 'c'.repeat(40);
+  const candidateSha = candidateHead;
   result = run(fx.root, ['start', fx.manifest.run_id, 'publish', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
@@ -1131,6 +1153,7 @@ test('stage-cli accepts artifactless stateful DEV evidence bound to exact source
   fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/test' };
   await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
 
+  const candidateHead = await publishedFixtureHead(fx);
   const stateRoot = path.join(fx.root, '.tmp', 'stateful-dev-state');
   let result = run(fx.root, ['init', fx.manifestPath, '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
@@ -1155,7 +1178,7 @@ test('stage-cli accepts artifactless stateful DEV evidence bound to exact source
   result = run(fx.root, ['complete', fx.manifest.run_id, 'git-verify', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
 
-  const candidateSha = 'e'.repeat(40);
+  const candidateSha = candidateHead;
   result = run(fx.root, ['start', fx.manifest.run_id, 'publish', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.equal(result.status, 0, result.stderr);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
@@ -1200,7 +1223,7 @@ test('stage-cli accepts artifactless stateful DEV evidence bound to exact source
   }, null, 2));
   result = run(fx.root, ['start', fx.manifest.run_id, 'dev', '--pipeline', 'app', '--state-root', stateRoot]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /EVIDENCE_INVALID_OR_STALE/);
+  assert.match(result.stderr, /EVIDENCE_INVALID_OR_STALE|CANDIDATE_STALE_SOURCE/);
 
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
     status: 'PASS',
@@ -1332,6 +1355,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
   );
   await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
 
+  const candidateHead = await publishedFixtureHead(fx);
   const stateRoot = path.join(fx.root, '.tmp', 'owner-acceptance-state');
   const invoke = (args) => run(fx.root, [...args, '--state-root', stateRoot]);
   let result = invoke(['init', fx.manifestPath]);
@@ -1357,7 +1381,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
   result = invoke(['complete', fx.manifest.run_id, 'git-verify', '--pipeline', 'app']);
   assert.equal(result.status, 0, result.stderr);
 
-  const candidateSha = 'c'.repeat(40);
+  const candidateSha = candidateHead;
   result = invoke(['start', fx.manifest.run_id, 'publish', '--pipeline', 'app']);
   assert.equal(result.status, 0, result.stderr);
   await writeFile(path.join(fx.runRoot, 'candidate.json'), JSON.stringify({
@@ -1489,6 +1513,7 @@ test('technical fix after publish reopens source, verify and publish before GitH
   fx.manifest.git_setup = { base_sha: 'a'.repeat(40), branch: 'feature/test' };
   await writeFile(fx.manifestPath, JSON.stringify(fx.manifest, null, 2));
 
+  const candidateHead = await publishedFixtureHead(fx);
   const stateRoot = path.join(fx.root, '.tmp', 'fix-invalidation-state');
   const invoke = (args) => run(fx.root, [...args, '--state-root', stateRoot]);
   let result = invoke(['init', fx.manifestPath]);
@@ -1520,8 +1545,8 @@ test('technical fix after publish reopens source, verify and publish before GitH
     status: 'PASS',
     run_id: fx.manifest.run_id,
     branch: 'feature/test',
-    candidate_sha: 'c'.repeat(40),
-    remote_sha: 'c'.repeat(40),
+    candidate_sha: candidateHead,
+    remote_sha: candidateHead,
     published_at: new Date(Date.now() + 1000).toISOString(),
   }, null, 2));
   result = invoke(['complete', fx.manifest.run_id, 'publish', '--pipeline', 'app']);
