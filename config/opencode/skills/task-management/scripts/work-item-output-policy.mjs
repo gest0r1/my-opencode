@@ -20,17 +20,12 @@ function scopeContains(scope, path) {
   return scope === path;
 }
 
+// Mirror the installed OpenCode permission glob: '*' spans '/' and '**/' still
+// requires a directory. Do not reuse filesystem/impact-selection globs here.
 function globMatches(glob, path) {
-  if (glob === '*') return true;
-  let source = '^';
-  for (let i = 0; i < glob.length;) {
-    if (glob.slice(i, i + 3) === '**/') { source += '(?:.*/)?'; i += 3; }
-    else if (glob.slice(i, i + 2) === '**') { source += '.*'; i += 2; }
-    else if (glob[i] === '*') { source += '[^/]*'; i++; }
-    else if (glob[i] === '?') { source += '[^/]'; i++; }
-    else { source += glob[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); i++; }
-  }
-  return new RegExp(source + '$').test(path);
+  const escaped = glob.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = escaped.replace(/\\\*/g, '.*').replace(/\\\?/g, '.');
+  return new RegExp('^' + pattern + '$').test(path);
 }
 
 export function readRoleEditPolicy(role, { policyDir, cache = new Map() } = {}) {
