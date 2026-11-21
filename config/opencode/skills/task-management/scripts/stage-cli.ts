@@ -9,7 +9,7 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { applyOwnerAmendment, runCli, validateApprovalRecord } from './stage-cli-core.ts';
+import { applyOwnerAmendment, runCli, validateApprovalRecord, completeExplicitOwnerStage } from './stage-cli-core.ts';
 import { prepareProjectTooling, restoreDependencies } from './project-tooling.mjs';
 import { preflightFile } from './manifest-preflight.mjs';
 import { freezeGateTesting } from './gate-testing-freeze.mjs';
@@ -215,8 +215,13 @@ async function ownerAcceptance(args: string[]): Promise<boolean> {
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
 
   const common = [runId, stage, '--pipeline', pipelineId, '--state-root', stateRoot, '--evidence', evidencePath];
-  if (result === 'pass') await runCli(['complete', ...common, ...(message ? ['--message', message] : [])]);
-  else await runCli(['block', ...common, ...(message ? ['--message', message] : [])]);
+  if (result === 'pass') {
+    // The explicit owner command is a distinct entrypoint. Generic complete
+    // remains forbidden for owner_acceptance, including direct core callers.
+    await completeExplicitOwnerStage(stateRoot, runId, stage, pipelineId, {
+      json: false, stateRoot, pipelineId, evidencePath, ...(message ? { message } : {}),
+    });
+  } else await runCli(['block', ...common, ...(message ? ['--message', message] : [])]);
   return true;
 }
 
