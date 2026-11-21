@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { validateGateManifest } from './manifest-preflight.mjs';
+import { validateWorkItems } from './manifest-v2-policy.mjs';
 import { readRoleEditPolicy, roleCanEdit, validateWorkItemOutputContract, validatePlanningAssessmentOutput,
   verifyCompletedWorkItemOutputs } from './work-item-output-policy.mjs';
 
@@ -196,5 +197,32 @@ test('fresh DocWriter PLAN without output contract is not mistaken for frozen le
     manifest.pipelines[0].stages = ['implementation', 'review'];
     manifest.pipelines[0].executors.review = 'agent';
     assert.throws(check, /AGENT_STAGE_WITHOUT_WORK_ITEM/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('only an existing SHA-verified frozen legacy RUN may omit the v1 output contract', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'o10-legacy-frozen-'));
+  try {
+    const runRoot = join(root, '.tmp/pipelines/old-run');
+    await mkdir(join(runRoot, 'work-items'), { recursive: true });
+    const raw = JSON.stringify({ id: 'old-wi', pipeline_id: 'p' }); // historical WI: no stage or outputs
+    await writeFile(join(runRoot, 'work-items/old-wi.json'), raw);
+    const manifest = {
+      schema_version: 2, run_id: 'old-run',
+      work_items: [{ id: 'old-wi', pipeline_id: 'p', path: 'work-items/old-wi.json', sha256: sha(raw) }],
+      pipelines: [{ id: 'p', stages: ['implementation'], executors: { implementation: 'agent' },
+        work_items: ['old-wi'], decision_ids: [], research_ids: [], contract_ids: [] }],
+    };
+    const manifestFile = join(runRoot, 'historic-manifest.json');
+    const content = JSON.stringify(manifest);
+    await writeFile(manifestFile, content);
+    const stateFile = join(runRoot, 'state.json');
+    const state = { run_id: 'old-run', manifest_file: manifestFile, manifest_sha256: sha(content) };
+    await writeFile(stateFile, JSON.stringify(state));
+    assert.doesNotThrow(() => validateWorkItems(manifest, runRoot, { manifestPath: manifestFile }));
+    state.manifest_sha256 = '0'.repeat(64);
+    await writeFile(stateFile, JSON.stringify(state));
+    assert.throws(() => validateWorkItems(manifest, runRoot, { manifestPath: manifestFile }),
+      /WORK_ITEM_OUTPUT_CONTRACT_VERSION_REQUIRED/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
