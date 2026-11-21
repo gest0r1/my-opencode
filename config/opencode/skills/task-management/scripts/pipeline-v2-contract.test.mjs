@@ -38,13 +38,17 @@ async function fixture(runId = 'v2-run') {
   const artifacts = {
     decision_register: await frozen('decision-register.md', '# decisions\n'),
     architecture,
-    work_items: await frozen('work-items/index.json', '{"items":["wi-1"]}\n'),
+    work_items: await frozen('work-items/index.json', '{"items":["wi-1","wi-finalize"]}\n'),
   };
   const review = await frozen('reviews/architecture-review-1.md', '# review\n');
-  const item = await frozen('work-items/wi-1.json', '{"id":"wi-1"}\n');
+  const item = await frozen('work-items/wi-1.json',
+    JSON.stringify({ id: 'wi-1', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
+  const finalize = await frozen('work-items/wi-finalize.json',
+    JSON.stringify({ id: 'wi-finalize', pipeline_id: 'app', stage: 'finalize', suggested_agent: 'CoderAgent' }) + '\n');
 
   const manifest = {
     schema_version: 2,
+    work_item_output_contract_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,
@@ -77,14 +81,14 @@ async function fixture(runId = 'v2-run') {
         'candidate-review': 'review',
         finalize: 'agent',
       },
-      work_items: ['wi-1'],
+      work_items: ['wi-1', 'wi-finalize'],
       decision_ids: [],
       research_ids: [],
       contract_ids: [],
       ready_after_stage: 'functional-review',
       release_ready_after_stage: 'candidate-review',
     }],
-    work_items: [{ id: 'wi-1', pipeline_id: 'app', ...item }],
+    work_items: [{ id: 'wi-1', pipeline_id: 'app', ...item }, { id: 'wi-finalize', pipeline_id: 'app', ...finalize }],
     gate_profiles: {},
   };
   const manifestPath = path.join(runRoot, 'manifest.json');
