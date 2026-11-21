@@ -381,6 +381,19 @@ export function validateWorkItems(manifest, root, options = {}) {
   if (manifest.work_item_output_contract_version !== undefined && manifest.work_item_output_contract_version !== 1) {
     throw new ManifestV2PolicyError('WORK_ITEM_OUTPUT_CONTRACT_VERSION_UNSUPPORTED');
   }
+  // A truly existing frozen RUN can keep its original contract. New PLANs must
+  // declare v1 even when DocWriter outputs are omitted: no silent legacy fallback.
+  if (!options.runtime && manifest.work_item_output_contract_version !== 1) {
+    let frozenLegacy = false;
+    try {
+      const state = JSON.parse(readFileSync(join(root, 'state.json'), 'utf8'));
+      const manifestFile = resolve(root, 'manifest.json');
+      frozenLegacy = state.run_id === manifest.run_id &&
+        resolve(state.manifest_file) === manifestFile &&
+        state.manifest_sha256 === sha256(readFileSync(manifestFile, 'utf8'));
+    } catch { /* absence or mismatch is a fresh PLAN, never implicit legacy */ }
+    if (!frozenLegacy) throw new ManifestV2PolicyError('WORK_ITEM_OUTPUT_CONTRACT_VERSION_REQUIRED');
+  }
   if (!Array.isArray(manifest.work_items) || manifest.work_items.length === 0) {
     throw new ManifestV2PolicyError('schema v2 manifest requires frozen work_items');
   }
