@@ -96,6 +96,26 @@ async function fixture(runId = 'v2-run') {
   return { root, runRoot, manifest, manifestPath, frozen };
 }
 
+
+async function alignFixtureWorkItems(fx) {
+  // Tests that replace pipeline stages must also replace the frozen work-item map.
+  // Only valid fixtures can test later gate/deploy/owner contracts meaningfully.
+  const pipeline = fx.manifest.pipelines[0];
+  const item = fx.manifest.work_items.find(entry => entry.id === 'wi-finalize');
+  if (!item) return;
+  const otherAgentStages = pipeline.stages.filter(stage =>
+    stage !== 'implementation' && pipeline.executors?.[stage] === 'agent');
+  if (!otherAgentStages.length) {
+    pipeline.work_items = pipeline.work_items.filter(id => id !== 'wi-finalize');
+    fx.manifest.work_items = fx.manifest.work_items.filter(entry => entry.id !== 'wi-finalize');
+  } else if (otherAgentStages[0] !== 'finalize') {
+    const content = JSON.stringify({ id: 'wi-finalize', pipeline_id: 'app',
+      stage: otherAgentStages[0], suggested_agent: 'CoderAgent' }) + '\n';
+    await writeFile(path.join(fx.runRoot, item.path), content);
+    item.sha256 = sha(content);
+  }
+}
+
 function run(root, args) {
   const fixtureBin = path.join(root, '.fixture-bin');
   return spawnSync('npx', ['--yes', 'tsx', STAGE_CLI, ...withApprovalArgs(root, args)], {
@@ -213,7 +233,8 @@ test('schema v2 rejects changed planning evidence by SHA-256', async () => {
 
 test('schema v2 requires an explicit executor for every stage', async () => {
   const fx = await fixture('v2-executor-coverage');
-  delete fx.manifest.pipelines[0].executors.finalize;
+  delete fx.manifest.pipelines[0].executors.finalize;;
+  await alignFixtureWorkItems(fx)
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /EXECUTOR_STAGE_MISMATCH/,
@@ -229,6 +250,7 @@ test('schema v2 rejects planned source mutation after candidate publication', as
     publish: 'git_publish',
     'late-docs': 'agent',
   };
+  await alignFixtureWorkItems(fx)
   assert.throws(
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /SOURCE_STAGE_AFTER_PUBLISH/,
@@ -666,6 +688,7 @@ test('GitHub-driven OpenCode-host deployment still requires trusted probe eviden
     dev: 'github_dev',
     'owner-acceptance': 'owner_acceptance',
   };
+  await alignFixtureWorkItems(fx)
   pipeline.deployable = true;
   pipeline.decision_ids.push('decision-testing-strategy');
   pipeline.deployment_validation = {
@@ -776,6 +799,7 @@ test('hybrid uses local post-CI deployment without GitHub-to-host probe', async 
     tests: 'github_ci',
     'local-deploy': 'local_gate',
   };
+  await alignFixtureWorkItems(fx)
   pipeline.profile = 'default';
   fx.manifest.gate_profiles = {
     default: {
@@ -816,6 +840,7 @@ test('a versioned run must end with publish, local candidate gate, dev_deploy an
 
   pipeline.stages = ['implementation', 'git-verify', 'publish', 'candidate', 'dev', 'accept'];
   pipeline.executors = { implementation: 'agent', 'git-verify': 'git_verify', publish: 'git_publish', candidate: 'local_gate', dev: 'dev_deploy', accept: 'owner_acceptance' };
+  await alignFixtureWorkItems(fx)
   pipeline.profile = 'default';
   fx.manifest.gate_profiles = { default: { candidate: ['pnpm test'] } };
   pipeline.deployable = true;
@@ -981,6 +1006,7 @@ test('stage-cli refuses github_ci completion without exact candidate evidence', 
   const fx = await fixture('v2-github-evidence');
   fx.manifest.pipelines[0].stages = ['implementation', 'git-verify', 'publish', 'tests'];
   fx.manifest.pipelines[0].executors = { implementation: 'agent', 'git-verify': 'git_verify', publish: 'git_publish', tests: 'github_ci' };
+  await alignFixtureWorkItems(fx)
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
@@ -1068,6 +1094,7 @@ test('stage-cli accepts artifactless stateful DEV evidence bound to exact source
     tests: 'github_ci',
     dev: 'github_dev',
   };
+  await alignFixtureWorkItems(fx)
   fx.manifest.pipelines[0].deployable = true;
   fx.manifest.pipelines[0].decision_ids.push('decision-testing-strategy');
   fx.manifest.pipelines[0].testing_strategy = {
@@ -1227,6 +1254,7 @@ test('owner acceptance cannot be completed by model-style generic complete', asy
     dev: 'github_dev',
     'owner-acceptance': 'owner_acceptance',
   };
+  await alignFixtureWorkItems(fx)
   pipeline.deployable = true;
   pipeline.decision_ids.push('decision-testing-strategy');
   pipeline.deployment_validation = {
@@ -1448,6 +1476,7 @@ test('technical fix after publish reopens source, verify and publish before GitH
     publish: 'git_publish',
     tests: 'github_ci',
   };
+  await alignFixtureWorkItems(fx)
   fx.manifest.pipelines[0].github_gates = {
     tests: {
       workflow: '.github/workflows/ci.yml',
