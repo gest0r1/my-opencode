@@ -221,6 +221,8 @@ async function ownerAcceptance(args: string[]): Promise<boolean> {
     await completeExplicitOwnerStage(stateRoot, runId, stage, pipelineId, {
       json: false, stateRoot, pipelineId, evidencePath, ...(message ? { message } : {}),
     });
+    // Preserve the former CLI completion output for owner workflows.
+    await runCli(['status', runId, '--state-root', stateRoot]);
   } else await runCli(['block', ...common, ...(message ? ['--message', message] : [])]);
   return true;
 }
