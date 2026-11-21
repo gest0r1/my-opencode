@@ -818,6 +818,7 @@ export async function initFromManifest(
     run_id: manifest.run_id,
     manifest_file: absoluteManifestPath,
     manifest_sha256: sha256(manifestContent),
+    worktree_root: realpathSync(process.cwd()),
     rules_file: rules.path,
     rules_source: rules.source,
     rules_version: rules.metadata.rules_version,
@@ -1146,7 +1147,7 @@ function queuePipelineStatusTransitions(
 async function updateState(
   stateRoot: string,
   runId: string,
-  updater: (state: PipelineState) => void,
+  updater: (state: PipelineState) => void | Promise<void>,
 ): Promise<PipelineState> {
   const unlock = await acquireLock(stateRoot, runId);
   try {
@@ -1155,7 +1156,7 @@ async function updateState(
       throw new StageCliError(`RUN_SUPERSEDED: ${runId} -> ${state.superseded_by} reason=${String(state.supersede_reason ?? 'unknown')}`);
     }
     const before = new Map(Object.values(state.pipelines).map((pipeline) => [pipeline.id, pipeline.status]));
-    updater(state);
+    await updater(state);
     for (const decision of state.deferred_decisions ?? []) {
       if (decision.status !== 'pending') continue;
       const pipeline = state.pipelines[decision.pipeline_id];
@@ -1421,12 +1422,28 @@ export async function completeStage(
   pipelineId?: string,
   options: StageCommandOptions = { json: false, stateRoot },
 ): Promise<PipelineState> {
-  return updateState(stateRoot, runId, (state) => {
+  return updateState(stateRoot, runId, async (state) => {
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
     if (!runtime || runtime.status !== 'in_progress') {
       throw new StageCliError(`Stage is not in progress: ${pipeline.id}/${stage}`);
     }
+    // The state machine, not a caller-specific facade, owns the authoritative
+    // completion guard. This also covers direct stage-cli-core invocation.
+    const root = realpathSync(process.cwd());
+    if (state.worktree_root && root !== realpathSync(state.worktree_root)) {
+      throw new StageCliError('RUN_WORKTREE_ROOT_MISMATCH: completion must execute in the adopted worktree');
+    }
+    const args = ['complete', runId, stage, '--pipeline', pipeline.id, '--state-root', resolve(stateRoot),
+      ...(options.evidencePath ? ['--evidence', options.evidencePath] : [])];
+    const { enforcePublishedEvidenceCurrent, rejectDirectOwnerAcceptanceTransition,
+      enforceCompletionEvidence } = await import('./stage-cli.ts');
+    await enforcePublishedEvidenceCurrent(args);
+    await rejectDirectOwnerAcceptanceTransition(args);
+    await enforceCompletionEvidence(args);
+    const { verifyAgentAdvisoryCompletion, verifyReviewClosing } = await import('./stage-complete-cli.ts');
+    await verifyAgentAdvisoryCompletion(root, args);
+    await verifyReviewClosing(root, args);
     runtime.status = 'completed';
     runtime.completed_at = now();
     runtime.evidence = buildEvidence(stage, 'completed', options);
