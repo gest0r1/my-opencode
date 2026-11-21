@@ -855,11 +855,16 @@ export async function initFromManifest(
     throw error;
   });
   if (revision?.previous_approval === true && revision.owner_contract_changed === false) {
-    state.status = 'approved';
-    for (const pipeline of Object.values(state.pipelines)) pipeline.status = 'approved';
-    if (revision.approval_carry) {
+    if (!revision.approval_carry || typeof revision.manifest_sha256 !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(revision.manifest_sha256)) {
+      throw new StageCliError('APPROVAL_CARRY_EVIDENCE_REQUIRED');
+    }
+    {
       if (!revision.approval_carry.revision_evidence_path || !revision.approval_carry.revision_evidence_sha256 ||
-          !revision.approval_carry.revision_reviewed_manifest_sha256) throw new StageCliError('APPROVAL_CARRY_EVIDENCE_REQUIRED');
+          !revision.approval_carry.revision_reviewed_manifest_sha256 ||
+          revision.approval_carry.revision_reviewed_manifest_sha256 !== revision.manifest_sha256) {
+        throw new StageCliError('APPROVAL_CARRY_EVIDENCE_REQUIRED');
+      }
       const carried = validateApprovalRecord(revision.approval_carry, manifest.run_id, revision.approval_carry.shown_manifest_sha256);
       const runRoot = resolve(dirname(absoluteManifestPath));
       const evidencePath = resolve(runRoot, revision.approval_carry.revision_evidence_path);
@@ -883,6 +888,8 @@ export async function initFromManifest(
       };
       if (Array.isArray(revision.approval_outbox)) state.github_outbox = revision.approval_outbox;
     }
+    state.status = 'approved';
+    for (const pipeline of Object.values(state.pipelines)) pipeline.status = 'approved';
   }
 
   const unlock = await acquireLock(stateRoot, manifest.run_id);
