@@ -1711,7 +1711,7 @@ test('PLAN rejects two work items of one pipeline that may change the same path 
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /WORK_ITEM_SCOPE_OVERLAP: wi-1 and wi-2 of app may both change scripts\/testing\/\*\*/,
   );
-  const ordered = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', depends_on: ['wi-1'], allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
+  const ordered = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', depends_on: ['wi-1'], allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
   fx.manifest.work_items[fx.manifest.work_items.findIndex(item => item.id === 'wi-2')] = { id: 'wi-2', pipeline_id: 'app', ...ordered };
   assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
   const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/b.ts'] }));
@@ -1766,7 +1766,7 @@ test('a FAIL plan probe passes only with a baseline_repair work item on the prof
 
 test('pipelines sharing profile and gate share one plan probe; runtime and candidate gates need none', async () => {
   const fx = await planProbeFixture('v2-plan-probe-shared');
-  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/b/**'] }));
+  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/b/**'] }));
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...second });
   fx.manifest.pipelines.push({ id: 'b', deployable: false, profile: 'default', stages: ['implementation', 'fast-tests'],
     executors: { implementation: 'agent', 'fast-tests': 'local_gate' }, work_items: ['wi-2'], decision_ids: [], research_ids: [], contract_ids: [] });
