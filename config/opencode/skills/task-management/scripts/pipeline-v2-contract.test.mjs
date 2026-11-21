@@ -289,7 +289,7 @@ test('schema v2 allows deterministic local test/build gates before final GitHub 
 
 test('schema v2 freezes CI bootstrap work item and workflow scope', async () => {
   const fx = await fixture('v2-ci-bootstrap');
-  const bootstrap = await fx.frozen('work-items/wi-ci.json', '{"id":"wi-ci"}\n');
+  const bootstrap = await fx.frozen('work-items/wi-ci.json', JSON.stringify({ id: 'wi-ci', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   fx.manifest.work_items.push({ id: 'wi-ci', pipeline_id: 'app', ...bootstrap });
   fx.manifest.pipelines[0].work_items.push('wi-ci');
   fx.manifest.pipelines[0].stages.push('git-verify', 'publish', 'build');
@@ -412,7 +412,7 @@ test('schema v2 protects stateful DEV behind trusted default-branch workflow', a
 
 test('schema v2 keeps new stateful DEV workflow deferred until it becomes trusted', async () => {
   const fx = await fixture('v2-stateful-bootstrap');
-  const bootstrap = await fx.frozen('work-items/wi-dev.json', '{"id":"wi-dev"}\n');
+  const bootstrap = await fx.frozen('work-items/wi-dev.json', JSON.stringify({ id: 'wi-dev', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   fx.manifest.work_items.push({ id: 'wi-dev', pipeline_id: 'app', ...bootstrap });
   fx.manifest.pipelines[0].work_items.push('wi-dev');
   fx.manifest.allowed_change_paths.push('.github/workflows/dev.yml');
@@ -474,7 +474,7 @@ test('schema v2 keeps new stateful DEV workflow deferred until it becomes truste
 
 test('schema v2 serializes declared conflict groups through the DAG', async () => {
   const fx = await fixture('v2-conflict');
-  const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
+  const secondItem = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...secondItem });
   fx.manifest.pipelines[0].conflict_group = 'admin';
   fx.manifest.pipelines.push({
@@ -503,7 +503,7 @@ test('schema v2 serializes declared conflict groups through the DAG', async () =
 
 test('schema v2 requires source-ready milestone on depended-on pipelines', async () => {
   const fx = await fixture('v2-source-ready-required');
-  const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
+  const secondItem = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...secondItem });
   delete fx.manifest.pipelines[0].ready_after_stage;
   delete fx.manifest.pipelines[0].release_ready_after_stage;
@@ -526,7 +526,7 @@ test('schema v2 requires source-ready milestone on depended-on pipelines', async
 
 test('schema v2 rejects source-mutating agent stages after source-ready boundary', async () => {
   const fx = await fixture('v2-source-ready-no-late-agent');
-  const secondItem = await fx.frozen('work-items/wi-2.json', '{"id":"wi-2"}\n');
+  const secondItem = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...secondItem });
   fx.manifest.pipelines.push({
     id: 'b',
@@ -1636,7 +1636,7 @@ test('schema v2 validates preserved baseline shape and reason-coded lineage', as
 test('PLAN rejects orphaned work items, missing dependencies, cycles and reversed order before init', async () => {
   const fx = await fixture('complete-work-item-catalog');
   const itemFile = path.join(fx.runRoot, 'work-items/wi-2.json');
-  const content = JSON.stringify({id:'wi-2',pipeline_id:'app',depends_on:['wi-1']});
+  const content = JSON.stringify({id:'wi-2',pipeline_id:'app',stage:'implementation',suggested_agent:'CoderAgent',depends_on:['wi-1']});
   await writeFile(itemFile, content);
   fx.manifest.work_items.push({id:'wi-2',pipeline_id:'app',path:'work-items/wi-2.json',sha256:sha(content)});
   assert.throws(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}), /UNBOUND_WORK_ITEM/);
@@ -1646,8 +1646,8 @@ test('PLAN rejects orphaned work items, missing dependencies, cycles and reverse
   assert.throws(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}), /DEPENDENCY_ORDER/);
   fx.manifest.pipelines[0].work_items.reverse();
   for (const dependency of ['missing','wi-2']) {
-    const data = JSON.stringify({id:'wi-2',pipeline_id:'app',depends_on:[dependency]});
-    await writeFile(itemFile, data); fx.manifest.work_items[1].sha256=sha(data);
+    const data = JSON.stringify({id:'wi-2',pipeline_id:'app',stage:'implementation',suggested_agent:'CoderAgent',depends_on:[dependency]});
+    await writeFile(itemFile, data); fx.manifest.work_items.find(item => item.id === 'wi-2').sha256=sha(data);
     assert.throws(() => validateGateManifest(fx.manifest, {cwd:fx.root,manifestPath:fx.manifestPath}), dependency==='missing' ? /UNKNOWN_WORK_ITEM_DEPENDENCY/ : /DEPENDENCY_CYCLE/);
   }
 });
@@ -1657,7 +1657,7 @@ test('PLAN allows independent source lanes beside prep and enforces only named p
   const file = 'tests/obsolete.test.ts';
   fx.manifest.allowed_change_paths.push(file);
   const prepItem = await fx.frozen('work-items/wi-prep.json', JSON.stringify({
-    id: 'wi-prep', pipeline_id: 'prep', stage: 'implementation', allowed_change_paths: [file],
+    id: 'wi-prep', pipeline_id: 'prep', stage: 'implementation', suggested_agent: 'TestEngineer', allowed_change_paths: [file],
   }));
   fx.manifest.work_items.push({ id: 'wi-prep', pipeline_id: 'prep', ...prepItem });
   fx.manifest.pipelines.push({
@@ -1683,9 +1683,9 @@ test('PLAN allows independent source lanes beside prep and enforces only named p
 
 test('schema v2 rejects parallel pipelines whose work items may change the same paths', async () => {
   const fx = await fixture('v2-parallel-scope');
-  const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', allowed_change_paths: ['src/api/**', 'vitest.config.ts'] }));
+  const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/api/**', 'vitest.config.ts'] }));
   fx.manifest.work_items[0] = { id: 'wi-1', pipeline_id: 'app', ...first };
-  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/web/**', 'vitest.config.ts'] }));
+  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/web/**', 'vitest.config.ts'] }));
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...second });
   fx.manifest.pipelines.push({
     id: 'b', deployable: false, stages: ['implementation'], executors: { implementation: 'agent' },
@@ -1695,16 +1695,16 @@ test('schema v2 rejects parallel pipelines whose work items may change the same 
     () => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }),
     /PARALLEL_SCOPE_OVERLAP: app and b .*vitest\.config\.ts/,
   );
-  const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/web/**'] }));
-  fx.manifest.work_items[1] = { id: 'wi-2', pipeline_id: 'b', ...disjoint };
+  const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'b', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/web/**'] }));
+  fx.manifest.work_items[fx.manifest.work_items.findIndex(item => item.id === 'wi-2')] = { id: 'wi-2', pipeline_id: 'b', ...disjoint };
   assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
 });
 
 test('PLAN rejects two work items of one pipeline that may change the same path unless depends_on orders them', async () => {
   const fx = await fixture('v2-item-scope');
-  const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', allowed_change_paths: ['scripts/testing/**', 'src/a.ts'] }));
+  const first = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['scripts/testing/**', 'src/a.ts'] }));
   fx.manifest.work_items[0] = { id: 'wi-1', pipeline_id: 'app', ...first };
-  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
+  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'app', ...second });
   fx.manifest.pipelines[0].work_items.push('wi-2');
   assert.throws(
@@ -1712,10 +1712,10 @@ test('PLAN rejects two work items of one pipeline that may change the same path 
     /WORK_ITEM_SCOPE_OVERLAP: wi-1 and wi-2 of app may both change scripts\/testing\/\*\*/,
   );
   const ordered = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', depends_on: ['wi-1'], allowed_change_paths: ['scripts/testing/inventory.ts', 'src/b.ts'] }));
-  fx.manifest.work_items[1] = { id: 'wi-2', pipeline_id: 'app', ...ordered };
+  fx.manifest.work_items[fx.manifest.work_items.findIndex(item => item.id === 'wi-2')] = { id: 'wi-2', pipeline_id: 'app', ...ordered };
   assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
-  const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/b.ts'] }));
-  fx.manifest.work_items[1] = { id: 'wi-2', pipeline_id: 'app', ...disjoint };
+  const disjoint = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/b.ts'] }));
+  fx.manifest.work_items[fx.manifest.work_items.findIndex(item => item.id === 'wi-2')] = { id: 'wi-2', pipeline_id: 'app', ...disjoint };
   assert.doesNotThrow(() => validateGateManifest(fx.manifest, { cwd: fx.root, manifestPath: fx.manifestPath }));
 });
 
@@ -1759,14 +1759,14 @@ test('a FAIL plan probe passes only with a baseline_repair work item on the prof
   await fx.writeProbe({ status: 'FAIL' });
   const check = () => validatePlanProbes(fx.manifest, { manifestPath: fx.manifestPath, cwd: fx.root });
   assert.throws(check, /PLAN_PROBE_REQUIRED/);
-  const repaired = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', baseline_repair: true }));
+  const repaired = await fx.frozen('work-items/wi-1.json', JSON.stringify({ id: 'wi-1', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', baseline_repair: true }));
   fx.manifest.work_items[0] = { id: 'wi-1', pipeline_id: 'app', ...repaired };
   assert.doesNotThrow(check);
 });
 
 test('pipelines sharing profile and gate share one plan probe; runtime and candidate gates need none', async () => {
   const fx = await planProbeFixture('v2-plan-probe-shared');
-  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', allowed_change_paths: ['src/b/**'] }));
+  const second = await fx.frozen('work-items/wi-2.json', JSON.stringify({ id: 'wi-2', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent', allowed_change_paths: ['src/b/**'] }));
   fx.manifest.work_items.push({ id: 'wi-2', pipeline_id: 'b', ...second });
   fx.manifest.pipelines.push({ id: 'b', deployable: false, profile: 'default', stages: ['implementation', 'fast-tests'],
     executors: { implementation: 'agent', 'fast-tests': 'local_gate' }, work_items: ['wi-2'], decision_ids: [], research_ids: [], contract_ids: [] });
