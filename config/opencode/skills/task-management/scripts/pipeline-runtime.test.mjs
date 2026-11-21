@@ -56,7 +56,7 @@ async function baseManifest(root, runId, pipelines) {
     normalized.push({
       ...pipeline,
       deployable: false,
-      executors: Object.fromEntries(pipeline.stages.map((stage) => [stage, 'agent'])),
+      executors: { ...Object.fromEntries(pipeline.stages.map((stage) => [stage, 'agent'])), ...pipeline.executors },
       work_items: [id],
       decision_ids: [],
       research_ids: [],
@@ -65,6 +65,7 @@ async function baseManifest(root, runId, pipelines) {
   }
   return {
     schema_version: 2,
+    work_item_output_contract_version: 1,
     run_id: runId,
     rules_file: 'docs/pipeline-rules.md',
     rules_version: 2,
@@ -116,7 +117,7 @@ test('validated dispatch uses file-backed handoffs and resumes only the same hea
   spawnSync('git',['add','src'],{cwd:root});
   spawnSync('git',['commit','-m','base'],{cwd:root});
 
-  const manifest = await baseManifest(root,'runtime-test',[{id:'p',stages:['implementation', 'code-review']}]);
+  const manifest = await baseManifest(root,'runtime-test',[{id:'p',stages:['implementation', 'code-review'],executors:{'code-review':'review'}}]);
   manifest.allowed_change_paths=['src/**'];
   manifest.pipelines[0].executors['code-review']='review';
   manifest.pipelines[0].profile='local';
@@ -333,7 +334,7 @@ test('a repair dispatch binds its authorized repair paths into the advisory base
   await mkdir(path.join(root,'src'),{recursive:true}); await mkdir(path.join(root,'test'),{recursive:true});
   await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n'); await writeFile(path.join(root,'test','a.test.ts'),'// base\n');
   spawnSync('git',['add','src','test'],{cwd:root}); spawnSync('git',['commit','-m','base'],{cwd:root});
-  const manifest = await baseManifest(root,'repair-scope',[{id:'p',stages:['implementation','code-review']}]);
+  const manifest = await baseManifest(root,'repair-scope',[{id:'p',stages:['implementation','code-review'],executors:{'code-review':'review'}}]);
   manifest.allowed_change_paths=['src/**','test/**'];
   manifest.pipelines[0].executors['code-review']='review';
   manifest.pipelines[0].profile='local';
@@ -836,7 +837,7 @@ test('a gate passed on a tree snapshot completes only while the lane files still
   await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
   await writeFile(path.join(root,'src','b.ts'),'export const b = 1;\n');
   git('add','src'); git('commit','-m','base');
-  const manifest = await baseManifest(root,'lane-run',[{id:'p',stages:['implementation','fail-fast']}]);
+  const manifest = await baseManifest(root,'lane-run',[{id:'p',stages:['implementation','fail-fast'],executors:{'fail-fast':'local_gate'}}]);
   manifest.allowed_change_paths=['src/**'];
   manifest.pipelines[0].executors['fail-fast']='local_gate';
   manifest.pipelines[0].profile='local';
@@ -871,7 +872,7 @@ test('a lane in its gate or review reserves its planned files, not shared runtim
   await mkdir(path.join(root,'src'),{recursive:true});
   await writeFile(path.join(root,'src','a.ts'),'export const a = 1;\n');
   git('add','src'); git('commit','-m','base');
-  const manifest = await baseManifest(root,'reserve-run',[{id:'p',stages:['implementation','fail-fast'],ready_after_stage:'fail-fast'},{id:'q',stages:['implementation']}]);
+  const manifest = await baseManifest(root,'reserve-run',[{id:'p',stages:['implementation','fail-fast'],executors:{'fail-fast':'local_gate'},ready_after_stage:'fail-fast'},{id:'q',stages:['implementation']}]);
   manifest.allowed_change_paths=['src/**'];
   manifest.generated_paths=['src/p/gen.json'];
   manifest.pipelines[0].executors['fail-fast']='local_gate';
@@ -1079,7 +1080,7 @@ test('owner amendment releases stale repair paths; reopened wave ignores prior c
     await writeFile(path.join(root, 'src', 'base.ts'), 'export const ready = true;\n');
     git('add', 'src'); git('commit', '-m', 'base');
     const runId = 'amend-reopened-wave';
-    const manifest = await baseManifest(root, runId, [{ id: 'p', stages: ['implementation', 'code-review'] }]);
+    const manifest = await baseManifest(root, runId, [{ id: 'p', stages: ['implementation', 'code-review'],executors:{'code-review':'review'} }]);
     manifest.allowed_change_paths = ['src/**'];
     manifest.pipelines[0].executors = {
       implementation: 'agent', 'code-review': 'review',
