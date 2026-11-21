@@ -209,8 +209,8 @@ function stageCli(args: string[]) {
 }
 
 async function complete(args: string[]): Promise<string> {
-  await verifyAgentAdvisoryCompletion(process.cwd(), args);
-  await verifyReviewClosing(process.cwd(), args);
+  // No separate evidence pass here: canonical completeStage enforces every
+  // required proof before changing RUN state, including direct core entrypoints.
   const result = stageCli(['complete', ...args.slice(1)]);
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.status !== 0) {
