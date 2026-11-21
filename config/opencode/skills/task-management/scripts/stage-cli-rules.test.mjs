@@ -53,7 +53,7 @@ async function v2Manifest(root, runId, rulesVersion) {
     accepted_risks: await frozen(root, 'accepted-risks.md', '# risks\n'),
     work_items: await frozen(root, 'work-items/index.json', '{"schema":2}\n'),
   };
-  const item = await frozen(root, JSON.stringify({ id: 'wi-app', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
+  const item = await frozen(root, 'work-items/wi-app.json', JSON.stringify({ id: 'wi-app', pipeline_id: 'app', stage: 'implementation', suggested_agent: 'CoderAgent' }) + '\n');
   return {
     schema_version: 2,
     work_item_output_contract_version: 1,
