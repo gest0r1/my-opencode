@@ -8,13 +8,16 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 const version = JSON.parse(read('config/opencode/package.json')).dependencies['@opencode/plugin'];
 if (!/^2\.\d+\.\d+$/.test(version)) throw Error('OpenCode plugin must use an exact v2 pin');
-for (const file of ['install.sh', 'install-openchamber.sh', 'scripts/install-opencode-generation.sh', 'scripts/install-openchamber-v2-core.sh']) {
+for (const file of ['install.sh', 'scripts/install-opencode-generation.sh', 'scripts/install-openchamber-v2-core.sh']) {
   const found = read(file).match(/OPENCODE_(?:INSTALL_)?VERSION="\$\{OPENCODE_INSTALL_VERSION:-(2\.\d+\.\d+)\}"/);
   if (found?.[1] !== version) throw Error(`${file}: OpenCode default differs from ${version}`);
 }
-// OpenChamber RU: install-openchamber.sh is the single source; every other default and the README follow it.
-const openchamber = read('install-openchamber.sh').match(/OPENCHAMBER_EXPECTED_VERSION="\$\{OPENCHAMBER_EXPECTED_VERSION:-(\d+\.\d+\.\d+)\}"/)?.[1];
-if (!openchamber) throw Error('install-openchamber.sh: OpenChamber pin missing');
+// The root coordinator owns the OpenChamber default; the canonical wrapper
+// resolves both refs to immutable SHAs and never installs a binary as opencode.
+if (!read('install-openchamber.sh').includes('install-openchamber-root.sh?ref=$CONFIG_SHA'))
+  throw Error('Root OpenChamber coordinator not pinned to the config SHA');
+const openchamber = read('scripts/install-openchamber-root.sh').match(/OPENCHAMBER_EXPECTED_VERSION="\$\{OPENCHAMBER_EXPECTED_VERSION:-(\d+\.\d+\.\d+)\}"/)?.[1];
+if (!openchamber) throw Error('scripts/install-openchamber-root.sh: OpenChamber pin missing');
 // The one-off SeVami v0.6.7 RUN exception must stay retired in every release.
 for (const name of ['legacy-live-preflight-v067.mjs', 'legacy-live-preflight-v067.test.mjs']) {
   if (fs.existsSync(path.join(root, 'config/opencode/skills/task-management/scripts', name))) {
