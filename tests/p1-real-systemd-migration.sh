@@ -68,7 +68,19 @@ UNIT
 sudo chown opencode:opencode /home/opencode/.config/systemd/user/openchamber.service
 user_systemctl daemon-reload
 user_systemctl enable --now openchamber.service
-curl -fsS http://127.0.0.1:3000/profile-source.txt | grep -Fxq current-source-kept
+legacy_ui_ready=0
+for i in {1..30}; do
+  if curl -fsS --max-time 2 http://127.0.0.1:3000/profile-source.txt 2>/dev/null | grep -Fxq current-source-kept; then
+    legacy_ui_ready=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$legacy_ui_ready" != 1 ]]; then
+  user_systemctl status --no-pager -l openchamber.service || true
+  echo 'P1_LEGACY_OPENCHAMBER_FIXTURE_NOT_READY' >&2
+  exit 3
+fi
 sudo -n install -d -o root -g root -m 700 /root/.config/openchamber
 printf 'historical-root-kept\n' | sudo -n tee /root/.config/openchamber/profile-root-only.txt >/dev/null
 
