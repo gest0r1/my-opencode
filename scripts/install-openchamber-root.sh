@@ -35,6 +35,7 @@ for file in install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstra
   fetch "scripts/$file" "$TMP/$file"
 done
 fetch scripts/migrate-openchamber-to-root.py "$TMP/migrate.py"
+fetch scripts/check-openchamber-quiescence.py "$TMP/quiescence.py"
 fetch scripts/rekey-openchamber-ui.py "$TMP/rekey.py"
 fetch config/systemd/openchamber-root.service "$TMP/openchamber.service"
 fetch config/systemd/opencode-owner-approval.service "$TMP/owner-broker.service"
@@ -227,6 +228,33 @@ if [[ "$fresh_install" != 1 && "${OPENCHAMBER_CUTOVER_QUIESCENT:-0}" != 1 ]]; th
   echo 'PENDING APPLY: active OpenChamber terminal state not confirmed quiescent.' >&2
   exit 0
 fi
+
+# Independently validate the process tree immediately before changing a
+# running OpenChamber service. Even explicit owner quiescence acknowledgement
+# cannot kill a live PTY, project action, or long-running guest service.
+old_pid=0
+root_pid=0
+if run_oc_user systemctl --user is-active --quiet openchamber.service; then
+  old_pid="$(run_oc_user systemctl --user show -p MainPID --value openchamber.service)" || {
+    echo 'OPENCHAMBER_OLD_PID_UNAVAILABLE' >&2; exit 3;
+  }
+  [[ "$old_pid" =~ ^[0-9]+$ && "$old_pid" -gt 1 ]] || {
+    echo 'OPENCHAMBER_OLD_PID_UNTRUSTED' >&2; exit 3;
+  }
+fi
+if systemctl is-active --quiet openchamber.service; then
+  root_pid="$(systemctl show -p MainPID --value openchamber.service)" || {
+    echo 'OPENCHAMBER_ROOT_PID_UNAVAILABLE' >&2; exit 3;
+  }
+  [[ "$root_pid" =~ ^[0-9]+$ && "$root_pid" -gt 1 ]] || {
+    echo 'OPENCHAMBER_ROOT_PID_UNTRUSTED' >&2; exit 3;
+  }
+fi
+python3 "$TMP/quiescence.py" --old-pid "$old_pid" --old-uid "$(id -u opencode)" --root-pid "$root_pid" || {
+  install_journal_event activation pending_restart "reason=live_openchamber_children"
+  echo 'PENDING APPLY: OpenChamber terminal, extension or project process is active.' >&2
+  exit 0
+}
 
 # Roll back only the root OpenChamber package and migration, never the OpenCode
 # runtime or its sessions. A failed activation cannot strand the old UI.
