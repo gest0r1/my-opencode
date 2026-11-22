@@ -144,12 +144,6 @@ OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}" \
 
 # Core delivered an exact-source SHA release; only activate the validated package.
 oc_validate_release "$RELEASE_DIR" || { echo 'Root OpenChamber release validation failed' >&2; exit 3; }
-if [[ "$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)" != "$RELEASE_DIR" ]]; then
-  oc_activate_release "$RELEASE_DIR"
-fi
-oc_write_managed_launcher
-[[ -x "$OPENCHAMBER_CURRENT_BIN" ]] || { echo 'Root OpenChamber binary is not installed' >&2; exit 3; }
-
 if [[ "${OPENCHAMBER_RESTART_MODE:-auto}" == defer || "${OPENCHAMBER_EMBEDDED_TERMINAL:-0}" == 1 ]]; then
   install_journal_event activation pending_restart "reason=embedded_or_deferred" "openchamber_sha=$APP_SHA"
   echo 'PENDING APPLY: installed root runtime staged; do not cut over from an embedded terminal.'
@@ -188,6 +182,15 @@ rollback_cutover() {
 }
 trap rollback_cutover ERR
 trap 'rollback_cutover' INT TERM
+
+# Only a quiescent, accepted cutover may publish the staged binary.
+# A deferred update must leave the currently running root service executable
+# and its current symlink untouched.
+if [[ "$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)" != "$RELEASE_DIR" ]]; then
+  oc_activate_release "$RELEASE_DIR"
+fi
+oc_write_managed_launcher
+[[ -x "$OPENCHAMBER_CURRENT_BIN" ]] || { echo 'Root OpenChamber binary is not installed' >&2; exit 3; }
 
 # Stop only the old OpenChamber service. Keep OpenCode's server and live RUNs.
 cutover_started=1
