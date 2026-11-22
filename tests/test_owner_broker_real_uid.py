@@ -75,6 +75,6 @@ s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1]);s.sendall((sys.argv[2]+"\
         tampered={**cp,'manifest_sha256':'b'*64}
         mismatch=self.sock(RUN_ROOT/'agent.sock',{'action':'consume','request_id':rid,'checkpoint':tampered},as_user='opencode')
         self.assertEqual(json.loads(mismatch.stdout)['error'],'CHECKPOINT_MISMATCH')
-        self.assertEqual((DATA_ROOT/'ledger.sqlite3').stat().st_mode&0o077,0)
+        self.assertEqual(int(subprocess.check_output(['sudo','-n','stat','-c','%a',str(DATA_ROOT/'ledger.sqlite3')],text=True).strip(),8)&0o077,0)
         self.assertEqual((RUN_ROOT/'owner.sock').stat().st_mode&0o077,0)
 if __name__=='__main__':unittest.main()
