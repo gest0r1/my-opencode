@@ -82,6 +82,7 @@ jobs:
           python3 tests/test_openchamber_root_migration.py
           python3 tests/test_openchamber_root_child_boundary.py
           python3 tests/test_owner_broker_real_uid.py
+          python3 tests/test_openchamber_ui_rekey.py
           bash tests/test_agent_installation.sh
           bash tests/test_binary_only_installer.sh
           bash tests/test_incremental_installer.sh
