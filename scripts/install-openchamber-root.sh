@@ -113,13 +113,13 @@ root_node_version_ok() {
 }
 ensure_root_node() {
   if root_node_version_ok; then return 0; fi
-  local version=24.21.0 name="node-v24.21.0-linux-x64.tar.xz" dest=/opt/my-openchamber/node-v24.21.0
+  local version=24.21.0 name="node-v24.21.0-linux-x64.tar.xz" dest=/usr/local/lib/my-openchamber/node-v24.21.0
   if [[ ! -x "$dest/bin/node" ]]; then
     local tmp; tmp="$(mktemp -d /tmp/openchamber-node.XXXXXXXX)"
     (cd "$tmp" && curl -fsSLO "https://nodejs.org/dist/v$version/$name" && \
       curl -fsSLO "https://nodejs.org/dist/v$version/SHASUMS256.txt" && \
       grep -F "  $name" SHASUMS256.txt > node.sha && sha256sum -c node.sha && \
-      tar -xJf "$name" && install -d -m 755 /opt/my-openchamber && \
+      tar -xJf "$name" && install -d -m 755 /usr/local/lib/my-openchamber && \
       mv "node-v$version-linux-x64" "$dest" && \
       chown -R root:root "$dest" && chmod -R go-w "$dest") || { rm -rf -- "$tmp"; return 1; }
     rm -rf -- "$tmp"
@@ -146,7 +146,7 @@ ensure_root_node
 # archive; the extracted executable lives under a root-owned immutable path.
 ensure_root_bun() {
   local current version=1.3.4 archive=bun-linux-x64.zip
-  local destination="/opt/my-openchamber/bun-1.3.4"
+  local destination="/usr/local/lib/my-openchamber/bun-1.3.4"
   current="$(command -v bun 2>/dev/null || true)"
   if [[ -n "$current" ]] && trusted_root_exec "$current" && bun --version >/dev/null 2>&1; then
     return 0
