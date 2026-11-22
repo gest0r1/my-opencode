@@ -1,0 +1,113 @@
+name: P1 installed root acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'install-openchamber.sh'
+      - 'install.sh'
+      - 'scripts/install-openchamber-root.sh'
+      - 'scripts/install-openchamber-v2-core.sh'
+      - 'scripts/openchamber-runtime-store.sh'
+      - 'scripts/migrate-openchamber-to-root.py'
+      - 'scripts/opencode-owner-approval*.py'
+      - 'scripts/openchamber-child-boundary.cjs'
+      - 'scripts/rekey-openchamber-ui.py'
+      - 'scripts/launch-openchamber-root.sh'
+      - 'config/systemd/openchamber-root.service'
+      - 'config/systemd/opencode-owner-approval.service'
+      - '.github/workflows/p1-installed-root-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p1-installed-root-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-systemd-cutover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: Verify immutable OpenChamber main release is published
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sha="$(gh api repos/gest0r1/openchamber-ru/commits/main --jq .sha)"
+          [[ "$sha" =~ ^[a-f0-9]{40}$ ]]
+          gh release view "v2-web-package-$sha" --repo gest0r1/openchamber-ru >/dev/null || {
+            echo "P1_RELEASE_REQUIRED: publish verified OpenChamber web package for $sha before installed acceptance"
+            exit 1
+          }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Provision safe root toolchain for ephemeral VM
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Actions installs Bun under runner HOME. Copy it to a root-owned
+          # executable path before any privileged installer is invoked.
+          sudo install -o root -g root -m 755 "$(command -v bun)" /usr/local/bin/bun
+          sudo systemctl is-system-running --wait >/dev/null || {
+            sudo systemctl is-system-running
+            exit 1
+          }
+      - name: Real systemd clean install and unchanged repeat upgrade
+        id: install
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OC_SHA: ${{ steps.target.outputs.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # DO NOT run on production. This is GitHub's disposable ubuntu VM.
+          [[ "$RUNNER_ENVIRONMENT" == github-hosted ]] || {
+            echo 'P1_EPHEMERAL_RUNNER_REQUIRED'; exit 2;
+          }
+          sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
+            OPENCODE_CONFIG_REF="$GITHUB_SHA" OPENCHAMBER_REF="$OC_SHA" \
+            bash scripts/install-openchamber-root.sh
+          sudo systemctl is-active --quiet openchamber.service
+          sudo systemctl is-active --quiet opencode-owner-approval.service
+          sudo -u opencode env XDG_RUNTIME_DIR="/run/user/$(id -u opencode)" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u opencode)/bus" \
+            systemctl --user is-active --quiet opencode-web.service
+          test "$(sudo stat -c %a /run/my-opencode-approval/owner.sock)" = 600
+          test "$(sudo stat -c %a /etc/my-opencode/owner-broker-required)" = 644
+          test "$(sudo stat -c %a /etc/my-opencode/openchamber-execution.env)" = 600
+          test "$(sudo stat -c %U /root/.config/openchamber/startup.env)" = root
+          test "$(sudo stat -c %U /root/.config/openchamber/jwt-secret)" = root
+          curl -fsS http://127.0.0.1:4096/api/info >/dev/null
+          curl -fsS http://127.0.0.1:3000/ >/dev/null
+          echo 'PASS: real systemd root service and unprivileged OpenCode'
+          before_oc="$(sudo systemctl show openchamber.service --property=MainPID --value)"
+          before_ocweb="$(sudo -u opencode env XDG_RUNTIME_DIR="/run/user/$(id -u opencode)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u opencode)/bus" systemctl --user show opencode-web.service --property=MainPID --value)"
+          id="$(curl -fsS -X POST http://127.0.0.1:4096/api/session -H 'Content-Type: application/json' -d '{"title":"P1 acceptance existing session"}' | node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{const j=JSON.parse(s);if(!j.data?.id)process.exit(1);console.log(j.data.id)})')"
+          [[ -n "$id" ]]
+          sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
+            OPENCODE_CONFIG_REF="$GITHUB_SHA" OPENCHAMBER_REF="$OC_SHA" \
+            bash scripts/install-openchamber-root.sh
+          after_oc="$(sudo systemctl show openchamber.service --property=MainPID --value)"
+          after_ocweb="$(sudo -u opencode env XDG_RUNTIME_DIR="/run/user/$(id -u opencode)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u opencode)/bus" systemctl --user show opencode-web.service --property=MainPID --value)"
+          [[ "$before_oc" == "$after_oc" && "$before_ocweb" == "$after_ocweb" ]] || {
+            echo 'P1_REINSTALL_RESTARTED_LIVE_SERVICE' >&2; exit 1;
+          }
+          curl -fsS "http://127.0.0.1:4096/api/session/$id" |
+            node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{let j=JSON.parse(s);if(!j.data?.id)process.exit(1)})'
+          echo "PASS: exact-SHA repeat install preserves OpenCode session and both process IDs"
+      - name: Failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          sudo systemctl status openchamber.service --no-pager -l || true
+          sudo systemctl status opencode-owner-approval.service --no-pager -l || true
+          sudo journalctl -u openchamber.service -n 90 --no-pager || true
+          sudo journalctl -u opencode-owner-approval.service -n 90 --no-pager || true
