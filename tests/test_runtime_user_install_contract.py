@@ -43,6 +43,12 @@ def main():
     require(oc_unit,'User=root')
     require(oc_unit,'OPENCODE_SKIP_START=true')
     require(oc_unit,'openchamber-child-boundary.cjs')
+    # The root UI must traverse existing 0700 opencode project and Chats paths;
+    # child processes and ambient caps must never inherit DAC override.
+    require(oc_unit,'CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE')
+    require(oc_unit,'AmbientCapabilities=CAP_SETUID CAP_SETGID')
+    forbid(oc_unit,'AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE')
+    require(oc_unit,'NoNewPrivileges=true')
     require(broker_unit,'User=root')
     require(broker_unit,'ExecStart=/usr/bin/python3 /usr/local/lib/my-opencode/opencode-owner-approvald.py')
     require(child,'OPENCHAMBER_EXECUTION_UID')
