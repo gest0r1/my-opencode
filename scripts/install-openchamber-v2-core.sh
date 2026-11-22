@@ -448,6 +448,16 @@ build_source_package() {
   PACKAGE_FILE="$cache"
 }
 
+# Root distribution packages must be installed without running their
+# lifecycle scripts. Unprivileged historical installations are unchanged.
+install_openchamber_package() {
+  if [[ "${OPENCHAMBER_ROOT_ONLY:-0}" == 1 ]]; then
+    bun add -g --ignore-scripts "$PACKAGE_FILE"
+  else
+    bun add -g "$PACKAGE_FILE"
+  fi
+}
+
 PACKAGE_FILE=''
 if (( runtime_needs_apply == 1 )); then
   if (( manifest_available == 1 )); then
@@ -461,7 +471,7 @@ if (( runtime_needs_apply == 1 )); then
     echo "  $PACKAGE_FILE"
   else
     ensure_bun
-    bun add -g "$PACKAGE_FILE"
+    install_openchamber_package
     package_changed=1
     installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
     [[ "$installed_openchamber" == "$EXPECTED_OPENCHAMBER_VERSION" ]] || {
@@ -476,7 +486,7 @@ fi
 # Fresh install: there is no running OpenChamber runtime to preserve.
 if [[ -z "$installed_openchamber" && -n "$PACKAGE_FILE" ]]; then
   ensure_bun
-  bun add -g "$PACKAGE_FILE"
+  install_openchamber_package
   package_changed=1
   installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
 fi
