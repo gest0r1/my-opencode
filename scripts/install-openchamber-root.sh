@@ -88,7 +88,9 @@ ensure_root_node
 # clients/sessions. The P1 owner trust channel is the independent root broker.
 AUTH_FILE=/etc/my-opencode/openchamber-connect.env
 mkdir -p /etc/my-opencode
-chmod 700 /etc/my-opencode
+# Searchable but not listable by the agent. The mandatory root-owned
+# enforcement marker must be stat()-visible to the opencode UID.
+chmod 711 /etc/my-opencode
 OPENCODE_SERVICE_PASSWORD="$(run_oc_user bash -c 'if [[ -f "$HOME/.config/opencode.env" ]]; then source "$HOME/.config/opencode.env"; fi; printf %s "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}"' )"
 if [[ -n "$OPENCODE_SERVICE_PASSWORD" ]]; then
   curl -fsS --max-time 6 -u "opencode:$OPENCODE_SERVICE_PASSWORD" \
@@ -130,7 +132,7 @@ install -d -o root -g root -m 755 /usr/local/lib/my-opencode
 for file in opencode-owner-approval.py opencode-owner-approvald.py openchamber-child-boundary.cjs opencode-unpriv-wrapper.sh; do
   install -o root -g root -m 755 "$TMP/$file" "/usr/local/lib/my-opencode/$file"
 done
-install -d -o root -g root -m 700 /etc/my-opencode
+install -d -o root -g root -m 711 /etc/my-opencode
 printf 'OPENCHAMBER_EXECUTION_UID=%s\nOPENCHAMBER_EXECUTION_GID=%s\n' "$(id -u opencode)" "$(id -g opencode)" > /etc/my-opencode/openchamber-execution.env
 chmod 600 /etc/my-opencode/openchamber-execution.env
 source "$TMP/openchamber-runtime-store.sh"
@@ -244,7 +246,7 @@ for i in {1..30}; do
     if [[ "$migration_status" == staged ]]; then python3 "$TMP/migrate.py" complete --ready yes; fi
     run_oc_user systemctl --user disable openchamber.service >/dev/null || true
     # Enforce broker for every new PLAN/owner-accept at this point.
-    install -o root -g root -m 600 /dev/null /etc/my-opencode/owner-broker-required
+    install -o root -g root -m 644 /dev/null /etc/my-opencode/owner-broker-required
     printf '%s\n' "$CONFIG_SHA $APP_SHA" > "$ROOT_STATE/active-sha"
     oc_commit_activation
     install_journal_event activation activated "config_sha=$CONFIG_SHA" "openchamber_sha=$APP_SHA"
