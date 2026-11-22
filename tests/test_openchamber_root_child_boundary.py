@@ -45,6 +45,54 @@ c.execFile('/usr/bin/id',['-u'],{},(err,out)=>{if(err)throw err;ids.push(out.tri
         p = subprocess.run(['sudo','-n','env',*env,'node','--require',str(SCRIPT),'-e',source],capture_output=True,text=True,timeout=25)
         self.assertEqual(p.returncode,0,p.stderr)
         self.assertEqual(json.loads(p.stdout),[str(uid)]*4)
+    def test_promisified_exec_file_and_exec_keep_node_contract_and_uid(self):
+        if os.geteuid() == 0:
+            self.skipTest('CI runner should be nonroot for this check')
+        if not shutil.which('sudo'):
+            self.skipTest('sudo not installed')
+        uid, gid = self.exec_user.pw_uid, self.exec_user.pw_gid
+        source = r'''
+const { promisify } = require('node:util');
+const child = require('node:child_process');
+(async () => {
+  const file = await promisify(child.execFile)('/usr/bin/id', ['-u']);
+  const exec = await promisify(child.exec)('id -u');
+  const { execFile: esmExecFile } = await import('node:child_process');
+  const esm = await promisify(esmExecFile)('/usr/bin/id', ['-u']);
+  const environment = await promisify(child.execFile)('/usr/bin/env', []);
+  let failure = null;
+  try {
+    await promisify(child.execFile)('/bin/sh', ['-c', 'printf failed-out; printf failed-err >&2; exit 7']);
+  } catch (error) {
+    failure = { code: error.code, stdout: error.stdout, stderr: error.stderr };
+  }
+  console.log(JSON.stringify({
+    file: file.stdout.trim(), fileStderr: file.stderr,
+    exec: exec.stdout.trim(), execStderr: exec.stderr,
+    esm: esm.stdout.trim(),
+    secretsFiltered: !environment.stdout.includes('DO_NOT_INHERIT_P1'),
+    failure,
+  }));
+})().catch(error => { console.error(error); process.exitCode = 1; });
+'''
+        args = [
+            'sudo', '-n', 'env',
+            'OPENCHAMBER_ROOT_MODE=separated',
+            f'OPENCHAMBER_EXECUTION_UID={uid}',
+            f'OPENCHAMBER_EXECUTION_GID={gid}',
+            'GH_TOKEN=DO_NOT_INHERIT_P1',
+            'OPENCODE_PASSWORD=DO_NOT_INHERIT_P1',
+            'node', '--require', str(SCRIPT), '-e', source,
+        ]
+        result = subprocess.run(args, capture_output=True, text=True, timeout=25)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            'file': str(uid), 'fileStderr': '',
+            'exec': str(uid), 'execStderr': '',
+            'esm': str(uid), 'secretsFiltered': True,
+            'failure': {'code': 7, 'stdout': 'failed-out', 'stderr': 'failed-err'},
+        })
+
     def test_deny_wrong_executor(self):
         if os.geteuid() == 0 or not shutil.which('sudo'): self.skipTest('sudo runner required')
         p=subprocess.run(['sudo','-n','env','OPENCHAMBER_ROOT_MODE=separated',
