@@ -272,8 +272,19 @@ for current, directories, files in os.walk(target, followlinks=False):
 PY
 # Never put this location in startup.env: migrated user settings must not be
 # able to redefine the trusted identity or Chats location.
+# These values are the protected root-side trust boundary and must win over
+# any migrated startup.env values (systemd reads this file last).
 printf 'OPENCHAMBER_EXECUTION_UID=%s\nOPENCHAMBER_EXECUTION_GID=%s\nOPENCHAMBER_CHATS_DIR=%s\n' \
   "$(id -u opencode)" "$(id -g opencode)" "$SHARED_CHATS_DIR" > /etc/my-opencode/openchamber-execution.env
+cat >> /etc/my-opencode/openchamber-execution.env <<'EOF'
+OPENCHAMBER_ROOT_MODE=separated
+OPENCHAMBER_EXECUTION_USER=opencode
+OPENCHAMBER_DATA_DIR=/root/.config/openchamber
+OPENCODE_HOST=http://127.0.0.1:4096
+OPENCODE_SKIP_START=true
+OPENCODE_BINARY=/usr/local/lib/my-opencode/opencode-unpriv-wrapper.sh
+NODE_OPTIONS="--require /usr/local/lib/my-opencode/openchamber-child-boundary.cjs"
+EOF
 chmod 600 /etc/my-opencode/openchamber-execution.env
 source "$TMP/openchamber-runtime-store.sh"
 oc_runtime_init
