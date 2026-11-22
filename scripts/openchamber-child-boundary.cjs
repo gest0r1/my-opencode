@@ -4,6 +4,7 @@
  * Native node-pty is independently isolated in root-execution-boundary.js.
  */
 const os = require('node:os');
+const fs = require('node:fs');
 const child = require('node:child_process');
 const Module = require('node:module');
 
@@ -15,6 +16,15 @@ if (typeof process.getuid === 'function' && process.getuid() === 0) {
   const gid = Number(process.env.OPENCHAMBER_EXECUTION_GID);
   if (!Number.isSafeInteger(uid) || uid < 1 || !Number.isSafeInteger(gid) || gid < 1) {
     throw new Error('ROOT_CHILD_EXECUTION_FORBIDDEN: missing opencode UID/GID');
+  }
+  // Never accept an arbitrary unprivileged UID from a migrated or altered
+  // OpenChamber startup.env. The only permitted project executor is the
+  // actual local opencode account provisioned by the installer.
+  const passwdEntry = fs.readFileSync('/etc/passwd', 'utf8').split('\n')
+    .find((line) => line.startsWith('opencode:'));
+  const fields = passwdEntry?.split(':') ?? [];
+  if (Number(fields[2]) !== uid || Number(fields[3]) !== gid) {
+    throw new Error('ROOT_CHILD_EXECUTION_FORBIDDEN: executor must be local opencode');
   }
   const envClean = (source) => {
     // Preserve explicit project variables except service auth; root HOME must
