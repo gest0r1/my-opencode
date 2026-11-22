@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
-# Static activation contract: update rollback stays within the permanent user runtime.
+# New root OpenChamber activation and rollback do not own OpenCode sessions.
 set -Eeuo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WRAPPER="$ROOT/install-openchamber.sh"
+COORD="$ROOT/scripts/install-openchamber-root.sh"
 CORE="$ROOT/scripts/install-openchamber-v2-core.sh"
 STORE="$ROOT/scripts/openchamber-runtime-store.sh"
-
-for f in "$WRAPPER" "$CORE" "$STORE"; do bash -n "$f"; done
-
-grep -Fq 'oc_rollback_activation' "$WRAPPER"
-grep -Fq 'oc_activate_release' "$WRAPPER"
-grep -Fq 'native_startup' "$WRAPPER"
-grep -Fq 'readiness' "$WRAPPER"
-grep -Fq 'systemctl --user restart opencode-web.service openchamber.service' "$WRAPPER"
-if grep -Fq 'verify-runtime-services.py' "$WRAPPER"; then echo 'FAIL: runtime acceptance probe is back in the wrapper' >&2; exit 1; fi
+for f in "$WRAPPER" "$COORD" "$CORE" "$STORE"; do bash -n "$f"; done
+grep -Fq 'oc_rollback_activation' "$COORD"
+grep -Fq 'oc_activate_release' "$COORD"
+grep -Fq 'PENDING APPLY:' "$COORD"
+grep -Fq 'OPENCHAMBER_CUTOVER_QUIESCENT' "$COORD"
+grep -Fq 'opencode-owner-approval.service' "$COORD"
+grep -Fq 'systemctl restart openchamber.service' "$COORD"
+! grep -Fq 'systemctl --user restart opencode-web.service openchamber.service' "$COORD"
 grep -Fq 'effective_restart_mode=defer' "$CORE"
-grep -Fq 'OPENCHAMBER_EMBEDDED_TERMINAL' "$CORE"
-
-for forbidden in opencode-runtime-cutover legacy-stop legacy-restore legacy-commit root-state-sync.pending migration-plan; do
+grep -Fq 'mv -Tf "$link_tmp" "$OPENCHAMBER_CURRENT"' "$STORE"
+for forbidden in opencode-runtime-cutover legacy-stop legacy-restore legacy-commit root-state-sync.pending; do
   ! grep -Fq "$forbidden" "$WRAPPER"
+  ! grep -Fq "$forbidden" "$COORD"
 done
-
-echo 'PASS: native activation uses only permanent user-runtime rollback and embedded-terminal defer'
+echo 'PASS: root OpenChamber activation is isolated, deferred and rollback-capable'

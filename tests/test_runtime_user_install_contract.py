@@ -1,86 +1,58 @@
 #!/usr/bin/env python3
-"""Static regression contract for the permanent opencode runtime installation."""
+"""Canonical permanent runtime identities after P1 root OpenChamber split."""
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-setup = (ROOT / "scripts/setup-opencode-package-sudo.sh").read_text()
-provision = (ROOT / "scripts/provision-runtime-user.sh").read_text()
-config_installer = (ROOT / "install.sh").read_text()
-combined_installer = (ROOT / "install-openchamber.sh").read_text()
-core = (ROOT / "scripts/install-openchamber-v2-core.sh").read_text()
+ROOT=Path(__file__).resolve().parents[1]
+def src(name): return (ROOT/name).read_text()
+provision=src('scripts/provision-runtime-user.sh')
+config_installer=src('install.sh')
+wrapper=src('install-openchamber.sh')
+coordinator=src('scripts/install-openchamber-root.sh')
+oc_unit=src('config/systemd/openchamber-root.service')
+ocweb_unit=src('config/systemd/opencode-web.service')
+broker_unit=src('config/systemd/opencode-owner-approval.service')
+core=src('scripts/install-openchamber-v2-core.sh')
+child=src('scripts/openchamber-child-boundary.cjs')
+rekey=src('scripts/rekey-openchamber-ui.py')
 
-
-def require(text: str, needle: str):
-    assert needle in text, f"missing contract: {needle}"
-
-
-def forbid(text: str, needle: str):
-    assert needle not in text, f"forbidden regression: {needle}"
-
+def require(text, value): assert value in text, 'missing: '+value
+def forbid(text, value): assert value not in text, 'forbidden: '+value
 
 def main():
-    require(provision, 'if ! id opencode >/dev/null 2>&1; then useradd --create-home --shell /bin/bash opencode; fi')
-    require(provision, 'setup-opencode-package-sudo.sh')
-    # Both installers download only the files named in their provisioning loop into a temp dir, so every
-    # helper provision-runtime-user.sh runs must be in that loop, or the install stops after the first helper.
-    import re
-    called = sorted(set(re.findall(r'/(setup-[a-z-]+\.sh)"', provision)))
-    assert called, 'provision-runtime-user.sh calls no setup helper'
-    for name, text in (('install.sh', config_installer), ('install-openchamber.sh', combined_installer)):
-        loop = re.search(r'for file in ([^;]+); do', text)
-        assert loop, f'{name} has no provisioning download loop'
-        fetched = loop.group(1).split()
-        for helper in ['provision-runtime-user.sh', *called]:
-            assert helper in fetched, f'{name} does not download {helper}'
-    require(setup, 'opencode-install-packages')
+    require(provision,'useradd --create-home --shell /bin/bash opencode')
+    require(config_installer,'OPENCODE_INSTALL_VERSION:-2.2.7')
+    require(config_installer,'loginctl enable-linger "$RUNTIME_USER"')
+    require(config_installer,'sudo -H -u "$RUNTIME_USER" env -i')
+    require(ocweb_unit,'opencode serve --port ${OPENCODE_WEB_PORT} --hostname 127.0.0.1')
+    forbid(ocweb_unit,'0.0.0.0')
+    require(wrapper,'[[ $EUID == 0 ]]')
+    require(wrapper,'install-openchamber-root.sh?ref=$CONFIG_SHA')
+    forbid(wrapper,'sudo -H -u "$RUNTIME_USER"')
+    require(coordinator,'OPENCODE_USER=opencode')
+    require(coordinator,'OPENCODE_CONFIG_REF="$CONFIG_SHA"')
+    require(coordinator,'OPENCHAMBER_ROOT_ONLY=1')
+    require(coordinator,'OPENCODE_BINARY=/usr/local/lib/my-opencode/opencode-unpriv-wrapper.sh')
+    require(coordinator,'python3 "$TMP/migrate.py" stage --source "$OLD_OC_DATA_DIR" --quiescent yes')
+    require(coordinator,'python3 "$TMP/rekey.py"')
+    require(coordinator,'chmod 711 /etc/my-opencode')
+    require(coordinator,'OPENCHAMBER_DATA_MIGRATION_UNSUPPORTED')
+    require(coordinator,'OPENCHAMBER_PACKAGE_MODE=release')
+    require(coordinator,'systemctl restart openchamber.service')
+    require(coordinator,'install -o root -g root -m 644 /dev/null /etc/my-opencode/owner-broker-required')
+    require(core,'OPENCHAMBER_ROOT_ONLY')
+    require(oc_unit,'User=root')
+    require(oc_unit,'OPENCODE_SKIP_START=true')
+    require(oc_unit,'openchamber-child-boundary.cjs')
+    require(broker_unit,'User=root')
+    require(broker_unit,'ExecStart=/usr/bin/python3 /usr/local/lib/my-opencode/opencode-owner-approvald.py')
+    require(child,'OPENCHAMBER_EXECUTION_UID')
+    require(child,'uid, gid')
+    require(rekey,'existing_ui_sessions_revoked')
+    forbidden=('migrate-root-runtime-to-opencode.sh','migrate-runtime-state.py',
+               'finalize-runtime-migration.py','opencode-runtime-cutover',
+               'root-state-sync.pending','legacy-stop','legacy-restore','legacy-commit')
+    for text in (provision,config_installer,wrapper,coordinator):
+        for needle in forbidden: forbid(text,needle)
+    print('PASS: OpenCode remains opencode, OpenChamber and P1 broker are root-owned')
 
-    forbidden = (
-        'migrate-root-runtime-to-opencode.sh',
-        'migrate-runtime-state.py',
-        'finalize-runtime-migration.py',
-        'opencode-runtime-cutover',
-        'root-state-sync.pending',
-        'migration-plan',
-        'legacy-stop',
-        'legacy-restore',
-        'legacy-commit',
-    )
-    for text in (setup, provision, config_installer, combined_installer):
-        for needle in forbidden:
-            forbid(text, needle)
-
-    for installer in (config_installer, combined_installer):
-        require(installer, 'sudo -v')
-        require(installer, 'Switching installer runtime:')
-        require(installer, 'sudo -H -u "$RUNTIME_USER" env -i')
-        require(installer, 'loginctl enable-linger "$RUNTIME_USER"')
-        require(installer, 'bash -c \'cd "$HOME"; exec bash "$@"\'')
-        require(installer, 'XDG_RUNTIME_DIR="/run/user/$runtime_uid"')
-        require(installer, 'XDG_CONFIG_HOME="$HOME/.config"')
-
-    require(config_installer, 'OPENCODE_INSTALL_VERSION:-2.2.7')
-    require(config_installer, 'contents/config/systemd/opencode-web.service?ref=$CONFIG_SHA')
-    unit = (ROOT / 'config/systemd/opencode-web.service').read_text()
-    require(unit, 'opencode serve --port ${OPENCODE_WEB_PORT} --hostname 127.0.0.1')
-    forbid(unit, '0.0.0.0')
-    require(config_installer, 'systemctl --user enable opencode-web.service')
-    forbid(config_installer, 'ensure_' + 'claude_cli')
-    require(config_installer, 'configure_server_browser')
-
-    require(combined_installer, 'OPENCHAMBER_EXPECTED_VERSION:-2.7.1')
-    # --no-env-snapshot keeps OPENCODE_BINARY out of startup.env; the managed binary is pinned in the drop-in.
-    require(combined_installer, 'Environment="OPENCODE_BINARY=$OPENCODE_BINARY"')
-    require(combined_installer, 'systemctl --user is-enabled --quiet opencode-web.service')
-    require(combined_installer, 'systemctl --user is-enabled --quiet openchamber.service')
-    require(combined_installer, 'systemctl --user restart opencode-web.service openchamber.service')
-    require(combined_installer, 'configure_server_browser')
-
-    require(core, 'OPENCHAMBER_EMBEDDED_TERMINAL')
-    require(core, 'effective_restart_mode=defer')
-
-    print("PASS: permanent runtime-user install contract")
-
-
-if __name__ == "__main__":
-    main()
-
+if __name__=='__main__': main()

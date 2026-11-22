@@ -31,7 +31,7 @@ STATE="$STATE_ROOT/openchamber-v2-install.state"
 CACHE_ROOT="$STATE_ROOT/openchamber-v2-cache"
 LOCK="$STATE_ROOT/openchamber-v2-install.lock"
 
-OPENCODE_BIN="$HOME/.opencode/bin/opencode"
+OPENCODE_BIN="${OPENCODE_BINARY:-$HOME/.opencode/bin/opencode}"
 COMMON_ENV="$HOME/.config/opencode.env"
 LEGACY_PASSWORD_ENV="$HOME/.config/openchamber-live.env"
 NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
@@ -97,6 +97,35 @@ ensure_supported_node() {
 }
 
 ensure_bun() {
+  if [[ "${OPENCHAMBER_ROOT_ONLY:-0}" == 1 ]]; then
+    # No curl | bash or user-writable Bun executable may run as root.
+    local bun_path resolved part
+    bun_path="$(command -v bun 2>/dev/null || true)"
+    [[ -n "$bun_path" ]] || {
+      echo 'ROOT_BUN_REQUIRED: install a trusted root-owned Bun binary before OpenChamber cutover' >&2
+      return 2
+    }
+    resolved="$(readlink -f "$bun_path" 2>/dev/null)" || return 2
+    [[ "$bun_path" == /* && -x "$resolved" &&
+       "$resolved" != /home/* && "$resolved" != /tmp/* &&
+       "$resolved" != /var/tmp/* ]] || { echo 'ROOT_BUN_PATH_UNTRUSTED' >&2; return 2; }
+    local permissions
+    for part in "$bun_path" "$resolved"; do
+      while [[ "$part" != / ]]; do
+        permissions="$(stat -c %a "$part" 2>/dev/null)" || return 2
+        [[ "$permissions" =~ ^[0-7]{3,4}$ &&
+           "$(stat -c %u "$part")" == 0 ]] || {
+          echo 'ROOT_BUN_PATH_UNTRUSTED' >&2; return 2;
+        }
+        if (( (8#$permissions & 8#6022) != 0 )); then
+          echo 'ROOT_BUN_PATH_UNTRUSTED' >&2; return 2
+        fi
+        part="$(dirname "$part")"
+      done
+    done
+    bun --version >/dev/null || return 2
+    return 0
+  fi
   if command -v bun >/dev/null 2>&1; then return 0; fi
   echo 'Installing Bun for the fork package build'
   curl -fsSL https://bun.sh/install | bash
@@ -222,6 +251,20 @@ fi
 
 # ---- OpenCode binary/config decisions -------------------------------------
 
+if [[ "${OPENCHAMBER_ROOT_ONLY:-0}" == 1 ]]; then
+  # The root OpenChamber transaction must never install or restart OpenCode.
+  # Its configuration/database belong exclusively to the 'opencode' UID.
+  [[ -x "$OPENCODE_BIN" ]] || { echo 'Existing opencode binary not found' >&2; exit 2; }
+  installed_opencode="$("$OPENCODE_BIN" --version | sed -E 's/^opencode[[:space:]]+v?//')"
+  [[ "$installed_opencode" == "$OPENCODE_VERSION" ]] || {
+    echo "OpenCode version mismatch: expected=$OPENCODE_VERSION actual=$installed_opencode" >&2
+    exit 2
+  }
+  opencode_binary_changed=0
+  echo 'Root OpenChamber delivery: OpenCode binary/config unchanged'
+else
+
+
 installed_opencode=''
 if [[ -x "$OPENCODE_BIN" ]]; then
   installed_opencode="$("$OPENCODE_BIN" --version 2>/dev/null | sed -E 's/^opencode[[:space:]]+v?//' || true)"
@@ -255,6 +298,8 @@ installed_opencode="$("$OPENCODE_BIN" --version | sed -E 's/^opencode[[:space:]]
   echo "OpenCode version mismatch: expected=$OPENCODE_VERSION actual=$installed_opencode" >&2
   exit 1
 }
+
+fi
 
 env_after="$(file_sha256 "$COMMON_ENV")"
 env_changed=0
@@ -432,6 +477,16 @@ build_source_package() {
   PACKAGE_FILE="$cache"
 }
 
+# Root distribution packages must be installed without running their
+# lifecycle scripts. Unprivileged historical installations are unchanged.
+install_openchamber_package() {
+  if [[ "${OPENCHAMBER_ROOT_ONLY:-0}" == 1 ]]; then
+    bun add -g --ignore-scripts "$PACKAGE_FILE"
+  else
+    bun add -g "$PACKAGE_FILE"
+  fi
+}
+
 PACKAGE_FILE=''
 if (( runtime_needs_apply == 1 )); then
   if (( manifest_available == 1 )); then
@@ -445,7 +500,7 @@ if (( runtime_needs_apply == 1 )); then
     echo "  $PACKAGE_FILE"
   else
     ensure_bun
-    bun add -g "$PACKAGE_FILE"
+    install_openchamber_package
     package_changed=1
     installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
     [[ "$installed_openchamber" == "$EXPECTED_OPENCHAMBER_VERSION" ]] || {
@@ -460,7 +515,7 @@ fi
 # Fresh install: there is no running OpenChamber runtime to preserve.
 if [[ -z "$installed_openchamber" && -n "$PACKAGE_FILE" ]]; then
   ensure_bun
-  bun add -g "$PACKAGE_FILE"
+  install_openchamber_package
   package_changed=1
   installed_openchamber="$(openchamber --version 2>/dev/null | sed -E 's/^OpenChamber[[:space:]]+v?//; s/^v//' || true)"
 fi

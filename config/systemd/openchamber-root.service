@@ -1,0 +1,30 @@
+[Unit]
+Description=OpenChamber (root UI, external opencode runtime)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root
+Environment="HOME=/root" "XDG_CONFIG_HOME=/root/.config" "XDG_DATA_HOME=/root/.local/share" "XDG_STATE_HOME=/root/.local/state"
+Environment="OPENCHAMBER_ROOT_MODE=separated" "OPENCHAMBER_EXECUTION_USER=opencode"
+Environment="NODE_OPTIONS=--require /usr/local/lib/my-opencode/openchamber-child-boundary.cjs"
+EnvironmentFile=/etc/my-opencode/openchamber-execution.env
+Environment="OPENCODE_HOST=http://127.0.0.1:4096" "OPENCODE_SKIP_START=true" "OPENCODE_BINARY=/usr/local/lib/my-opencode/opencode-unpriv-wrapper.sh"
+Environment="OPENCHAMBER_BIND_HOST=0.0.0.0" "OPENCHAMBER_BIND_PORT=3000"
+EnvironmentFile=-/root/.config/openchamber/startup.env
+ExecStart=/usr/local/lib/my-opencode/launch-openchamber-root.sh /root/.local/bin/openchamber serve --host ${OPENCHAMBER_BIND_HOST} --port ${OPENCHAMBER_BIND_PORT} --foreground
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+AmbientCapabilities=CAP_SETUID CAP_SETGID
+PrivateTmp=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

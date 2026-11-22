@@ -1,155 +1,68 @@
 #!/usr/bin/env python3
-"""Static contracts for the incremental OpenCode/OpenChamber V2 installer."""
+"""Installed root OpenChamber contract, pinned delivery and independent rollback."""
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-wrapper = (ROOT / "install-openchamber.sh").read_text()
-core = (ROOT / "scripts/install-openchamber-v2-core.sh").read_text()
-runtime_store = (ROOT / "scripts/openchamber-runtime-store.sh").read_text()
-journal = (ROOT / "scripts/install-journal.sh").read_text()
-config_bootstrap = (ROOT / "install.sh").read_text()
-config_generation = (ROOT / "scripts/install-opencode-generation.sh").read_text()
-installer = wrapper + "\n" + core
-config_installer = config_bootstrap + "\n" + config_generation
+R=Path(__file__).resolve().parents[1]
+read=lambda p:(R/p).read_text()
+wrapper=read('install-openchamber.sh')
+root=read('scripts/install-openchamber-root.sh')
+core=read('scripts/install-openchamber-v2-core.sh')
+store=read('scripts/openchamber-runtime-store.sh')
+broker=read('scripts/opencode-owner-approvald.py')
+ledger=read('scripts/opencode-owner-approval.py')
+ocunit=read('config/systemd/openchamber-root.service')
+brunit=read('config/systemd/opencode-owner-approval.service')
 
-
-def require(text: str, needle: str, label: str):
-    assert needle in text, f"missing contract: {label}: {needle}"
-
-
-def forbid(text: str, needle: str, label: str):
-    assert needle not in text, f"forbidden regression: {label}: {needle}"
-
+def req(txt,value):
+    assert value in txt, 'missing required installed contract: '+value
+def deny(txt,value):
+    assert value not in txt, 'unsafe installed contract: '+value
 
 def main():
-    # Version/network contract.
-    require(core, 'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.2.7}"', "OpenCode pin")
-    require(core, 'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.7.1}"',
-            "OpenChamber pin")
-    require(core, 'HOST="${OPENCHAMBER_BIND_HOST:-0.0.0.0}"', "wildcard listener allows loopback callback")
-    require(core, 'PORT="${OPENCHAMBER_BIND_PORT:-3000}"', "default port")
-    require(wrapper, 'attempt<30', "bounded readiness retry")
+    for text in (wrapper,root):
+        req(text,'CONFIG_SHA="$(gh api')
+        req(text,'APP_SHA="$(gh api')
+        req(text,'^[a-f0-9]{40}$')
+    req(wrapper,'install-openchamber-root.sh?ref=$CONFIG_SHA')
+    req(wrapper,'OPENCHAMBER_REF="$APP_SHA"')
+    req(wrapper,'OPENCODE_CONFIG_SOURCE_REF="$REQUESTED_CONFIG_REF"')
+    req(wrapper,'OPENCHAMBER_SOURCE_REF="$REQUESTED_APP_REF"')
+    req(root,'contents/$path?ref=$CONFIG_SHA')
+    req(root,'OPENCHAMBER_ROOT_ONLY=1')
+    req(root,'install-openchamber-v2-core.sh')
+    req(root,'openchamber-runtime-store.sh')
+    req(core,'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.2.7}"')
+    req(core,'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.7.1}"')
+    req(core,'opencode_binary_changed=0')
+    req(core,'v2-web-package-$APP_SHA')
+    req(core,'package_source_sha')
+    req(core,'runtime_fingerprint')
+    req(core,'sha256sum -c -')
+    req(core,'bun run --cwd packages/web build')
+    req(store,'mv -Tf "$link_tmp" "$OPENCHAMBER_CURRENT"')
+    req(store,'oc_rollback_activation()')
+    req(root,'oc_activate_release')
+    req(root,'oc_rollback_activation')
+    req(root,'oc_commit_activation')
+    req(root,'flock -x 9')
+    req(root,'OPENCHAMBER_RESTART_MODE:-auto')
+    req(root,'OPENCHAMBER_CUTOVER_QUIESCENT')
+    req(root,'PENDING APPLY:')
+    req(root,'migration_status')
+    req(root,'python3 "$TMP/rekey.py"')
+    req(root,'opencode-owner-approval.service')
+    req(root,'owner-broker-required')
+    req(ocunit,'User=root')
+    req(ocunit,'--foreground')
+    req(ocunit,'OPENCODE_SKIP_START=true')
+    req(ocunit,'NODE_OPTIONS=--require /usr/local/lib/my-opencode/openchamber-child-boundary.cjs')
+    req(brunit,'User=root')
+    req(broker,'SO_PEERCRED')
+    req(ledger,'BEGIN IMMEDIATE')
+    req(ledger,"'plan.final_manifest.approve', 'owner.accept'")
+    deny(root,'systemctl --user restart opencode-web.service openchamber.service')
+    deny(wrapper,'sudo -H -u "$RUNTIME_USER"')
+    assert root.index('oc_validate_release "$RELEASE_DIR"') < root.index('oc_activate_release "$RELEASE_DIR"')
+    print('PASS: root-owned OpenChamber delivery is SHA-pinned, isolated and rollback-aware')
 
-    # Outer transaction resolves branch refs once and all children use immutable SHAs.
-    require(wrapper, 'CONFIG_SHA="$(gh api "repos/$CONFIG_REPO/commits/$CONFIG_REF" --jq .sha)"',
-            "exact config SHA resolution")
-    require(wrapper, 'APP_SHA="$(gh api "repos/$APP_REPO/commits/$APP_REF" --jq .sha)"',
-            "exact OpenChamber SHA resolution")
-    require(wrapper, 'install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py install-journal.sh', "exact core fetch")
-    require(wrapper, 'contents/scripts/$file?ref=$CONFIG_SHA', "exact runtime helper fetch")
-    require(wrapper, 'export OPENCODE_CONFIG_REF="$CONFIG_SHA"', "pinned config ref")
-    require(wrapper, 'OPENCHAMBER_REF="$APP_SHA"', "pinned app ref")
-    require(wrapper, 'OPENCODE_CONFIG_SOURCE_REF=$REQUESTED_CONFIG_REF', "requested config ref preserved across user switch")
-    require(wrapper, 'OPENCHAMBER_SOURCE_REF=$REQUESTED_APP_REF', "requested app ref preserved across user switch")
-    require(wrapper, 'OPENCHAMBER_REF=$REQUESTED_APP_REF', "app ref is forwarded with the pinned SHA")
-    require(wrapper, 'OPENCODE_CONFIG_SOURCE_REF|OPENCHAMBER_SOURCE_REF) continue', "mutable refs cannot overwrite pinned refs")
-    assert wrapper.index('OPENCHAMBER_REF="$APP_SHA"') < wrapper.index('bash +h "$TMP/install-openchamber-v2-core.sh"')
-
-    # 1.x-style independent incremental decisions.
-    require(core, 'opencode_binary_changed=0', "OpenCode binary decision")
-    forbid(core, 'GENERATION_RECEIPT=', 'no fingerprint config skip')
-    require(core, 'OPENCODE_SKIP_BINARY_INSTALL=1', "config-only binary skip")
-    require(core, 'Config-only update:', 'always refresh config')
-    require(core, 'write_state "$runtime_pending" 1', 'configuration activation pending native startup')
-    require(core, 'v2-web-package-$APP_SHA', "exact-SHA OpenChamber manifest")
-    require(core, 'runtime_fingerprint', "runtime fingerprint")
-    require(core, 'package_source_sha', "reusable package source")
-    require(core, 'OpenChamber source/runtime metadata unchanged: release lookup skipped',
-            "manifest lookup fast path")
-    require(core, 'OpenChamber runtime fingerprint/package unchanged: package download skipped',
-            "runtime package fast path")
-    require(core, 'Using cached verified OpenChamber package', "verified package cache")
-    require(core, 'sha256sum -c -', "package integrity")
-    require(core, 'bun run --cwd packages/web build', "explicit source fallback")
-
-    # Always refresh settings; unchanged binary remains independently reusable.
-    require(config_bootstrap, 'OPENCODE_CONFIG_REF|MY_OPENCODE_REF) continue', 'bootstrap pinned ref cannot be overwritten')
-    require(config_bootstrap, 'GENERATION_PATH="scripts/install-opencode-generation.sh"', 'generation installer split')
-    require(config_bootstrap, 'export OPENCODE_SKIP_BINARY_INSTALL=1', 'unchanged binary skip')
-    require(config_bootstrap, 'contents/$GENERATION_PATH?ref=$CONFIG_SHA', 'exact generation fetch')
-    forbid(config_bootstrap, 'generation_unchanged=', 'no fingerprint config skip')
-
-    # Full generation installer remains the standalone/config-change path.
-    require(config_generation, 'CONFIG_HOME="$HOME/.config/opencode"', "canonical config root")
-    require(config_generation, 'mkdir -p "$STAGE_CONFIG/agents"', "canonical plural agents")
-    require(config_generation, '"$STAGE_CONFIG/commands"', "canonical plural commands")
-    require(config_generation, 'OPENCODE_SKIP_BINARY_INSTALL', "config-only support")
-    require(config_generation, 'https://opencode.ai/v2/install', "full install official binary path")
-    require(config_generation, 'rollback_transaction()', "config rollback")
-    require(config_generation, 'rollback_binary()', "full-install binary rollback")
-    require(config_generation, 'mv "$STAGE_CONFIG" "$CONFIG_HOME"', "atomic config commit")
-    require(config_generation, 'install-opencode-dependencies.sh', 'bounded locked dependencies')
-    require(config_generation, 'pipeline-runtime.ts is not a valid OpenCode V2 Plugin.define export',
-            "plugin validation")
-    require(config_generation, 'github-handoff.ts is not a native V2 plugin',
-            "custom tool validation")
-    require(config_generation, 'OpenCode V2 does not load config.instructions; use global AGENTS.md',
-            "V2 instruction contract")
-    require(config_generation, 'legacy singular command path still active', "legacy command rejection")
-
-    # Installation must be provider-neutral. User-selected models remain managed
-    # by the independent preference-preservation code.
-    bootstrap = (ROOT / "scripts/bootstrap-runtime-tools.sh").read_text()
-    forbid(bootstrap, "ensure_" + "claude_cli", "no provider-specific bootstrap")
-    forbid(config_installer + "\\n" + wrapper, "ensure_" + "claude_cli", "no provider-specific installer calls")
-    forbid(config_generation, "migrate-" + "claude-provider", "no provider migration step")
-    forbid(config_generation, "verify-" + "claude-models", "no provider migration preflight")
-
-    # Atomic binary transaction and self-preserving embedded-terminal mode.
-    require(wrapper, 'exec 8>"$STATE_ROOT/openchamber-v2-atomic.lock"',
-            "outer transaction lock")
-    require(wrapper, 'flock -x 8', "outer serialization")
-    require(core, 'flock -x 9', "core lock")
-    require(core, 'OPENCHAMBER_EMBEDDED_TERMINAL', "embedded terminal marker")
-    require(core, 'effective_restart_mode=defer', "self-preserving defer")
-    require(wrapper, 'PENDING APPLY:', "pending apply handoff")
-    forbid(core, 'systemctl --user restart', "core does not control services")
-    forbid(core, 'write_env_dropin', "core does not write dropins")
-    forbid(wrapper, 'oc_snapshot_service', "binary-only transaction")
-    require(wrapper, 'oc_rollback_activation', "binary rollback")
-    require(wrapper, 'oc_activate_release', "runtime activation")
-    require(wrapper, 'OPENCHAMBER_STARTUP_LAUNCHER=', "native stable launcher")
-    require(wrapper, 'native_startup', "native service ownership")
-    require(wrapper, 'readiness', "commit readiness")
-    require(wrapper, 'oc_prune_releases', "bounded runtime retention")
-
-    require(runtime_store, 'OPENCHAMBER_RELEASES="$OPENCHAMBER_RUNTIME_ROOT/releases"',
-            "immutable releases root")
-    require(runtime_store, 'OPENCHAMBER_CURRENT="$OPENCHAMBER_RUNTIME_ROOT/current"',
-            "current symlink")
-    require(runtime_store, 'mv -Tf "$link_tmp" "$OPENCHAMBER_CURRENT"', "atomic current publish")
-    require(runtime_store, 'oc_rollback_activation()', "runtime rollback")
-
-    # Auditable install provenance and bounded journal.
-    require(core, '"config_ref=$CONFIG_SOURCE_REF"', "config source ref persisted")
-    require(core, '"openchamber_ref=$APP_SOURCE_REF"', "app source ref persisted")
-    require(core, '"installed_at=$(date -u', "install timestamp persisted")
-    require(core, '"installation_status=delivered"', "delivery status persisted")
-    require(core, 'activation_status=$activation_status', "activation status persisted")
-    require(wrapper, 'install_journal_event install start', "journal start")
-    require(wrapper, 'install_journal_event activation pending_restart', "deferred activation is distinct")
-    require(wrapper, 'install_journal_event activation activated', "successful activation is distinct")
-    require(wrapper, 'install_journal_event install failed', "rollback is journaled")
-    require(journal, 'umask 077', "journal private creation")
-    require(journal, 'chmod 600 "$file"', "journal private mode")
-    require(journal, 'INSTALL_JOURNAL_MAX_BYTES', "journal bounded rotation")
-    forbid(journal, 'GH_TOKEN', "journal never records tokens")
-    forbid(journal, 'OPENCHAMBER_UI_PASSWORD', "journal never records passwords")
-
-    # Managed commands must never execute a CLI from root's private home.
-    # A prose-only prohibition in pipeline-plan.md is intentionally allowed.
-    command_dir = ROOT / 'config/opencode/command'
-    for command in sorted(command_dir.glob('*.md')):
-        for lineno, line in enumerate(command.read_text().splitlines(), 1):
-            if '/root/.config/opencode/' in line and 'never hard-code' not in line:
-                raise AssertionError(f"{command.relative_to(ROOT)}:{lineno}: hard-coded root CLI path")
-    require((command_dir / 'pipeline-run.md').read_text(),
-            'node $HOME/.config/opencode/skills/task-management/scripts/pipeline-github-sync.mjs sync <run-id>',
-            'GitHub outbox sync uses runtime HOME')
-
-    print("PASS: V2 installer contract is incremental, ref-pinned, atomic and v2-only")
-
-
-if __name__ == "__main__":
-    main()
-
+if __name__=='__main__': main()

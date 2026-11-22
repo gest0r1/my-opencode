@@ -1,4 +1,6 @@
 import { acceptedReconciliations } from './reconcile-evidence.ts';
+import { authorizeOwnerCheckpoint, verifyOwnerCheckpointReceipt } from './owner-approval-checkpoint.ts';
+import { ownerBrokerRequired } from './owner-broker-client.mjs';
 import { readReviewVerdict } from './review-result-evidence.mjs';
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
@@ -855,7 +857,7 @@ export async function initFromManifest(
     if (error.code === 'ENOENT') return undefined;
     throw error;
   });
-  if (revision?.previous_approval === true && revision.owner_contract_changed === false) {
+  if (revision?.previous_approval === true && revision.owner_contract_changed === false && !ownerBrokerRequired()) {
     if (!revision.approval_carry || typeof revision.manifest_sha256 !== 'string' ||
         !/^[a-f0-9]{64}$/.test(revision.manifest_sha256)) {
       throw new StageCliError('APPROVAL_CARRY_EVIDENCE_REQUIRED');
@@ -934,6 +936,34 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
     await writeJsonAtomic(statePath(stateRoot, runId), state);
   }
 
+  // In protected mode state.json is a mutable projection. Every owner-approved
+  // state must carry a root-ledger receipt, including after a restart or manual
+  // state edit. The agent cannot mint these via direct core/CLI calls.
+  if (ownerBrokerRequired()) {
+    if (state.approval_record) {
+      await verifyOwnerCheckpointReceipt(state, 'plan.final_manifest.approve',
+        state.approval_record.message_id);
+    } else if (state.status !== 'planned') {
+      throw new StageCliError('OWNER_BROKER_PLAN_RECEIPT_REQUIRED');
+    }
+    if (state.manifest_file) {
+      const manifest = readFrozenManifestFromState(state);
+      for (const pipeline of manifest.pipelines) {
+        for (const stage of pipeline.stages) {
+          if (pipeline.executors?.[stage] !== 'owner_acceptance') continue;
+          const outcome = state.pipelines?.[pipeline.id]?.stages?.[stage];
+          if (outcome?.status === 'skipped') {
+            throw new StageCliError('OWNER_BROKER_OWNER_STAGE_SKIP_FORBIDDEN');
+          }
+          if (outcome?.status === 'completed') {
+            await verifyOwnerCheckpointReceipt(state, 'owner.accept',
+              (outcome.evidence as any)?.owner_approval_request_id,
+              pipeline.id, stage);
+          }
+        }
+      }
+    }
+  }
   if (state.manifest_file && state.manifest_sha256) {
     const manifestContent = await readFile(state.manifest_file, 'utf8').catch(() => {
       throw new StageCliError('Frozen manifest is missing');
@@ -1344,12 +1374,25 @@ export async function authorizeTechnicalScope(
 }
 
 export async function approvePipeline(stateRoot: string, runId: string, approval: Partial<PipelineApprovalRecord>): Promise<PipelineState> {
-  return updateState(stateRoot, runId, (state) => {
+  return updateState(stateRoot, runId, async (state) => {
     if (state.status !== 'planned') throw new StageCliError(`Cannot approve run while it is ${state.status}`);
     if (!state.manifest_file || !state.manifest_sha256) throw new StageCliError('Frozen manifest is missing');
     const rawManifest = readFileSync(state.manifest_file, 'utf8');
     if (sha256(rawManifest) !== state.manifest_sha256) throw new StageCliError('Frozen manifest hash mismatch');
-    state.approval_record = validateApprovalRecord(approval, runId, state.manifest_sha256);
+    // No direct CLI, plan-start, or core caller can mint a real owner grant:
+    // the external broker's root ledger is the only authority.
+    const grant = await authorizeOwnerCheckpoint(state, 'plan.final_manifest.approve');
+    state.approval_record = validateApprovalRecord(
+      grant.mode === 'broker' ? {
+        subject: 'final-manifest',
+        run_id: runId,
+        decision: 'approved',
+        shown_manifest_sha256: state.manifest_sha256,
+        owner_response: `broker-confirmed:${grant.id}`,
+        message_id: grant.id,
+      } : approval,
+      runId, state.manifest_sha256,
+    );
     for (const pipeline of Object.values(state.pipelines)) {
       if (pipeline.status !== 'planned') throw new StageCliError(`Pipeline is not planned: ${pipeline.id}`);
       pipeline.status = 'approved';
@@ -1426,6 +1469,7 @@ async function completeStageTransition(
   explicitOwnerPass: boolean,
 ): Promise<PipelineState> {
   return updateState(stateRoot, runId, async (state) => {
+    let ownerApprovalId: string | undefined;
     const pipeline = getPipeline(state, pipelineId);
     const runtime = pipeline.stages[stage];
     if (!runtime || runtime.status !== 'in_progress') {
@@ -1459,6 +1503,9 @@ async function completeStageTransition(
           proof.run_id !== runId || proof.pipeline_id !== pipeline.id || proof.stage !== stage) {
         throw new StageCliError('OWNER_ACCEPTANCE_EVIDENCE_INVALID');
       }
+      // PASS evidence is only a projection; require the owner-authenticated grant.
+      const approval = await authorizeOwnerCheckpoint(state, 'owner.accept', pipeline.id, stage);
+      ownerApprovalId = approval.id;
     } else {
       await rejectDirectOwnerAcceptanceTransition(args);
     }
@@ -1476,6 +1523,7 @@ async function completeStageTransition(
     runtime.status = 'completed';
     runtime.completed_at = now();
     runtime.evidence = buildEvidence(stage, 'completed', effectiveOptions);
+    if (ownerApprovalId) (runtime.evidence as any).owner_approval_request_id = ownerApprovalId;
     addHistory(state, pipeline.id, stage, 'completed', options.message);
 
     const stageDone = (name: string | undefined): boolean => {
@@ -1914,6 +1962,9 @@ export async function ownerSkipStage(stateRoot: string, runId: string, stage: st
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     if (['completed', 'skipped'].includes(runtime.status)) throw new StageCliError(`OWNER_SKIP_STAGE_DONE: ${pipeline.id}/${stage}`);
     const spec = readFrozenManifestFromState(state).pipelines.find(p => p.id === pipeline.id) as any;
+    if (ownerBrokerRequired() && spec?.executors?.[stage] === 'owner_acceptance') {
+      throw new StageCliError('OWNER_SKIP_CANNOT_BYPASS_PROTECTED_ACCEPTANCE');
+    }
     const text = (value: unknown) => typeof value === 'string' && value.trim().length > 0;
     const ownerDecision = evidence.kind === 'owner_skip' && evidence.owner_decision_required === true && text(evidence.owner_decision) && text(evidence.reason);
     const ciWaiver = evidence.kind === 'ci_infra_waiver' && spec?.github_ci_mode === 'optional' &&

@@ -1,50 +1,52 @@
 #!/usr/bin/env bash
-# Execute the sudo re-exec handover with fakes and assert the frozen refs.
+# Real root entrypoint, mocked GitHub resolution, exact-SHA child handoff.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf -- "$TMP"' EXIT
-BIN="$TMP/bin"; HOME_FAKE="$TMP/runtime-home"; TRACE="$TMP/trace.log"
-CONFIG_SHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-APP_SHA="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-mkdir -p "$BIN" "$HOME_FAKE"; : > "$TRACE"
-
-fail(){ echo "FAIL: $*" >&2; exit 1; }
-
-cat > "$BIN/id" <<'EOS'
-#!/bin/sh
-case "$1" in -un) echo owner;; -u) echo 1001;; *) exec /usr/bin/id "$@";; esac
+BIN="$TMP/bin"; TRACE="$TMP/trace"; mkdir -p "$BIN"; : > "$TRACE"
+CONFIG_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+cat > "$TMP/coordinator" <<'EOS'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+{
+ printf 'pinned=%s\n' "$OPENCODE_CONFIG_REF"
+ printf 'app=%s\n' "$OPENCHAMBER_REF"
+ printf 'user=%s\n' "$(id -u)"
+} >> "$TRACE"
 EOS
-cat > "$BIN/getent" <<EOS
-#!/bin/sh
-echo "opencode:x:1001:1001::\$HOME_FAKE:/bin/bash"
-EOS
-sed -i "s|\$HOME_FAKE|$HOME_FAKE|" "$BIN/getent"
-cat > "$BIN/sudo" <<EOS
-#!/bin/sh
-printf '%s\\n' "\$*" >> "$TRACE"
-case "\$*" in *"gh auth status"*) exit 1 ;; esac
-exit 0
-EOS
-cat > "$BIN/gh" <<EOS
-#!/bin/sh
-if [ "\$1" = auth ] && [ "\$2" = status ]; then exit 0; fi
-if [ "\$1" = auth ] && [ "\$2" = token ]; then echo 'super-secret-token'; exit 0; fi
-case "\$*" in
-  *repos/*openchamber-ru/commits/*) echo "$APP_SHA" ;;
-  *repos/*my-opencode/commits/*) echo "$CONFIG_SHA" ;;
-  *contents/scripts/*) printf '#!/bin/sh\\nexit 0\\n' ;;
-  *) echo "unexpected gh: \$*" >&2; exit 91 ;;
+cat > "$BIN/gh" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+  *"repos/gest0r1/my-opencode/commits/"*) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
+  *"repos/gest0r1/openchamber-ru/commits/"*) printf '%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ;;
+  *"repos/gest0r1/my-opencode/contents/scripts/install-openchamber-root.sh?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"*) cat "$COORDINATOR" ;;
+  *) echo "unexpected gh: $*" >&2; exit 91 ;;
 esac
 EOS
-chmod +x "$BIN"/*
-
-PATH="$BIN:$PATH" HOME="$TMP/home" GH_TOKEN='super-secret-token' \
-OPENCODE_CONFIG_REF='feature/test-ref' OPENCHAMBER_REF='feature/app-ref' \
-  bash "$ROOT/install-openchamber.sh" >"$TMP/out" 2>&1 || { cat "$TMP/out" >&2; fail 'handover script failed'; }
-
-grep -Fq "OPENCODE_CONFIG_REF=$CONFIG_SHA" "$TRACE" || fail 'pinned config SHA not passed'
-grep -Fq 'OPENCODE_CONFIG_SOURCE_REF=feature/test-ref' "$TRACE" || fail 'requested config ref lost'
-grep -Fq 'OPENCHAMBER_REF=feature/app-ref' "$TRACE" || fail 'requested app ref lost'
-grep -Fq 'OPENCHAMBER_SOURCE_REF=feature/app-ref' "$TRACE" || fail 'app source ref lost'
-if grep -Fq 'super-secret-token' "$TRACE"; then fail 'token leaked to re-exec argv'; fi
-echo 'PASS: sudo handover preserves requested refs, pins SHAs and leaks no token'
+chmod +x "$BIN/gh"
+# Must run the actual new root dispatch, not the retired sudo-to-opencode path.
+if [[ $EUID == 0 ]]; then
+  env PATH="$BIN:$PATH" TRACE="$TRACE" COORDINATOR="$TMP/coordinator" \
+    OPENCODE_CONFIG_REF=feature/secure OPENCHAMBER_REF=feature/oc \
+    bash "$ROOT/install-openchamber.sh" > "$TMP/out" 2>&1
+else
+  sudo -n env PATH="$BIN:$PATH" TRACE="$TRACE" COORDINATOR="$TMP/coordinator" \
+    OPENCODE_CONFIG_REF=feature/secure OPENCHAMBER_REF=feature/oc \
+    bash "$ROOT/install-openchamber.sh" > "$TMP/out" 2>&1
+fi
+grep -Fxq "pinned=$CONFIG_SHA" "$TRACE"
+grep -Fxq 'app=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$TRACE"
+grep -Fxq 'user=0' "$TRACE"
+# A malicious ref must be rejected without touching the protected coordinator.
+cp "$TRACE" "$TMP/old"
+rc=0
+if [[ $EUID == 0 ]]; then
+  env PATH="$BIN:$PATH" TRACE="$TRACE" COORDINATOR="$TMP/coordinator" \
+    OPENCODE_CONFIG_REF=$'main\nx=1' bash "$ROOT/install-openchamber.sh" >"$TMP/bad" 2>&1 || rc=$?
+else
+  sudo -n env PATH="$BIN:$PATH" TRACE="$TRACE" COORDINATOR="$TMP/coordinator" \
+    OPENCODE_CONFIG_REF=$'main\nx=1' bash "$ROOT/install-openchamber.sh" >"$TMP/bad" 2>&1 || rc=$?
+fi
+[[ "$rc" != 0 ]] && grep -Fq INSTALL_SOURCE_REF_INVALID "$TMP/bad"
+cmp "$TRACE" "$TMP/old"
+echo 'PASS: root coordinator resolves exact config SHA and rejects malicious refs'
