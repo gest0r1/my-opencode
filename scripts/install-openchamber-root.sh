@@ -215,6 +215,7 @@ fi
 # Roll back only the root OpenChamber package and migration, never the OpenCode
 # runtime or its sessions. A failed activation cannot strand the old UI.
 old_active=0
+old_enabled=0
 root_was_active=0
 broker_was_active=0
 old_marker_present=0
@@ -254,10 +255,12 @@ rollback_cutover() {
   if (( cutover_started )); then
     if (( root_was_active )); then
       systemctl restart openchamber.service || true
-    elif (( old_active )); then
-      run_oc_user systemctl --user start openchamber.service || true
+    else
+      systemctl disable --now openchamber.service >/dev/null 2>&1 || true
+      if (( old_active )); then run_oc_user systemctl --user start openchamber.service || true; fi
+      if (( old_enabled )); then run_oc_user systemctl --user enable openchamber.service || true; fi
     fi
-    if (( broker_was_active == 0 )); then systemctl stop opencode-owner-approval.service || true; fi
+    if (( broker_was_active == 0 )); then systemctl disable --now opencode-owner-approval.service >/dev/null 2>&1 || true; fi
   fi
   install_journal_event install failed "openchamber_sha=$APP_SHA" "exit_code=$code" "reason=cutover_rollback" || true
   exit "$code"
@@ -289,6 +292,7 @@ fi
 # Stop only the old OpenChamber service. Keep OpenCode's server and live RUNs.
 cutover_started=1
 run_oc_user systemctl --user is-active --quiet openchamber.service && old_active=1 || true
+run_oc_user systemctl --user is-enabled --quiet openchamber.service && old_enabled=1 || true
 if ((old_active)); then run_oc_user systemctl --user stop openchamber.service; fi
 migration_status='not_required'
 if [[ -d "$OLD_OC_DATA_DIR" ]]; then
