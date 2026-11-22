@@ -13,6 +13,7 @@ on:
       - 'scripts/openchamber-child-boundary.cjs'
       - 'tests/test_openchamber_root_child_boundary.py'
       - 'tests/test_openchamber_shared_chats.py'
+      - 'tests/test_root_openchamber_dac_boundary.py'
       - 'scripts/rekey-openchamber-ui.py'
       - 'scripts/launch-openchamber-root.sh'
       - 'config/systemd/openchamber-root.service'
@@ -130,6 +131,11 @@ jobs:
           curl -fsS -u "opencode:$OPENCODE_TEST_PASSWORD" "http://127.0.0.1:4096/api/session/$id" |
             node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{let j=JSON.parse(s);if(!j.data?.id)process.exit(1)})'
           echo "PASS: exact-SHA repeat install preserves OpenCode session and both process IDs"
+      - name: Verify root UI traversal and unprivileged child capability boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tests/test_root_openchamber_dac_boundary.py
       - name: Failure diagnostics
         if: failure()
         shell: bash
