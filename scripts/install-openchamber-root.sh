@@ -39,6 +39,9 @@ fetch scripts/rekey-openchamber-ui.py "$TMP/rekey.py"
 fetch config/systemd/openchamber-root.service "$TMP/openchamber.service"
 fetch config/systemd/opencode-owner-approval.service "$TMP/owner-broker.service"
 fetch install.sh "$TMP/install-opencode.sh"
+export HOME=/root XDG_STATE_HOME=/root/.local/state
+source "$TMP/install-journal.sh"
+install_journal_event install start "config_ref=${OPENCODE_CONFIG_SOURCE_REF:-$CONFIG_REF}" "config_sha=$CONFIG_SHA" "openchamber_ref=${OPENCHAMBER_SOURCE_REF:-$APP_REF}" "openchamber_sha=$APP_SHA"
 
 # Reuse the canonical OpenCode installer under the existing opencode UID.
 # This call does not launch OpenChamber or move OpenCode databases.
@@ -148,6 +151,7 @@ oc_write_managed_launcher
 [[ -x "$OPENCHAMBER_CURRENT_BIN" ]] || { echo 'Root OpenChamber binary is not installed' >&2; exit 3; }
 
 if [[ "${OPENCHAMBER_RESTART_MODE:-auto}" == defer || "${OPENCHAMBER_EMBEDDED_TERMINAL:-0}" == 1 ]]; then
+  install_journal_event activation pending_restart "reason=embedded_or_deferred" "openchamber_sha=$APP_SHA"
   echo 'PENDING APPLY: installed root runtime staged; do not cut over from an embedded terminal.'
   exit 0
 fi
@@ -155,10 +159,12 @@ fi
 # Require a verified root-safe OpenChamber release and a human-confirmed
 # quiescent window; no unprivileged user should be stranded in an active PTY.
 if [[ "${OPENCHAMBER_ROOT_RUNTIME_VERIFIED:-0}" != 1 ]]; then
+  install_journal_event activation pending_restart "reason=runtime_not_verified"
   echo 'PENDING APPLY: root execution boundary not yet accepted (OPENCHAMBER_ROOT_RUNTIME_VERIFIED=1 required).' >&2
   exit 0
 fi
 if [[ "${OPENCHAMBER_CUTOVER_QUIESCENT:-0}" != 1 ]]; then
+  install_journal_event activation pending_restart "reason=not_quiescent"
   echo 'PENDING APPLY: active OpenChamber terminal state not confirmed quiescent.' >&2
   exit 0
 fi
@@ -177,6 +183,7 @@ rollback_cutover() {
     if (( old_active )); then run_oc_user systemctl --user start openchamber.service || true; fi
   fi
   oc_rollback_activation || true
+  install_journal_event install failed "openchamber_sha=$APP_SHA" "exit_code=$code" "reason=cutover_rollback" || true
   exit "$code"
 }
 trap rollback_cutover ERR
@@ -237,6 +244,7 @@ for i in {1..30}; do
     install -o root -g root -m 600 /dev/null /etc/my-opencode/owner-broker-required
     printf '%s\n' "$CONFIG_SHA $APP_SHA" > "$ROOT_STATE/active-sha"
     oc_commit_activation
+    install_journal_event activation activated "config_sha=$CONFIG_SHA" "openchamber_sha=$APP_SHA"
     trap - ERR INT TERM
     echo "ROOT OPENCHAMBER READY config=$CONFIG_SHA app=$APP_SHA"
     exit 0
