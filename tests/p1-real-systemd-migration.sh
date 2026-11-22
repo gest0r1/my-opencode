@@ -18,7 +18,17 @@ user_systemctl() {
     systemctl --user "$@"
 }
 user_systemctl start opencode-web.service
-curl -fsS http://127.0.0.1:4096/api/info >/dev/null
+ready=0
+for i in {1..40}; do
+  if curl -fsS --max-time 2 http://127.0.0.1:4096/api/info >/dev/null 2>&1; then ready=1; break; fi
+  sleep 1
+done
+if [[ "$ready" != 1 ]]; then
+  user_systemctl status --no-pager -l opencode-web.service || true
+  sudo journalctl --user-unit=opencode-web.service --no-pager -n 80 || true
+  echo 'P1_OPENCODE_USER_SERVICE_NOT_READY' >&2
+  exit 3
+fi
 old_id="$(curl -fsS -X POST http://127.0.0.1:4096/api/session \
   -H 'Content-Type: application/json' \
   -d '{"title":"P1 before migration"}' | \
