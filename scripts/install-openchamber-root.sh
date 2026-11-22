@@ -112,7 +112,11 @@ if [[ -n "$OPENCODE_SERVICE_PASSWORD" ]]; then
   fi
   # Root-owned transaction stores inert password bytes, not a shell-sourced
   # environment file. The root launcher exports them only at exec time.
-  [[ "$OPENCODE_SERVICE_PASSWORD" != *
+  python3 -c 'import sys; sys.exit(chr(10) in sys.argv[1])' "$OPENCODE_SERVICE_PASSWORD" || {
+    echo 'OPENCODE_CONNECT_MULTILINE_UNSUPPORTED' >&2; exit 3;
+  }
+  (umask 077; printf '%s' "$OPENCODE_SERVICE_PASSWORD" > "$AUTH_FILE.tmp"; mv -f "$AUTH_FILE.tmp" "$AUTH_FILE")
+  chmod 600 "$AUTH_FILE"
 else
   # An unchanged local no-password OpenCode is supported. Only loopback is
   # allowed; UI owner approval still requires root-only socket + fresh auth.
