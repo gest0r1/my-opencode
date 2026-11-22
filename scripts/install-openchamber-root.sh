@@ -293,6 +293,40 @@ if [[ "$fresh_install" != 1 && "${OPENCHAMBER_CUTOVER_QUIESCENT:-0}" != 1 ]]; th
   exit 0
 fi
 
+# OpenCode is not restarted during cutover, but an active model RUN would
+# encounter a different owner-approval policy mid-flight. Do not change the
+# policy until the existing OpenCode execution has drained naturally.
+# This is a single install-time check, NEVER per work item.
+if [[ "$fresh_install" != 1 ]]; then
+  active_json="$TMP/opencode-active.json"
+  if [[ -n "$OPENCODE_SERVICE_PASSWORD" ]]; then
+    curl -fsS --max-time 7 -u "opencode:$OPENCODE_SERVICE_PASSWORD" \
+      http://127.0.0.1:4096/api/session/active -o "$active_json" || {
+        echo 'OPENCHAMBER_CUTOVER_OPENCODE_ACTIVE_INVENTORY_UNAVAILABLE' >&2; exit 3;
+      }
+  else
+    curl -fsS --max-time 7 http://127.0.0.1:4096/api/session/active -o "$active_json" || {
+      echo 'OPENCHAMBER_CUTOVER_OPENCODE_ACTIVE_INVENTORY_UNAVAILABLE' >&2; exit 3;
+    }
+  fi
+  if ! python3 - "$active_json" <<'PY'
+import json,sys
+try:
+    body=json.load(open(sys.argv[1],encoding='utf-8'))
+    if not isinstance(body,dict) or not isinstance(body.get('data'),dict):
+        sys.exit(2)
+    if body['data']:
+        sys.exit(10)
+except (OSError,ValueError):
+    sys.exit(2)
+PY
+  then
+    install_journal_event activation pending_restart "reason=active_opencode_session_or_invalid_inventory"
+    echo 'PENDING APPLY: active OpenCode session or unverified inventory; keeping both services unchanged.' >&2
+    exit 0
+  fi
+fi
+
 # Independently validate the process tree immediately before changing a
 # running OpenChamber service. Even explicit owner quiescence acknowledgement
 # cannot kill a live PTY, project action, or long-running guest service.
