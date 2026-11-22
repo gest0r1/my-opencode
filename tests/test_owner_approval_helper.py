@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[0] / 'owner_approval_helper.py'
+SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'opencode-owner-approval.py'
 H = 'a'*64
 B = 'b'*64
 C = 'c'*64
