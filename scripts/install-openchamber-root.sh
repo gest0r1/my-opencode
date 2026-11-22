@@ -11,10 +11,8 @@ CONFIG_REF="${OPENCODE_CONFIG_REF:-main}"
 APP_REPO="${OPENCHAMBER_REPO:-gest0r1/openchamber-ru}"
 APP_REF="${OPENCHAMBER_REF:-main}"
 OPENCODE_USER=opencode
-OPENCODE_HOME="$(getent passwd "$OPENCODE_USER" | cut -d: -f6)"
-[[ -d "$OPENCODE_HOME" && "$OPENCODE_HOME" != /root ]] || { echo 'Missing unprivileged OpenCode runtime user' >&2; exit 2; }
 
-for tool in gh systemctl sudo python3 curl flock sha256sum tar; do command -v "$tool" >/dev/null || { echo "Missing $tool" >&2; exit 2; }; done
+for tool in gh systemctl sudo python3 curl flock sha256sum tar setpriv install stat; do command -v "$tool" >/dev/null || { echo "Missing $tool" >&2; exit 2; }; done
 
 gh auth status --hostname github.com >/dev/null 2>&1 || { echo 'GitHub CLI authorization required for root installer' >&2; exit 2; }
 CONFIG_SHA="$(gh api "repos/$CONFIG_REPO/commits/$CONFIG_REF" --jq .sha)"
@@ -33,12 +31,19 @@ fetch() {
   gh api -H 'Accept: application/vnd.github.raw' \
     "repos/$CONFIG_REPO/contents/$path?ref=$CONFIG_SHA" > "$dest"
 }
-for file in install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py install-journal.sh; do
+for file in install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstrap-runtime-tools.sh runtime-processes.py install-journal.sh opencode-owner-approvald.py opencode-owner-approval.py openchamber-child-boundary.cjs opencode-unpriv-wrapper.sh; do
   fetch "scripts/$file" "$TMP/$file"
 done
 fetch scripts/migrate-openchamber-to-root.py "$TMP/migrate.py"
-fetch scripts/opencode-owner-approval.py "$TMP/approval.py"
 fetch config/systemd/openchamber-root.service "$TMP/openchamber.service"
+fetch config/systemd/opencode-owner-approval.service "$TMP/owner-broker.service"
+fetch install.sh "$TMP/install-opencode.sh"
+
+# Reuse the canonical OpenCode installer under the existing opencode UID.
+# This call does not launch OpenChamber or move OpenCode databases.
+OPENCODE_CONFIG_REF="$CONFIG_SHA" MY_OPENCODE_REF="$CONFIG_SHA" bash "$TMP/install-opencode.sh"
+OPENCODE_HOME="$(getent passwd "$OPENCODE_USER" | cut -d: -f6)"
+[[ -d "$OPENCODE_HOME" && "$OPENCODE_HOME" != /root ]] || { echo 'Missing unprivileged OpenCode runtime user' >&2; exit 2; }
 
 # OpenCode remains a systemd --user unit for opencode; never reboot/restart it
 # from the OpenChamber release transaction.
@@ -77,24 +82,37 @@ ensure_root_node
 # Root OpenChamber is not allowed to run its own OpenCode server. The service
 # must be password-protected; do not silently attach to anonymous OpenCode.
 AUTH_FILE=/etc/my-opencode/openchamber-connect.env
-if [[ ! -f "$AUTH_FILE" ]]; then
-  echo 'Protected external OpenCode connection is not configured; refusing root cutover.' >&2
-  echo 'Expected a root-owned /etc/my-opencode/openchamber-connect.env containing OPENCODE_PASSWORD.' >&2
+# The password belongs to the existing opencode service; never parse or source
+# an agent-writable shell file with root privileges.
+mkdir -p /etc/my-opencode
+chmod 700 /etc/my-opencode
+OPENCODE_SERVICE_PASSWORD="$(run_oc_user bash -c 'set -a; if [[ -f "$HOME/.config/opencode.env" ]]; then source "$HOME/.config/opencode.env"; fi; printf %s "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}"' )"
+if [[ -z "$OPENCODE_SERVICE_PASSWORD" ]]; then
+  echo 'PENDING APPLY: OpenCode is not password-protected. Configure OPENCODE_PASSWORD under opencode and restart its service in a quiescent window before root cutover.' >&2
   exit 3
+fi
+# Preserve a working password; never rotate OpenCode auth and invalidate
+# existing clients/sessions merely to migrate the UI.
+if ! curl -fsS --max-time 6 -u "opencode:$OPENCODE_SERVICE_PASSWORD" http://127.0.0.1:4096/api/info -o "$TMP/opencode-info.json"; then
+  echo 'OpenCode external authentication/readiness failed; refusing root cutover' >&2; exit 3;
+fi
+if [[ ! -f "$AUTH_FILE" ]]; then
+  ( umask 077; printf 'OPENCODE_PASSWORD=%q\n' "$OPENCODE_SERVICE_PASSWORD" > "$AUTH_FILE" )
 fi
 [[ "$(stat -c %u "$AUTH_FILE")" == 0 && "$(stat -c %a "$AUTH_FILE")" =~ ^[460][04]0$ ]] || {
   echo 'External OpenCode auth file must be root-owned and unreadable by others' >&2; exit 2;
 }
-source "$AUTH_FILE"
-[[ -n "${OPENCODE_PASSWORD:-}" ]] || { echo 'Missing external OpenCode password' >&2; exit 3; }
-[[ "$(curl -fsS --max-time 5 -u "opencode:$OPENCODE_PASSWORD" http://127.0.0.1:4096/api/info 2>/dev/null | head -c 300)" != '' ]] || {
-  echo 'OpenCode service authentication/readiness failed; refusing root cutover' >&2; exit 3;
+# Verify the root-only copy is equal to the service credential without
+# interpreting the owner-controlled file as executable shell code.
+AUTH_FILE_PASSWORD="$(bash -c 'source "$1"; printf %s "$OPENCODE_PASSWORD"' sh "$AUTH_FILE")"
+[[ "$AUTH_FILE_PASSWORD" == "$OPENCODE_SERVICE_PASSWORD" ]] || {
+  echo 'OpenCode root connection credential differs from current service; refusing cutover' >&2; exit 3;
 }
 
 # Source package delivery stays independent. Version and source SHA must match
 # the verified package manifest; package fallback builds pinned source only.
 export XDG_CONFIG_HOME=/root/.config XDG_DATA_HOME=/root/.local/share XDG_STATE_HOME=/root/.local/state
-export HOME=/root OPENCODE_BINARY="$OPENCODE_HOME/.opencode/bin/opencode"
+export HOME=/root OPENCODE_BINARY=/usr/local/lib/my-opencode/opencode-unpriv-wrapper.sh
 export OPENCHAMBER_ROOT_ONLY=1 OPENCHAMBER_EXECUTION_USER=opencode OPENCHAMBER_ROOT_MODE=separated
 export OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCHAMBER_REF="$APP_SHA"
 export OPENCHAMBER_EXPECTED_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.7.1}"
@@ -102,6 +120,15 @@ export OPENCHAMBER_RUNTIME_ROOT="${OPENCHAMBER_RUNTIME_ROOT:-/root/.local/share/
 export PATH="/root/.local/bin:/root/.bun/bin:/root/.opencode/bin:$PATH"
 EXPECTED_OPENCHAMBER_VERSION="$OPENCHAMBER_EXPECTED_VERSION"
 export EXPECTED_OPENCHAMBER_VERSION
+# Privileged installation code and child security interposers are immutable
+# from the OpenCode agent's UID.
+install -d -o root -g root -m 755 /usr/local/lib/my-opencode
+for file in opencode-owner-approval.py opencode-owner-approvald.py openchamber-child-boundary.cjs opencode-unpriv-wrapper.sh; do
+  install -o root -g root -m 755 "$TMP/$file" "/usr/local/lib/my-opencode/$file"
+done
+install -d -o root -g root -m 700 /etc/my-opencode
+printf 'OPENCHAMBER_EXECUTION_UID=%s\nOPENCHAMBER_EXECUTION_GID=%s\n' "$(id -u opencode)" "$(id -g opencode)" > /etc/my-opencode/openchamber-execution.env
+chmod 600 /etc/my-opencode/openchamber-execution.env
 source "$TMP/openchamber-runtime-store.sh"
 oc_runtime_init
 RELEASE_DIR="$OPENCHAMBER_RELEASES/$APP_SHA"
