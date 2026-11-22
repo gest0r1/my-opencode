@@ -18,6 +18,7 @@ cat > "$BIN/gh" <<'EOS'
 #!/usr/bin/env bash
 case "$*" in
   *"repos/gest0r1/my-opencode/commits/"*) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
+  *"repos/gest0r1/openchamber-ru/commits/"*) printf '%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ;;
   *"repos/gest0r1/my-opencode/contents/scripts/install-openchamber-root.sh?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"*) cat "$COORDINATOR" ;;
   *) echo "unexpected gh: $*" >&2; exit 91 ;;
 esac
@@ -34,7 +35,7 @@ else
     bash "$ROOT/install-openchamber.sh" > "$TMP/out" 2>&1
 fi
 grep -Fxq "pinned=$CONFIG_SHA" "$TRACE"
-grep -Fxq 'app=feature/oc' "$TRACE"
+grep -Fxq 'app=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$TRACE"
 grep -Fxq 'user=0' "$TRACE"
 # A malicious ref must be rejected without touching the protected coordinator.
 cp "$TRACE" "$TMP/old"
