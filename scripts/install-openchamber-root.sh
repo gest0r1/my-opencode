@@ -58,6 +58,21 @@ run_oc_user() {
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$OPENCODE_UID/bus" "$@"
 }
 if ! run_oc_user systemctl --user is-active --quiet opencode-web.service; then
+  # A standalone OpenCode service with no configured credential generates a
+  # random password at startup. Establish a stable credential ONLY before
+  # first service start; NEVER rotate a running server or break its sessions.
+  run_oc_user bash -c '
+    set -Eeuo pipefail
+    file="$HOME/.config/opencode.env"
+    if [[ -L "$file" ]]; then echo "OPENCODE_PASSWORD_FILE_SYMLINK_FORBIDDEN" >&2; exit 3; fi
+    mkdir -p "$HOME/.config"
+    if [[ -f "$file" ]]; then source "$file"; fi
+    if [[ -z "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" ]]; then
+      generated="$(python3 -c "import secrets; print(secrets.token_urlsafe(36))")"
+      (umask 077; printf "OPENCODE_PASSWORD=%s\\n" "$generated" >> "$file")
+      chmod 600 "$file"
+    fi
+  '
   # Fresh installations enable but do not start OpenCode in install.sh.
   # Start only an inactive service; never restart a running OpenCode with
   # potentially active RUNs or session DB writes.
@@ -169,6 +184,10 @@ mkdir -p /etc/my-opencode
 # enforcement marker must be stat()-visible to the opencode UID.
 chmod 711 /etc/my-opencode
 OPENCODE_SERVICE_PASSWORD="$(run_oc_user bash -c 'if [[ -f "$HOME/.config/opencode.env" ]]; then source "$HOME/.config/opencode.env"; fi; printf %s "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}"' )"
+if [[ -z "$OPENCODE_SERVICE_PASSWORD" ]]; then
+  echo 'OPENCODE_EXISTING_AUTH_NOT_CONFIGURED: running server may use ephemeral password; refusing root UI migration without touching sessions.' >&2
+  exit 3
+fi
 if [[ -n "$OPENCODE_SERVICE_PASSWORD" ]]; then
   curl -fsS --max-time 6 -u "opencode:$OPENCODE_SERVICE_PASSWORD" \
     http://127.0.0.1:4096/api/info -o "$TMP/opencode-info.json" || {
