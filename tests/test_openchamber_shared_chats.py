@@ -81,6 +81,9 @@ class SharedChatsContract(unittest.TestCase):
         self.assertIn('run_oc_user python3 - "$SHARED_CHATS_DIR"', INSTALLER)
         self.assertIn('OPENCHAMBER_EXECUTION_UID=%s', INSTALLER)
         self.assertIn('OPENCHAMBER_EXECUTION_GID=%s', INSTALLER)
+        self.assertIn('OPENCHAMBER_DATA_DIR=/root/.config/openchamber', INSTALLER)
+        self.assertIn('NODE_OPTIONS="--require /usr/local/lib/my-opencode/openchamber-child-boundary.cjs"', INSTALLER)
+        self.assertIn('OPENCODE_SKIP_START=true', INSTALLER)
         self.assertNotIn('chmod -R 777', INSTALLER)
 
 
