@@ -111,8 +111,12 @@ OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}" \
   OPENCHAMBER_RESTART_MODE=now \
   bash "$TMP/install-openchamber-v2-core.sh"
 
-# Verified sourceSHA and runtime fingerprints may refer to a different package
-# source; only activate an installed, validated immutable runtime.
+# Core delivered an exact-source SHA release; only activate the validated package.
+oc_validate_release "$RELEASE_DIR" || { echo 'Root OpenChamber release validation failed' >&2; exit 3; }
+if [[ "$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)" != "$RELEASE_DIR" ]]; then
+  oc_activate_release "$RELEASE_DIR"
+fi
+oc_write_managed_launcher
 [[ -x "$OPENCHAMBER_CURRENT_BIN" ]] || { echo 'Root OpenChamber binary is not installed' >&2; exit 3; }
 
 if [[ "${OPENCHAMBER_RESTART_MODE:-auto}" == defer || "${OPENCHAMBER_EMBEDDED_TERMINAL:-0}" == 1 ]]; then
@@ -131,8 +135,27 @@ if [[ "${OPENCHAMBER_CUTOVER_QUIESCENT:-0}" != 1 ]]; then
   exit 0
 fi
 
-# Stop only the old OpenChamber service. Keep OpenCode's server and live RUNs.
+# Roll back only the root OpenChamber package and migration, never the OpenCode
+# runtime or its sessions. A failed activation cannot strand the old UI.
 old_active=0
+cutover_started=0
+migration_status=not_required
+rollback_cutover() {
+  local code=$?
+  trap - ERR INT TERM
+  if (( cutover_started )); then
+    systemctl stop openchamber.service >/dev/null 2>&1 || true
+    if [[ "$migration_status" == staged ]]; then python3 "$TMP/migrate.py" rollback || true; fi
+    if (( old_active )); then run_oc_user systemctl --user start openchamber.service || true; fi
+  fi
+  oc_rollback_activation || true
+  exit "$code"
+}
+trap rollback_cutover ERR
+trap 'rollback_cutover' INT TERM
+
+# Stop only the old OpenChamber service. Keep OpenCode's server and live RUNs.
+cutover_started=1
 run_oc_user systemctl --user is-active --quiet openchamber.service && old_active=1 || true
 if ((old_active)); then run_oc_user systemctl --user stop openchamber.service; fi
 migration_status='not_required'
@@ -143,6 +166,13 @@ if [[ "$migration_status" != staged && "$migration_status" != completed && "$mig
   echo 'OpenChamber data migration not staged' >&2; exit 3
 fi
 
+# Never expose an unauthenticated root web UI, including on a fresh install.
+NATIVE_ENV=/root/.config/openchamber/startup.env
+if [[ ! -f "$NATIVE_ENV" ]]; then
+  mkdir -p "$(dirname "$NATIVE_ENV")"
+  printf 'OPENCHAMBER_UI_PASSWORD=%s\n' "$(python3 -c 'import secrets;print(secrets.token_hex(32))')" > "$NATIVE_ENV"
+  chmod 600 "$NATIVE_ENV"
+fi
 # Root-owned service; never use root systemd --user and never stop opencode-web.
 install -o root -g root -m 644 "$TMP/openchamber.service" /etc/systemd/system/openchamber.service
 systemctl daemon-reload
@@ -153,14 +183,13 @@ for i in {1..30}; do
     if [[ "$migration_status" == staged ]]; then python3 "$TMP/migrate.py" complete --ready yes; fi
     run_oc_user systemctl --user disable openchamber.service >/dev/null || true
     printf '%s\n' "$CONFIG_SHA $APP_SHA" > "$ROOT_STATE/active-sha"
+    oc_commit_activation
+    trap - ERR INT TERM
     echo "ROOT OPENCHAMBER READY config=$CONFIG_SHA app=$APP_SHA"
     exit 0
   fi
   sleep 1
 done
 
-systemctl stop openchamber.service || true
-if [[ "$migration_status" == staged ]]; then python3 "$TMP/migrate.py" rollback || true; fi
-if ((old_active)); then run_oc_user systemctl --user start openchamber.service || true; fi
-echo 'ROOT_OPENCHAMBER_CUTOVER_FAILED: old OpenChamber preserved/restarted' >&2
-exit 3
+echo 'ROOT_OPENCHAMBER_CUTOVER_FAILED: rolling back root cutover' >&2
+false
