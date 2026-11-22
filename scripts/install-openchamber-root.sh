@@ -35,6 +35,7 @@ for file in install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstra
   fetch "scripts/$file" "$TMP/$file"
 done
 fetch scripts/migrate-openchamber-to-root.py "$TMP/migrate.py"
+fetch scripts/rekey-openchamber-ui.py "$TMP/rekey.py"
 fetch config/systemd/openchamber-root.service "$TMP/openchamber.service"
 fetch config/systemd/opencode-owner-approval.service "$TMP/owner-broker.service"
 fetch install.sh "$TMP/install-opencode.sh"
@@ -79,35 +80,35 @@ ensure_root_node() {
 }
 ensure_root_node
 
-# Root OpenChamber is not allowed to run its own OpenCode server. The service
-# must be password-protected; do not silently attach to anonymous OpenCode.
+# OpenCode stays on its existing authentication policy. Do not rotate or restart
+# the running service just to migrate OpenChamber: that would invalidate live
+# clients/sessions. The P1 owner trust channel is the independent root broker.
 AUTH_FILE=/etc/my-opencode/openchamber-connect.env
-# The password belongs to the existing opencode service; never parse or source
-# an agent-writable shell file with root privileges.
 mkdir -p /etc/my-opencode
 chmod 700 /etc/my-opencode
-OPENCODE_SERVICE_PASSWORD="$(run_oc_user bash -c 'set -a; if [[ -f "$HOME/.config/opencode.env" ]]; then source "$HOME/.config/opencode.env"; fi; printf %s "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}"' )"
-if [[ -z "$OPENCODE_SERVICE_PASSWORD" ]]; then
-  echo 'PENDING APPLY: OpenCode is not password-protected. Configure OPENCODE_PASSWORD under opencode and restart its service in a quiescent window before root cutover.' >&2
-  exit 3
+OPENCODE_SERVICE_PASSWORD="$(run_oc_user bash -c 'if [[ -f "$HOME/.config/opencode.env" ]]; then source "$HOME/.config/opencode.env"; fi; printf %s "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}"' )"
+if [[ -n "$OPENCODE_SERVICE_PASSWORD" ]]; then
+  curl -fsS --max-time 6 -u "opencode:$OPENCODE_SERVICE_PASSWORD" \
+    http://127.0.0.1:4096/api/info -o "$TMP/opencode-info.json" || {
+      echo 'OpenCode authentication/readiness failed; refusing root cutover' >&2; exit 3;
+    }
+  if [[ -f "$AUTH_FILE" ]]; then
+    [[ "$(stat -c %u "$AUTH_FILE")" == 0 && "$(stat -c %a "$AUTH_FILE")" =~ ^[460][04]0$ ]] || {
+      echo 'External OpenCode auth file must be root-owned and private' >&2; exit 2;
+    }
+  fi
+  # Root-owned transaction replaces the previous credential only after it has
+  # been validated against the *existing* OpenCode service.
+  ( umask 077; printf 'OPENCODE_PASSWORD=%q\\n' "$OPENCODE_SERVICE_PASSWORD" > "$AUTH_FILE.tmp"; mv -f "$AUTH_FILE.tmp" "$AUTH_FILE" )
+  chmod 600 "$AUTH_FILE"
+else
+  # An unchanged local no-password OpenCode is supported. Only loopback is
+  # allowed; UI owner approval still requires root-only socket + fresh auth.
+  curl -fsS --max-time 6 http://127.0.0.1:4096/api/info -o "$TMP/opencode-info.json" || {
+    echo 'OpenCode external readiness failed; refusing root cutover' >&2; exit 3;
+  }
+  [[ ! -f "$AUTH_FILE" ]] || rm -f -- "$AUTH_FILE"
 fi
-# Preserve a working password; never rotate OpenCode auth and invalidate
-# existing clients/sessions merely to migrate the UI.
-if ! curl -fsS --max-time 6 -u "opencode:$OPENCODE_SERVICE_PASSWORD" http://127.0.0.1:4096/api/info -o "$TMP/opencode-info.json"; then
-  echo 'OpenCode external authentication/readiness failed; refusing root cutover' >&2; exit 3;
-fi
-if [[ ! -f "$AUTH_FILE" ]]; then
-  ( umask 077; printf 'OPENCODE_PASSWORD=%q\n' "$OPENCODE_SERVICE_PASSWORD" > "$AUTH_FILE" )
-fi
-[[ "$(stat -c %u "$AUTH_FILE")" == 0 && "$(stat -c %a "$AUTH_FILE")" =~ ^[460][04]0$ ]] || {
-  echo 'External OpenCode auth file must be root-owned and unreadable by others' >&2; exit 2;
-}
-# Verify the root-only copy is equal to the service credential without
-# interpreting the owner-controlled file as executable shell code.
-AUTH_FILE_PASSWORD="$(bash -c 'source "$1"; printf %s "$OPENCODE_PASSWORD"' sh "$AUTH_FILE")"
-[[ "$AUTH_FILE_PASSWORD" == "$OPENCODE_SERVICE_PASSWORD" ]] || {
-  echo 'OpenCode root connection credential differs from current service; refusing cutover' >&2; exit 3;
-}
 
 # Source package delivery stays independent. Version and source SHA must match
 # the verified package manifest; package fallback builds pinned source only.
@@ -193,22 +194,47 @@ if [[ "$migration_status" != staged && "$migration_status" != completed && "$mig
   echo 'OpenChamber data migration not staged' >&2; exit 3
 fi
 
-# Never expose an unauthenticated root web UI, including on a fresh install.
+# The original OpenChamber UI secret and password were readable under the
+# opencode UID. Rotate once after moving the files to root so an agent cannot
+# replay a captured UI cookie/password. Existing OpenCode sessions are intact;
+# only the OpenChamber UI needs one re-login. Rebind public passkeys, do not
+# discard them.
 NATIVE_ENV=/root/.config/openchamber/startup.env
-if [[ ! -f "$NATIVE_ENV" ]]; then
-  mkdir -p "$(dirname "$NATIVE_ENV")"
-  printf 'OPENCHAMBER_UI_PASSWORD=%s\n' "$(python3 -c 'import secrets;print(secrets.token_hex(32))')" > "$NATIVE_ENV"
-  chmod 600 "$NATIVE_ENV"
+if [[ "$migration_status" == staged || ! -f "$NATIVE_ENV" ]]; then
+  mkdir -p /root/.config/openchamber
+  chmod 700 /root/.config/openchamber
+  python3 "$TMP/rekey.py"
 fi
+[[ -f "$NATIVE_ENV" && "$(stat -c %u "$NATIVE_ENV")" == 0 ]] || {
+  echo 'Root OpenChamber authentication configuration unavailable' >&2; exit 3;
+}
 # Root-owned service; never use root systemd --user and never stop opencode-web.
+# Prepare protected P1 broker and root-owned UI. The policy marker is not
+# published until the root UI, socket modes and broker all pass readiness.
+install -o root -g root -m 644 "$TMP/owner-broker.service" /etc/systemd/system/opencode-owner-approval.service
 install -o root -g root -m 644 "$TMP/openchamber.service" /etc/systemd/system/openchamber.service
 systemctl daemon-reload
+systemctl enable --now opencode-owner-approval.service
+for i in {1..20}; do
+  [[ -S /run/my-opencode-approval/owner.sock && -S /run/my-opencode-approval/agent.sock ]] && break
+  sleep 1
+done
+[[ -S /run/my-opencode-approval/owner.sock && -S /run/my-opencode-approval/agent.sock ]] || {
+  echo 'Owner broker sockets unavailable' >&2; exit 3;
+}
+[[ "$(stat -c %a /run/my-opencode-approval/owner.sock)" == 600 ]] || {
+  echo 'Owner approval socket is not private' >&2; exit 3;
+}
 systemctl enable --now openchamber.service
+# "enable --now" does not reload an existing running root service.
+systemctl restart openchamber.service
 for i in {1..30}; do
   if systemctl is-active --quiet openchamber.service && \
      curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:"${OPENCHAMBER_BIND_PORT:-3000}"/; then
     if [[ "$migration_status" == staged ]]; then python3 "$TMP/migrate.py" complete --ready yes; fi
     run_oc_user systemctl --user disable openchamber.service >/dev/null || true
+    # Enforce broker for every new PLAN/owner-accept at this point.
+    install -o root -g root -m 600 /dev/null /etc/my-opencode/owner-broker-required
     printf '%s\n' "$CONFIG_SHA $APP_SHA" > "$ROOT_STATE/active-sha"
     oc_commit_activation
     trap - ERR INT TERM
