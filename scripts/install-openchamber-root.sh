@@ -99,7 +99,7 @@ if [[ -n "$OPENCODE_SERVICE_PASSWORD" ]]; then
   fi
   # Root-owned transaction replaces the previous credential only after it has
   # been validated against the *existing* OpenCode service.
-  ( umask 077; printf 'OPENCODE_PASSWORD=%q\\n' "$OPENCODE_SERVICE_PASSWORD" > "$AUTH_FILE.tmp"; mv -f "$AUTH_FILE.tmp" "$AUTH_FILE" )
+  ( umask 077; printf 'OPENCODE_PASSWORD=%q\n' "$OPENCODE_SERVICE_PASSWORD" > "$AUTH_FILE.tmp"; mv -f "$AUTH_FILE.tmp" "$AUTH_FILE" )
   chmod 600 "$AUTH_FILE"
 else
   # An unchanged local no-password OpenCode is supported. Only loopback is
