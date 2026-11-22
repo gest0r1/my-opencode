@@ -3,6 +3,31 @@
 # service lifecycle; no legacy root runtime migration/cutover is performed.
 set -Eeuo pipefail
 
+# The supported distribution entrypoint now coordinates two independent UIDs.
+# OpenCode installer retains opencode, OpenChamber and approval broker use root.
+# Existing legacy shell code below is retained temporarily for installer
+# fixture compatibility; it is not an executable installation path.
+if [[ "${EUID}" == 0 ]]; then
+  CONFIG_REPO="${OPENCODE_CONFIG_REPO:-gest0r1/my-opencode}"
+  CONFIG_REF="${OPENCODE_CONFIG_REF:-${MY_OPENCODE_REF:-main}}"
+  [[ "$CONFIG_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$ && "$CONFIG_REF" != *..* && "$CONFIG_REF" != *//* ]] || {
+    echo 'INSTALL_SOURCE_REF_INVALID' >&2; exit 2;
+  }
+  for tool in gh mktemp chmod bash; do command -v "$tool" >/dev/null || exit 2; done
+  CONFIG_SHA="$(gh api "repos/$CONFIG_REPO/commits/$CONFIG_REF" --jq .sha)"
+  [[ "$CONFIG_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'CONFIG_SHA_INVALID' >&2; exit 2; }
+  COORDINATOR="$(mktemp /tmp/openchamber-root-coordinator.XXXXXXXX)"
+  trap 'rm -f -- "$COORDINATOR"' EXIT
+  gh api -H 'Accept: application/vnd.github.raw' \
+    "repos/$CONFIG_REPO/contents/scripts/install-openchamber-root.sh?ref=$CONFIG_SHA" > "$COORDINATOR"
+  # A unique pinned coordinator resolves and installs the same exact SHA.
+  OPENCODE_CONFIG_REF="$CONFIG_SHA" bash "$COORDINATOR" "$@"
+  exit $?
+fi
+echo 'OpenChamber installation requires root; run the canonical installer with sudo/root. OpenCode itself remains opencode.' >&2
+exit 2
+
+
 RUNTIME_USER="${OPENCODE_RUNTIME_USER:-opencode}"
 [[ "$RUNTIME_USER" == opencode ]] || {
   echo "Invalid runtime user '$RUNTIME_USER': required name is exactly opencode" >&2
