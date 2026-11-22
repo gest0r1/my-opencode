@@ -1,6 +1,7 @@
 import { dispatchPacket, workItemWaves } from './pipeline-dispatch.ts';
 import { deployEvidencePath } from './dev-deploy-cli.ts';
 import { candidateEvidenceMatches } from './github-actions-gate-core.mjs';
+import { ownerBrokerRequired } from './owner-broker-client.mjs';
 // Stable CLI entry point. Keep core stage/DAG/state implementation untouched and
 // reject non-executable machine gates BEFORE init creates any state or approve mutates it.
 export * from './stage-cli-core.ts';
@@ -419,10 +420,17 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
   const manifestSha = createHash('sha256').update(rawManifest).digest('hex');
   const revisionPath = join(dirname(resolve(manifest)), 'planning/revision.json');
   const revision = await readFile(revisionPath, 'utf8').then(JSON.parse).catch(() => undefined);
-  const technicalCarry = revision?.previous_approval === true && revision?.owner_contract_changed === false;
+  const protectedOwnerGate = ownerBrokerRequired();
+  const technicalCarry = !protectedOwnerGate && revision?.previous_approval === true && revision?.owner_contract_changed === false;
   let approvalArgs: string[] = [];
   if (command === 'plan-start' && !technicalCarry) {
-    const descriptor = {
+    const descriptor = protectedOwnerGate ? {
+      // This is only a valid CLI shape. The core gate replaces every
+      // model-supplied field with the owner-broker-authorized decision.
+      subject: 'final-manifest', run_id: manifestObject.run_id,
+      decision: 'approved', shown_manifest_sha256: manifestSha,
+      owner_response: 'broker-pending',
+    } : {
       subject: values.get('--approval-subject'), run_id: values.get('--approval-run-id'),
       decision: values.get('--approval-decision'), shown_manifest_sha256: values.get('--approval-manifest-sha256'),
       owner_response: values.get('--owner-response'), message_id: values.get('--owner-message-id'),
@@ -435,7 +443,25 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
       ...(checked.message_id ? ['--owner-message-id', checked.message_id] : []),
       ...(checked.source_session ? ['--owner-source-session', checked.source_session] : [])];
   }
-  const steps: Array<[string, string[]]> = [
+  // Owner can answer later. Resume only a matching frozen PLAN; never re-init
+  // or silently adopt a different worktree after the broker request was issued.
+  let resumePendingApproval = false;
+  if (command === 'plan-start' && protectedOwnerGate) {
+    const stateFile = resolve(values.get('--state-root') ?? '.tmp/pipelines', manifestObject.run_id, 'state.json');
+    const existing = await readFile(stateFile, 'utf8').then(JSON.parse).catch((error: any) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (existing) {
+      if (existing.status !== 'planned' ||
+          existing.manifest_sha256 !== manifestSha ||
+          resolve(String(existing.manifest_file ?? '')) !== resolve(manifest)) {
+        throw new Error('OWNER_APPROVAL_RESUME_STATE_MISMATCH');
+      }
+      resumePendingApproval = true;
+    }
+  }
+  const steps: Array<[string, string[]]> = resumePendingApproval ? [] : [
     ['plan-run-preflight', [script('stage-cli.ts'), 'plan-run-preflight', manifest, '--environment', '--json']],
     ['adopt', [script('git-worktree-cli.ts'), 'adopt', manifest]],
     ['verify', [script('git-worktree-cli.ts'), 'verify', manifest]],
@@ -443,7 +469,7 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
   if (command === 'plan-start') {
     const runId = manifestObject.run_id;
     steps.push(
-      ['init', [script('stage-cli.ts'), 'init', manifest, ...root, '--json']],
+      ...(resumePendingApproval ? [] : [['init', [script('stage-cli.ts'), 'init', manifest, ...root, '--json']] as [string, string[]]]),
       ...(technicalCarry ? [] : [['approve', [script('stage-cli.ts'), 'approve', runId, ...root, ...approvalArgs, '--json']] as [string, string[]]]),
       ['github-sync', [script('pipeline-github-sync.mjs'), 'sync', runId, ...root]],
       ['validate', [script('stage-cli.ts'), 'validate', runId, ...root, '--json']],
