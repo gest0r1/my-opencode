@@ -144,7 +144,25 @@ OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}" \
   OPENCHAMBER_RESTART_MODE=now \
   bash "$TMP/install-openchamber-v2-core.sh"
 
-# Core delivered an exact-source SHA release; only activate the validated package.
+# Runtime fingerprint may remain unchanged when only the source metadata SHA
+# advances. In that case core intentionally skips package installation: reuse
+# the already validated current package, not an empty new-SHA directory.
+# A pending delivery (e.g. embedded terminal/defer) must never become active.
+ROOT_CORE_STATE="${XDG_STATE_HOME}/my-opencode/openchamber-v2-install.state"
+root_state_value() { sed -n "s/^$1=//p" "$ROOT_CORE_STATE" 2>/dev/null | head -1; }
+if [[ ! -x "$RELEASE_DIR/bin/openchamber" ]]; then
+  current_verified="$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)"
+  if [[ -n "$current_verified" && -x "$current_verified/bin/openchamber" &&
+        "$(root_state_value runtime_pending)" == 0 ]]; then
+    RELEASE_DIR="$current_verified"
+  elif [[ -n "$current_verified" && -x "$current_verified/bin/openchamber" &&
+          "$(root_state_value effective_restart_mode)" == defer ]]; then
+    RELEASE_DIR="$current_verified"
+  else
+    echo 'Root OpenChamber package not installed and no safe reusable release exists' >&2
+    exit 3
+  fi
+fi
 oc_validate_release "$RELEASE_DIR" || { echo 'Root OpenChamber release validation failed' >&2; exit 3; }
 if [[ "${OPENCHAMBER_RESTART_MODE:-auto}" == defer || "${OPENCHAMBER_EMBEDDED_TERMINAL:-0}" == 1 ]]; then
   install_journal_event activation pending_restart "reason=embedded_or_deferred" "openchamber_sha=$APP_SHA"
