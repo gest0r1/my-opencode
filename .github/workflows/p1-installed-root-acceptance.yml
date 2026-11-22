@@ -90,12 +90,14 @@ jobs:
           test "$(sudo stat -c %a /etc/my-opencode/openchamber-execution.env)" = 600
           test "$(sudo stat -c %U /root/.config/openchamber/startup.env)" = root
           test "$(sudo stat -c %U /root/.config/openchamber/jwt-secret)" = root
-          curl -fsS http://127.0.0.1:4096/api/info >/dev/null
+          OPENCODE_TEST_PASSWORD="$(sudo -H -u opencode bash -c 'source "$HOME/.config/opencode.env"; printf %s "$OPENCODE_PASSWORD"')"
+          [[ -n "$OPENCODE_TEST_PASSWORD" ]]
+          curl -fsS -u "opencode:$OPENCODE_TEST_PASSWORD" http://127.0.0.1:4096/api/info >/dev/null
           curl -fsS http://127.0.0.1:3000/ >/dev/null
           echo 'PASS: real systemd root service and unprivileged OpenCode'
           before_oc="$(sudo systemctl show openchamber.service --property=MainPID --value)"
           before_ocweb="$(sudo -u opencode env XDG_RUNTIME_DIR="/run/user/$(id -u opencode)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u opencode)/bus" systemctl --user show opencode-web.service --property=MainPID --value)"
-          id="$(curl -fsS -X POST http://127.0.0.1:4096/api/session -H 'Content-Type: application/json' -d '{"title":"P1 acceptance existing session"}' | node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{const j=JSON.parse(s);if(!j.data?.id)process.exit(1);console.log(j.data.id)})')"
+          id="$(curl -fsS -u "opencode:$OPENCODE_TEST_PASSWORD" -X POST http://127.0.0.1:4096/api/session -H 'Content-Type: application/json' -d '{"title":"P1 acceptance existing session"}' | node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{const j=JSON.parse(s);if(!j.data?.id)process.exit(1);console.log(j.data.id)})')"
           [[ -n "$id" ]]
           sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
             OPENCODE_CONFIG_REF="$GITHUB_SHA" OPENCHAMBER_REF="$OC_SHA" \
@@ -105,7 +107,7 @@ jobs:
           [[ "$before_oc" == "$after_oc" && "$before_ocweb" == "$after_ocweb" ]] || {
             echo 'P1_REINSTALL_RESTARTED_LIVE_SERVICE' >&2; exit 1;
           }
-          curl -fsS "http://127.0.0.1:4096/api/session/$id" |
+          curl -fsS -u "opencode:$OPENCODE_TEST_PASSWORD" "http://127.0.0.1:4096/api/session/$id" |
             node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{let j=JSON.parse(s);if(!j.data?.id)process.exit(1)})'
           echo "PASS: exact-SHA repeat install preserves OpenCode session and both process IDs"
       - name: Failure diagnostics
