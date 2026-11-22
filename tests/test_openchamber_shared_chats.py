@@ -79,6 +79,7 @@ class SharedChatsContract(unittest.TestCase):
         self.assertLess(UNIT.index(migrated), UNIT.index(trusted))
         self.assertIn('OPENCHAMBER_CHATS_DIR=%s', INSTALLER)
         self.assertIn('run_oc_user python3 - "$SHARED_CHATS_DIR"', INSTALLER)
+        self.assertLess(INSTALLER.index('fresh_install=0'), INSTALLER.index('run_oc_user python3 - "$SHARED_CHATS_DIR"'))
         self.assertIn('OPENCHAMBER_EXECUTION_UID=%s', INSTALLER)
         self.assertIn('OPENCHAMBER_EXECUTION_GID=%s', INSTALLER)
         self.assertIn('OPENCHAMBER_DATA_DIR=/root/.config/openchamber', INSTALLER)
