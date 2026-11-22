@@ -79,6 +79,7 @@ jobs:
           python3 tests/test_runtime_user_install_contract.py
           python3 tests/test_runtime_processes.py
           python3 tests/test_owner_approval_helper.py
+          python3 tests/test_openchamber_root_migration.py
           bash tests/test_agent_installation.sh
           bash tests/test_binary_only_installer.sh
           bash tests/test_incremental_installer.sh
