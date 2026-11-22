@@ -54,6 +54,14 @@ def database():
         nonce TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
         decision TEXT NOT NULL, decided_at INTEGER, consumed_at INTEGER
     )''')
+    # Retain expired or rejected attempts as root-only audit, instead of
+    # reusing their request IDs or permanently blocking the same frozen PLAN.
+    conn.execute('''CREATE TABLE IF NOT EXISTS approval_history (
+        id TEXT PRIMARY KEY, subject_key TEXT NOT NULL, tuple_json TEXT NOT NULL,
+        nonce TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+        decision TEXT NOT NULL, decided_at INTEGER, consumed_at INTEGER,
+        archived_at INTEGER NOT NULL
+    )''')
     return conn
 
 
@@ -118,7 +126,19 @@ def action(conn, role, req):
             now = int(time.time())
             conn.execute('BEGIN IMMEDIATE')
             try:
-                row = conn.execute('SELECT id FROM approvals WHERE subject_key=?', (key,)).fetchone()
+                row = conn.execute(
+                    'SELECT id,decision,expires_at,consumed_at FROM approvals WHERE subject_key=?',
+                    (key,)).fetchone()
+                # An expired, never-consumed decision must be requestable again.
+                # A consumed approval is immutable forever for idempotent
+                # state recovery, even after its request TTL has passed.
+                if row and row[2] <= now and row[3] is None:
+                    conn.execute('''INSERT INTO approval_history
+                        SELECT id,subject_key,tuple_json,nonce,created_at,
+                               expires_at,decision,decided_at,consumed_at,?
+                        FROM approvals WHERE id=?''', (now, row[0]))
+                    conn.execute('DELETE FROM approvals WHERE id=?', (row[0],))
+                    row = None
                 if row:
                     rid = row[0]
                 else:
