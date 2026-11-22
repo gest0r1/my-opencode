@@ -335,26 +335,6 @@ if [[ "${OPENCHAMBER_RESTART_MODE:-auto}" == defer || "${OPENCHAMBER_EMBEDDED_TE
   exit 0
 fi
 # Fresh-install detection must happen before creating the first user Chats tree.
-run_oc_user python3 - "$SHARED_CHATS_DIR" <<'PY'
-import os, stat, sys
-from pathlib import Path
-target = Path(sys.argv[1])
-home = Path.home()
-if target != home / '.config/openchamber/chats':
-    raise SystemExit('OPENCHAMBER_SHARED_CHATS_INVALID_LOCATION')
-for parent in (home / '.config', home / '.config/openchamber', target):
-    if parent.is_symlink():
-        raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_SYMLINK_REFUSED: {parent}')
-target.mkdir(parents=True, exist_ok=True)
-if not target.is_dir():
-    raise SystemExit('OPENCHAMBER_SHARED_CHATS_NOT_DIRECTORY')
-for current, directories, files in os.walk(target, followlinks=False):
-    if any((Path(current) / name).is_symlink() for name in directories + files):
-        raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_ENTRY_SYMLINK_REFUSED: {current}')
-    mode = stat.S_IMODE(os.stat(current, follow_symlinks=False).st_mode)
-    os.chown(current, -1, os.getgid(), follow_symlinks=False)
-    os.chmod(current, (mode | 0o2770) & ~0o007, follow_symlinks=False)
-PY
 
 
 # Require a verified root-safe OpenChamber release and a human-confirmed
@@ -535,6 +515,29 @@ fi
 [[ -f "$NATIVE_ENV" && "$(stat -c %u "$NATIVE_ENV")" == 0 ]] || {
   echo 'Root OpenChamber authentication configuration unavailable' >&2; exit 3;
 }
+# Prepare the shared Chats tree only after migration source detection and
+# copying. A clean install must never treat the new empty tree as legacy data.
+run_oc_user python3 - "$SHARED_CHATS_DIR" <<'PY'
+import os, stat, sys
+from pathlib import Path
+target = Path(sys.argv[1])
+home = Path.home()
+if target != home / '.config/openchamber/chats':
+    raise SystemExit('OPENCHAMBER_SHARED_CHATS_INVALID_LOCATION')
+for parent in (home / '.config', home / '.config/openchamber', target):
+    if parent.is_symlink():
+        raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_SYMLINK_REFUSED: {parent}')
+target.mkdir(parents=True, exist_ok=True)
+if not target.is_dir():
+    raise SystemExit('OPENCHAMBER_SHARED_CHATS_NOT_DIRECTORY')
+for current, directories, files in os.walk(target, followlinks=False):
+    if any((Path(current) / name).is_symlink() for name in directories + files):
+        raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_ENTRY_SYMLINK_REFUSED: {current}')
+    mode = stat.S_IMODE(os.stat(current, follow_symlinks=False).st_mode)
+    os.chown(current, -1, os.getgid(), follow_symlinks=False)
+    os.chmod(current, (mode | 0o2770) & ~0o007, follow_symlinks=False)
+PY
+
 # Root-owned service; never use root systemd --user and never stop opencode-web.
 # Prepare protected P1 broker and root-owned UI. The policy marker is not
 # published until the root UI, socket modes and broker all pass readiness.
