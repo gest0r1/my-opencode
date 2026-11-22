@@ -1,4 +1,6 @@
 import { acceptedReconciliations } from './reconcile-evidence.ts';
+import { authorizeOwnerCheckpoint } from './owner-approval-checkpoint.ts';
+import { ownerBrokerRequired } from './owner-broker-client.mjs';
 import { readReviewVerdict } from './review-result-evidence.mjs';
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
@@ -855,7 +857,7 @@ export async function initFromManifest(
     if (error.code === 'ENOENT') return undefined;
     throw error;
   });
-  if (revision?.previous_approval === true && revision.owner_contract_changed === false) {
+  if (revision?.previous_approval === true && revision.owner_contract_changed === false && !ownerBrokerRequired()) {
     if (!revision.approval_carry || typeof revision.manifest_sha256 !== 'string' ||
         !/^[a-f0-9]{64}$/.test(revision.manifest_sha256)) {
       throw new StageCliError('APPROVAL_CARRY_EVIDENCE_REQUIRED');
@@ -1344,12 +1346,25 @@ export async function authorizeTechnicalScope(
 }
 
 export async function approvePipeline(stateRoot: string, runId: string, approval: Partial<PipelineApprovalRecord>): Promise<PipelineState> {
-  return updateState(stateRoot, runId, (state) => {
+  return updateState(stateRoot, runId, async (state) => {
     if (state.status !== 'planned') throw new StageCliError(`Cannot approve run while it is ${state.status}`);
     if (!state.manifest_file || !state.manifest_sha256) throw new StageCliError('Frozen manifest is missing');
     const rawManifest = readFileSync(state.manifest_file, 'utf8');
     if (sha256(rawManifest) !== state.manifest_sha256) throw new StageCliError('Frozen manifest hash mismatch');
-    state.approval_record = validateApprovalRecord(approval, runId, state.manifest_sha256);
+    // No direct CLI, plan-start, or core caller can mint a real owner grant:
+    // the external broker's root ledger is the only authority.
+    const grant = await authorizeOwnerCheckpoint(state, 'plan.final_manifest.approve');
+    state.approval_record = validateApprovalRecord(
+      grant.mode === 'broker' ? {
+        subject: 'final-manifest',
+        run_id: runId,
+        decision: 'approved',
+        shown_manifest_sha256: state.manifest_sha256,
+        owner_response: `broker-confirmed:${grant.id}`,
+        message_id: grant.id,
+      } : approval,
+      runId, state.manifest_sha256,
+    );
     for (const pipeline of Object.values(state.pipelines)) {
       if (pipeline.status !== 'planned') throw new StageCliError(`Pipeline is not planned: ${pipeline.id}`);
       pipeline.status = 'approved';
@@ -1459,6 +1474,8 @@ async function completeStageTransition(
           proof.run_id !== runId || proof.pipeline_id !== pipeline.id || proof.stage !== stage) {
         throw new StageCliError('OWNER_ACCEPTANCE_EVIDENCE_INVALID');
       }
+      // PASS evidence is only a projection; require the owner-authenticated grant.
+      await authorizeOwnerCheckpoint(state, 'owner.accept', pipeline.id, stage);
     } else {
       await rejectDirectOwnerAcceptanceTransition(args);
     }
@@ -1914,6 +1931,9 @@ export async function ownerSkipStage(stateRoot: string, runId: string, stage: st
     if (!runtime) throw new StageCliError(`Stage not found: ${pipeline.id}/${stage}`);
     if (['completed', 'skipped'].includes(runtime.status)) throw new StageCliError(`OWNER_SKIP_STAGE_DONE: ${pipeline.id}/${stage}`);
     const spec = readFrozenManifestFromState(state).pipelines.find(p => p.id === pipeline.id) as any;
+    if (ownerBrokerRequired() && spec?.executors?.[stage] === 'owner_acceptance') {
+      throw new StageCliError('OWNER_SKIP_CANNOT_BYPASS_PROTECTED_ACCEPTANCE');
+    }
     const text = (value: unknown) => typeof value === 'string' && value.trim().length > 0;
     const ownerDecision = evidence.kind === 'owner_skip' && evidence.owner_decision_required === true && text(evidence.owner_decision) && text(evidence.reason);
     const ciWaiver = evidence.kind === 'ci_infra_waiver' && spec?.github_ci_mode === 'optional' &&
