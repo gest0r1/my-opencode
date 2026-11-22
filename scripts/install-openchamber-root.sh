@@ -216,17 +216,50 @@ fi
 # Roll back only the root OpenChamber package and migration, never the OpenCode
 # runtime or its sessions. A failed activation cannot strand the old UI.
 old_active=0
+root_was_active=0
+broker_was_active=0
+old_marker_present=0
 cutover_started=0
 migration_status=not_required
+[[ ! -f /etc/my-opencode/owner-broker-required ]] || old_marker_present=1
+systemctl is-active --quiet openchamber.service && root_was_active=1 || true
+systemctl is-active --quiet opencode-owner-approval.service && broker_was_active=1 || true
+for unit in openchamber.service opencode-owner-approval.service; do
+  [[ ! -f "/etc/systemd/system/$unit" ]] ||
+    cp -p "/etc/systemd/system/$unit" "$TMP/$unit.before"
+done
+[[ ! -f "$ROOT_STATE/active-sha" ]] || cp -p "$ROOT_STATE/active-sha" "$TMP/active-sha.before"
 rollback_cutover() {
   local code=$?
+  (( code != 0 )) || code=130
   trap - ERR INT TERM
   if (( cutover_started )); then
     systemctl stop openchamber.service >/dev/null 2>&1 || true
     if [[ "$migration_status" == staged ]]; then python3 "$TMP/migrate.py" rollback || true; fi
-    if (( old_active )); then run_oc_user systemctl --user start openchamber.service || true; fi
+    if (( old_marker_present == 0 )); then rm -f -- /etc/my-opencode/owner-broker-required; fi
+    if [[ -f "$TMP/active-sha.before" ]]; then
+      cp -p "$TMP/active-sha.before" "$ROOT_STATE/active-sha" || true
+    else
+      rm -f -- "$ROOT_STATE/active-sha"
+    fi
+    for unit in openchamber.service opencode-owner-approval.service; do
+      if [[ -f "$TMP/$unit.before" ]]; then
+        cp -p "$TMP/$unit.before" "/etc/systemd/system/$unit" || true
+      else
+        rm -f -- "/etc/systemd/system/$unit"
+      fi
+    done
+    systemctl daemon-reload || true
   fi
   oc_rollback_activation || true
+  if (( cutover_started )); then
+    if (( root_was_active )); then
+      systemctl restart openchamber.service || true
+    elif (( old_active )); then
+      run_oc_user systemctl --user start openchamber.service || true
+    fi
+    if (( broker_was_active == 0 )); then systemctl stop opencode-owner-approval.service || true; fi
+  fi
   install_journal_event install failed "openchamber_sha=$APP_SHA" "exit_code=$code" "reason=cutover_rollback" || true
   exit "$code"
 }
@@ -303,14 +336,17 @@ systemctl restart openchamber.service
 for i in {1..30}; do
   if systemctl is-active --quiet openchamber.service && \
      curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:"${OPENCHAMBER_BIND_PORT:-3000}"/; then
-    if [[ "$migration_status" == staged ]]; then python3 "$TMP/migrate.py" complete --ready yes; fi
     run_oc_user systemctl --user disable openchamber.service >/dev/null || true
     # Enforce broker for every new PLAN/owner-accept at this point.
     install -o root -g root -m 644 /dev/null /etc/my-opencode/owner-broker-required
-    printf '%s\n' "$CONFIG_SHA $APP_SHA" > "$ROOT_STATE/active-sha"
-    oc_commit_activation
+    (umask 077; printf '%s\n' "$CONFIG_SHA $APP_SHA" > "$ROOT_STATE/active-sha.new")
+    mv -f "$ROOT_STATE/active-sha.new" "$ROOT_STATE/active-sha"
     install_journal_event activation activated "config_sha=$CONFIG_SHA" "openchamber_sha=$APP_SHA"
+    # Final durable migration commit: every preceding fallible step can still
+    # roll back the data, unit files, marker and previous active runtime.
+    if [[ "$migration_status" == staged ]]; then python3 "$TMP/migrate.py" complete --ready yes; fi
     trap - ERR INT TERM
+    oc_commit_activation || echo 'WARN: root service healthy but previous-release pointer not yet persisted' >&2
     echo "ROOT OPENCHAMBER READY config=$CONFIG_SHA app=$APP_SHA"
     exit 0
   fi
