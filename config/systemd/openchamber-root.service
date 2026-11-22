@@ -23,7 +23,10 @@ ExecStart=/usr/local/lib/my-opencode/launch-openchamber-root.sh /root/.local/bin
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+# Root UI must traverse opencode-owned 0700 projects/Chats to read Git and
+# OpenChamber project setup. Do not grant this capability to child executors.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE
+# Deliberately exclude CAP_DAC_OVERRIDE from ambient capabilities.
 AmbientCapabilities=CAP_SETUID CAP_SETGID
 PrivateTmp=true
 ProtectSystem=full
