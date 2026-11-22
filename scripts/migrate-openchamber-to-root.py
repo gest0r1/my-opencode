@@ -59,6 +59,35 @@ def secure_copy(src, dst):
             mode = stat.S_IMODE(p.stat().st_mode)
             os.chmod(p, 0o700 if mode & stat.S_IXUSR else 0o600)
 
+def merge_historical_files(source, historical, conflicts, prefix=''):
+    """Add files unique to the former root profile; source wins conflicts.
+
+    Never combine SQLite or JSON records without an application-level schema.
+    Keep an immutable full historical snapshot for manual collision handling.
+    All copied source entries were checked separately before this operation.
+    """
+    for entry in historical.iterdir():
+        if entry.is_symlink() or not (entry.is_file() or entry.is_dir()):
+            raise Refused('UNSAFE_HISTORICAL_ENTRY: ' + str(entry))
+        relative = prefix + entry.name
+        target = source / entry.name
+        if not target.exists() and not target.is_symlink():
+            if entry.is_dir():
+                secure_copy(entry, target)
+            else:
+                shutil.copy2(entry, target, follow_symlinks=False)
+                os.chmod(target, 0o600)
+            continue
+        if target.is_dir() and entry.is_dir():
+            merge_historical_files(target, entry, conflicts, relative + '/')
+        elif target.is_file() and entry.is_file():
+            # File identity comparison is byte-for-byte, not mtime guesses.
+            if target.read_bytes() != entry.read_bytes():
+                conflicts.append(relative)
+        else:
+            conflicts.append(relative)
+
+
 def perform(cmd, args):
     src, dst = Path(args.source), Path(args.destination)
     check_paths(src, dst)
@@ -83,8 +112,18 @@ def perform(cmd, args):
         stage = dst.parent/('.openchamber.p1-stage-'+marker)
         previous = dst.parent/('.openchamber.p1-previous-'+marker)
         secure_copy(src,stage)
+        collisions = []
+        if dst.exists():
+            if not dst.is_dir() or dst.is_symlink():
+                raise Refused('UNSAFE_HISTORICAL_DATA_DIR')
+            # A different historical root profile may have data the current
+            # opencode profile never had. Add only unique paths; conflict
+            # copies remain intact in the rollback snapshot, never overwrite
+            # current source files by timestamp or by blind directory replace.
+            merge_historical_files(stage, dst, collisions)
         state = {'status':'prepared','source':str(src),'destination':str(dst),
-                 'stage':str(stage),'previous':str(previous),'created_at':int(time.time())}
+                 'stage':str(stage),'previous':str(previous),
+                 'historical_conflicts':collisions,'created_at':int(time.time())}
         atomic_json(state_file,state)
         try:
             if dst.exists(): os.replace(dst, previous)
@@ -94,7 +133,9 @@ def perform(cmd, args):
             raise
         state['status']='staged'
         atomic_json(state_file,state)
-        return {'status':'staged','previous_saved':previous.exists()}
+        return {'status':'staged','previous_saved':previous.exists(),
+                'historical_conflicts':len(collisions),
+                'historical_unique_paths_added':True}
     if cmd == 'complete':
         if state.get('status') == 'completed': return {'status':'completed','reused':True}
         if state.get('status') != 'staged': raise Refused('NO_STAGED_MIGRATION')
