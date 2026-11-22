@@ -12,7 +12,7 @@ Environment="HOME=/root" "XDG_CONFIG_HOME=/root/.config" "XDG_DATA_HOME=/root/.l
 Environment="OPENCHAMBER_ROOT_MODE=separated" "OPENCHAMBER_EXECUTION_USER=opencode"
 Environment="NODE_OPTIONS=--require /usr/local/lib/my-opencode/openchamber-child-boundary.cjs"
 EnvironmentFile=/etc/my-opencode/openchamber-execution.env
-Environment="OPENCODE_HOST=http://127.0.0.1:4096" "OPENCODE_SKIP_START=true" "OPENCODE_BINARY=/home/opencode/.opencode/bin/opencode"
+Environment="OPENCODE_HOST=http://127.0.0.1:4096" "OPENCODE_SKIP_START=true" "OPENCODE_BINARY=/usr/local/lib/my-opencode/opencode-unpriv-wrapper.sh"
 Environment="OPENCHAMBER_BIND_HOST=0.0.0.0" "OPENCHAMBER_BIND_PORT=3000"
 EnvironmentFile=-/root/.config/openchamber/startup.env
 ExecStart=/usr/local/lib/my-opencode/launch-openchamber-root.sh /root/.local/bin/openchamber serve --host ${OPENCHAMBER_BIND_HOST} --port ${OPENCHAMBER_BIND_PORT}
