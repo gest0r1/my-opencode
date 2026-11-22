@@ -26,7 +26,7 @@ class RealUidBroker(unittest.TestCase):
         # On ephemeral CI runner only. Refuse nonempty production ledger.
         for root in (RUN_ROOT,DATA_ROOT):
             if root.exists(): raise AssertionError('CI expects empty broker roots: '+str(root))
-        subprocess.run(['sudo','-n','install','-d','-o','root','-g','root','-m','700','/usr/local/lib/my-opencode'],check=True)
+        subprocess.run(['sudo','-n','install','-d','-o','root','-g','root','-m','755','/usr/local/lib/my-opencode'],check=True)
         for source in (BROKER,LEDGER,BROKER_CLIENT):
             subprocess.run(['sudo','-n','install','-o','root','-g','root','-m','644',str(source),'/usr/local/lib/my-opencode/'+source.name],check=True)
         cls.proc=subprocess.Popen(['sudo','-n','python3','/usr/local/lib/my-opencode/opencode-owner-approvald.py'],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
