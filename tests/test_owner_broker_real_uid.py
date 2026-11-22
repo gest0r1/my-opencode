@@ -68,7 +68,7 @@ s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1]);s.sendall((sys.argv[2]+"\
         self.assertNotEqual(wrong.returncode,0)
         status=self.sock(RUN_ROOT/'agent.sock',{'action':'consume','request_id':rid,'checkpoint':cp},as_user='opencode')
         self.assertFalse(json.loads(status.stdout)['ok']['authorized'])
-        owner=self.sock(RUN_ROOT/'owner.sock',{'action':'approve','request_id':rid})
+        owner=self.sock(RUN_ROOT/'owner.sock',{'action':'approve','request_id':rid},as_user='root')
         self.assertEqual(json.loads(owner.stdout)['ok']['decision'],'approved')
         consumed=self.sock(RUN_ROOT/'agent.sock',{'action':'consume','request_id':rid,'checkpoint':cp},as_user='opencode')
         self.assertTrue(json.loads(consumed.stdout)['ok']['authorized'])
