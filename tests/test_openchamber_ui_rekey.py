@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[0] / 'rekey-openchamber-ui.py'
+SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'rekey-openchamber-ui.py'
 spec = importlib.util.spec_from_file_location('oc_rekey', SCRIPT)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
