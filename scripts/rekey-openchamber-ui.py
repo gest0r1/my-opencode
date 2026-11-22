@@ -60,12 +60,29 @@ def rekey(data_dir, test=False):
     if any(p.is_symlink() for p in (env_file, jwt_file, passkeys_file, marker)):
         raise ValueError('UNSAFE_UI_SECRET_SYMLINK')
     old_env = env_file.read_text(encoding='utf-8') if env_file.exists() else ''
+    legacy_file = data_dir / 'startup.env.pre-p1'
+    if legacy_file.is_symlink():
+        raise ValueError('UNSAFE_UI_SECRET_SYMLINK')
+    # The historical startup file was writable by the OpenCode agent.
+    # Passing arbitrary migrated variables to systemd User=root can load
+    # attacker-controlled code via LD_PRELOAD, NODE_PATH, BASH_ENV, etc.
+    # Retain the whole original file privately for operator reconfiguration
+    # but activate only two narrowly validated network settings.
+    if old_env and not legacy_file.exists():
+        secure_atomic(legacy_file, old_env)
     new_lines = []
+    disabled_keys = []
     for line in old_env.splitlines():
-        match = re.match(r'^\s*(?:export\s+)?([A-Z_][A-Z_0-9]*)\s*=', line)
-        if match and (match.group(1) in STRIP or match.group(1).startswith('OPENCHAMBER_APPROVAL_')):
+        match = re.fullmatch(r'\s*(?:export\s+)?([A-Z_][A-Z_0-9]*)\s*=\s*(.*?)\s*', line)
+        if not match:
             continue
-        new_lines.append(line)
+        key, value = match.groups()
+        if key == 'OPENCHAMBER_BIND_HOST' and value in ('127.0.0.1','0.0.0.0','::1','::'):
+            new_lines.append(key+'='+value)
+        elif key == 'OPENCHAMBER_BIND_PORT' and value.isdecimal() and 1 <= int(value) <= 65535:
+            new_lines.append(key+'='+value)
+        else:
+            disabled_keys.append(key)
     ui_password = secrets.token_hex(32)
     jwt_secret = secrets.token_hex(32)
     new_lines.append('OPENCHAMBER_UI_PASSWORD=' + ui_password)
@@ -82,11 +99,12 @@ def rekey(data_dir, test=False):
     if passkeys is not None:
         secure_atomic(passkeys_file, json.dumps(passkeys, indent=2) + '\n')
     secure_atomic(marker, 'rekeyed\n')
-    for p in (env_file, jwt_file, marker, passkeys_file):
+    for p in (env_file, jwt_file, marker, passkeys_file, legacy_file):
         if p.exists():
             os.chmod(p, stat.S_IRUSR | stat.S_IWUSR)
     return {'status': 'rekeyed', 'passkeys_preserved': len(passkeys['passkeys']) if passkeys else 0,
-            'existing_ui_sessions_revoked': True}
+            'existing_ui_sessions_revoked': True,
+            'legacy_startup_keys_quarantined': sorted(set(disabled_keys))}
 
 
 if __name__ == '__main__':
