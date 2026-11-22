@@ -77,6 +77,27 @@ if (typeof process.getuid === 'function' && process.getuid() === 0) {
     else if (typeof options === 'function') { callback = options; options = undefined; }
     return execFile(file, args, optionsOf(options), callback);
   };
+  // Native exec/execFile expose util.promisify.custom returning {stdout, stderr}.
+  // A replacement without this hook makes promisify(execFile) return a bare
+  // string. Never copy the native hook: that would bypass the enforced UID/GID.
+  const promisifyCustom = require('node:util').promisify.custom;
+  const promiseOf = (wrapped) => (...args) => new Promise((resolve, reject) => {
+    wrapped(...args, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+  Object.defineProperty(child.exec, promisifyCustom, {
+    configurable: true, value: promiseOf(child.exec),
+  });
+  Object.defineProperty(child.execFile, promisifyCustom, {
+    configurable: true, value: promiseOf(child.execFile),
+  });
   Module.syncBuiltinESMExports();
   process.env.OPENCHAMBER_CHILD_BOUNDARY_ACTIVE = '1';
 }
