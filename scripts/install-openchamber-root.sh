@@ -197,6 +197,18 @@ if [[ ! -x "$RELEASE_DIR/bin/openchamber" ]]; then
   fi
 fi
 oc_validate_release "$RELEASE_DIR" || { echo 'Root OpenChamber release validation failed' >&2; exit 3; }
+# Clean installs have neither a previous UI nor a migration source, so there
+# are no PTYs or user sessions to interrupt. Activate automatically after the
+# signed/release-verified package, isolated OpenCode runtime and broker checks.
+# Existing installations ALWAYS require an explicit quiescent cutover.
+fresh_install=0
+if [[ ! -e "$OPENCODE_HOME/.config/openchamber" &&
+      ! -e /root/.config/openchamber &&
+      ! -e "$ROOT_STATE/active-sha" ]] &&
+   ! run_oc_user systemctl --user is-active --quiet openchamber.service &&
+   ! systemctl is-active --quiet openchamber.service; then
+  fresh_install=1
+fi
 if [[ "${OPENCHAMBER_RESTART_MODE:-auto}" == defer || "${OPENCHAMBER_EMBEDDED_TERMINAL:-0}" == 1 ]]; then
   install_journal_event activation pending_restart "reason=embedded_or_deferred" "openchamber_sha=$APP_SHA"
   echo 'PENDING APPLY: installed root runtime staged; do not cut over from an embedded terminal.'
@@ -205,12 +217,12 @@ fi
 
 # Require a verified root-safe OpenChamber release and a human-confirmed
 # quiescent window; no unprivileged user should be stranded in an active PTY.
-if [[ "${OPENCHAMBER_ROOT_RUNTIME_VERIFIED:-0}" != 1 ]]; then
+if [[ "$fresh_install" != 1 && "${OPENCHAMBER_ROOT_RUNTIME_VERIFIED:-0}" != 1 ]]; then
   install_journal_event activation pending_restart "reason=runtime_not_verified"
   echo 'PENDING APPLY: root execution boundary not yet accepted (OPENCHAMBER_ROOT_RUNTIME_VERIFIED=1 required).' >&2
   exit 0
 fi
-if [[ "${OPENCHAMBER_CUTOVER_QUIESCENT:-0}" != 1 ]]; then
+if [[ "$fresh_install" != 1 && "${OPENCHAMBER_CUTOVER_QUIESCENT:-0}" != 1 ]]; then
   install_journal_event activation pending_restart "reason=not_quiescent"
   echo 'PENDING APPLY: active OpenChamber terminal state not confirmed quiescent.' >&2
   exit 0
