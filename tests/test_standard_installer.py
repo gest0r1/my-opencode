@@ -53,6 +53,7 @@ def main():
     req(root,'opencode-owner-approval.service')
     req(root,'owner-broker-required')
     req(ocunit,'User=root')
+    req(ocunit,'--foreground')
     req(ocunit,'OPENCODE_SKIP_START=true')
     req(ocunit,'NODE_OPTIONS=--require /usr/local/lib/my-opencode/openchamber-child-boundary.cjs')
     req(brunit,'User=root')
