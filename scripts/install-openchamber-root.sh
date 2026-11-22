@@ -105,11 +105,15 @@ ensure_root_node() {
       curl -fsSLO "https://nodejs.org/dist/v$version/SHASUMS256.txt" && \
       grep -F "  $name" SHASUMS256.txt > node.sha && sha256sum -c node.sha && \
       tar -xJf "$name" && install -d -m 755 /opt/my-openchamber && \
-      mv "node-v$version-linux-x64" "$dest") || { rm -rf -- "$tmp"; return 1; }
+      mv "node-v$version-linux-x64" "$dest" && \
+      chown -R root:root "$dest" && chmod -R go-w "$dest") || { rm -rf -- "$tmp"; return 1; }
     rm -rf -- "$tmp"
   fi
   export PATH="$dest/bin:$PATH"
-  root_node_version_ok
+  root_node_version_ok || {
+    echo "ROOT_NODE_TRUST_OR_VERSION_INVALID: $(command -v node 2>/dev/null || true)" >&2
+    return 2
+  }
 }
 ensure_root_node
 
