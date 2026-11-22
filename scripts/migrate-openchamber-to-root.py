@@ -26,7 +26,7 @@ def check_paths(src, dst):
     for x in (src, dst):
         if not x.is_absolute() or x.is_symlink():
             raise Refused('UNSAFE_PATH')
-    if src == dst or not src.is_dir() or not str(src).startswith('/home/opencode/'):
+    if src == dst or not str(src).startswith('/home/opencode/'):
         if not os.getenv('OPENCHAMBER_MIGRATION_TEST'):
             raise Refused('INVALID_SOURCE')
     if dst != DEFAULT_DST and not os.getenv('OPENCHAMBER_MIGRATION_TEST'):
@@ -71,6 +71,7 @@ def perform(cmd, args):
     if cmd == 'status':
         return {'status': state.get('status','not_started'), 'source': str(src), 'destination': str(dst)}
     if cmd == 'stage':
+        if not src.exists(): return {'status':'not_required','source_missing':True}
         if state.get('status') == 'completed': return {'status':'completed','reused':True}
         if state.get('status') == 'staged': return {'status':'staged','reused':True}
         if state: raise Refused('MIGRATION_TRANSACTION_PENDING')
