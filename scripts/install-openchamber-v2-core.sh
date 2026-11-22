@@ -106,14 +106,20 @@ ensure_bun() {
       return 2
     }
     resolved="$(readlink -f "$bun_path" 2>/dev/null)" || return 2
-    [[ -x "$resolved" && "$resolved" != /home/* && "$resolved" != /tmp/* &&
+    [[ "$bun_path" == /* && -x "$resolved" &&
+       "$resolved" != /home/* && "$resolved" != /tmp/* &&
        "$resolved" != /var/tmp/* ]] || { echo 'ROOT_BUN_PATH_UNTRUSTED' >&2; return 2; }
+    local permissions
     for part in "$bun_path" "$resolved"; do
       while [[ "$part" != / ]]; do
-        [[ "$(stat -c %u "$part" 2>/dev/null)" == 0 &&
-           "$(( 8#$(stat -c %a "$part" | tail -c 4) & 8#022 ))" == 0 ]] || {
+        permissions="$(stat -c %a "$part" 2>/dev/null)" || return 2
+        [[ "$permissions" =~ ^[0-7]{3,4}$ &&
+           "$(stat -c %u "$part")" == 0 ]] || {
           echo 'ROOT_BUN_PATH_UNTRUSTED' >&2; return 2;
         }
+        if (( (8#$permissions & 8#6022) != 0 )); then
+          echo 'ROOT_BUN_PATH_UNTRUSTED' >&2; return 2
+        fi
         part="$(dirname "$part")"
       done
     done
