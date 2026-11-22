@@ -51,15 +51,17 @@ def main():
         assert journal.stat().st_size < 1024
         assert stat.S_IMODE(rotated.stat().st_mode) == 0o600
 
-    # Ref provenance survives the sudo user switch and reaches core state.
-    assert 'OPENCODE_CONFIG_SOURCE_REF=$REQUESTED_CONFIG_REF' in wrapper
-    assert 'OPENCHAMBER_SOURCE_REF=$REQUESTED_APP_REF' in wrapper
-    assert 'OPENCHAMBER_REF=$REQUESTED_APP_REF' in wrapper
-    assert 'OPENCODE_CONFIG_SOURCE_REF|OPENCHAMBER_SOURCE_REF) continue' in wrapper
-    assert 'install_journal_event install start' in wrapper
-    assert 'install_journal_event activation pending_restart' in wrapper
-    assert 'install_journal_event activation activated' in wrapper
-    assert 'install_journal_event install failed' in wrapper
+    # The pinned root coordinator stores source provenance and journals
+    # root-owned activation/rollback; its agent-facing OpenCode installation
+    # remains an independent unprivileged transaction.
+    root = (ROOT / 'scripts/install-openchamber-root.sh').read_text()
+    assert 'OPENCODE_CONFIG_SOURCE_REF="$REQUESTED_CONFIG_REF"' in wrapper
+    assert 'OPENCHAMBER_SOURCE_REF="$REQUESTED_APP_REF"' in wrapper
+    assert 'OPENCHAMBER_REF="$APP_SHA"' in wrapper
+    assert 'install_journal_event install start' in root
+    assert 'install_journal_event activation pending_restart' in root
+    assert 'install_journal_event activation activated' in root
+    assert 'install_journal_event install failed' in root
     assert '"config_ref=$CONFIG_SOURCE_REF"' in core
     assert '"openchamber_ref=$APP_SOURCE_REF"' in core
     assert '"installed_at=$(date -u' in core
