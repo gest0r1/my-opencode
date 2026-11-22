@@ -50,14 +50,52 @@ def atomic_json(path, value):
     os.replace(tmp, path)
 
 def secure_copy(src, dst):
-    if dst.exists(): raise Refused('STAGE_ALREADY_EXISTS')
-    shutil.copytree(src, dst, symlinks=False, copy_function=shutil.copy2)
-    for cur, dirs, files in os.walk(dst):
-        os.chmod(cur, 0o700)
-        for f in files:
-            p = Path(cur, f)
-            mode = stat.S_IMODE(p.stat().st_mode)
-            os.chmod(p, 0o700 if mode & stat.S_IXUSR else 0o600)
+    """Copy agent-writable source without ever following injected symlinks.
+
+    Root reading with copytree(symlinks=False) is unsafe: an opencode writer
+    can replace a file after a validation walk with a symlink to /root.
+    Directory and file descriptors use no-follow at the read boundary.
+    """
+    if dst.exists() or dst.is_symlink():
+        raise Refused('STAGE_ALREADY_EXISTS')
+    if src.is_symlink() or not src.is_dir():
+        raise Refused('UNSAFE_SOURCE_DIRECTORY')
+    dst.mkdir(mode=0o700)
+    try:
+        visited = False
+        for source_dir, dirs, files, source_fd in os.fwalk(src, topdown=True, follow_symlinks=False):
+            visited = True
+            destination_dir = dst / Path(source_dir).relative_to(src)
+            for name in dirs:
+                entry = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+                if not stat.S_ISDIR(entry.st_mode):
+                    raise Refused('UNSAFE_SOURCE_ENTRY: ' + str(Path(source_dir, name)))
+                (destination_dir / name).mkdir(mode=0o700)
+            for name in files:
+                if name in ('.', '..'):
+                    raise Refused('UNSAFE_SOURCE_ENTRY')
+                flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+                try:
+                    source_file = os.open(name, flags, dir_fd=source_fd)
+                except OSError as error:
+                    raise Refused('UNSAFE_SOURCE_ENTRY: ' + str(Path(source_dir, name))) from error
+                with os.fdopen(source_file, 'rb') as reader:
+                    source_info = os.fstat(reader.fileno())
+                    if not stat.S_ISREG(source_info.st_mode) or source_info.st_nlink != 1:
+                        raise Refused('UNSAFE_SOURCE_ENTRY: ' + str(Path(source_dir, name)))
+                    destination = destination_dir / name
+                    out_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+                    out_fd = os.open(destination, out_flags, 0o600)
+                    with os.fdopen(out_fd, 'wb') as writer:
+                        shutil.copyfileobj(reader, writer, 1024 * 1024)
+                        writer.flush()
+                        os.fsync(writer.fileno())
+                    os.chmod(destination, 0o700 if source_info.st_mode & stat.S_IXUSR else 0o600)
+        if not visited:
+            raise Refused('UNSAFE_SOURCE_DIRECTORY')
+    except BaseException:
+        shutil.rmtree(dst)
+        raise
 
 def merge_historical_files(source, historical, conflicts, prefix=''):
     """Add files unique to the former root profile; source wins conflicts.
