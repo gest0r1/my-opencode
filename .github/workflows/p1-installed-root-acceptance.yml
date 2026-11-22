@@ -116,3 +116,46 @@ jobs:
           sudo systemctl status opencode-owner-approval.service --no-pager -l || true
           sudo journalctl -u openchamber.service -n 90 --no-pager || true
           sudo journalctl -u opencode-owner-approval.service -n 90 --no-pager || true
+
+  real-systemd-migration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: Verify exact published root-safe OpenChamber release
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api repos/gest0r1/openchamber-ru/pulls/29 --jq .merged)" = true
+          sha="$(gh api repos/gest0r1/openchamber-ru/commits/main --jq .sha)"
+          [[ "$sha" =~ ^[a-f0-9]{40}$ ]]
+          gh release view "v2-web-package-$sha" --repo gest0r1/openchamber-ru >/dev/null
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Prepare disposable real-systemd runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$RUNNER_ENVIRONMENT" == github-hosted ]]
+          test -d /run/systemd/system
+          sudo install -o root -g root -m 755 "$(command -v bun)" /usr/local/bin/bun
+      - name: Migrate legacy user UI and prove full rollback and retry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OC_SHA: ${{ steps.target.outputs.sha }}
+        shell: bash
+        run: bash tests/p1-real-systemd-migration.sh
+      - name: Failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          sudo systemctl status openchamber.service --no-pager -l || true
+          sudo systemctl status opencode-owner-approval.service --no-pager -l || true
+          sudo journalctl -u openchamber.service -n 90 --no-pager || true
+          sudo journalctl -u opencode-owner-approval.service -n 90 --no-pager || true
