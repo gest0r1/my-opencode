@@ -56,9 +56,17 @@ run_oc_user() {
   sudo -H -u opencode env XDG_RUNTIME_DIR="/run/user/$OPENCODE_UID" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$OPENCODE_UID/bus" "$@"
 }
+if ! run_oc_user systemctl --user is-active --quiet opencode-web.service; then
+  # Fresh installations enable but do not start OpenCode in install.sh.
+  # Start only an inactive service; never restart a running OpenCode with
+  # potentially active RUNs or session DB writes.
+  run_oc_user systemctl --user start opencode-web.service || {
+    echo 'OpenCode service failed to start under opencode; refusing root cutover' >&2
+    exit 2
+  }
+fi
 run_oc_user systemctl --user is-active --quiet opencode-web.service || {
-  echo 'OpenCode service is not active. Install/start it separately under opencode before cutover.' >&2
-  exit 2
+  echo 'OpenCode service is not active after install' >&2; exit 2
 }
 
 # Root runtime has its own verified Node distribution. Never execute the
