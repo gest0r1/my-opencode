@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BROKER = ROOT / 'scripts/opencode-owner-approvald.py'
 LEDGER = ROOT / 'scripts/opencode-owner-approval.py'
+BROKER_CLIENT = ROOT / 'config/opencode/skills/task-management/scripts/owner-broker-client.mjs'
 RUN_ROOT = Path('/run/my-opencode-approval')
 DATA_ROOT = Path('/var/lib/my-opencode-approval')
 
@@ -26,7 +27,7 @@ class RealUidBroker(unittest.TestCase):
         for root in (RUN_ROOT,DATA_ROOT):
             if root.exists(): raise AssertionError('CI expects empty broker roots: '+str(root))
         subprocess.run(['sudo','-n','install','-d','-o','root','-g','root','-m','700','/usr/local/lib/my-opencode'],check=True)
-        for source in (BROKER,LEDGER):
+        for source in (BROKER,LEDGER,BROKER_CLIENT):
             subprocess.run(['sudo','-n','install','-o','root','-g','root','-m','644',str(source),'/usr/local/lib/my-opencode/'+source.name],check=True)
         cls.proc=subprocess.Popen(['sudo','-n','python3','/usr/local/lib/my-opencode/opencode-owner-approvald.py'],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         for _ in range(60):
@@ -35,13 +36,42 @@ class RealUidBroker(unittest.TestCase):
             time.sleep(.1)
         else: raise AssertionError('broker did not create sockets')
 
+    def test_policy_marker_visibility_and_fail_closed_for_agent_uid(self):
+        policy=Path('/etc/my-opencode')
+        if policy.exists():
+            self.skipTest('pre-existing local policy is not modified')
+        sudo=['sudo','-n']
+        try:
+            subprocess.run(sudo+['install','-d','-o','root','-g','root','-m','711',str(policy)],check=True)
+            marker=policy/'owner-broker-required'
+            subprocess.run(sudo+['install','-o','root','-g','root','-m','644','/dev/null',str(marker)],check=True)
+            binary=shutil.which('node')
+            self.assertTrue(binary,'node executable required')
+            probe="import{ownerBrokerRequired}from 'file:///usr/local/lib/my-opencode/owner-broker-client.mjs';console.log(ownerBrokerRequired())"
+            cmd=sudo+['-u','opencode',binary,'--input-type=module','-e',probe]
+            ok=subprocess.run(cmd,capture_output=True,text=True)
+            self.assertEqual(ok.returncode,0,ok.stderr)
+            self.assertEqual(ok.stdout.strip(),'true')
+            subprocess.run(sudo+['chmod','700',str(policy)],check=True)
+            invisible=subprocess.run(cmd,capture_output=True,text=True)
+            self.assertNotEqual(invisible.returncode,0)
+            self.assertIn('OWNER_BROKER_POLICY_DIR_UNTRUSTED',invisible.stderr)
+            subprocess.run(sudo+['chmod','711',str(policy)],check=True)
+            subprocess.run(sudo+['rm','-f',str(marker)],check=True)
+            missing=subprocess.run(cmd,capture_output=True,text=True)
+            self.assertNotEqual(missing.returncode,0)
+            self.assertIn('OWNER_BROKER_POLICY_MARKER_MISSING',missing.stderr)
+        finally:
+            subprocess.run(sudo+['chmod','711',str(policy)],check=False)
+            subprocess.run(sudo+['rm','-rf',str(policy)],check=False)
+
     @classmethod
     def tearDownClass(cls):
         if hasattr(cls,'proc'):
             cls.proc.terminate()
             try: cls.proc.wait(timeout=8)
             except subprocess.TimeoutExpired: cls.proc.kill();cls.proc.wait()
-        subprocess.run(['sudo','-n','rm','-rf',str(RUN_ROOT),str(DATA_ROOT),'/usr/local/lib/my-opencode/opencode-owner-approvald.py','/usr/local/lib/my-opencode/opencode-owner-approval.py'],check=False)
+        subprocess.run(['sudo','-n','rm','-rf',str(RUN_ROOT),str(DATA_ROOT),'/usr/local/lib/my-opencode/opencode-owner-approvald.py','/usr/local/lib/my-opencode/opencode-owner-approval.py','/usr/local/lib/my-opencode/owner-broker-client.mjs'],check=False)
         if getattr(cls,'created',False): subprocess.run(['sudo','-n','userdel','-r','opencode'],capture_output=True)
 
     def sock(self,path,data,as_user=None):
