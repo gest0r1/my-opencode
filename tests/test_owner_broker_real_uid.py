@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """CI-only root-owned broker test with real Unix peer credentials, sockets and ledger."""
-import json, os, pwd, shutil, socket, subprocess, sys, time, unittest
+import hashlib, json, os, pwd, shutil, socket, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +64,93 @@ class RealUidBroker(unittest.TestCase):
         finally:
             subprocess.run(sudo+['chmod','711',str(policy)],check=False)
             subprocess.run(sudo+['rm','-rf',str(policy)],check=False)
+
+    def test_plan_and_owner_receipts_reject_forged_state_and_changed_artifacts(self):
+        """Real broker, real opencode UID, actual TS checkpoint and receipt logic."""
+        policy=Path('/etc/my-opencode')
+        if policy.exists(): self.skipTest('pre-existing host policy must not be touched')
+        tsx=ROOT/'config/opencode/node_modules/.bin/tsx'
+        self.assertTrue(tsx.exists(), 'Pinned tsx is required for protected-stage E2E')
+        runner=ROOT/'tests/owner-broker-receipt-runner.mjs'
+        binary=shutil.which('node')
+        self.assertTrue(binary)
+        temp=Path(tempfile.mkdtemp(prefix='owner-broker-checkpoint-',dir='/tmp'))
+        os.chmod(temp,0o755)
+        envpath=os.path.dirname(binary)+':'+os.getenv('PATH','')
+        def agent(*args):
+            return subprocess.run(['sudo','-n','-u','opencode','env','HOME=/home/opencode',
+                                   'PATH='+envpath,str(tsx),str(runner),*map(str,args)],
+                                  text=True,capture_output=True)
+        try:
+            raw=json.dumps({'schema_version':2,'run_id':'p1-real-uid-checkpoint'})
+            manifest=temp/'manifest.json'; manifest.write_text(raw)
+            artifact=temp/'proof.json'; artifact.write_text('{"status":"PASS"}')
+            candidate=temp/'candidate.json'
+            candidate.write_text(json.dumps({'candidate_sha':'a'*40}))
+            state={
+                'run_id':'p1-real-uid-checkpoint',
+                'created_at':'2026-11-22T10:00:00.000Z',
+                'worktree_root':str(temp),
+                'manifest_file':str(manifest),
+                'manifest_sha256':hashlib.sha256(raw.encode()).hexdigest(),
+                'pipelines':{'p1':{
+                    'stage_order':['implementation','owner'],
+                    'stages':{
+                        'implementation':{'status':'completed','evidence':{'artifacts':[str(artifact)]}},
+                        'owner':{'status':'in_progress'}
+                    }
+                }}
+            }
+            statefile=temp/'state.json'
+            statefile.write_text(json.dumps(state))
+            for path in (manifest,artifact,candidate,statefile): os.chmod(path,0o644)
+            subprocess.run(['sudo','-n','install','-d','-o','root','-g','root','-m','711',str(policy)],check=True)
+            subprocess.run(['sudo','-n','install','-o','root','-g','root','-m','644','/dev/null',
+                            str(policy/'owner-broker-required')],check=True)
+
+            def tuple_of(op, pipeline='all', stage='approval'):
+                result=agent('tuple',statefile,op,pipeline,stage)
+                self.assertEqual(result.returncode,0,result.stderr)
+                return json.loads(result.stdout)
+            def check(op, receipt, pipeline='all', stage='approval', expected=True):
+                result=agent('verify',statefile,op,pipeline,stage,receipt)
+                if expected:
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertIn('BROKER_RECEIPT_PASS',result.stdout)
+                else: self.assertNotEqual(result.returncode,0,'forged checkpoint incorrectly authorized')
+
+            def grant(cp):
+                req=self.sock(RUN_ROOT/'agent.sock',{'action':'submit','checkpoint':cp},as_user='opencode')
+                self.assertEqual(req.returncode,0,req.stderr)
+                rid=json.loads(req.stdout)['ok']['id']
+                check(cp['operation'],'0'*32,cp['pipeline_id'],cp['stage'],False)
+                owner=self.sock(RUN_ROOT/'owner.sock',{'action':'approve','request_id':rid},as_user='root')
+                self.assertEqual(json.loads(owner.stdout)['ok']['decision'],'approved')
+                consumed=self.sock(RUN_ROOT/'agent.sock',{'action':'consume','request_id':rid,'checkpoint':cp},as_user='opencode')
+                self.assertTrue(json.loads(consumed.stdout)['ok']['authorized'])
+                return rid
+
+            plan=tuple_of('plan.final_manifest.approve')
+            plan_id=grant(plan)
+            check('plan.final_manifest.approve',plan_id)
+            owner_tuple=tuple_of('owner.accept','p1','owner')
+            owner_id=grant(owner_tuple)
+            check('owner.accept',owner_id,'p1','owner')
+            state['pipelines']['p1']['stages']['owner']={'status':'completed','evidence':{'owner_approval_request_id':owner_id}}
+            statefile.write_text(json.dumps(state))
+            check('owner.accept',owner_id,'p1','owner')  # immutable across stage completion
+            check('owner.accept',plan_id,'p1','owner',False) # wrong operation receipt
+            artifact.write_text('{"status":"FAIL"}')
+            check('owner.accept',owner_id,'p1','owner',False)
+            artifact.write_text('{"status":"PASS"}')
+            candidate.write_text(json.dumps({'candidate_sha':'b'*40}))
+            check('owner.accept',owner_id,'p1','owner',False)
+            candidate.write_text(json.dumps({'candidate_sha':'a'*40}))
+            check('owner.accept',owner_id,'p1','owner')
+        finally:
+            subprocess.run(['sudo','-n','chmod','711',str(policy)],check=False)
+            subprocess.run(['sudo','-n','rm','-rf',str(policy)],check=False)
+            shutil.rmtree(temp,ignore_errors=True)
 
     @classmethod
     def tearDownClass(cls):
