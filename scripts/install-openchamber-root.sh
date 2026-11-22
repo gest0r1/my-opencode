@@ -226,13 +226,25 @@ fi
 oc_write_managed_launcher
 [[ -x "$OPENCHAMBER_CURRENT_BIN" ]] || { echo 'Root OpenChamber binary is not installed' >&2; exit 3; }
 
+# Detect a non-default OpenChamber data directory from the old runtime.
+# Parse its startup file only as opencode, never source its shell content as
+# root. A custom directory outside the old user's home is refused rather
+# than silently starting the new UI without its sessions/settings.
+OLD_OC_DATA_DIR="$(run_oc_user bash -c 'if [[ -f "$HOME/.config/openchamber/startup.env" ]]; then source "$HOME/.config/openchamber/startup.env"; fi; printf %s "${OPENCHAMBER_DATA_DIR:-$HOME/.config/openchamber}"')"
+if [[ "$OLD_OC_DATA_DIR" != "$OPENCODE_HOME/.config/openchamber" &&
+      "$OLD_OC_DATA_DIR" != "$OPENCODE_HOME/"* ]]; then
+  echo "OPENCHAMBER_DATA_MIGRATION_UNSUPPORTED: custom data outside opencode HOME; refusing cutover" >&2
+  exit 3
+fi
+[[ ! -L "$OLD_OC_DATA_DIR" ]] || { echo 'OPENCHAMBER_DATA_MIGRATION_SYMLINK_REFUSED' >&2; exit 3; }
+
 # Stop only the old OpenChamber service. Keep OpenCode's server and live RUNs.
 cutover_started=1
 run_oc_user systemctl --user is-active --quiet openchamber.service && old_active=1 || true
 if ((old_active)); then run_oc_user systemctl --user stop openchamber.service; fi
 migration_status='not_required'
-if [[ -d "$OPENCODE_HOME/.config/openchamber" ]]; then
-  migration_status="$(python3 "$TMP/migrate.py" stage --quiescent yes | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
+if [[ -d "$OLD_OC_DATA_DIR" ]]; then
+  migration_status="$(python3 "$TMP/migrate.py" stage --source "$OLD_OC_DATA_DIR" --quiescent yes | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
 fi
 if [[ "$migration_status" != staged && "$migration_status" != completed && "$migration_status" != not_required ]]; then
   echo 'OpenChamber data migration not staged' >&2; exit 3
