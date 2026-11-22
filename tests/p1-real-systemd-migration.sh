@@ -12,6 +12,17 @@ sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
   OPENCODE_CONFIG_REF="$source_sha" bash install.sh
 uid="$(id -u opencode)"
 sudo systemctl start "user@${uid}.service"
+# Existing host credentials must be stable before a running OpenCode server
+# can be attached without re-authenticating its current sessions.
+sudo -u opencode bash -c '
+  set -Eeuo pipefail
+  file="$HOME/.config/opencode.env"
+  [[ ! -L "$file" ]]
+  token="$(python3 -c "import secrets;print(secrets.token_urlsafe(36))")"
+  (umask 077; printf "OPENCODE_PASSWORD=%s\\n" "$token" >> "$file")
+'
+OPENCODE_TEST_PASSWORD="$(sudo -u opencode bash -c 'source "$HOME/.config/opencode.env";printf %s "$OPENCODE_PASSWORD"')"
+oc_curl() { curl -u "opencode:$OPENCODE_TEST_PASSWORD" "$@"; }
 user_systemctl() {
   sudo -n -u opencode env XDG_RUNTIME_DIR="/run/user/$uid" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
@@ -29,7 +40,7 @@ if [[ "$ready" != 1 ]]; then
   echo 'P1_OPENCODE_USER_SERVICE_NOT_READY' >&2
   exit 3
 fi
-old_id="$(curl -fsS -X POST http://127.0.0.1:4096/api/session \
+old_id="$(oc_curl -fsS -X POST http://127.0.0.1:4096/api/session \
   -H 'Content-Type: application/json' \
   -d '{"title":"P1 before migration"}' | \
   node -e 'let v="";process.stdin.on("data",x=>v+=x).on("end",()=>{let j=JSON.parse(v);if(!j.data?.id)process.exit(1);console.log(j.data.id)})')"
@@ -76,7 +87,7 @@ user_systemctl is-active --quiet openchamber.service || {
 }
 test "$(sudo cat /root/.config/openchamber/profile-root-only.txt)" = historical-root-kept
 test "$(sudo cat /home/opencode/.config/openchamber/profile-source.txt)" = current-source-kept
-curl -fsS "http://127.0.0.1:4096/api/session/$old_id" >/dev/null
+oc_curl -fsS "http://127.0.0.1:4096/api/session/$old_id" >/dev/null
 echo 'PASS: failed cutover restored old UI, historical root data and OpenCode session'
 
 # Retry with a valid port after the previous rollback. Source remains the
@@ -96,6 +107,6 @@ test "$(sudo cat /home/opencode/.config/openchamber/profile-source.txt)" = curre
 test "$(sudo stat -c %a /root/.config/openchamber/startup.env)" = 600
 ! sudo grep -Eq 'LD_PRELOAD|NODE_OPTIONS|former-agent-readable' /root/.config/openchamber/startup.env
 sudo grep -Fq 'LD_PRELOAD=/home/opencode/agent.so' /root/.config/openchamber/startup.env.pre-p1
-curl -fsS "http://127.0.0.1:4096/api/session/$old_id" >/dev/null
+oc_curl -fsS "http://127.0.0.1:4096/api/session/$old_id" >/dev/null
 curl -fsS http://127.0.0.1:3000/ >/dev/null
 echo 'PASS: user-to-root migration, historical merge, credential quarantine, OpenCode session continuity'
