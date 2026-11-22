@@ -14,14 +14,14 @@ uid="$(id -u opencode)"
 sudo systemctl start "user@${uid}.service"
 # Existing host credentials must be stable before a running OpenCode server
 # can be attached without re-authenticating its current sessions.
-sudo -u opencode bash -c '
+sudo -H -u opencode bash -c '
   set -Eeuo pipefail
   file="$HOME/.config/opencode.env"
   [[ ! -L "$file" ]]
   token="$(python3 -c "import secrets;print(secrets.token_urlsafe(36))")"
   (umask 077; printf "OPENCODE_PASSWORD=%s\\n" "$token" >> "$file")
 '
-OPENCODE_TEST_PASSWORD="$(sudo -u opencode bash -c 'source "$HOME/.config/opencode.env";printf %s "$OPENCODE_PASSWORD"')"
+OPENCODE_TEST_PASSWORD="$(sudo -H -u opencode bash -c 'source "$HOME/.config/opencode.env";printf %s "$OPENCODE_PASSWORD"')"
 oc_curl() { curl -u "opencode:$OPENCODE_TEST_PASSWORD" "$@"; }
 user_systemctl() {
   sudo -n -u opencode env XDG_RUNTIME_DIR="/run/user/$uid" \
@@ -31,7 +31,7 @@ user_systemctl() {
 user_systemctl start opencode-web.service
 ready=0
 for i in {1..40}; do
-  if curl -fsS --max-time 2 http://127.0.0.1:4096/api/info >/dev/null 2>&1; then ready=1; break; fi
+  if oc_curl -fsS --max-time 2 http://127.0.0.1:4096/api/info >/dev/null 2>&1; then ready=1; break; fi
   sleep 1
 done
 if [[ "$ready" != 1 ]]; then
