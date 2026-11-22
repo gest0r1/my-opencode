@@ -241,7 +241,30 @@ for file in opencode-owner-approval.py opencode-owner-approvald.py openchamber-c
   install -o root -g root -m 755 "$TMP/$file" "/usr/local/lib/my-opencode/$file"
 done
 install -d -o root -g root -m 711 /etc/my-opencode
-printf 'OPENCHAMBER_EXECUTION_UID=%s\nOPENCHAMBER_EXECUTION_GID=%s\n' "$(id -u opencode)" "$(id -g opencode)" > /etc/my-opencode/openchamber-execution.env
+# Chats are execution data, not owner credentials. Use the preserved original
+# OpenChamber Chats tree, so OpenCode's existing chat session directories keep
+# their absolute paths after the root UI cutover. The separate root profile
+# (settings, passwords and approval evidence) is never made accessible to opencode.
+# Root-created chat directories must remain writable by opencode: setgid on the
+# Chats tree + the root UI unit's UMask=0002 keeps the group inherited.
+SHARED_CHATS_DIR="$OPENCODE_HOME/.config/openchamber/chats"
+# Perform all operations on the untrusted legacy Chats tree AS opencode, not as
+# root. Even a concurrent symlink swap cannot elevate a filesystem mutation.
+# Never put this location in startup.env: migrated user settings must not be
+# able to redefine the trusted identity or Chats location.
+# These values are the protected root-side trust boundary and must win over
+# any migrated startup.env values (systemd reads this file last).
+printf 'OPENCHAMBER_EXECUTION_UID=%s\nOPENCHAMBER_EXECUTION_GID=%s\nOPENCHAMBER_CHATS_DIR=%s\n' \
+  "$(id -u opencode)" "$(id -g opencode)" "$SHARED_CHATS_DIR" > /etc/my-opencode/openchamber-execution.env
+cat >> /etc/my-opencode/openchamber-execution.env <<'EOF'
+OPENCHAMBER_ROOT_MODE=separated
+OPENCHAMBER_EXECUTION_USER=opencode
+OPENCHAMBER_DATA_DIR=/root/.config/openchamber
+OPENCODE_HOST=http://127.0.0.1:4096
+OPENCODE_SKIP_START=true
+OPENCODE_BINARY=/usr/local/lib/my-opencode/opencode-unpriv-wrapper.sh
+NODE_OPTIONS="--require /usr/local/lib/my-opencode/openchamber-child-boundary.cjs"
+EOF
 chmod 600 /etc/my-opencode/openchamber-execution.env
 source "$TMP/openchamber-runtime-store.sh"
 oc_runtime_init
@@ -311,6 +334,8 @@ if [[ "${OPENCHAMBER_RESTART_MODE:-auto}" == defer || "${OPENCHAMBER_EMBEDDED_TE
   echo 'PENDING APPLY: installed root runtime staged; do not cut over from an embedded terminal.'
   exit 0
 fi
+# Fresh-install detection must happen before creating the first user Chats tree.
+
 
 # Require a verified root-safe OpenChamber release and a human-confirmed
 # quiescent window; no unprivileged user should be stranded in an active PTY.
@@ -490,6 +515,29 @@ fi
 [[ -f "$NATIVE_ENV" && "$(stat -c %u "$NATIVE_ENV")" == 0 ]] || {
   echo 'Root OpenChamber authentication configuration unavailable' >&2; exit 3;
 }
+# Prepare the shared Chats tree only after migration source detection and
+# copying. A clean install must never treat the new empty tree as legacy data.
+run_oc_user python3 - "$SHARED_CHATS_DIR" <<'PY'
+import os, stat, sys
+from pathlib import Path
+target = Path(sys.argv[1])
+home = Path.home()
+if target != home / '.config/openchamber/chats':
+    raise SystemExit('OPENCHAMBER_SHARED_CHATS_INVALID_LOCATION')
+for parent in (home / '.config', home / '.config/openchamber', target):
+    if parent.is_symlink():
+        raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_SYMLINK_REFUSED: {parent}')
+target.mkdir(parents=True, exist_ok=True)
+if not target.is_dir():
+    raise SystemExit('OPENCHAMBER_SHARED_CHATS_NOT_DIRECTORY')
+for current, directories, files in os.walk(target, followlinks=False):
+    if any((Path(current) / name).is_symlink() for name in directories + files):
+        raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_ENTRY_SYMLINK_REFUSED: {current}')
+    mode = stat.S_IMODE(os.stat(current, follow_symlinks=False).st_mode)
+    os.chown(current, -1, os.getgid(), follow_symlinks=False)
+    os.chmod(current, (mode | 0o2770) & ~0o007, follow_symlinks=False)
+PY
+
 # Root-owned service; never use root systemd --user and never stop opencode-web.
 # Prepare protected P1 broker and root-owned UI. The policy marker is not
 # published until the root UI, socket modes and broker all pass readiness.
