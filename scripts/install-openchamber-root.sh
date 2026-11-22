@@ -148,7 +148,13 @@ oc_runtime_init
 RELEASE_DIR="$OPENCHAMBER_RELEASES/$APP_SHA"
 export BUN_INSTALL="$RELEASE_DIR"
 export PATH="$BUN_INSTALL/bin:$PATH"
-OPENCHAMBER_PACKAGE_MODE="${OPENCHAMBER_PACKAGE_MODE:-auto}" \
+# Never run a source fallback build (package scripts, bun install) as root.
+# Verified exact-SHA CI release is mandatory for root-owned deployment.
+if [[ -n "${OPENCHAMBER_PACKAGE_MODE:-}" && "$OPENCHAMBER_PACKAGE_MODE" != release ]]; then
+  echo 'ROOT_INSTALL_SOURCE_BUILD_FORBIDDEN: use a verified GitHub release' >&2
+  exit 2
+fi
+OPENCHAMBER_PACKAGE_MODE=release \
   OPENCHAMBER_RESTART_MODE=now \
   bash "$TMP/install-openchamber-v2-core.sh"
 
