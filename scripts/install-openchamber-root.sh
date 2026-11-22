@@ -145,6 +145,22 @@ printf 'OPENCHAMBER_EXECUTION_UID=%s\nOPENCHAMBER_EXECUTION_GID=%s\n' "$(id -u o
 chmod 600 /etc/my-opencode/openchamber-execution.env
 source "$TMP/openchamber-runtime-store.sh"
 oc_runtime_init
+# Reapplying the same pinned versions must not kill a healthy root OpenChamber
+# or its guest sessions. This check is after the OpenCode config refresh, which
+# itself never restarts the existing opencode-web service.
+if [[ -f "$ROOT_STATE/active-sha" &&
+      "$(cat "$ROOT_STATE/active-sha")" == "$CONFIG_SHA $APP_SHA" &&
+      -f /etc/my-opencode/owner-broker-required &&
+      "$(stat -c %u /etc/my-opencode/owner-broker-required)" == 0 ]] &&
+   systemctl is-active --quiet openchamber.service &&
+   systemctl is-active --quiet opencode-owner-approval.service &&
+   [[ -S /run/my-opencode-approval/agent.sock &&
+      -S /run/my-opencode-approval/owner.sock ]] &&
+   oc_validate_release "$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)"; then
+  install_journal_event activation activated "config_sha=$CONFIG_SHA" "openchamber_sha=$APP_SHA" "mode=noop"
+  echo 'Root OpenChamber package and service unchanged: no restart or migration'
+  exit 0
+fi
 RELEASE_DIR="$OPENCHAMBER_RELEASES/$APP_SHA"
 export BUN_INSTALL="$RELEASE_DIR"
 export PATH="$BUN_INSTALL/bin:$PATH"
