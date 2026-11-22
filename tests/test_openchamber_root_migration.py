@@ -46,6 +46,11 @@ class TestMigration(unittest.TestCase):
         self.assertEqual(self.run_cmd('rollback')[1]['status'],'rolled_back')
         self.assertEqual((self.dst/'old').read_text(),'historical')
         self.assertTrue(self.src.exists())
+    def test_no_source_fresh_install(self):
+        import shutil
+        shutil.rmtree(self.src)
+        self.assertEqual(self.run_cmd('stage', '--quiescent', 'yes')[1]['status'],'not_required')
+
     def test_reject_unsafe_symlink(self):
         (self.src/'evil').symlink_to('/etc/passwd')
         code,result=self.run_cmd('stage','--quiescent','yes')
