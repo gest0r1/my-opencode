@@ -70,7 +70,7 @@ const child = require('node:child_process');
     file: file.stdout.trim(), fileStderr: file.stderr,
     exec: exec.stdout.trim(), execStderr: exec.stderr,
     esm: esm.stdout.trim(),
-    secretsFiltered: !environment.stdout.split('\\n').some(line => /^(GH_TOKEN|OPENCODE_PASSWORD)=/.test(line)),
+    secretsFiltered: !environment.stdout.split(String.fromCharCode(10)).some(line => /^(GH_TOKEN|OPENCODE_PASSWORD)=/.test(line)),
     failure,
   }));
 })().catch(error => { console.error(error); process.exitCode = 1; });
