@@ -69,17 +69,26 @@ class RealUidBroker(unittest.TestCase):
         """Real broker, real opencode UID, actual TS checkpoint and receipt logic."""
         policy=Path('/etc/my-opencode')
         if policy.exists(): self.skipTest('pre-existing host policy must not be touched')
-        tsx=ROOT/'config/opencode/node_modules/.bin/tsx'
-        self.assertTrue(tsx.exists(), 'Pinned tsx is required for protected-stage E2E')
-        runner=ROOT/'tests/owner-broker-receipt-runner.mjs'
         binary=shutil.which('node')
-        self.assertTrue(binary)
+        self.assertTrue(binary,'Node 24 required for native TypeScript stripping')
         temp=Path(tempfile.mkdtemp(prefix='owner-broker-checkpoint-',dir='/tmp'))
         os.chmod(temp,0o755)
+        # The hosted runner checkout is not traversable by UID opencode.
+        # Copy only the exact tested TS/MJS modules to a temporary read-only
+        # public test tree; do not grant the agent access to runner HOME.
+        source=temp/'source'
+        script_dir=source/'config/opencode/skills/task-management/scripts'
+        script_dir.mkdir(parents=True,mode=0o755)
+        test_dir=source/'tests'
+        test_dir.mkdir(mode=0o755)
+        for name in ('owner-approval-checkpoint.ts','owner-broker-client.mjs'):
+            shutil.copy2(ROOT/'config/opencode/skills/task-management/scripts'/name,script_dir/name)
+        shutil.copy2(ROOT/'tests/owner-broker-receipt-runner.mjs',test_dir/'owner-broker-receipt-runner.mjs')
+        runner=test_dir/'owner-broker-receipt-runner.mjs'
         envpath=os.path.dirname(binary)+':'+os.getenv('PATH','')
         def agent(*args):
             return subprocess.run(['sudo','-n','-u','opencode','env','HOME=/home/opencode',
-                                   'PATH='+envpath,str(tsx),str(runner),*map(str,args)],
+                                   'PATH='+envpath,binary,str(runner),*map(str,args)],
                                   text=True,capture_output=True)
         try:
             raw=json.dumps({'schema_version':2,'run_id':'p1-real-uid-checkpoint'})
