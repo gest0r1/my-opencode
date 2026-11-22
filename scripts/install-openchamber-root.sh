@@ -126,7 +126,16 @@ ensure_root_node() {
   fi
   export PATH="$dest/bin:$PATH"
   root_node_version_ok || {
-    echo "ROOT_NODE_TRUST_OR_VERSION_INVALID: $(command -v node 2>/dev/null || true)" >&2
+    local candidate
+    candidate="$(command -v node 2>/dev/null || true)"
+    echo "ROOT_NODE_TRUST_OR_VERSION_INVALID: $candidate" >&2
+    for part in "$candidate" "$(dirname "$candidate")" "$(dirname "$(dirname "$candidate")")" \
+                "$(dirname "$(dirname "$(dirname "$candidate")")")" /opt; do
+      if [[ -e "$part" ]]; then
+        stat -c 'NODE_TRUST_PATH %n uid=%u mode=%a kind=%F' "$part" >&2 || true
+      fi
+    done
+    "$candidate" --version >&2 || true
     return 2
   }
 }
