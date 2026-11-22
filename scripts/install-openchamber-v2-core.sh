@@ -97,6 +97,29 @@ ensure_supported_node() {
 }
 
 ensure_bun() {
+  if [[ "${OPENCHAMBER_ROOT_ONLY:-0}" == 1 ]]; then
+    # No curl | bash or user-writable Bun executable may run as root.
+    local bun_path resolved part
+    bun_path="$(command -v bun 2>/dev/null || true)"
+    [[ -n "$bun_path" ]] || {
+      echo 'ROOT_BUN_REQUIRED: install a trusted root-owned Bun binary before OpenChamber cutover' >&2
+      return 2
+    }
+    resolved="$(readlink -f "$bun_path" 2>/dev/null)" || return 2
+    [[ -x "$resolved" && "$resolved" != /home/* && "$resolved" != /tmp/* &&
+       "$resolved" != /var/tmp/* ]] || { echo 'ROOT_BUN_PATH_UNTRUSTED' >&2; return 2; }
+    for part in "$bun_path" "$resolved"; do
+      while [[ "$part" != / ]]; do
+        [[ "$(stat -c %u "$part" 2>/dev/null)" == 0 &&
+           "$(( 8#$(stat -c %a "$part" | tail -c 4) & 8#022 ))" == 0 ]] || {
+          echo 'ROOT_BUN_PATH_UNTRUSTED' >&2; return 2;
+        }
+        part="$(dirname "$part")"
+      done
+    done
+    bun --version >/dev/null || return 2
+    return 0
+  fi
   if command -v bun >/dev/null 2>&1; then return 0; fi
   echo 'Installing Bun for the fork package build'
   curl -fsSL https://bun.sh/install | bash
