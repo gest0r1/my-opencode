@@ -75,7 +75,14 @@ oc_stage_package() {
   rm -rf -- "$release_dir"
   mkdir -p "$release_dir"
 
-  if ! BUN_INSTALL="$release_dir" bun add -g "$package_file"; then
+  # In root-owned deployments even the immutable staging transaction must
+  # never execute third-party package lifecycle scripts with elevated rights.
+  local -a install_args=(add -g)
+  if [[ "${OPENCHAMBER_ROOT_ONLY:-0}" == 1 ]]; then
+    install_args+=(--ignore-scripts)
+  fi
+  install_args+=("$package_file")
+  if ! BUN_INSTALL="$release_dir" bun "${install_args[@]}"; then
     rm -rf -- "$release_dir"
     return 1
   fi
