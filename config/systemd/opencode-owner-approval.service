@@ -1,0 +1,22 @@
+[Unit]
+Description=OpenCode independent owner approval broker
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /usr/local/lib/my-opencode/opencode-owner-approvald.py
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/my-opencode-approval /run/my-opencode-approval
+ProtectHome=true
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
