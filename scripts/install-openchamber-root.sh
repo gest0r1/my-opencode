@@ -241,7 +241,32 @@ for file in opencode-owner-approval.py opencode-owner-approvald.py openchamber-c
   install -o root -g root -m 755 "$TMP/$file" "/usr/local/lib/my-opencode/$file"
 done
 install -d -o root -g root -m 711 /etc/my-opencode
-printf 'OPENCHAMBER_EXECUTION_UID=%s\nOPENCHAMBER_EXECUTION_GID=%s\n' "$(id -u opencode)" "$(id -g opencode)" > /etc/my-opencode/openchamber-execution.env
+# Chats are execution data, not owner credentials. Use the preserved original
+# OpenChamber Chats tree, so OpenCode's existing chat session directories keep
+# their absolute paths after the root UI cutover. The separate root profile
+# (settings, passwords and approval evidence) is never made accessible to opencode.
+# Root-created chat directories must remain writable by opencode: setgid on the
+# Chats tree + the root UI unit's UMask=0002 keeps the group inherited.
+SHARED_CHATS_DIR="$OPENCODE_HOME/.config/openchamber/chats"
+for part in "$OPENCODE_HOME/.config" "$OPENCODE_HOME/.config/openchamber" "$SHARED_CHATS_DIR"; do
+  [[ ! -L "$part" ]] || { echo "OPENCHAMBER_SHARED_CHATS_SYMLINK_REFUSED: $part" >&2; exit 3; }
+done
+[[ ! -e "$SHARED_CHATS_DIR" || -d "$SHARED_CHATS_DIR" ]] || {
+  echo 'OPENCHAMBER_SHARED_CHATS_NOT_DIRECTORY' >&2; exit 3;
+}
+if [[ -d "$SHARED_CHATS_DIR" ]] && [[ -n "$(find "$SHARED_CHATS_DIR" -type l -print -quit)" ]]; then
+  echo 'OPENCHAMBER_SHARED_CHATS_ENTRY_SYMLINK_REFUSED' >&2
+  exit 3
+fi
+install -d -o opencode -g opencode -m 2770 "$SHARED_CHATS_DIR"
+while IFS= read -r -d '' chat_dir; do
+  chgrp opencode "$chat_dir"
+  chmod g+rwx,g+s "$chat_dir"
+done < <(find "$SHARED_CHATS_DIR" -type d -print0)
+# Never put this location in startup.env: migrated user settings must not be
+# able to redefine the trusted identity or Chats location.
+printf 'OPENCHAMBER_EXECUTION_UID=%s\nOPENCHAMBER_EXECUTION_GID=%s\nOPENCHAMBER_CHATS_DIR=%s\n' \
+  "$(id -u opencode)" "$(id -g opencode)" "$SHARED_CHATS_DIR" > /etc/my-opencode/openchamber-execution.env
 chmod 600 /etc/my-opencode/openchamber-execution.env
 source "$TMP/openchamber-runtime-store.sh"
 oc_runtime_init
