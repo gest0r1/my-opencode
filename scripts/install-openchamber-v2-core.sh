@@ -31,7 +31,7 @@ STATE="$STATE_ROOT/openchamber-v2-install.state"
 CACHE_ROOT="$STATE_ROOT/openchamber-v2-cache"
 LOCK="$STATE_ROOT/openchamber-v2-install.lock"
 
-OPENCODE_BIN="$HOME/.opencode/bin/opencode"
+OPENCODE_BIN="${OPENCODE_BINARY:-$HOME/.opencode/bin/opencode}"
 COMMON_ENV="$HOME/.config/opencode.env"
 LEGACY_PASSWORD_ENV="$HOME/.config/openchamber-live.env"
 NATIVE_STARTUP_ENV="$HOME/.config/openchamber/startup.env"
@@ -222,6 +222,20 @@ fi
 
 # ---- OpenCode binary/config decisions -------------------------------------
 
+if [[ "${OPENCHAMBER_ROOT_ONLY:-0}" == 1 ]]; then
+  # The root OpenChamber transaction must never install or restart OpenCode.
+  # Its configuration/database belong exclusively to the 'opencode' UID.
+  [[ -x "$OPENCODE_BIN" ]] || { echo 'Existing opencode binary not found' >&2; exit 2; }
+  installed_opencode="$("$OPENCODE_BIN" --version | sed -E 's/^opencode[[:space:]]+v?//')"
+  [[ "$installed_opencode" == "$OPENCODE_VERSION" ]] || {
+    echo "OpenCode version mismatch: expected=$OPENCODE_VERSION actual=$installed_opencode" >&2
+    exit 2
+  }
+  opencode_binary_changed=0
+  echo 'Root OpenChamber delivery: OpenCode binary/config unchanged'
+else
+
+
 installed_opencode=''
 if [[ -x "$OPENCODE_BIN" ]]; then
   installed_opencode="$("$OPENCODE_BIN" --version 2>/dev/null | sed -E 's/^opencode[[:space:]]+v?//' || true)"
@@ -255,6 +269,8 @@ installed_opencode="$("$OPENCODE_BIN" --version | sed -E 's/^opencode[[:space:]]
   echo "OpenCode version mismatch: expected=$OPENCODE_VERSION actual=$installed_opencode" >&2
   exit 1
 }
+
+fi
 
 env_after="$(file_sha256 "$COMMON_ENV")"
 env_changed=0
