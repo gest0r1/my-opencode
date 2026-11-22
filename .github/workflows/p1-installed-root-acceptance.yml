@@ -42,6 +42,10 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          test "$(gh api repos/gest0r1/openchamber-ru/pulls/29 --jq .merged)" = true || {
+            echo 'P1_OPENCHAMBER_MAIN_REQUIRED: PR #29 must merge before installed root smoke'
+            exit 1
+          }
           sha="$(gh api repos/gest0r1/openchamber-ru/commits/main --jq .sha)"
           [[ "$sha" =~ ^[a-f0-9]{40}$ ]]
           gh release view "v2-web-package-$sha" --repo gest0r1/openchamber-ru >/dev/null || {
@@ -56,10 +60,11 @@ jobs:
           # Actions installs Bun under runner HOME. Copy it to a root-owned
           # executable path before any privileged installer is invoked.
           sudo install -o root -g root -m 755 "$(command -v bun)" /usr/local/bin/bun
-          sudo systemctl is-system-running --wait >/dev/null || {
-            sudo systemctl is-system-running
-            exit 1
-          }
+          # Hosted Ubuntu images frequently report "degraded" because an
+          # unrelated preinstalled unit failed. PID 1 and systemd service
+          # management, not a globally clean image, are the prerequisite.
+          test -d /run/systemd/system
+          sudo systemctl show --property=Version >/dev/null
       - name: Real systemd clean install and unchanged repeat upgrade
         id: install
         env:
