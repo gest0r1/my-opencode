@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sqlite3
+import time
 import sys
 import tempfile
 import unittest
@@ -80,6 +82,41 @@ class TestApproval(unittest.TestCase):
         code,body=self.call('agent','owner',request_id='0'*32)
         self.assertNotEqual(code,0)
         self.assertEqual(body['error'],'AGENT_ACTION_FORBIDDEN')
+
+    def expire(self, rid):
+        conn=sqlite3.connect(str(Path(self.tmp.name)/'ledger.sqlite3'))
+        try:
+            conn.execute('UPDATE approvals SET expires_at=? WHERE id=?',(int(time.time())-2,rid))
+            conn.commit()
+        finally: conn.close()
+
+    def test_expired_unconsumed_request_reissues_and_preserves_audit(self):
+        data=checkpoint()
+        old=self.submit(data)
+        self.expire(old)
+        fresh=self.submit(data)
+        self.assertNotEqual(old,fresh)
+        self.assertNotEqual(self.call('owner','approve',request_id=old)[0],0)
+        self.assertEqual(self.call('owner','approve',request_id=fresh)[0],0)
+        self.assertTrue(self.call('agent','consume',request_id=fresh,checkpoint=data)[1]['authorized'])
+        conn=sqlite3.connect(str(Path(self.tmp.name)/'ledger.sqlite3'))
+        try:
+            self.assertEqual(conn.execute('SELECT id FROM approval_history WHERE id=?',(old,)).fetchone()[0],old)
+        finally: conn.close()
+
+    def test_expired_approved_unconsumed_reissues_but_consumed_never_expires(self):
+        data=checkpoint()
+        old=self.submit(data)
+        self.call('owner','approve',request_id=old)
+        self.expire(old)
+        self.assertFalse(self.call('agent','status',request_id=old,checkpoint=data)[1]['authorized'])
+        fresh=self.submit(data)
+        self.assertNotEqual(old,fresh)
+        self.call('owner','approve',request_id=fresh)
+        self.assertTrue(self.call('agent','consume',request_id=fresh,checkpoint=data)[1]['authorized'])
+        self.expire(fresh)
+        self.assertEqual(self.submit(data),fresh)
+        self.assertTrue(self.call('agent','status',request_id=fresh,checkpoint=data)[1]['authorized'])
 
     def test_ledger_file_permissions(self):
         self.submit()
