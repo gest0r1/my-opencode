@@ -18,6 +18,7 @@ import time
 
 DEFAULT_ROOT = Path('/var/lib/my-opencode-approval')
 SHA = re.compile(r'^[a-f0-9]{64}$')
+GIT_SHA = re.compile(r'^[a-f0-9]{40}$')
 IDENT = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
 ALLOWED = {'plan.final_manifest.approve', 'owner.accept'}
 FIELDS = ('run_instance_id', 'run_id', 'operation', 'pipeline_id', 'stage',
@@ -70,7 +71,7 @@ def clean_tuple(value):
         if not isinstance(value[name], str) or not SHA.fullmatch(value[name]):
             err('INVALID_' + name.upper())
     candidate = value['candidate_sha']
-    if not isinstance(candidate, str) or (candidate and not SHA.fullmatch(candidate)):
+    if not isinstance(candidate, str) or (candidate and not (GIT_SHA.fullmatch(candidate) or SHA.fullmatch(candidate))):
         err('INVALID_CANDIDATE_SHA')
     if value['operation'] == 'owner.accept' and not candidate:
         err('CANDIDATE_SHA_REQUIRED')
