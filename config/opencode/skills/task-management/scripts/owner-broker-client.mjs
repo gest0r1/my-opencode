@@ -2,11 +2,23 @@ import { connect } from 'node:net';
 import { existsSync, lstatSync } from 'node:fs';
 
 export const BROKER_ENFORCEMENT_MARKER = '/etc/my-opencode/owner-broker-required';
+const BROKER_POLICY_DIR = '/etc/my-opencode';
 export const AGENT_SOCKET = '/run/my-opencode-approval/agent.sock';
 
 /** The installer owns this file; user input/env cannot turn protected mode off. */
 export function ownerBrokerRequired() {
-  if (!existsSync(BROKER_ENFORCEMENT_MARKER)) return false;
+  // A root-only parent (0700) makes existsSync(marker) silently return
+  // false for opencode; that would re-enable legacy self-confirmation.
+  // A broker socket with a missing/hidden marker must also fail closed.
+  const parent = existsSync(BROKER_POLICY_DIR) ? lstatSync(BROKER_POLICY_DIR) : null;
+  if (parent && (!parent.isDirectory() || parent.isSymbolicLink() ||
+      parent.uid !== 0 || (parent.mode & 0o022) || !(parent.mode & 0o001))) {
+    throw new Error('OWNER_BROKER_POLICY_DIR_UNTRUSTED');
+  }
+  if (!existsSync(BROKER_ENFORCEMENT_MARKER)) {
+    if (existsSync(AGENT_SOCKET)) throw new Error('OWNER_BROKER_POLICY_MARKER_MISSING');
+    return false;
+  }
   const st = lstatSync(BROKER_ENFORCEMENT_MARKER);
   if (!st.isFile() || st.isSymbolicLink() || st.uid !== 0 || (st.mode & 0o022)) {
     throw new Error('OWNER_BROKER_POLICY_UNTRUSTED');
