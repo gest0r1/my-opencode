@@ -1,7 +1,7 @@
 {
   "type": "module",
   "dependencies": {
-    "@opencode/plugin": "2.2.7",
+    "@opencode/plugin": "2.3.2",
     "tsx": "4.23.15"
   }
 }
