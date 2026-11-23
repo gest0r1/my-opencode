@@ -55,4 +55,4 @@ jobs:
           }
           console.log('PASS: all six OpenCode SDK packages pinned to v2.3.2');
           NODE
-          bun -e "import('@opencode/client').then(m => { if (typeof m.createOpencodeClient !== 'function') throw Error('OpenCode client API unavailable'); console.log('PASS: SDK client import') })"
+          bun -e "import('@opencode/client').then(m => { if (typeof m.OpenCode?.make !== 'function') throw Error('OpenCode client API unavailable'); console.log('PASS: SDK client import') })"
