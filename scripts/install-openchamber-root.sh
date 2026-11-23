@@ -37,6 +37,7 @@ done
 fetch scripts/migrate-openchamber-to-root.py "$TMP/migrate.py"
 fetch scripts/check-openchamber-quiescence.py "$TMP/quiescence.py"
 fetch scripts/rekey-openchamber-ui.py "$TMP/rekey.py"
+fetch scripts/repair-openchamber-root-extensions.py "$TMP/rebase-extensions.py"
 fetch config/systemd/openchamber-root.service "$TMP/openchamber.service"
 fetch config/systemd/opencode-owner-approval.service "$TMP/owner-broker.service"
 fetch install.sh "$TMP/install-opencode.sh"
@@ -515,6 +516,12 @@ fi
 [[ -f "$NATIVE_ENV" && "$(stat -c %u "$NATIVE_ENV")" == 0 ]] || {
   echo 'Root OpenChamber authentication configuration unavailable' >&2; exit 3;
 }
+# Idempotent repair after a data-only opencode->root migration. The copied
+# extensions.json can still refer to /home/opencode-owned plugin directories.
+# Root services refuse those as untrusted; move only copied extension paths to
+# their root-owned replicas before service activation. No plugin code runs here.
+python3 "$TMP/rebase-extensions.py"
+
 # Prepare the shared Chats tree only after migration source detection and
 # copying. A clean install must never treat the new empty tree as legacy data.
 run_oc_user python3 - "$SHARED_CHATS_DIR" <<'PY'
