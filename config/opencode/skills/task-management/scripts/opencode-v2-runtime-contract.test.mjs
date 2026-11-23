@@ -26,8 +26,8 @@ test('OpenCode pinned runtime contract retains native subagent session resume', 
   const runtime = read('config/opencode/plugins/pipeline-runtime.ts');
   const installer = read('install.sh');
 
-  assert.equal(pkg.dependencies['@opencode/plugin'], '2.2.7');
-  assert.match(installer, /OPENCODE_INSTALL_VERSION="\$\{OPENCODE_INSTALL_VERSION:-2\.2\.7\}"/);
+  assert.equal(pkg.dependencies['@opencode/plugin'], '2.3.2');
+  assert.match(installer, /OPENCODE_INSTALL_VERSION="\$\{OPENCODE_INSTALL_VERSION:-2\.3\.2\}"/);
 
   assert.match(runtime, /import \{ Plugin \} from "@opencode\/plugin"/);
   assert.match(runtime, /export default Plugin\.define\(/);
