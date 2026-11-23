@@ -93,7 +93,7 @@ printf 'official-installer %s\n' "$*" >> "$TRACE"
 mkdir -p "$HOME/.opencode/bin"
 cat > "$HOME/.opencode/bin/opencode" <<'INNER'
 #!/usr/bin/env bash
-if [[ "$1" == serve ]]; then echo '--hostname --port'; else printf '%s\n' 'opencode 2.2.7'; fi
+if [[ "$1" == serve ]]; then echo '--hostname --port'; else printf '%s\n' 'opencode 2.3.2'; fi
 INNER
 chmod +x "$HOME/.opencode/bin/opencode"
 EOF
@@ -173,10 +173,14 @@ EOF
 dir="$(run_bootstrap older-binary 2.0.20 "$CONFIG_SHA" "$APP_SHA" 0)"
 assert_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
 assert_contains "$dir/trace.log" 'generation skip_binary=0'
+# Migration from the previously pinned OpenCode must update the binary,
+# even when the installed configuration checksum is otherwise identical.
+dir="$(run_bootstrap previous-2-2-7 2.2.7 "$CONFIG_SHA" "$APP_SHA" 0)"
+assert_contains "$dir/trace.log" 'generation skip_binary=0'
 assert_not_contains "$dir/trace.log" 'curl '
-dir="$(run_bootstrap config-only 2.2.7 "$CONFIG_SHA" "$APP_SHA" 1)"
+dir="$(run_bootstrap config-only 2.3.2 "$CONFIG_SHA" "$APP_SHA" 1)"
 assert_contains "$dir/trace.log" 'generation skip_binary=1'
-dir="$(run_bootstrap identical 2.2.7 "$CONFIG_SHA" '' 0)"
+dir="$(run_bootstrap identical 2.3.2 "$CONFIG_SHA" '' 0)"
 assert_contains "$dir/trace.log" 'contents/scripts/install-opencode-generation.sh'
 assert_contains "$dir/trace.log" 'generation skip_binary=1'
 assert_not_contains "$dir/trace.log" 'curl '

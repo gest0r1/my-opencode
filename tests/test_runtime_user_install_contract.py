@@ -20,7 +20,7 @@ def forbid(text, value): assert value not in text, 'forbidden: '+value
 
 def main():
     require(provision,'useradd --create-home --shell /bin/bash opencode')
-    require(config_installer,'OPENCODE_INSTALL_VERSION:-2.2.7')
+    require(config_installer,'OPENCODE_INSTALL_VERSION:-2.3.2')
     require(config_installer,'loginctl enable-linger "$RUNTIME_USER"')
     require(config_installer,'sudo -H -u "$RUNTIME_USER" env -i')
     require(ocweb_unit,'opencode serve --port ${OPENCODE_WEB_PORT} --hostname 127.0.0.1')
