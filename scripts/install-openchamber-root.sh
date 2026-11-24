@@ -35,7 +35,6 @@ for file in install-openchamber-v2-core.sh openchamber-runtime-store.sh bootstra
   fetch "scripts/$file" "$TMP/$file"
 done
 fetch scripts/migrate-openchamber-to-root.py "$TMP/migrate.py"
-fetch scripts/check-openchamber-quiescence.py "$TMP/quiescence.py"
 fetch scripts/rekey-openchamber-ui.py "$TMP/rekey.py"
 fetch scripts/repair-openchamber-root-extensions.py "$TMP/rebase-extensions.py"
 fetch config/systemd/openchamber-root.service "$TMP/openchamber.service"
@@ -43,6 +42,14 @@ fetch config/systemd/opencode-owner-approval.service "$TMP/owner-broker.service"
 fetch install.sh "$TMP/install-opencode.sh"
 export HOME=/root XDG_STATE_HOME=/root/.local/state
 source "$TMP/install-journal.sh"
+# Explicit now permits terminating only the managed services at cutover.
+# Never stop the service/cgroup from which this installer was launched.
+RESTART_MODE="${OPENCHAMBER_RESTART_MODE:-auto}"
+case "$RESTART_MODE" in auto|now|defer) ;; *) echo 'Invalid OPENCHAMBER_RESTART_MODE' >&2; exit 2;; esac
+origin="$(python3 "$TMP/runtime-processes.py" --ancestor "$PPID")" || origin=unknown
+if [[ "${OPENCHAMBER_EMBEDDED_TERMINAL:-0}" == 1 || "$origin" != external ]]; then
+  RESTART_MODE=defer
+fi
 install_journal_event install start "config_ref=${OPENCODE_CONFIG_SOURCE_REF:-$CONFIG_REF}" "config_sha=$CONFIG_SHA" "openchamber_ref=${OPENCHAMBER_SOURCE_REF:-$APP_REF}" "openchamber_sha=$APP_SHA"
 
 # Reuse the canonical OpenCode installer under the existing opencode UID.
@@ -51,8 +58,8 @@ OPENCODE_CONFIG_REF="$CONFIG_SHA" MY_OPENCODE_REF="$CONFIG_SHA" bash "$TMP/insta
 OPENCODE_HOME="$(getent passwd "$OPENCODE_USER" | cut -d: -f6)"
 [[ -d "$OPENCODE_HOME" && "$OPENCODE_HOME" != /root ]] || { echo 'Missing unprivileged OpenCode runtime user' >&2; exit 2; }
 
-# OpenCode remains a systemd --user unit for opencode; never reboot/restart it
-# from the OpenChamber release transaction.
+# OpenCode remains a systemd --user unit for opencode; only the final
+# cutover may restart it when the installed version or active RUNs require it.
 OPENCODE_UID="$(id -u "$OPENCODE_USER")"
 run_oc_user() {
   # Do not inherit runner/root XDG paths. OpenCode 2.3.2 may initialize its
@@ -210,7 +217,8 @@ if [[ -n "$OPENCODE_SERVICE_PASSWORD" ]]; then
       echo 'OpenCode authentication/readiness failed; refusing root cutover' >&2; exit 3;
     }
   installed_opencode="$(run_oc_user "$OPENCODE_HOME/.opencode/bin/opencode" --version | sed -E 's/^opencode[[:space:]]+v?//')"
-  live_opencode="$(python3 - "$TMP/opencode-info.json" <<'VERSION'
+  read_opencode_version() {
+    python3 - "$TMP/opencode-info.json" <<'VERSION'
 import json
 import re
 import sys
@@ -222,12 +230,8 @@ with open(sys.argv[1], encoding="utf-8") as stream:
         sys.exit(1)
     print(version)
 VERSION
-  )" || { echo 'OPENCODE_LIVE_VERSION_UNAVAILABLE' >&2; exit 3; }
-  if [[ "$live_opencode" != "$installed_opencode" ]]; then
-    install_journal_event activation pending_restart "reason=opencode_live_version_mismatch" "live_opencode=$live_opencode" "installed_opencode=$installed_opencode"
-    echo "PENDING APPLY: OpenCode is running $live_opencode; installed $installed_opencode. Retry after the OpenCode service has restarted in a quiescent window." >&2
-    exit 0
-  fi
+  }
+  live_opencode="$(read_opencode_version)" || { echo 'OPENCODE_LIVE_VERSION_UNAVAILABLE' >&2; exit 3; }
   if [[ -f "$AUTH_FILE" ]]; then
     [[ "$(stat -c %u "$AUTH_FILE")" == 0 && "$(stat -c %a "$AUTH_FILE")" =~ ^[460][04]0$ ]] || {
       echo 'External OpenCode auth file must be root-owned and private' >&2; exit 2;
@@ -301,6 +305,7 @@ if [[ -f "$ROOT_STATE/active-sha" &&
       "$(cat "$ROOT_STATE/active-sha")" == "$CONFIG_SHA $APP_SHA" &&
       -f /etc/my-opencode/owner-broker-required &&
       "$(stat -c %u /etc/my-opencode/owner-broker-required)" == 0 ]] &&
+   [[ "$live_opencode" == "$installed_opencode" ]] &&
    systemctl is-active --quiet openchamber.service &&
    systemctl is-active --quiet opencode-owner-approval.service &&
    [[ -S /run/my-opencode-approval/agent.sock &&
@@ -346,7 +351,7 @@ oc_validate_release "$RELEASE_DIR" || { echo 'Root OpenChamber release validatio
 # Clean installs have neither a previous UI nor a migration source, so there
 # are no PTYs or user sessions to interrupt. Activate automatically after the
 # signed/release-verified package, isolated OpenCode runtime and broker checks.
-# Existing installations ALWAYS require an explicit quiescent cutover.
+# Existing installations require explicit now; auto is non-disruptive.
 fresh_install=0
 if [[ ! -e "$OPENCODE_HOME/.config/openchamber" &&
       ! -e /root/.config/openchamber &&
@@ -355,90 +360,70 @@ if [[ ! -e "$OPENCODE_HOME/.config/openchamber" &&
    ! systemctl is-active --quiet openchamber.service; then
   fresh_install=1
 fi
-if [[ "${OPENCHAMBER_RESTART_MODE:-auto}" == defer || "${OPENCHAMBER_EMBEDDED_TERMINAL:-0}" == 1 ]]; then
+if [[ "$RESTART_MODE" == defer || ( "$RESTART_MODE" == auto && "$fresh_install" != 1 ) ]]; then
   install_journal_event activation pending_restart "reason=embedded_or_deferred" "openchamber_sha=$APP_SHA"
-  echo 'PENDING APPLY: installed root runtime staged; do not cut over from an embedded terminal.'
-  exit 0
-fi
-# Fresh-install detection must happen before creating the first user Chats tree.
-
-
-# Require a verified root-safe OpenChamber release and a human-confirmed
-# quiescent window; no unprivileged user should be stranded in an active PTY.
-if [[ "$fresh_install" != 1 && "${OPENCHAMBER_ROOT_RUNTIME_VERIFIED:-0}" != 1 ]]; then
-  install_journal_event activation pending_restart "reason=runtime_not_verified"
-  echo 'PENDING APPLY: root execution boundary not yet accepted (OPENCHAMBER_ROOT_RUNTIME_VERIFIED=1 required).' >&2
-  exit 0
-fi
-if [[ "$fresh_install" != 1 && "${OPENCHAMBER_CUTOVER_QUIESCENT:-0}" != 1 ]]; then
-  install_journal_event activation pending_restart "reason=not_quiescent"
-  echo 'PENDING APPLY: active OpenChamber terminal state not confirmed quiescent.' >&2
+  echo 'PENDING APPLY: runtime staged; use OPENCHAMBER_RESTART_MODE=now from SSH to activate.'
   exit 0
 fi
 
-# OpenCode is not restarted during cutover, but an active model RUN would
-# encounter a different owner-approval policy mid-flight. Do not change the
-# policy until the existing OpenCode execution has drained naturally.
-# This is a single install-time check, NEVER per work item.
-if [[ "$fresh_install" != 1 ]]; then
-  active_json="$TMP/opencode-active.json"
-  if [[ -n "$OPENCODE_SERVICE_PASSWORD" ]]; then
-    curl -fsS --max-time 7 -u "opencode:$OPENCODE_SERVICE_PASSWORD" \
-      http://127.0.0.1:4096/api/session/active -o "$active_json" || {
-        echo 'OPENCHAMBER_CUTOVER_OPENCODE_ACTIVE_INVENTORY_UNAVAILABLE' >&2; exit 3;
-      }
-  else
-    curl -fsS --max-time 7 http://127.0.0.1:4096/api/session/active -o "$active_json" || {
-      echo 'OPENCHAMBER_CUTOVER_OPENCODE_ACTIVE_INVENTORY_UNAVAILABLE' >&2; exit 3;
-    }
-  fi
-  if ! python3 - "$active_json" <<'PY'
-import json,sys
-try:
-    body=json.load(open(sys.argv[1],encoding='utf-8'))
-    if not isinstance(body,dict) or not isinstance(body.get('data'),dict):
-        sys.exit(2)
-    if body['data']:
-        sys.exit(10)
-except (OSError,ValueError):
-    sys.exit(2)
-PY
-  then
-    install_journal_event activation pending_restart "reason=active_opencode_session_or_invalid_inventory"
-    echo 'PENDING APPLY: active OpenCode session or unverified inventory; keeping both services unchanged.' >&2
-    exit 0
-  fi
-fi
-
-# Independently validate the process tree immediately before changing a
-# running OpenChamber service. Even explicit owner quiescence acknowledgement
-# cannot kill a live PTY, project action, or long-running guest service.
-old_pid=0
-root_pid=0
-if run_oc_user systemctl --user is-active --quiet openchamber.service; then
-  old_pid="$(run_oc_user systemctl --user show -p MainPID --value openchamber.service)" || {
-    echo 'OPENCHAMBER_OLD_PID_UNAVAILABLE' >&2; exit 3;
-  }
-  [[ "$old_pid" =~ ^[0-9]+$ && "$old_pid" -gt 1 ]] || {
-    echo 'OPENCHAMBER_OLD_PID_UNTRUSTED' >&2; exit 3;
-  }
-fi
-if systemctl is-active --quiet openchamber.service; then
-  root_pid="$(systemctl show -p MainPID --value openchamber.service)" || {
-    echo 'OPENCHAMBER_ROOT_PID_UNAVAILABLE' >&2; exit 3;
-  }
-  [[ "$root_pid" =~ ^[0-9]+$ && "$root_pid" -gt 1 ]] || {
-    echo 'OPENCHAMBER_ROOT_PID_UNTRUSTED' >&2; exit 3;
-  }
-fi
-python3 "$TMP/quiescence.py" --old-pid "$old_pid" --old-uid "$(id -u opencode)" --root-pid "$root_pid" || {
-  install_journal_event activation pending_restart "reason=live_openchamber_children"
-  echo 'PENDING APPLY: OpenChamber terminal, extension or project process is active.' >&2
-  exit 0
+# Use systemd's service cgroups, not process names/PIDs. TERM first, then
+# KILL only the managed unit if it has not stopped within ten seconds.
+stop_managed_service() {
+  local unit=$1 state i
+  shift
+  "$@" stop --no-block "$unit"
+  for ((i=0; i<15; i++)); do
+    state="$("$@" show -p ActiveState --value "$unit")"
+    case "$state" in inactive|failed) return 0;; esac
+    if ((i == 10)); then
+      echo "Force stopping remaining processes in $unit" >&2
+      "$@" kill --kill-whom=all --signal=KILL "$unit" || true
+    fi
+    sleep 1
+  done
+  echo "MANAGED_SERVICE_STOP_FAILED: $unit" >&2
+  return 3
 }
 
-# Roll back only the root OpenChamber package and migration, never the OpenCode
-# runtime or its sessions. A failed activation cannot strand the old UI.
+opencode_has_work() {
+  # An invalid/unavailable inventory cannot establish that the server is idle.
+  # In explicitly authorized now mode, restart the managed server in that case.
+  curl -fsS --max-time 7 -u "opencode:$OPENCODE_SERVICE_PASSWORD" \
+    http://127.0.0.1:4096/api/session/active -o "$TMP/opencode-active.json" || return 0
+  python3 - "$TMP/opencode-active.json" <<'PY'
+import json,sys
+try:
+    data=json.load(open(sys.argv[1],encoding='utf-8')).get('data')
+    sys.exit(1 if isinstance(data,dict) and not data else 0)
+except (OSError,ValueError,AttributeError):
+    sys.exit(0)
+PY
+}
+
+restart_opencode_if_needed() {
+  if [[ "$live_opencode" == "$installed_opencode" ]] && ! opencode_has_work; then
+    return 0
+  fi
+  echo "Applying OpenCode runtime: $live_opencode -> $installed_opencode"
+  stop_managed_service opencode-web.service run_oc_user systemctl --user
+  run_oc_user systemctl --user start opencode-web.service
+  local i version
+  for ((i=0; i<30; i++)); do
+    if curl -fsS --max-time 2 -u "opencode:$OPENCODE_SERVICE_PASSWORD" \
+      http://127.0.0.1:4096/api/info -o "$TMP/opencode-info.json" 2>/dev/null &&
+      version="$(read_opencode_version 2>/dev/null)" &&
+      [[ "$version" == "$installed_opencode" ]]; then
+      live_opencode="$version"
+      return 0
+    fi
+    sleep 1
+  done
+  echo 'OPENCODE_RESTART_NOT_READY' >&2
+  return 3
+}
+
+# Roll back the root OpenChamber package and migration, not the OpenCode
+# binary/config already installed by install.sh. Session history is preserved.
 old_active=0
 old_enabled=0
 root_was_active=0
@@ -478,6 +463,7 @@ rollback_cutover() {
   fi
   oc_rollback_activation || true
   if (( cutover_started )); then
+    run_oc_user systemctl --user start opencode-web.service >/dev/null 2>&1 || true
     if (( root_was_active )); then
       systemctl restart openchamber.service || true
     else
@@ -493,15 +479,6 @@ rollback_cutover() {
 trap rollback_cutover ERR
 trap 'rollback_cutover' INT TERM
 
-# Only a quiescent, accepted cutover may publish the staged binary.
-# A deferred update must leave the currently running root service executable
-# and its current symlink untouched.
-if [[ "$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)" != "$RELEASE_DIR" ]]; then
-  oc_activate_release "$RELEASE_DIR"
-fi
-oc_write_managed_launcher
-[[ -x "$OPENCHAMBER_CURRENT_BIN" ]] || { echo 'Root OpenChamber binary is not installed' >&2; exit 3; }
-
 # Detect a non-default OpenChamber data directory from the old runtime.
 # Parse its startup file only as opencode, never source its shell content as
 # root. A custom directory outside the old user's home is refused rather
@@ -514,11 +491,21 @@ if [[ "$OLD_OC_DATA_DIR" != "$OPENCODE_HOME/.config/openchamber" &&
 fi
 [[ ! -L "$OLD_OC_DATA_DIR" ]] || { echo 'OPENCHAMBER_DATA_MIGRATION_SYMLINK_REFUSED' >&2; exit 3; }
 
-# Stop only the old OpenChamber service. Keep OpenCode's server and live RUNs.
-cutover_started=1
+# Preparation is complete. Start the short maintenance window: stop UI
+# cgroups including PTYs and project processes; no global process killing.
 run_oc_user systemctl --user is-active --quiet openchamber.service && old_active=1 || true
 run_oc_user systemctl --user is-enabled --quiet openchamber.service && old_enabled=1 || true
-if ((old_active)); then run_oc_user systemctl --user stop openchamber.service; fi
+cutover_started=1
+if ((old_active)); then stop_managed_service openchamber.service run_oc_user systemctl --user; fi
+if ((root_was_active)); then stop_managed_service openchamber.service systemctl; fi
+restart_opencode_if_needed
+
+# Publish only after the old services have stopped.
+if [[ "$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)" != "$RELEASE_DIR" ]]; then
+  oc_activate_release "$RELEASE_DIR"
+fi
+oc_write_managed_launcher
+[[ -x "$OPENCHAMBER_CURRENT_BIN" ]] || { echo 'Root OpenChamber binary is not installed' >&2; exit 3; }
 migration_status='not_required'
 if [[ -d "$OLD_OC_DATA_DIR" ]]; then
   migration_status="$(python3 "$TMP/migrate.py" stage --source "$OLD_OC_DATA_DIR" --quiescent yes | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
@@ -589,7 +576,7 @@ for current, directories, files in os.walk(target, followlinks=False, onerror=wa
         raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_UNSAFE_OWNER_OR_MODE: {current}')
 PY
 
-# Root-owned service; never use root systemd --user and never stop opencode-web.
+# Root-owned UI and broker; OpenCode remains a separate user service.
 # Prepare protected P1 broker and root-owned UI. The policy marker is not
 # published until the root UI, socket modes and broker all pass readiness.
 install -o root -g root -m 644 "$TMP/owner-broker.service" /etc/systemd/system/opencode-owner-approval.service
@@ -607,8 +594,6 @@ done
   echo 'Owner approval socket is not private' >&2; exit 3;
 }
 systemctl enable --now openchamber.service
-# "enable --now" does not reload an existing running root service.
-systemctl restart openchamber.service
 for i in {1..30}; do
   if systemctl is-active --quiet openchamber.service && \
      curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:"${OPENCHAMBER_BIND_PORT:-3000}"/; then
@@ -623,7 +608,7 @@ for i in {1..30}; do
     if [[ "$migration_status" == staged ]]; then python3 "$TMP/migrate.py" complete --ready yes; fi
     trap - ERR INT TERM
     oc_commit_activation || echo 'WARN: root service healthy but previous-release pointer not yet persisted' >&2
-    echo "ROOT OPENCHAMBER READY config=$CONFIG_SHA app=$APP_SHA"
+    echo "ROOT OPENCHAMBER READY config=$CONFIG_SHA app=$APP_SHA OpenCode=$live_opencode"
     exit 0
   fi
   sleep 1
