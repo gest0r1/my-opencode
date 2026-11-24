@@ -20,6 +20,7 @@ EnvironmentFile=-/root/.config/openchamber/startup.env
 # The trusted root-owned split-execution settings must win over migrated startup.env.
 EnvironmentFile=/etc/my-opencode/openchamber-execution.env
 ExecStart=/usr/local/lib/my-opencode/launch-openchamber-root.sh /root/.local/bin/openchamber serve --host ${OPENCHAMBER_BIND_HOST} --port ${OPENCHAMBER_BIND_PORT} --foreground
+TimeoutStopSec=10
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
