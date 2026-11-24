@@ -48,6 +48,58 @@ class SharedChatsContract(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(mode) & 0o007, 0)
             self.assertEqual(run_setup(home).returncode, 0)
 
+    def test_root_ui_created_dates_and_sessions_survive_reinstall(self):
+        # GitHub's disposable runner has sudo. Run the real installer snippet
+        # as the unprivileged test user against directories owned by root.
+        if os.geteuid() == 0:
+            self.skipTest('requires an unprivileged test user')
+        try:
+            sudo = subprocess.run(['sudo', '-n', 'true'], capture_output=True)
+        except FileNotFoundError:
+            sudo = None
+        if sudo is None or sudo.returncode:
+            if os.environ.get('GITHUB_ACTIONS') == 'true':
+                self.fail('real UID regression requires sudo on hosted CI')
+            self.skipTest('sudo unavailable')
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            target = home / '.config/openchamber/chats'
+            target.mkdir(parents=True)
+            self.assertEqual(run_setup(home).returncode, 0)
+            date = target / '2026-11-24'
+            session = date / 'session-fixture'
+            for directory in (date, session):
+                subprocess.run(
+                    ['sudo', '-n', 'install', '-d', '-o', 'root',
+                     '-g', str(os.getgid()), '-m', '2775', str(directory)],
+                    check=True, capture_output=True,
+                )
+            marker = session / 'existing.txt'
+            marker.write_text('preserved')
+            try:
+                for _ in range(2):
+                    result = run_setup(home)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    for directory in (date, session):
+                        info = directory.stat()
+                        self.assertEqual(info.st_uid, 0)
+                        self.assertEqual(info.st_gid, os.getgid())
+                        self.assertEqual(stat.S_IMODE(info.st_mode), 0o2775)
+                    self.assertEqual(marker.read_text(), 'preserved')
+                for bad_mode in ('2755', '2777'):
+                    subprocess.run(
+                        ['sudo', '-n', 'chmod', bad_mode, str(session)],
+                        check=True, capture_output=True,
+                    )
+                    result = run_setup(home)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('UNSAFE_OWNER_OR_MODE', result.stderr)
+            finally:
+                subprocess.run(
+                    ['sudo', '-n', 'chmod', '2775', str(session)],
+                    check=True, capture_output=True,
+                )
+
     def test_refuses_symlinks_without_following_them(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / 'home'
