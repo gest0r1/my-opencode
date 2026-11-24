@@ -7,6 +7,7 @@ on:
       - 'install.sh'
       - 'scripts/install-openchamber-root.sh'
       - 'scripts/install-openchamber-v2-core.sh'
+      - 'scripts/runtime-processes.py'
       - 'scripts/openchamber-runtime-store.sh'
       - 'scripts/migrate-openchamber-to-root.py'
       - 'scripts/opencode-owner-approval*.py'
@@ -14,6 +15,28 @@ on:
       - 'tests/test_openchamber_root_child_boundary.py'
       - 'tests/test_openchamber_shared_chats.py'
       - 'tests/test_root_openchamber_dac_boundary.py'
+      - 'tests/p1-real-systemd-migration.sh'
+      - 'scripts/rekey-openchamber-ui.py'
+      - 'scripts/launch-openchamber-root.sh'
+      - 'config/systemd/openchamber-root.service'
+      - 'config/systemd/opencode-owner-approval.service'
+      - '.github/workflows/p1-installed-root-acceptance.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'install-openchamber.sh'
+      - 'install.sh'
+      - 'scripts/install-openchamber-root.sh'
+      - 'scripts/install-openchamber-v2-core.sh'
+      - 'scripts/runtime-processes.py'
+      - 'scripts/openchamber-runtime-store.sh'
+      - 'scripts/migrate-openchamber-to-root.py'
+      - 'scripts/opencode-owner-approval*.py'
+      - 'scripts/openchamber-child-boundary.cjs'
+      - 'tests/test_openchamber_root_child_boundary.py'
+      - 'tests/test_openchamber_shared_chats.py'
+      - 'tests/test_root_openchamber_dac_boundary.py'
+      - 'tests/p1-real-systemd-migration.sh'
       - 'scripts/rekey-openchamber-ui.py'
       - 'scripts/launch-openchamber-root.sh'
       - 'config/systemd/openchamber-root.service'
@@ -134,6 +157,51 @@ jobs:
           curl -fsS -u "opencode:$OPENCODE_TEST_PASSWORD" "http://127.0.0.1:4096/api/session/$id" |
             node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{let j=JSON.parse(s);if(!j.data?.id)process.exit(1)})'
           echo "PASS: exact-SHA repeat install preserves OpenCode session and both process IDs"
+          # Reproduce the VPS failure after the root UI has created a Chats tree.
+          chats=/home/opencode/.config/openchamber/chats
+          date_dir="$chats/2000-01-01"
+          fixture="$date_dir/session-fixture"
+          sudo namei -l "$chats"
+          # Model the real root UI: root creates directories inside the
+          # group-inheriting Chats tree, not opencode followed by chown.
+          sudo mkdir -m 2775 "$date_dir"
+          sudo mkdir -m 2775 "$fixture"
+          sudo namei -l "$fixture"
+          if command -v getfacl >/dev/null; then sudo getfacl -p "$chats" "$date_dir" "$fixture"; fi
+          sudo -H -u opencode -g "#$(id -g opencode)" id
+          sudo -H -u opencode -g "#$(id -g opencode)" python3 - "$fixture" <<'PY'
+          import os, sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          print("fixture", "uid", os.geteuid(), "gid", os.getegid(), "groups", os.getgroups(),
+                "directory", p.stat().st_uid, p.stat().st_gid, oct(p.stat().st_mode & 0o7777),
+                "access", os.access(p, os.R_OK | os.W_OK | os.X_OK), "xattrs", os.listxattr(p))
+          assert os.access(p, os.R_OK | os.W_OK | os.X_OK), 'P1_FIXTURE_OPENCODE_ACCESS'
+          (p/'history.txt').write_text('existing chat\n')
+          PY
+          before_jwt="$(sudo sha256sum /root/.config/openchamber/jwt-secret)"
+          # Force a configuration-only upgrade without changing the immutable app.
+          printf '%s %s\n' "$(printf '%040d' 0)" "$OC_SHA" | sudo tee /var/lib/my-opencode/openchamber-root-installer/active-sha >/dev/null
+          sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
+            OPENCODE_CONFIG_REF="$GITHUB_SHA" OPENCHAMBER_REF="$OC_SHA" \
+            OPENCHAMBER_RESTART_MODE=defer bash scripts/install-openchamber-root.sh
+          test "$(sudo systemctl show openchamber.service -p MainPID --value)" = "$after_oc"
+          test "$(sudo cat /var/lib/my-opencode/openchamber-root-installer/active-sha)" = "$(printf '%040d' 0) $OC_SHA"
+          sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
+            OPENCODE_CONFIG_REF="$GITHUB_SHA" OPENCHAMBER_REF="$OC_SHA" \
+            OPENCHAMBER_RESTART_MODE=now bash scripts/install-openchamber-root.sh
+          sudo systemctl is-active --quiet openchamber.service
+          test "$(sudo cat /var/lib/my-opencode/openchamber-root-installer/active-sha)" = "$GITHUB_SHA $OC_SHA"
+          test "$(sudo systemctl show openchamber.service -p MainPID --value)" != "$after_oc"
+          test "$(sudo stat -c %u:%g:%a "$fixture")" = "0:$(id -g opencode):2775"
+          test "$(sudo cat "$fixture/history.txt")" = 'existing chat'
+          test "$(sudo sha256sum /root/.config/openchamber/jwt-secret)" = "$before_jwt"
+          latest_ocweb="$(sudo -u opencode env XDG_RUNTIME_DIR="/run/user/$(id -u opencode)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u opencode)/bus" systemctl --user show opencode-web.service --property=MainPID --value)"
+          test "$latest_ocweb" = "$after_ocweb"
+          curl -fsS -u "opencode:$OPENCODE_TEST_PASSWORD" "http://127.0.0.1:4096/api/session/$id" |
+            node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{let j=JSON.parse(s);if(!j.data?.id)process.exit(1)})'
+          echo 'PASS: single-invocation root-to-root upgrade preserves shared Chats and idle OpenCode'
+
       - name: Verify root UI traversal and unprivileged child capability boundary
         shell: bash
         run: |

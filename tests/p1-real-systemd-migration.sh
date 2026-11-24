@@ -9,7 +9,7 @@ set -Eeuo pipefail
 source_sha="$GITHUB_SHA"
 export PATH="/usr/local/bin:$PATH"
 sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
-  OPENCODE_CONFIG_REF="$source_sha" bash install.sh
+  OPENCODE_CONFIG_REF="$source_sha" OPENCODE_INSTALL_VERSION=2.2.7 bash install.sh
 uid="$(id -u opencode)"
 sudo systemctl start "user@${uid}.service"
 # Existing host credentials must be stable before a running OpenCode server
@@ -60,7 +60,7 @@ sudo -n tee /home/opencode/.config/systemd/user/openchamber.service >/dev/null <
 Description=P1 legacy OpenChamber fixture (unprivileged, ephemeral)
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -m http.server 3000 --bind 127.0.0.1 --directory /home/opencode/.config/openchamber
+ExecStart=/bin/bash -c 'trap "" TERM; sleep 600 & echo $! > /home/opencode/p1-legacy-child.pid; trap - TERM; exec /usr/bin/python3 -m http.server 3000 --bind 127.0.0.1 --directory /home/opencode/.config/openchamber'
 Restart=on-failure
 [Install]
 WantedBy=default.target
@@ -84,12 +84,21 @@ fi
 sudo -n install -d -o root -g root -m 700 /root/.config/openchamber
 printf 'historical-root-kept\n' | sudo -n tee /root/.config/openchamber/profile-root-only.txt >/dev/null
 
+legacy_child="$(sudo cat /home/opencode/p1-legacy-child.pid)"
+[[ "$legacy_child" =~ ^[0-9]+$ ]]
+sudo kill -0 "$legacy_child"
+sleep 600 &
+unrelated=$!
+trap 'kill "$unrelated" 2>/dev/null || true' EXIT
+before_ocweb="$(user_systemctl show -p MainPID --value opencode-web.service)"
+oc_curl -fsS http://127.0.0.1:4096/api/info | python3 -c 'import json,sys; j=json.load(sys.stdin); assert j.get("data",j)["version"]=="2.2.7"'
+
 # First attempt must fail safely after migration stage and restore the old
 # running UI, the historical profile, and the unmodified OpenCode session.
 set +e
 sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
   OPENCODE_CONFIG_REF="$source_sha" OPENCHAMBER_REF="$OC_SHA" \
-  OPENCHAMBER_ROOT_RUNTIME_VERIFIED=1 OPENCHAMBER_CUTOVER_QUIESCENT=1 \
+  OPENCHAMBER_RESTART_MODE=now \
   bash scripts/install-openchamber-root.sh >"$RUNNER_TEMP/p1-failed-cutover.log" 2>&1
 first_rc=$?
 set -e
@@ -100,7 +109,13 @@ user_systemctl is-active --quiet openchamber.service || {
 test "$(sudo cat /root/.config/openchamber/profile-root-only.txt)" = historical-root-kept
 test "$(sudo cat /home/opencode/.config/openchamber/profile-source.txt)" = current-source-kept
 oc_curl -fsS "http://127.0.0.1:4096/api/session/$old_id" >/dev/null
-echo 'PASS: failed cutover restored old UI, historical root data and OpenCode session'
+! sudo kill -0 "$legacy_child" 2>/dev/null
+ grep -Fq 'Force stopping remaining processes in openchamber.service' "$RUNNER_TEMP/p1-failed-cutover.log"
+kill -0 "$unrelated"
+after_ocweb="$(user_systemctl show -p MainPID --value opencode-web.service)"
+[[ "$before_ocweb" != "$after_ocweb" ]]
+oc_curl -fsS http://127.0.0.1:4096/api/info | python3 -c 'import json,sys; j=json.load(sys.stdin); assert j.get("data",j)["version"]=="2.3.2"'
+echo 'PASS: failed cutover restored old UI and data; managed child ended, unrelated process and OpenCode session preserved; live OpenCode updated to 2.3.2'
 
 # Retry with a valid port after the previous rollback. Source remains the
 # authority on conflicts; root-only history is merged additively.
@@ -108,7 +123,7 @@ sudo -n -u opencode sed -i 's/OPENCHAMBER_BIND_PORT=81/OPENCHAMBER_BIND_PORT=300
   /home/opencode/.config/openchamber/startup.env
 sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
   OPENCODE_CONFIG_REF="$source_sha" OPENCHAMBER_REF="$OC_SHA" \
-  OPENCHAMBER_ROOT_RUNTIME_VERIFIED=1 OPENCHAMBER_CUTOVER_QUIESCENT=1 \
+  OPENCHAMBER_RESTART_MODE=now \
   bash scripts/install-openchamber-root.sh
 sudo systemctl is-active --quiet openchamber.service
 sudo systemctl is-active --quiet opencode-owner-approval.service
@@ -121,4 +136,5 @@ test "$(sudo stat -c %a /root/.config/openchamber/startup.env)" = 600
 sudo grep -Fq 'LD_PRELOAD=/home/opencode/agent.so' /root/.config/openchamber/startup.env.pre-p1
 oc_curl -fsS "http://127.0.0.1:4096/api/session/$old_id" >/dev/null
 curl -fsS http://127.0.0.1:3000/ >/dev/null
+kill -0 "$unrelated"
 echo 'PASS: user-to-root migration, historical merge, credential quarantine, OpenCode session continuity'

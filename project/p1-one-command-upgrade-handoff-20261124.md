@@ -1,0 +1,31 @@
+# P1 one-command upgrade — handover 2026-11-24
+
+Owner approved implementation, CI, merge to main; do not deploy VPS until owner test. Work in PR #83. OpenCode 2.3.2 / OpenChamber 2.8.0; no upstream bump.
+
+- [x] Baseline: PR #83 root:opencode Chats fix; CI previously green at 924dafd. VPS rollback restored old UI after EPERM.
+- [x] Inspect installer entrypoints, restart/defer and systemd lifecycle. Implement explicit now as authorization to terminate managed sessions/PTYs only; preserve history and unrelated processes. Stage before downtime, avoid self-kill in embedded terminal, keep defer and no-op, preserve rollback. Remove redundant human flags in now, keep verified artifact and privilege boundary.
+- [ ] Adapt existing tests for active terminal/session, version mismatch, repeat and rollback. Run GH Actions and inspect exact head results.
+- [ ] Merge only green head; verify main; provide one-command SSH update and owner acceptance.
+
+Checkpoint: coordinator implementation committed at 6321b93. Explicit now stages first, stops managed UI cgroups (TERM then bounded KILL), restarts OpenCode only for mismatched version or active/unknown session inventory, verifies the new running version, preserves rollback and root/opencode split. Existing auto/defer remains non-disruptive; embedded origin forces defer. No additional human flags in now. Static contracts adapted; real migration test now installs 2.2.7 first, creates a child in legacy UI cgroup, verifies child termination, unrelated process survival and OpenCode 2.3.2 restart/session retention after rollback. Root-to-root acceptance exercises mixed-owner Chats and unchanged idle OpenCode PID. Test changes committed through 2de734a. CI pending; verify exact final head, correct failures, and explicitly verify active RUN and embedded protection before merge. No VPS mutations.
+
+## CI cycle 1 and fixes
+
+- Head 14461a1: canonical installer contract PASS; P1 boundary/chats PASS; real systemd migration PASS (2.2.7 running -> 2.3.2, legacy child stopped, rollback/retry, session preserved). Real root-to-root job FAIL during fixture creation (tee permission denied before invoking upgrade); see actions run 45378293152 job 138390360324. Do not claim root-to-root acceptance yet.
+- Through 17ecb20: existing activated root profile no longer remigrates/rekeys on update; explicit activation failures invoke rollback; auto remains non-disruptive; root systemd stop timeout 10s; actual root Node command recognized by existing embedded detector. Test fixture creates directories first as opencode, then assigns real root UID/opencode GID and mode 2775, records namei, verifies JWT unchanged, defer/no-op, and idle server PID. Migration fixture now has TERM-resistant child; decision-function test covers active/idle/malformed/unavailable inventory and live mismatch. All changes in PR #83.
+- Next: wait for exact latest PR head CI (canonical, pipeline contracts, P1 installed root acceptance). If failures, inspect logs and fix. Do not merge until all green. No production changes.
+
+## CI cycle 2
+
+Head ea261c7: canonical installer PASS; boundary/chats PASS; real legacy migration PASS with TERM-resistant child force-stop and recovery. Root-to-root fixture again failed before upgrade at writing history.txt, despite namei showing root:opencode 2775 on both descendants and 2770 on Chats. Run 45378882541, job 138392496910. Cause not yet confirmed. Through eae8baf explicitly select runtime user's primary GID for run_oc_user and fixture; fixture logs actual UID/GID/groups, xattrs, mode, os.access and writes via Python. Re-run exact current head, inspect root-to-root result. No VPS mutations and no merge yet.
+
+
+## CI cycle 3 — blocked
+
+Tested head `694797a0262fd7ee4e08783767d866ffee69b06e`, synthetic PR merge `010eef4d4bf5f7cba0465c957a142fb6bd043966`. Canonical installer run 45379459057 PASS; pipeline contracts 45379458968 PASS; P1 installed root acceptance 45379459047 FAIL (boundary/chats and real legacy migration PASS; real-systemd-cutover job 138394511052 FAIL before root-to-root upgrade). Clean installation and exact-SHA repeat preserving both PIDs and session passed. Fixture: uid=1002 gid=1002 groups=[1002], directory uid=0 gid=1002 mode=02775, os.access(RWX)=False, xattrs=['system.posix_acl_default','system.posix_acl_access']; assertion P1_FIXTURE_OPENCODE_ACCESS. Strong evidence of ACL restriction, exact ACL entries not captured. Explicit GID did not resolve it. Next: inspect ACL entries on ancestors and fixture using getfacl, reproduce inherited ACL locally, determine whether fixture-only or production provisioning issue, apply minimal scoped fix and retest. Do not weaken access boundary or skip the real regression. No merge or main CI, no VPS mutations. Monitor ends on failed acceptance as requested. This documentation checkpoint is not a tested code revision.
+
+## CI cycle 4 — ACL fix
+
+Local reproduction as real root and unprivileged UID: inherited named-user r-x and group r-x, ACL mask rwx, yields 2775 yet RWX=False on root-created directory. Removing only default ACL on execution-owned Chats parent makes a newly root-created 2775 directory writable. Exact CI ACL entries were not captured, so this is a reproduced mechanism, not a claim about the original entries. Normalize access/default POSIX ACL only on execution-owned directories inside Chats before chmod; no changes to ancestors, root-owned directories or unrelated xattrs. Correct root-owned descendants stay unchanged; genuinely inaccessible/unsafe root-owned descendants still refuse rather than escalating root filesystem mutation. Regression seeds restrictive inherited ACL, proves denied root child, runs real snippet, checks parent ACL retained and new root child writable. CI creates root directories directly and prints getfacl; P1 now also triggers on push main. Next: all three CI workflows on this code head, then guarded merge and main CI. No VPS changes.
+
+Acceptance also requires deferred active-sha unchanged, then exact target active-sha and changed UI PID after now, unchanged OpenCode PID, and retained session. This excludes a false PASS if activation was silently deferred. getfacl is diagnostic-only; actual identity/access assertion remains mandatory.
