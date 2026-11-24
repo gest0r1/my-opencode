@@ -7,6 +7,7 @@ on:
       - 'install.sh'
       - 'scripts/install-openchamber-root.sh'
       - 'scripts/install-openchamber-v2-core.sh'
+      - 'scripts/runtime-processes.py'
       - 'scripts/openchamber-runtime-store.sh'
       - 'scripts/migrate-openchamber-to-root.py'
       - 'scripts/opencode-owner-approval*.py'
@@ -137,16 +138,28 @@ jobs:
           echo "PASS: exact-SHA repeat install preserves OpenCode session and both process IDs"
           # Reproduce the VPS failure after the root UI has created a Chats tree.
           chats=/home/opencode/.config/openchamber/chats
-          sudo install -d -o root -g opencode -m 2775 "$chats/2026-11-24" "$chats/2026-11-24/session-fixture"
-          printf 'existing chat\n' | sudo -u opencode tee "$chats/2026-11-24/session-fixture/history.txt" >/dev/null
+          date_dir="$chats/2000-01-01"
+          fixture="$date_dir/session-fixture"
+          sudo namei -l "$chats"
+          sudo -H -u opencode mkdir -p "$fixture"
+          sudo chown "0:$(id -g opencode)" "$date_dir" "$fixture"
+          sudo chmod 2775 "$date_dir" "$fixture"
+          sudo namei -l "$fixture"
+          printf 'existing chat\n' | sudo -H -u opencode tee "$fixture/history.txt" >/dev/null
+          before_jwt="$(sudo sha256sum /root/.config/openchamber/jwt-secret)"
           # Force a configuration-only upgrade without changing the immutable app.
           printf '%s %s\n' "$(printf '%040d' 0)" "$OC_SHA" | sudo tee /var/lib/my-opencode/openchamber-root-installer/active-sha >/dev/null
           sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
             OPENCODE_CONFIG_REF="$GITHUB_SHA" OPENCHAMBER_REF="$OC_SHA" \
+            OPENCHAMBER_RESTART_MODE=defer bash scripts/install-openchamber-root.sh
+          test "$(sudo systemctl show openchamber.service -p MainPID --value)" = "$after_oc"
+          sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
+            OPENCODE_CONFIG_REF="$GITHUB_SHA" OPENCHAMBER_REF="$OC_SHA" \
             OPENCHAMBER_RESTART_MODE=now bash scripts/install-openchamber-root.sh
           sudo systemctl is-active --quiet openchamber.service
-          test "$(sudo stat -c %U:%G:%a "$chats/2026-11-24/session-fixture")" = root:opencode:2775
-          test "$(sudo cat "$chats/2026-11-24/session-fixture/history.txt")" = 'existing chat'
+          test "$(sudo stat -c %u:%g:%a "$fixture")" = "0:$(id -g opencode):2775"
+          test "$(sudo cat "$fixture/history.txt")" = 'existing chat'
+          test "$(sudo sha256sum /root/.config/openchamber/jwt-secret)" = "$before_jwt"
           latest_ocweb="$(sudo -u opencode env XDG_RUNTIME_DIR="/run/user/$(id -u opencode)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u opencode)/bus" systemctl --user show opencode-web.service --property=MainPID --value)"
           test "$latest_ocweb" = "$after_ocweb"
           echo 'PASS: single-invocation root-to-root upgrade preserves shared Chats and idle OpenCode'
