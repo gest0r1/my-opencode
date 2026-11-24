@@ -4,8 +4,8 @@ Owner approved implementation, CI, merge to main; do not deploy VPS until owner 
 
 - [x] Baseline: PR #83 root:opencode Chats fix; CI previously green at 924dafd. VPS rollback restored old UI after EPERM.
 - [x] Inspect installer entrypoints, restart/defer and systemd lifecycle. Implement explicit now as authorization to terminate managed sessions/PTYs only; preserve history and unrelated processes. Stage before downtime, avoid self-kill in embedded terminal, keep defer and no-op, preserve rollback. Remove redundant human flags in now, keep verified artifact and privilege boundary.
-- [ ] Adapt existing tests for active terminal/session, version mismatch, repeat and rollback. Run GH Actions and inspect exact head results.
-- [ ] Merge only green head; verify main; provide one-command SSH update and owner acceptance.
+- [x] Adapt existing tests for active terminal/session, version mismatch, repeat and rollback. Run GH Actions and inspect exact head results.
+- [x] Merge only green head; verify main; provide one-command SSH update and owner acceptance.
 
 Checkpoint: coordinator implementation committed at 6321b93. Explicit now stages first, stops managed UI cgroups (TERM then bounded KILL), restarts OpenCode only for mismatched version or active/unknown session inventory, verifies the new running version, preserves rollback and root/opencode split. Existing auto/defer remains non-disruptive; embedded origin forces defer. No additional human flags in now. Static contracts adapted; real migration test now installs 2.2.7 first, creates a child in legacy UI cgroup, verifies child termination, unrelated process survival and OpenCode 2.3.2 restart/session retention after rollback. Root-to-root acceptance exercises mixed-owner Chats and unchanged idle OpenCode PID. Test changes committed through 2de734a. CI pending; verify exact final head, correct failures, and explicitly verify active RUN and embedded protection before merge. No VPS mutations.
 
@@ -29,3 +29,27 @@ Tested head `694797a0262fd7ee4e08783767d866ffee69b06e`, synthetic PR merge `010e
 Local reproduction as real root and unprivileged UID: inherited named-user r-x and group r-x, ACL mask rwx, yields 2775 yet RWX=False on root-created directory. Removing only default ACL on execution-owned Chats parent makes a newly root-created 2775 directory writable. Exact CI ACL entries were not captured, so this is a reproduced mechanism, not a claim about the original entries. Normalize access/default POSIX ACL only on execution-owned directories inside Chats before chmod; no changes to ancestors, root-owned directories or unrelated xattrs. Correct root-owned descendants stay unchanged; genuinely inaccessible/unsafe root-owned descendants still refuse rather than escalating root filesystem mutation. Regression seeds restrictive inherited ACL, proves denied root child, runs real snippet, checks parent ACL retained and new root child writable. CI creates root directories directly and prints getfacl; P1 now also triggers on push main. Next: all three CI workflows on this code head, then guarded merge and main CI. No VPS changes.
 
 Acceptance also requires deferred active-sha unchanged, then exact target active-sha and changed UI PID after now, unchanged OpenCode PID, and retained session. This excludes a false PASS if activation was silently deferred. getfacl is diagnostic-only; actual identity/access assertion remains mandatory.
+
+## Final CI acceptance — 2026-11-24
+
+PR #83 merged at 13:38:14 UTC. Verified parents: base `9966ac5a634d2194f87d48fd783e3d42698eb4f0`, head `b2ceb1f5fc8e0b993f70804c2ebd1af92fbbd7d3`. Tested main merge SHA `7a91f77fb096141f6d680b80f601fdbf31135b8e`.
+
+All six workflows completed successfully:
+
+| Workflow | PR | push main |
+|---|---|---|
+| P1 installed root acceptance | [PASS](https://github.com/gest0r1/my-opencode/actions/runs/45395859586) | [PASS](https://github.com/gest0r1/my-opencode/actions/runs/45405491452) |
+| Canonical installer | [PASS](https://github.com/gest0r1/my-opencode/actions/runs/45395859560) | [PASS](https://github.com/gest0r1/my-opencode/actions/runs/45405491474) |
+| Pipeline contracts | [PASS](https://github.com/gest0r1/my-opencode/actions/runs/45395859566) | [PASS](https://github.com/gest0r1/my-opencode/actions/runs/45405491446) |
+
+Ready for owner SSH acceptance, not deployed. VPS untouched. OpenCode 2.3.2 / OpenChamber 2.8.0. Run from external root SSH (not embedded UI), pinned to verified config commit:
+
+```bash
+set -o pipefail
+CONFIG_SHA=7a91f77fb096141f6d680b80f601fdbf31135b8e
+gh api -H 'Accept: application/vnd.github.raw' \
+  "repos/gest0r1/my-opencode/contents/install-openchamber.sh?ref=$CONFIG_SHA" \
+  | OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCHAMBER_RESTART_MODE=now OPENCHAMBER_PACKAGE_MODE=release bash
+```
+
+This checkpoint is documentation only. Owner live acceptance remains pending.
