@@ -27,6 +27,10 @@ def inventory(text):
             tokens = args.split()
         executable = Path(tokens[0]).name if tokens else ''
         runtime = executable in ('opencode', 'openchamber') and any(t in ('serve', 'web', 'start') for t in tokens[1:])
+        if executable in ('node', 'bun') and len(tokens) > 2:
+            # Actual root unit: node .../current/bin/openchamber serve ...
+            runtime = runtime or (Path(tokens[1]).name in ('openchamber', 'opencode')
+                                  and any(t in ('serve', 'web', 'start') for t in tokens[2:]))
         if executable in ('node', 'bun', 'python3', 'python'):
             runtime = runtime or any(re.search(r'(?:openchamber|packages/web)/(?:server/|bin/cli)', t)
                                      or re.search(r'/(?:extensions|server-browser)/.+\.(?:js|mjs|py)$', t)
