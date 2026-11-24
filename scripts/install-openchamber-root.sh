@@ -55,7 +55,13 @@ OPENCODE_HOME="$(getent passwd "$OPENCODE_USER" | cut -d: -f6)"
 # from the OpenChamber release transaction.
 OPENCODE_UID="$(id -u "$OPENCODE_USER")"
 run_oc_user() {
-  sudo -H -u opencode env XDG_RUNTIME_DIR="/run/user/$OPENCODE_UID" \
+  # Do not inherit runner/root XDG paths. OpenCode 2.3.2 may initialize its
+  # config even for --version and must never write to another user's HOME.
+  sudo -H -u "$OPENCODE_USER" env HOME="$OPENCODE_HOME" \
+    XDG_CONFIG_HOME="$OPENCODE_HOME/.config" \
+    XDG_DATA_HOME="$OPENCODE_HOME/.local/share" \
+    XDG_STATE_HOME="$OPENCODE_HOME/.local/state" \
+    XDG_RUNTIME_DIR="/run/user/$OPENCODE_UID" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$OPENCODE_UID/bus" "$@"
 }
 if ! run_oc_user systemctl --user is-active --quiet opencode-web.service; then
