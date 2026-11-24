@@ -60,7 +60,7 @@ sudo -n tee /home/opencode/.config/systemd/user/openchamber.service >/dev/null <
 Description=P1 legacy OpenChamber fixture (unprivileged, ephemeral)
 [Service]
 Type=simple
-ExecStart=/bin/bash -c 'sleep 600 & echo $! > /home/opencode/p1-legacy-child.pid; exec /usr/bin/python3 -m http.server 3000 --bind 127.0.0.1 --directory /home/opencode/.config/openchamber'
+ExecStart=/bin/bash -c 'trap "" TERM; sleep 600 & echo $! > /home/opencode/p1-legacy-child.pid; trap - TERM; exec /usr/bin/python3 -m http.server 3000 --bind 127.0.0.1 --directory /home/opencode/.config/openchamber'
 Restart=on-failure
 [Install]
 WantedBy=default.target
@@ -110,6 +110,7 @@ test "$(sudo cat /root/.config/openchamber/profile-root-only.txt)" = historical-
 test "$(sudo cat /home/opencode/.config/openchamber/profile-source.txt)" = current-source-kept
 oc_curl -fsS "http://127.0.0.1:4096/api/session/$old_id" >/dev/null
 ! sudo kill -0 "$legacy_child" 2>/dev/null
+ grep -Fq 'Force stopping remaining processes in openchamber.service' "$RUNNER_TEMP/p1-failed-cutover.log"
 kill -0 "$unrelated"
 after_ocweb="$(user_systemctl show -p MainPID --value opencode-web.service)"
 [[ "$before_ocweb" != "$after_ocweb" ]]
