@@ -562,12 +562,31 @@ for parent in (home / '.config', home / '.config/openchamber', target):
 target.mkdir(parents=True, exist_ok=True)
 if not target.is_dir():
     raise SystemExit('OPENCHAMBER_SHARED_CHATS_NOT_DIRECTORY')
-for current, directories, files in os.walk(target, followlinks=False):
+def walk_error(error):
+    raise error
+
+for current, directories, files in os.walk(target, followlinks=False, onerror=walk_error):
     if any((Path(current) / name).is_symlink() for name in directories + files):
         raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_ENTRY_SYMLINK_REFUSED: {current}')
-    mode = stat.S_IMODE(os.stat(current, follow_symlinks=False).st_mode)
-    os.chown(current, -1, os.getgid(), follow_symlinks=False)
-    os.chmod(current, (mode | 0o2770) & ~0o007, follow_symlinks=False)
+    info = os.stat(current, follow_symlinks=False)
+    mode = stat.S_IMODE(info.st_mode)
+    if not stat.S_ISDIR(info.st_mode):
+        raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_NOT_DIRECTORY: {current}')
+    if info.st_uid == os.geteuid():
+        os.chown(current, -1, os.getgid(), follow_symlinks=False)
+        os.chmod(current, (mode | 0o2770) & ~0o007, follow_symlinks=False)
+    elif (info.st_uid == 0 and Path(current) != target
+          and info.st_gid == os.getgid()
+          and mode & 0o7770 == 0o2770
+          and not mode & 0o002
+          and os.access(current, os.R_OK | os.W_OK | os.X_OK)):
+        # The root UI creates date/session directories with setgid and
+        # UMask=0002 (typically 2775) inside the private Chats tree.
+        # They are already writable by opencode. Only their owner can
+        # chmod/chown them, and no privileged mutation is needed.
+        continue
+    else:
+        raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_UNSAFE_OWNER_OR_MODE: {current}')
 PY
 
 # Root-owned service; never use root systemd --user and never stop opencode-web.
