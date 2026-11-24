@@ -167,7 +167,7 @@ jobs:
           sudo mkdir -m 2775 "$date_dir"
           sudo mkdir -m 2775 "$fixture"
           sudo namei -l "$fixture"
-          sudo getfacl -p "$chats" "$date_dir" "$fixture"
+          if command -v getfacl >/dev/null; then sudo getfacl -p "$chats" "$date_dir" "$fixture"; fi
           sudo -H -u opencode -g "#$(id -g opencode)" id
           sudo -H -u opencode -g "#$(id -g opencode)" python3 - "$fixture" <<'PY'
           import os, sys
@@ -186,15 +186,20 @@ jobs:
             OPENCODE_CONFIG_REF="$GITHUB_SHA" OPENCHAMBER_REF="$OC_SHA" \
             OPENCHAMBER_RESTART_MODE=defer bash scripts/install-openchamber-root.sh
           test "$(sudo systemctl show openchamber.service -p MainPID --value)" = "$after_oc"
+          test "$(sudo cat /var/lib/my-opencode/openchamber-root-installer/active-sha)" = "$(printf '%040d' 0) $OC_SHA"
           sudo -n env GH_TOKEN="$GH_TOKEN" PATH="/usr/local/bin:/usr/bin:/bin" \
             OPENCODE_CONFIG_REF="$GITHUB_SHA" OPENCHAMBER_REF="$OC_SHA" \
             OPENCHAMBER_RESTART_MODE=now bash scripts/install-openchamber-root.sh
           sudo systemctl is-active --quiet openchamber.service
+          test "$(sudo cat /var/lib/my-opencode/openchamber-root-installer/active-sha)" = "$GITHUB_SHA $OC_SHA"
+          test "$(sudo systemctl show openchamber.service -p MainPID --value)" != "$after_oc"
           test "$(sudo stat -c %u:%g:%a "$fixture")" = "0:$(id -g opencode):2775"
           test "$(sudo cat "$fixture/history.txt")" = 'existing chat'
           test "$(sudo sha256sum /root/.config/openchamber/jwt-secret)" = "$before_jwt"
           latest_ocweb="$(sudo -u opencode env XDG_RUNTIME_DIR="/run/user/$(id -u opencode)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u opencode)/bus" systemctl --user show opencode-web.service --property=MainPID --value)"
           test "$latest_ocweb" = "$after_ocweb"
+          curl -fsS -u "opencode:$OPENCODE_TEST_PASSWORD" "http://127.0.0.1:4096/api/session/$id" |
+            node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{let j=JSON.parse(s);if(!j.data?.id)process.exit(1)})'
           echo 'PASS: single-invocation root-to-root upgrade preserves shared Chats and idle OpenCode'
 
       - name: Verify root UI traversal and unprivileged child capability boundary
