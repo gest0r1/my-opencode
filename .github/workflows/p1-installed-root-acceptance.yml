@@ -113,7 +113,10 @@ jobs:
           test "$(sudo stat -c %U /root/.config/openchamber/jwt-secret)" = root
           OPENCODE_TEST_PASSWORD="$(sudo -H -u opencode bash -c 'source "$HOME/.config/opencode.env"; printf %s "$OPENCODE_PASSWORD"')"
           [[ -n "$OPENCODE_TEST_PASSWORD" ]]
-          curl -fsS -u "opencode:$OPENCODE_TEST_PASSWORD" http://127.0.0.1:4096/api/info >/dev/null
+          expected="$(sudo -H -u opencode /home/opencode/.opencode/bin/opencode --version | sed -E 's/^opencode[[:space:]]+v?//')"
+          running="$(curl -fsS -u "opencode:$OPENCODE_TEST_PASSWORD" http://127.0.0.1:4096/api/info |
+            node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{const j=JSON.parse(s);const v=(j.data??j).version;if(typeof v!=="string")process.exit(1);console.log(v)})')"
+          test "$expected" = "$running"
           curl -fsS http://127.0.0.1:3000/ >/dev/null
           echo 'PASS: real systemd root service and unprivileged OpenCode'
           before_oc="$(sudo systemctl show openchamber.service --property=MainPID --value)"
