@@ -21,6 +21,27 @@ on:
       - 'config/systemd/openchamber-root.service'
       - 'config/systemd/opencode-owner-approval.service'
       - '.github/workflows/p1-installed-root-acceptance.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'install-openchamber.sh'
+      - 'install.sh'
+      - 'scripts/install-openchamber-root.sh'
+      - 'scripts/install-openchamber-v2-core.sh'
+      - 'scripts/runtime-processes.py'
+      - 'scripts/openchamber-runtime-store.sh'
+      - 'scripts/migrate-openchamber-to-root.py'
+      - 'scripts/opencode-owner-approval*.py'
+      - 'scripts/openchamber-child-boundary.cjs'
+      - 'tests/test_openchamber_root_child_boundary.py'
+      - 'tests/test_openchamber_shared_chats.py'
+      - 'tests/test_root_openchamber_dac_boundary.py'
+      - 'tests/p1-real-systemd-migration.sh'
+      - 'scripts/rekey-openchamber-ui.py'
+      - 'scripts/launch-openchamber-root.sh'
+      - 'config/systemd/openchamber-root.service'
+      - 'config/systemd/opencode-owner-approval.service'
+      - '.github/workflows/p1-installed-root-acceptance.yml'
   workflow_dispatch:
 
 permissions:
@@ -141,10 +162,12 @@ jobs:
           date_dir="$chats/2000-01-01"
           fixture="$date_dir/session-fixture"
           sudo namei -l "$chats"
-          sudo -H -u opencode -g "#$(id -g opencode)" mkdir -p "$fixture"
-          sudo chown "0:$(id -g opencode)" "$date_dir" "$fixture"
-          sudo chmod 2775 "$date_dir" "$fixture"
+          # Model the real root UI: root creates directories inside the
+          # group-inheriting Chats tree, not opencode followed by chown.
+          sudo mkdir -m 2775 "$date_dir"
+          sudo mkdir -m 2775 "$fixture"
           sudo namei -l "$fixture"
+          sudo getfacl -p "$chats" "$date_dir" "$fixture"
           sudo -H -u opencode -g "#$(id -g opencode)" id
           sudo -H -u opencode -g "#$(id -g opencode)" python3 - "$fixture" <<'PY'
           import os, sys

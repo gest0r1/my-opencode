@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,14 @@ def run_setup(home):
         [sys.executable, '-', str(path)], input=PREPARE,
         text=True, capture_output=True, env=env, timeout=10,
     )
+
+
+def restrictive_default_acl(uid):
+    # Linux POSIX ACL xattr: owner=rwx, named runtime user=r-x, group=r-x,
+    # mask=rwx, other=r-x. chmod 2775 alone does not fix the named entry.
+    entries = [(1, 7, 0xffffffff), (2, 5, uid), (4, 5, 0xffffffff),
+               (16, 7, 0xffffffff), (32, 5, 0xffffffff)]
+    return struct.pack('<I', 2) + b''.join(struct.pack('<HHI', *row) for row in entries)
 
 
 class SharedChatsContract(unittest.TestCase):
@@ -64,16 +73,30 @@ class SharedChatsContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             target = home / '.config/openchamber/chats'
-            target.mkdir(parents=True)
+            target.parent.mkdir(parents=True)
+            os.setxattr(target.parent, 'system.posix_acl_default',
+                        restrictive_default_acl(os.geteuid()))
+            target.mkdir()
+            self.assertIn('system.posix_acl_default', os.listxattr(target))
+            self.assertIn('system.posix_acl_access', os.listxattr(target))
+            # Prove failure before setup using a genuinely root-created child.
+            denied = target / 'before-normalization'
+            subprocess.run(['sudo', '-n', 'mkdir', str(denied)], check=True)
+            subprocess.run(['sudo', '-n', 'chown', f'0:{os.getgid()}', str(denied)], check=True)
+            subprocess.run(['sudo', '-n', 'chmod', '2775', str(denied)], check=True)
+            self.assertFalse(os.access(denied, os.R_OK | os.W_OK | os.X_OK))
+            subprocess.run(['sudo', '-n', 'rmdir', str(denied)], check=True)
             self.assertEqual(run_setup(home).returncode, 0)
+            self.assertNotIn('system.posix_acl_default', os.listxattr(target))
+            self.assertNotIn('system.posix_acl_access', os.listxattr(target))
+            self.assertIn('system.posix_acl_default', os.listxattr(target.parent))
             date = target / '2026-11-24'
             session = date / 'session-fixture'
             for directory in (date, session):
-                subprocess.run(
-                    ['sudo', '-n', 'install', '-d', '-o', 'root',
-                     '-g', str(os.getgid()), '-m', '2775', str(directory)],
-                    check=True, capture_output=True,
-                )
+                subprocess.run(['sudo', '-n', 'mkdir', str(directory)], check=True)
+                subprocess.run(['sudo', '-n', 'chown', f'0:{os.getgid()}', str(directory)], check=True)
+                subprocess.run(['sudo', '-n', 'chmod', '2775', str(directory)], check=True)
+                self.assertTrue(os.access(directory, os.R_OK | os.W_OK | os.X_OK))
             marker = session / 'existing.txt'
             marker.write_text('preserved')
             try:

@@ -548,7 +548,7 @@ python3 "$TMP/rebase-extensions.py"
 # Prepare the shared Chats tree only after migration source detection and
 # copying. A clean install must never treat the new empty tree as legacy data.
 run_oc_user python3 - "$SHARED_CHATS_DIR" <<'PY'
-import os, stat, sys
+import errno, os, stat, sys
 from pathlib import Path
 target = Path(sys.argv[1])
 home = Path.home()
@@ -571,6 +571,17 @@ for current, directories, files in os.walk(target, followlinks=False, onerror=wa
     if not stat.S_ISDIR(info.st_mode):
         raise SystemExit(f'OPENCHAMBER_SHARED_CHATS_NOT_DIRECTORY: {current}')
     if info.st_uid == os.geteuid():
+        # This private execution tree has a single group-access contract.
+        # Inherited ACLs can make chmod's group bits represent the mask,
+        # rather than actual group access, and propagate that restriction
+        # to future root-created directories. Normalize only directories
+        # owned by the execution user, never ancestors or other owners.
+        for acl in ('system.posix_acl_default', 'system.posix_acl_access'):
+            try:
+                os.removexattr(current, acl, follow_symlinks=False)
+            except OSError as error:
+                if error.errno not in (errno.ENODATA, errno.ENOTSUP):
+                    raise
         os.chown(current, -1, os.getgid(), follow_symlinks=False)
         os.chmod(current, (mode | 0o2770) & ~0o007, follow_symlinks=False)
     elif (info.st_uid == 0 and Path(current) != target
