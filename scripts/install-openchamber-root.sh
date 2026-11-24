@@ -55,7 +55,13 @@ OPENCODE_HOME="$(getent passwd "$OPENCODE_USER" | cut -d: -f6)"
 # from the OpenChamber release transaction.
 OPENCODE_UID="$(id -u "$OPENCODE_USER")"
 run_oc_user() {
-  sudo -H -u opencode env XDG_RUNTIME_DIR="/run/user/$OPENCODE_UID" \
+  # Do not inherit runner/root XDG paths. OpenCode 2.3.2 may initialize its
+  # config even for --version and must never write to another user's HOME.
+  sudo -H -u "$OPENCODE_USER" env HOME="$OPENCODE_HOME" \
+    XDG_CONFIG_HOME="$OPENCODE_HOME/.config" \
+    XDG_DATA_HOME="$OPENCODE_HOME/.local/share" \
+    XDG_STATE_HOME="$OPENCODE_HOME/.local/state" \
+    XDG_RUNTIME_DIR="/run/user/$OPENCODE_UID" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$OPENCODE_UID/bus" "$@"
 }
 if ! run_oc_user systemctl --user is-active --quiet opencode-web.service; then
@@ -203,6 +209,25 @@ if [[ -n "$OPENCODE_SERVICE_PASSWORD" ]]; then
     http://127.0.0.1:4096/api/info -o "$TMP/opencode-info.json" || {
       echo 'OpenCode authentication/readiness failed; refusing root cutover' >&2; exit 3;
     }
+  installed_opencode="$(run_oc_user "$OPENCODE_HOME/.opencode/bin/opencode" --version | sed -E 's/^opencode[[:space:]]+v?//')"
+  live_opencode="$(python3 - "$TMP/opencode-info.json" <<'VERSION'
+import json
+import re
+import sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    body = json.load(stream)
+    info = body.get("data", body)
+    version = info.get("version")
+    if not isinstance(version, str) or not re.fullmatch(r"2\.\d+\.\d+", version):
+        sys.exit(1)
+    print(version)
+VERSION
+  )" || { echo 'OPENCODE_LIVE_VERSION_UNAVAILABLE' >&2; exit 3; }
+  if [[ "$live_opencode" != "$installed_opencode" ]]; then
+    install_journal_event activation pending_restart "reason=opencode_live_version_mismatch" "live_opencode=$live_opencode" "installed_opencode=$installed_opencode"
+    echo "PENDING APPLY: OpenCode is running $live_opencode; installed $installed_opencode. Retry after the OpenCode service has restarted in a quiescent window." >&2
+    exit 0
+  fi
   if [[ -f "$AUTH_FILE" ]]; then
     [[ "$(stat -c %u "$AUTH_FILE")" == 0 && "$(stat -c %a "$AUTH_FILE")" =~ ^[460][04]0$ ]] || {
       echo 'External OpenCode auth file must be root-owned and private' >&2; exit 2;
@@ -230,7 +255,7 @@ export XDG_CONFIG_HOME=/root/.config XDG_DATA_HOME=/root/.local/share XDG_STATE_
 export HOME=/root OPENCODE_BINARY=/usr/local/lib/my-opencode/opencode-unpriv-wrapper.sh
 export OPENCHAMBER_ROOT_ONLY=1 OPENCHAMBER_EXECUTION_USER=opencode OPENCHAMBER_ROOT_MODE=separated
 export OPENCODE_CONFIG_REF="$CONFIG_SHA" OPENCHAMBER_REF="$APP_SHA"
-export OPENCHAMBER_EXPECTED_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.7.1}"
+export OPENCHAMBER_EXPECTED_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.8.0}"
 export OPENCHAMBER_RUNTIME_ROOT="${OPENCHAMBER_RUNTIME_ROOT:-/root/.local/share/openchamber-v2}"
 export PATH="/root/.local/bin:/root/.bun/bin:/root/.opencode/bin:$PATH"
 EXPECTED_OPENCHAMBER_VERSION="$OPENCHAMBER_EXPECTED_VERSION"

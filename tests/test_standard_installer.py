@@ -32,7 +32,7 @@ def main():
     req(root,'install-openchamber-v2-core.sh')
     req(root,'openchamber-runtime-store.sh')
     req(core,'OPENCODE_VERSION="${OPENCODE_INSTALL_VERSION:-2.3.2}"')
-    req(core,'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.7.1}"')
+    req(core,'EXPECTED_OPENCHAMBER_VERSION="${OPENCHAMBER_EXPECTED_VERSION:-2.8.0}"')
     req(core,'opencode_binary_changed=0')
     req(core,'v2-web-package-$APP_SHA')
     req(core,'package_source_sha')
