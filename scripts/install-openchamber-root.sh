@@ -422,6 +422,14 @@ restart_opencode_if_needed() {
   return 3
 }
 
+# Auto is non-disruptive even if OpenCode was installed before the first UI.
+if [[ "$RESTART_MODE" == auto ]] &&
+   { [[ "$live_opencode" != "$installed_opencode" ]] || opencode_has_work; }; then
+  install_journal_event activation pending_restart "reason=opencode_work_or_version"
+  echo 'PENDING APPLY: OpenCode needs a restart; use OPENCHAMBER_RESTART_MODE=now from SSH.'
+  exit 0
+fi
+
 # Roll back the root OpenChamber package and migration, not the OpenCode
 # binary/config already installed by install.sh. Session history is preserved.
 old_active=0
@@ -440,7 +448,7 @@ for unit in openchamber.service opencode-owner-approval.service; do
 done
 [[ ! -f "$ROOT_STATE/active-sha" ]] || cp -p "$ROOT_STATE/active-sha" "$TMP/active-sha.before"
 rollback_cutover() {
-  local code=$?
+  local code="${1:-$?}"
   (( code != 0 )) || code=130
   trap - ERR INT TERM
   if (( cutover_started )); then
@@ -479,35 +487,37 @@ rollback_cutover() {
 trap rollback_cutover ERR
 trap 'rollback_cutover' INT TERM
 
-# Detect a non-default OpenChamber data directory from the old runtime.
-# Parse its startup file only as opencode, never source its shell content as
-# root. A custom directory outside the old user's home is refused rather
-# than silently starting the new UI without its sessions/settings.
-OLD_OC_DATA_DIR="$(run_oc_user bash -c 'if [[ -f "$HOME/.config/openchamber/startup.env" ]]; then source "$HOME/.config/openchamber/startup.env"; fi; printf %s "${OPENCHAMBER_DATA_DIR:-$HOME/.config/openchamber}"')"
-if [[ "$OLD_OC_DATA_DIR" != "$OPENCODE_HOME/.config/openchamber" &&
-      "$OLD_OC_DATA_DIR" != "$OPENCODE_HOME/"* ]]; then
-  echo "OPENCHAMBER_DATA_MIGRATION_UNSUPPORTED: custom data outside opencode HOME; refusing cutover" >&2
-  exit 3
+# An activated root profile is already authoritative. The shared Chats
+# directory in opencode HOME is execution data, not a fresh migration source.
+run_oc_user systemctl --user is-active --quiet openchamber.service && old_active=1 || true
+run_oc_user systemctl --user is-enabled --quiet openchamber.service && old_enabled=1 || true
+OLD_OC_DATA_DIR=''
+if [[ ! -f "$ROOT_STATE/active-sha" || ! -f /root/.config/openchamber/startup.env || "$old_active" == 1 ]]; then
+  # Detect custom legacy data only when migrating the legacy user UI.
+  OLD_OC_DATA_DIR="$(run_oc_user bash -c 'if [[ -f "$HOME/.config/openchamber/startup.env" ]]; then source "$HOME/.config/openchamber/startup.env"; fi; printf %s "${OPENCHAMBER_DATA_DIR:-$HOME/.config/openchamber}"')"
+  if [[ "$OLD_OC_DATA_DIR" != "$OPENCODE_HOME/.config/openchamber" &&
+        "$OLD_OC_DATA_DIR" != "$OPENCODE_HOME/"* ]]; then
+    echo 'OPENCHAMBER_DATA_MIGRATION_UNSUPPORTED: custom data outside opencode HOME; refusing cutover' >&2
+    exit 3
+  fi
+  [[ ! -L "$OLD_OC_DATA_DIR" ]] || { echo 'OPENCHAMBER_DATA_MIGRATION_SYMLINK_REFUSED' >&2; exit 3; }
 fi
-[[ ! -L "$OLD_OC_DATA_DIR" ]] || { echo 'OPENCHAMBER_DATA_MIGRATION_SYMLINK_REFUSED' >&2; exit 3; }
 
 # Preparation is complete. Start the short maintenance window: stop UI
 # cgroups including PTYs and project processes; no global process killing.
-run_oc_user systemctl --user is-active --quiet openchamber.service && old_active=1 || true
-run_oc_user systemctl --user is-enabled --quiet openchamber.service && old_enabled=1 || true
 cutover_started=1
 if ((old_active)); then stop_managed_service openchamber.service run_oc_user systemctl --user; fi
 if ((root_was_active)); then stop_managed_service openchamber.service systemctl; fi
-restart_opencode_if_needed
+if [[ "$RESTART_MODE" == now ]]; then restart_opencode_if_needed; fi
 
 # Publish only after the old services have stopped.
 if [[ "$(readlink -f "$OPENCHAMBER_CURRENT" 2>/dev/null || true)" != "$RELEASE_DIR" ]]; then
   oc_activate_release "$RELEASE_DIR"
 fi
 oc_write_managed_launcher
-[[ -x "$OPENCHAMBER_CURRENT_BIN" ]] || { echo 'Root OpenChamber binary is not installed' >&2; exit 3; }
+[[ -x "$OPENCHAMBER_CURRENT_BIN" ]] || { echo 'Root OpenChamber binary is not installed' >&2; rollback_cutover 3; }
 migration_status='not_required'
-if [[ -d "$OLD_OC_DATA_DIR" ]]; then
+if [[ -n "$OLD_OC_DATA_DIR" && -d "$OLD_OC_DATA_DIR" ]]; then
   migration_status="$(python3 "$TMP/migrate.py" stage --source "$OLD_OC_DATA_DIR" --quiescent yes | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
 fi
 if [[ "$migration_status" != staged && "$migration_status" != completed && "$migration_status" != not_required ]]; then
@@ -526,7 +536,7 @@ if [[ "$migration_status" == staged || ! -f "$NATIVE_ENV" ]]; then
   python3 "$TMP/rekey.py"
 fi
 [[ -f "$NATIVE_ENV" && "$(stat -c %u "$NATIVE_ENV")" == 0 ]] || {
-  echo 'Root OpenChamber authentication configuration unavailable' >&2; exit 3;
+  echo 'Root OpenChamber authentication configuration unavailable' >&2; rollback_cutover 3;
 }
 # Idempotent repair after a data-only opencode->root migration. The copied
 # extensions.json can still refer to /home/opencode-owned plugin directories.
@@ -588,10 +598,10 @@ for i in {1..20}; do
   sleep 1
 done
 [[ -S /run/my-opencode-approval/owner.sock && -S /run/my-opencode-approval/agent.sock ]] || {
-  echo 'Owner broker sockets unavailable' >&2; exit 3;
+  echo 'Owner broker sockets unavailable' >&2; rollback_cutover 3;
 }
 [[ "$(stat -c %a /run/my-opencode-approval/owner.sock)" == 600 ]] || {
-  echo 'Owner approval socket is not private' >&2; exit 3;
+  echo 'Owner approval socket is not private' >&2; rollback_cutover 3;
 }
 systemctl enable --now openchamber.service
 for i in {1..30}; do
