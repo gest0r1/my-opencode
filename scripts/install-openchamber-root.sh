@@ -521,7 +521,7 @@ if [[ -n "$OLD_OC_DATA_DIR" && -d "$OLD_OC_DATA_DIR" ]]; then
   migration_status="$(python3 "$TMP/migrate.py" stage --source "$OLD_OC_DATA_DIR" --quiescent yes | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
 fi
 if [[ "$migration_status" != staged && "$migration_status" != completed && "$migration_status" != not_required ]]; then
-  echo 'OpenChamber data migration not staged' >&2; exit 3
+  echo 'OpenChamber data migration not staged' >&2; rollback_cutover 3
 fi
 
 # The original OpenChamber UI secret and password were readable under the
