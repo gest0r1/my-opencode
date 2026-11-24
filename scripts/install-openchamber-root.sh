@@ -61,10 +61,11 @@ OPENCODE_HOME="$(getent passwd "$OPENCODE_USER" | cut -d: -f6)"
 # OpenCode remains a systemd --user unit for opencode; only the final
 # cutover may restart it when the installed version or active RUNs require it.
 OPENCODE_UID="$(id -u "$OPENCODE_USER")"
+OPENCODE_GID="$(id -g "$OPENCODE_USER")"
 run_oc_user() {
   # Do not inherit runner/root XDG paths. OpenCode 2.3.2 may initialize its
   # config even for --version and must never write to another user's HOME.
-  sudo -H -u "$OPENCODE_USER" env HOME="$OPENCODE_HOME" \
+  sudo -H -u "$OPENCODE_USER" -g "#$OPENCODE_GID" env HOME="$OPENCODE_HOME" \
     XDG_CONFIG_HOME="$OPENCODE_HOME/.config" \
     XDG_DATA_HOME="$OPENCODE_HOME/.local/share" \
     XDG_STATE_HOME="$OPENCODE_HOME/.local/state" \
