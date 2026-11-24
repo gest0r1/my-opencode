@@ -141,11 +141,21 @@ jobs:
           date_dir="$chats/2000-01-01"
           fixture="$date_dir/session-fixture"
           sudo namei -l "$chats"
-          sudo -H -u opencode mkdir -p "$fixture"
+          sudo -H -u opencode -g "#$(id -g opencode)" mkdir -p "$fixture"
           sudo chown "0:$(id -g opencode)" "$date_dir" "$fixture"
           sudo chmod 2775 "$date_dir" "$fixture"
           sudo namei -l "$fixture"
-          printf 'existing chat\n' | sudo -H -u opencode tee "$fixture/history.txt" >/dev/null
+          sudo -H -u opencode -g "#$(id -g opencode)" id
+          sudo -H -u opencode -g "#$(id -g opencode)" python3 - "$fixture" <<'PY'
+          import os, sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          print("fixture", "uid", os.geteuid(), "gid", os.getegid(), "groups", os.getgroups(),
+                "directory", p.stat().st_uid, p.stat().st_gid, oct(p.stat().st_mode & 0o7777),
+                "access", os.access(p, os.R_OK | os.W_OK | os.X_OK), "xattrs", os.listxattr(p))
+          assert os.access(p, os.R_OK | os.W_OK | os.X_OK), 'P1_FIXTURE_OPENCODE_ACCESS'
+          (p/'history.txt').write_text('existing chat\n')
+          PY
           before_jwt="$(sudo sha256sum /root/.config/openchamber/jwt-secret)"
           # Force a configuration-only upgrade without changing the immutable app.
           printf '%s %s\n' "$(printf '%040d' 0)" "$OC_SHA" | sudo tee /var/lib/my-opencode/openchamber-root-installer/active-sha >/dev/null
