@@ -60,10 +60,10 @@ class RootDacBoundary(unittest.TestCase):
                       '--property=MainPID', '--value').stdout.strip())
         self.assertGreater(pid, 1)
         caps = cap_fields(pid)
-        dac = 1 << 1  # CAP_DAC_OVERRIDE
+        owner_caps = (1 << 0) | (1 << 1)  # CAP_CHOWN and CAP_DAC_OVERRIDE
         for field in ('CapEff', 'CapBnd'):
-            self.assertNotEqual(caps[field] & dac, 0, f'{field} missing CAP_DAC_OVERRIDE')
-        self.assertEqual(caps['CapAmb'] & dac, 0, 'DAC override must not be ambient')
+            self.assertEqual(caps[field] & owner_caps, owner_caps, f'{field} missing root UI capabilities')
+        self.assertEqual(caps['CapAmb'] & owner_caps, 0, 'owner capabilities must not be ambient')
 
     def test_node_children_run_unprivileged_without_dac(self):
         node = shutil.which('node')
@@ -73,6 +73,13 @@ class RootDacBoundary(unittest.TestCase):
         source = r"""
 const fs = require('node:fs');
 const child = require('node:child_process');
+const os = require('node:os');
+const path = require('node:path');
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'guest-capability-'));
+try {
+  fs.chownSync(scratch, Number(process.env.OPENCHAMBER_EXECUTION_UID), Number(process.env.OPENCHAMBER_EXECUTION_GID));
+  if (fs.statSync(scratch).uid !== Number(process.env.OPENCHAMBER_EXECUTION_UID)) throw Error('scratch ownership mismatch');
+} finally { fs.rmdirSync(scratch); }
 const privateProject = '__PROJECT__';
 const ownerFile = '__OWNER__';
 if (!fs.readFileSync(privateProject, 'utf8').includes('')) throw Error('read failed');
@@ -91,7 +98,7 @@ const result = child.spawnSync('/usr/bin/python3', ['-c', probe], { encoding: 'u
 if (result.error || result.status !== 0) throw Error('child failed: ' + result.stderr);
 const lines = result.stdout.trim().split(/\r?\n/);
 if (lines[0] !== '__UID__') throw Error('unexpected child uid: ' + lines[0]);
-if ((BigInt('0x' + lines[1]) & 0x2n) !== 0n) throw Error('child inherited DAC override');
+if ((BigInt('0x' + lines[1]) & 0x3n) !== 0n) throw Error('child inherited CHOWN or DAC override');
 if (lines[2] !== 'DENIED') throw Error('child could access root private file');
 console.log('P1_ROOT_DAC_BOUNDARY_PASS');
 """
@@ -103,7 +110,7 @@ console.log('P1_ROOT_DAC_BOUNDARY_PASS');
                         .replace('__UID__', str(self.exec_uid)))
         props = [
             'User=root', 'Group=root',
-            'CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE',
+            'CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_CHOWN',
             'AmbientCapabilities=CAP_SETUID CAP_SETGID',
             'NoNewPrivileges=yes', 'ProtectSystem=full', 'PrivateTmp=yes',
         ]

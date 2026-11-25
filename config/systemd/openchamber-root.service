@@ -26,8 +26,9 @@ RestartSec=5
 NoNewPrivileges=true
 # Root UI must traverse opencode-owned 0700 projects/Chats to read Git and
 # OpenChamber project setup. Do not grant this capability to child executors.
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE
-# Deliberately exclude CAP_DAC_OVERRIDE from ambient capabilities.
+# CHOWN: root UI prepares isolated extension Git scratch and service data.
+# Neither CHOWN nor DAC_OVERRIDE is ambient; children switch to opencode.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_CHOWN
 AmbientCapabilities=CAP_SETUID CAP_SETGID
 PrivateTmp=true
 ProtectSystem=full

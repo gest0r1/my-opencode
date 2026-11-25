@@ -45,7 +45,7 @@ def main():
     require(oc_unit,'openchamber-child-boundary.cjs')
     # The root UI must traverse existing 0700 opencode project and Chats paths;
     # child processes and ambient caps must never inherit DAC override.
-    require(oc_unit,'CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE')
+    require(oc_unit,'CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_CHOWN')
     require(oc_unit,'AmbientCapabilities=CAP_SETUID CAP_SETGID')
     forbid(oc_unit,'AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE')
     require(oc_unit,'NoNewPrivileges=true')
