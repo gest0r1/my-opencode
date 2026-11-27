@@ -2,7 +2,7 @@
 # Called by the root OpenChamber coordinator after validating system tools.
 stage_unified_release() {
   local work=$1 release metadata node_path package_path pkg
-  gh release download "v2-web-package-$APP_SHA" --repo "$APP_REPO" --pattern manifest.json --dir "$work" --clobber
+  gh release download "v2-web-package-$APP_SHA" --repo "$APP_REPO" --pattern manifest.json --dir "$work" --clobber || return 1
   metadata="$(python3 - "$work/manifest.json" "$APP_SHA" "$EXPECTED_OPENCHAMBER_VERSION" <<'PY'
 import json, re, sys
 
@@ -25,10 +25,10 @@ PY
   release="$OPENCHAMBER_RELEASES/$digest"
   pkg="$release/install/global/node_modules/@openchamber/web"
   if [[ ! -f "$pkg/build/bin/owner-approval.js" ]]; then
-    gh release download "$tag" --repo "$APP_REPO" --pattern "$asset" --dir "$work" --clobber
+    gh release download "$tag" --repo "$APP_REPO" --pattern "$asset" --dir "$work" --clobber || return 1
     package_path="$work/$asset"
-    printf '%s  %s\n' "$digest" "$package_path" | sha256sum -c - >/dev/null
-    release="$(OPENCHAMBER_ROOT_ONLY=1 oc_stage_package "$package_path" "$digest" | tail -n 1)"
+    printf '%s  %s\n' "$digest" "$package_path" | sha256sum -c - >/dev/null || return 1
+    release="$(OPENCHAMBER_ROOT_ONLY=1 oc_stage_package "$package_path" "$digest" | tail -n 1)" || return 1
     [[ "$release" == "$OPENCHAMBER_RELEASES/$digest" ]] || return 1
   fi
   [[ -f "$pkg/build/bin/owner-approval.js" && -f "$pkg/build/bin/cli.js" && -f "$pkg/build/server/index.js" ]] || {
@@ -36,7 +36,7 @@ PY
   }
   node_path="$(readlink -f "$(command -v node)")"
   trusted_root_exec "$node_path" || return 1
-  python3 - "$release" <<'PY'
+  python3 - "$release" <<'PY' || return 1
 import os, stat, sys
 from pathlib import Path
 

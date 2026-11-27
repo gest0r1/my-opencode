@@ -58,6 +58,8 @@ def rebase_profile(stage, active):
         if file.is_file():
             value = json.loads(file.read_text(encoding='utf-8'))
             updated = rebase(value, str(LEGACY), str(active))
+            if name == 'settings.json' and isinstance(updated, dict):
+                updated.pop('opencodeBinary', None)
             if updated != value:
                 FILES.atomic_json(file, updated)
 

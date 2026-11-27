@@ -2791,17 +2791,38 @@ export async function supersedeRun(
   newRunId:string,
   reason:string,
 ):Promise<Record<string,unknown>>{
-  if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(newRunId) || newRunId===oldRunId) {
+  if(![oldRunId,newRunId].every((runId)=>/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId)) || newRunId===oldRunId) {
     throw new StageCliError('supersede requires a new safe run-id');
   }
   if(!SUPERSEDE_REASONS.has(reason)) {
     throw new StageCliError(`invalid supersede reason: ${reason}`);
   }
-  const oldState=await validateState(stateRoot,oldRunId);
+  const protectedMode=passkeyBrokerRequired();
+  const prior=protectedMode ? await agentBrokerAction({action:'retired_run',run_id:oldRunId}) : null;
+  if(prior?.replacement_run_id && prior.replacement_run_id!==newRunId)throw new StageCliError('OWNER_RUN_REPLACEMENT_CONFLICT');
+  let canonicalRetired=Boolean(prior?.replacement_run_id);
+  const oldState=canonicalRetired ? await readState(stateRoot,oldRunId) : await validateState(stateRoot,oldRunId);
   if(!oldState.manifest_file)throw new StageCliError('old run has no frozen manifest');
   const oldManifest=JSON.parse(await readFile(oldState.manifest_file,'utf8')) as PipelineManifest;
   const oldRoot=dirname(resolve(oldState.manifest_file));
   const newRoot=join(dirname(oldRoot),newRunId);
+  if(canonicalRetired){
+    const manifestFile=join(newRoot,'manifest.json');
+    const replacement=JSON.parse(await readFile(manifestFile,'utf8')) as PipelineManifest;
+    if(replacement.lineage?.supersedes!==oldRunId || replacement.run_id!==newRunId || replacement.lineage.reason_code!==reason)
+      throw new StageCliError('OWNER_RUN_REPLACEMENT_CONFLICT');
+    const unlock=await acquireLock(stateRoot,oldRunId);
+    try {
+      const state=await readState(stateRoot,oldRunId);
+      state.superseded_by=newRunId;
+      state.supersede_reason=reason as any;
+      state.updated_at=now();
+      await writeJsonAtomic(statePath(stateRoot,oldRunId),state);
+    } finally {await unlock();}
+    return {status:'PASS',change_class:replacement.lineage.change_class,old_run_id:oldRunId,new_run_id:newRunId,
+      reason_code:reason,manifest:manifestFile,state_copied:false,machine_evidence_copied:false,
+      deployment_target_check_reset:Boolean(oldManifest.deployment_target_check)};
+  }
   if(await fileExists(newRoot) || await fileExists(statePath(stateRoot,newRunId))) {
     throw new StageCliError(`supersede destination already exists: ${newRunId}`);
   }
@@ -2826,6 +2847,10 @@ export async function supersedeRun(
     const unlock=await acquireLock(stateRoot,oldRunId);
     try{
       const state=await validateState(stateRoot,oldRunId);
+      if(protectedMode){
+        await agentBrokerAction({action:'retire_run',run_id:oldRunId,replacement_run_id:newRunId});
+        canonicalRetired=true;
+      }
       state.superseded_by=newRunId;
       state.supersede_reason=reason as any;
       state.updated_at=now();
@@ -2844,7 +2869,7 @@ export async function supersedeRun(
       deployment_target_check_reset:Boolean(oldManifest.deployment_target_check),
     };
   }catch(error){
-    await rm(newRoot,{recursive:true,force:true});
+    if(!canonicalRetired)await rm(newRoot,{recursive:true,force:true});
     throw error;
   }
 }
@@ -3254,8 +3279,9 @@ export async function runCli(args: string[]): Promise<void> {
   const runId = positional[1];
   if (!runId) throw new StageCliError('run-id is required');
   if (command === 'owner-reauthorize') {
-    if (!options.ownerSourceSession) throw new StageCliError('The original OpenCode session ID is required');
-    printState(await reauthorizeOwnerCheckpoints(options.stateRoot, runId, options.ownerSourceSession), options.json);
+    const sourceSession = process.env.MY_OPENCODE_ACTIVE_SESSION ?? options.ownerSourceSession;
+    if (!sourceSession) throw new StageCliError('The original OpenCode session ID is required');
+    printState(await reauthorizeOwnerCheckpoints(options.stateRoot, runId, sourceSession), options.json);
     return;
   }
   if (command === 'status') {

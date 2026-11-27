@@ -434,7 +434,7 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
       subject: 'final-manifest', run_id: manifestObject.run_id,
       decision: 'approved', shown_manifest_sha256: manifestSha,
       owner_response: 'broker-pending',
-      source_session: values.get('--owner-source-session'),
+      source_session: process.env.MY_OPENCODE_ACTIVE_SESSION ?? values.get('--owner-source-session'),
     } : {
       subject: values.get('--approval-subject'), run_id: values.get('--approval-run-id'),
       decision: values.get('--approval-decision'), shown_manifest_sha256: values.get('--approval-manifest-sha256'),
@@ -451,6 +451,7 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
   // Owner can answer later. Resume only a matching frozen PLAN; never re-init
   // or silently adopt a different worktree after the broker request was issued.
   let resumePendingApproval = false;
+  let approvalProjected = false;
   if (command === 'plan-start' && protectedOwnerGate) {
     const stateFile = resolve(values.get('--state-root') ?? '.tmp/pipelines', manifestObject.run_id, 'state.json');
     const existing = await readFile(stateFile, 'utf8').then(JSON.parse).catch((error: any) => {
@@ -458,12 +459,16 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
       throw error;
     });
     if (existing) {
-      if (existing.status !== 'planned' ||
-          existing.manifest_sha256 !== manifestSha ||
+      if (existing.manifest_sha256 !== manifestSha ||
           resolve(String(existing.manifest_file ?? '')) !== resolve(manifest)) {
         throw new Error('OWNER_APPROVAL_RESUME_STATE_MISMATCH');
       }
       resumePendingApproval = true;
+      approvalProjected = existing.status !== 'planned';
+      if (approvalProjected) {
+        const { validateState } = await import('./stage-cli-core.ts');
+        await validateState(resolve(values.get('--state-root') ?? '.tmp/pipelines'), manifestObject.run_id);
+      }
     }
   }
   const steps: Array<[string, string[]]> = resumePendingApproval ? [] : [
@@ -475,7 +480,7 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
     const runId = manifestObject.run_id;
     steps.push(
       ...(resumePendingApproval ? [] : [['init', [script('stage-cli.ts'), 'init', manifest, ...root, '--json']] as [string, string[]]]),
-      ...(technicalCarry ? [] : [['approve', [script('stage-cli.ts'), 'approve', runId, ...root, ...approvalArgs, '--json']] as [string, string[]]]),
+      ...(technicalCarry || approvalProjected ? [] : [['approve', [script('stage-cli.ts'), 'approve', runId, ...root, ...approvalArgs, '--json']] as [string, string[]]]),
       ['github-sync', [script('pipeline-github-sync.mjs'), 'sync', runId, ...root]],
       ['validate', [script('stage-cli.ts'), 'validate', runId, ...root, '--json']],
       ['next', [script('stage-cli.ts'), 'next', runId, ...root, '--json']],

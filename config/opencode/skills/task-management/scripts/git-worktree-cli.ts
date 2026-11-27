@@ -317,6 +317,16 @@ async function syncPlan(cwd:string,check:boolean):Promise<Record<string,unknown>
   return {...base,action:'merged',local_main_sha:localMain,head_sha:await git(['rev-parse','HEAD'],cwd)};
 }
 async function publish(manifest: Manifest, manifestPath: string, cwd: string): Promise<Record<string, unknown>> {
+  const { passkeyBrokerRequired } = await import('./owner-broker-client.mjs');
+  const requireApproval = async () => {
+    if (!passkeyBrokerRequired()) return;
+    const { validateState } = await import('./stage-cli-core.ts');
+    const state = await validateState(dirname(dirname(resolve(manifestPath))), String(manifest.run_id));
+    if (state.status === 'planned' || state.superseded_by || resolve(String(state.manifest_file ?? '')) !== resolve(manifestPath)) {
+      throw new GateError('OWNER_BROKER_PUBLISH_PLAN_REQUIRED');
+    }
+  };
+  await requireApproval();
   assertSetup(manifest.git_setup);
   let changed = await verify(manifest, manifestPath, cwd);
   const working = await Promise.all([
@@ -331,6 +341,7 @@ async function publish(manifest: Manifest, manifestPath: string, cwd: string): P
   }
   changed = await verify(manifest, manifestPath, cwd);
   const candidate = await git(['rev-parse', 'HEAD'], cwd);
+  await requireApproval();
   await git(['push', 'origin', `HEAD:refs/heads/${manifest.git_setup.branch}`], cwd);
   const remote = (await git(['ls-remote', '--heads', 'origin', `refs/heads/${manifest.git_setup.branch}`], cwd))
     .split(/\s+/)[0] ?? '';

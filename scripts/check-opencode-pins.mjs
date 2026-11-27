@@ -12,12 +12,16 @@ for (const file of ['install.sh', 'scripts/install-opencode-generation.sh', 'scr
   const found = read(file).match(/OPENCODE_(?:INSTALL_)?VERSION="\$\{OPENCODE_INSTALL_VERSION:-(2\.\d+\.\d+)\}"/);
   if (found?.[1] !== version) throw Error(`${file}: OpenCode default differs from ${version}`);
 }
-// The root coordinator owns the OpenChamber default; the canonical wrapper
-// resolves both refs to immutable SHAs and never installs a binary as opencode.
-if (!read('install-openchamber.sh').includes('install-openchamber-root.sh?ref=$CONFIG_SHA'))
-  throw Error('Root OpenChamber coordinator not pinned to the config SHA');
-const openchamber = read('scripts/install-openchamber-root.sh').match(/OPENCHAMBER_EXPECTED_VERSION="\$\{OPENCHAMBER_EXPECTED_VERSION:-(\d+\.\d+\.\d+)\}"/)?.[1];
-if (!openchamber) throw Error('scripts/install-openchamber-root.sh: OpenChamber pin missing');
+const coordinator = 'scripts/install-openchamber-unified.sh';
+if (!read('install-openchamber.sh').includes(`${coordinator}?ref=$CONFIG_SHA`))
+  throw Error('Unified OpenChamber coordinator not pinned to the config SHA');
+const coordinatorSource = read(coordinator);
+const openchamber = coordinatorSource.match(/^EXPECTED_OPENCHAMBER_VERSION=(\d+\.\d+\.\d+)$/m)?.[1];
+if (!openchamber) throw Error(`${coordinator}: OpenChamber pin missing`);
+if (coordinatorSource.match(/^EXPECTED_OPENCODE_VERSION=(2\.\d+\.\d+)$/m)?.[1] !== version)
+  throw Error(`${coordinator}: OpenCode pin differs from ${version}`);
+if (read('scripts/install-openchamber-root.sh').match(/OPENCHAMBER_EXPECTED_VERSION="\$\{OPENCHAMBER_EXPECTED_VERSION:-(\d+\.\d+\.\d+)\}"/)?.[1] !== openchamber)
+  throw Error('Legacy cutover and unified OpenChamber pins differ');
 // The one-off SeVami v0.6.7 RUN exception must stay retired in every release.
 for (const name of ['legacy-live-preflight-v067.mjs', 'legacy-live-preflight-v067.test.mjs']) {
   if (fs.existsSync(path.join(root, 'config/opencode/skills/task-management/scripts', name))) {

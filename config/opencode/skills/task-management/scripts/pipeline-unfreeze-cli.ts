@@ -226,7 +226,12 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
     }
     await inFlight(t.root,t.state);
     if(t.state.manifest_sha256===t.manifestHash && t.manifestHash!==marker.original_manifest_sha256) {
-      if(protectedMode)await verifyOwnerCheckpointReceipt(t.state,'plan.final_manifest.approve',t.state.approval_record?.message_id);
+      if(protectedMode){
+        await verifyOwnerCheckpointReceipt(t.state,'plan.final_manifest.approve',t.state.approval_record?.message_id);
+        const lineage=await agentBrokerAction({action:'verify_refreeze', request_id:t.state.approval_record.message_id,
+          unfreeze_request_id:marker.owner_approval_request});
+        if(!lineage.authorized)throw Error('UNFREEZE_APPROVED_PLAN_LINEAGE_REQUIRED');
+      }
       if(t.state.unfreeze_revision?.revision_id!==marker.revision_id)throw Error('UNFREEZE_COMMITTED_STATE_MISMATCH');
       const finalized=await optional(join(t.root,'planning/unfreeze-revisions',marker.revision_id,'finalization.json'));
       if(!finalized||finalized.new_manifest_sha256!==t.manifestHash)throw Error('UNFREEZE_FINALIZATION_AUDIT_MISSING');
@@ -300,6 +305,10 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
     await validateFrozenPlan(join(t.root,'manifest.json'));
     const grant=protectedMode ? await authorizePasskeyCheckpoint({runId:run,workspace:hash(t.state.worktree_root),
       operation:'plan.final_manifest.approve',snapshot:t.manifestRaw}) : null;
+    if(grant) {
+      const lineage=await agentBrokerAction({action:'verify_refreeze',request_id:grant.id,unfreeze_request_id:marker.owner_approval_request});
+      if(!lineage.authorized)throw Error('UNFREEZE_APPROVED_PLAN_LINEAGE_REQUIRED');
+    }
 
     // An existing global published candidate cannot prove the new manifest; invalidate every
     // post-publish consumer, preserving all old proof files as historical evidence only.

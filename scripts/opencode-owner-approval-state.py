@@ -44,6 +44,21 @@ def initialize(connection):
             credential_id TEXT,
             UNIQUE(instance_id, operation, pipeline_id, stage, generation)
         );
+        CREATE TABLE IF NOT EXISTS retired_owner_runs (
+            run_id TEXT PRIMARY KEY,
+            replacement_run_id TEXT NOT NULL,
+            retired_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS frozen_plan_suspensions (
+            instance_id TEXT NOT NULL REFERENCES canonical_runs(instance_id),
+            plan_generation INTEGER NOT NULL,
+            request_id TEXT NOT NULL REFERENCES canonical_checkpoints(request_id),
+            PRIMARY KEY(instance_id, plan_generation)
+        );
+        CREATE TABLE IF NOT EXISTS frozen_plan_refreeze_links (
+            request_id TEXT PRIMARY KEY REFERENCES canonical_checkpoints(request_id),
+            unfreeze_request_id TEXT NOT NULL REFERENCES canonical_checkpoints(request_id)
+        );
         CREATE TABLE IF NOT EXISTS owner_passkeys (
             id TEXT PRIMARY KEY,
             public_key TEXT NOT NULL,
@@ -108,6 +123,8 @@ def generation(value):
 def register(connection, request):
     require_fields(request, 'run_id', 'session_id', 'workspace')
     identity = tuple(validated(request[name], IDENTIFIER) for name in ('run_id', 'session_id', 'workspace'))
+    if retired_run(connection, identity[0]):
+        fail('OWNER_RUN_RETIRED')
     connection.execute('INSERT OR IGNORE INTO canonical_runs VALUES (?, ?, ?, ?)', (secrets.token_hex(16), *identity))
     row = connection.execute('SELECT instance_id, session_id, workspace FROM canonical_runs WHERE run_id=?', identity[:1]).fetchone()
     if tuple(row[1:]) != identity[1:]:
@@ -123,6 +140,16 @@ def latest(connection, instance, operation, pipeline, stage):
     ''', (instance, operation, pipeline, stage)).fetchone()
 
 
+def retired_run(connection, run_id):
+    return connection.execute('SELECT replacement_run_id FROM retired_owner_runs WHERE run_id=?', (run_id,)).fetchone()
+
+
+def plan_suspension(connection, instance, plan_generation):
+    return connection.execute('''
+        SELECT request_id FROM frozen_plan_suspensions WHERE instance_id=? AND plan_generation=?
+    ''', (instance, plan_generation)).fetchone()
+
+
 def lookup(connection, request_id):
     row = connection.execute('''
         SELECT checkpoint.*, run.session_id, run.workspace, run.run_id
@@ -135,13 +162,24 @@ def lookup(connection, request_id):
 
 
 def current(connection, row):
+    if retired_run(connection, row['run_id']):
+        return False
     newest = latest(connection, row['instance_id'], row['operation'], row['pipeline_id'], row['stage'])
     if not newest or newest['request_id'] != row['request_id']:
         return False
     if newest['operation'] == 'plan.final_manifest.approve':
-        return True
+        return not plan_suspension(connection, row['instance_id'], row['generation'])
     plan = latest(connection, row['instance_id'], 'plan.final_manifest.approve', 'all', 'approval')
-    return bool(plan and plan['generation'] == row['plan_generation'] and plan['decision'] == 'approved')
+    if not plan or plan['generation'] != row['plan_generation'] or plan['decision'] != 'approved':
+        return False
+    suspension = plan_suspension(connection, row['instance_id'], row['plan_generation'])
+    if newest['operation'] == 'plan.unfreeze':
+        if row['decision'] == 'approved':
+            return bool(suspension and suspension['request_id'] == row['request_id'])
+        return not suspension
+    if newest['operation'] == 'plan.unfreeze.abort':
+        return bool(suspension) or row['decision'] == 'approved'
+    return not suspension
 
 
 def digest(text):
@@ -193,6 +231,8 @@ def prepare(connection, request, now):
     run = connection.execute('SELECT run_id FROM canonical_runs WHERE instance_id=?', (instance,)).fetchone()
     if run is None:
         fail('UNKNOWN_RUN')
+    if retired_run(connection, run['run_id']):
+        fail('OWNER_RUN_RETIRED')
     operation = request['operation']
     pipeline = validated(request['pipeline_id'], IDENTIFIER)
     stage = validated(request['stage'], IDENTIFIER)
@@ -200,16 +240,28 @@ def prepare(connection, request, now):
     raw = request['snapshot']
     snapshot = read_snapshot(raw)
     subject = digest(raw)
+    refreeze = None
     if operation == 'plan.final_manifest.approve':
         if pipeline != 'all' or stage != 'approval' or snapshot.get('schema_version') != 2 or snapshot.get('run_id') != run['run_id']:
             fail('INVALID_PLAN_SNAPSHOT')
         pipeline_definitions(snapshot)
         plan_generation, manifest, candidate = 0, subject, ''
+        existing_plan = latest(connection, instance, operation, pipeline, stage)
+        if existing_plan:
+            suspension = plan_suspension(connection, instance, existing_plan['generation'])
+            link = connection.execute('SELECT unfreeze_request_id FROM frozen_plan_refreeze_links WHERE request_id=?',
+                                      (existing_plan['request_id'],)).fetchone()
+            if suspension:
+                refreeze = suspension['request_id']
+            elif link and existing_plan['decision'] != 'approved':
+                refreeze = link['unfreeze_request_id']
     elif operation in ('owner.accept', 'owner.amend', 'plan.unfreeze', 'plan.unfreeze.abort'):
         plan = latest(connection, instance, 'plan.final_manifest.approve', 'all', 'approval')
         if not plan or plan['decision'] != 'approved' or snapshot.get('manifest_sha256') != plan['manifest_sha256']:
             fail('PLAN_APPROVAL_REQUIRED')
         plan_generation, manifest = plan['generation'], plan['manifest_sha256']
+        if operation in ('owner.accept', 'owner.amend') and plan_suspension(connection, instance, plan_generation):
+            fail('OWNER_PLAN_SUSPENDED')
         if operation == 'owner.accept':
             if snapshot.get('pipeline_id') != pipeline or snapshot.get('stage') != stage:
                 fail('INVALID_ACCEPTANCE_SNAPSHOT')
@@ -227,13 +279,19 @@ def prepare(connection, request, now):
             if (pipeline, stage) != ('all', 'approval') or snapshot.get('run_id') != run['run_id']:
                 fail('INVALID_UNFREEZE_SNAPSHOT')
             candidate = ''
+            if operation == 'plan.unfreeze.abort' and not plan_suspension(connection, instance, plan_generation):
+                prior = latest(connection, instance, operation, pipeline, stage)
+                if not prior or prior['decision'] != 'approved' or prior['subject_sha256'] != subject:
+                    fail('OWNER_UNFREEZE_NOT_SUSPENDED')
     else:
         fail('INVALID_OPERATION')
     row = latest(connection, instance, operation, pipeline, stage)
     active_generation = row['generation'] if row else 0
     if row and row['subject_sha256'] == subject and row['plan_generation'] == plan_generation and (
         row['expires_at'] > now or row['decision'] in ('approved', 'rejected')
-    ) and previous in (active_generation, active_generation - 1):
+    ) and previous in (active_generation, active_generation - 1) and (
+        operation != 'plan.unfreeze' or row['decision'] != 'approved' or current(connection, lookup(connection, row['request_id']))
+    ):
         return status(connection, row['request_id'])
     if previous != active_generation or previous >= 1_000_000:
         fail('CHECKPOINT_GENERATION_MISMATCH')
@@ -252,6 +310,8 @@ def prepare(connection, request, now):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (request_id, instance, operation, pipeline, stage, previous + 1, plan_generation,
           manifest, subject, candidate, raw, now + APPROVAL_TIMEOUT))
+    if refreeze:
+        connection.execute('INSERT INTO frozen_plan_refreeze_links VALUES (?, ?)', (request_id, refreeze))
     return status(connection, request_id)
 
 
@@ -318,6 +378,12 @@ def finish(connection, request, now):
     connection.execute('UPDATE canonical_checkpoints SET decision=?, decided_at=?, credential_id=? WHERE request_id=?',
                        (terminal, now, credential['id'], row['request_id']))
     if terminal == 'approved':
+        if row['operation'] == 'plan.unfreeze':
+            connection.execute('INSERT INTO frozen_plan_suspensions VALUES (?, ?, ?)',
+                               (row['instance_id'], row['plan_generation'], row['request_id']))
+        if row['operation'] == 'plan.unfreeze.abort':
+            connection.execute('DELETE FROM frozen_plan_suspensions WHERE instance_id=? AND plan_generation=?',
+                               (row['instance_id'], row['plan_generation']))
         connection.execute('INSERT INTO owner_transition_outbox (request_id, message_id) VALUES (?, ?)',
                            (row['request_id'], 'msg_' + secrets.token_hex(16)))
     return status(connection, row['request_id'])
@@ -427,6 +493,28 @@ def act(connection, role, request, clock=time.time):
         if role == 'runtime':
             if operation == 'register':
                 return register(connection, request)
+            if operation == 'retired_run':
+                require_fields(request, 'run_id')
+                row = retired_run(connection, validated(request['run_id'], IDENTIFIER))
+                return {'replacement_run_id': row['replacement_run_id'] if row else None}
+            if operation == 'retire_run':
+                require_fields(request, 'run_id', 'replacement_run_id')
+                run_id = validated(request['run_id'], IDENTIFIER)
+                replacement = validated(request['replacement_run_id'], IDENTIFIER)
+                if run_id == replacement:
+                    fail('INVALID_RUN_REPLACEMENT')
+                existing = retired_run(connection, run_id)
+                if existing and existing['replacement_run_id'] != replacement:
+                    fail('OWNER_RUN_REPLACEMENT_CONFLICT')
+                claiming = connection.execute('''
+                    SELECT 1 FROM owner_transition_outbox outbox JOIN canonical_checkpoints checkpoint USING(request_id)
+                    JOIN canonical_runs run USING(instance_id)
+                    WHERE run.run_id=? AND outbox.dispatched_at IS NULL AND outbox.claim_until>? LIMIT 1
+                ''', (run_id, now)).fetchone()
+                if claiming:
+                    fail('OWNER_CONTINUATION_IN_PROGRESS')
+                connection.execute('INSERT OR IGNORE INTO retired_owner_runs VALUES (?, ?, ?)', (run_id, replacement, now))
+                return {'replacement_run_id': replacement}
             if operation == 'binding':
                 require_fields(request, 'run_id')
                 row = connection.execute('SELECT * FROM canonical_runs WHERE run_id=?',
@@ -444,6 +532,12 @@ def act(connection, role, request, clock=time.time):
             if operation == 'status':
                 require_fields(request, 'request_id')
                 return status(connection, request['request_id'])
+            if operation == 'verify_refreeze':
+                require_fields(request, 'request_id', 'unfreeze_request_id')
+                row = lookup(connection, request['request_id'])
+                match = connection.execute('SELECT 1 FROM frozen_plan_refreeze_links WHERE request_id=? AND unfreeze_request_id=?',
+                                           (row['request_id'], validated(request['unfreeze_request_id'], IDENTIFIER))).fetchone()
+                return {'authorized': bool(match and row['decision'] == 'approved' and current(connection, row))}
             if operation == 'list_checkpoints':
                 require_fields(request, 'before')
                 return list_checkpoints(connection, now, request['before'])
@@ -474,12 +568,15 @@ def act(connection, role, request, clock=time.time):
                     fail('CHECKPOINT_MISMATCH')
                 recorded = connection.execute('''
                     UPDATE owner_transition_outbox SET dispatched_at=coalesce(dispatched_at, ?)
-                    WHERE request_id=? AND message_id=?
-                ''', (now, checkpoint['request_id'], request['message_id']))
+                    WHERE request_id=? AND message_id=? AND (dispatched_at IS NOT NULL OR claim_until>?)
+                ''', (now, checkpoint['request_id'], request['message_id'], now))
                 if not recorded.rowcount:
                     fail('CONTINUATION_MISMATCH')
                 return {'ok': True}
         elif role == 'verifier':
+            if operation == 'health':
+                require_fields(request)
+                return {'ready': True}
             if operation == 'review':
                 require_fields(request, 'request_id')
                 row = pending(connection, request['request_id'], now)

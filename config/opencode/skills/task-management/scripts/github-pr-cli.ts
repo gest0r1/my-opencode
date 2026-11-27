@@ -262,6 +262,11 @@ export async function publishPullRequest(
   await verifyProtectedDelivery(stateRoot, runId, candidate.candidateSha);
   await assertFinalDeploymentValidation(runDir, state, candidate.candidateSha);
   requireGitHubAuth(cwd);
+  const protectedMode = passkeyBrokerRequired();
+  if (protectedMode) {
+    const remoteHead = command('git', ['ls-remote', '--heads', 'origin', `refs/heads/${candidate.branch}`], { cwd }).split(/\s+/)[0];
+    if (remoteHead !== candidate.candidateSha) throw new GitHubPrCliError('OWNER_BROKER_PR_BRANCH_HEAD_CHANGED');
+  }
 
   const sync = await syncRun(runId, { stateRoot });
   if (sync.pending !== 0) {
@@ -274,7 +279,7 @@ export async function publishPullRequest(
     '--state', 'open',
     '--head', candidate.branch,
     '--base', 'main',
-    '--json', 'number,title,body,headRefName,baseRefName,url',
+    '--json', protectedMode ? 'number,title,body,headRefName,headRefOid,baseRefName,url' : 'number,title,body,headRefName,baseRefName,url',
     '--limit', '2',
   ], cwd));
   if (list.length > 1) throw new GitHubPrCliError('multiple open PRs exist for the candidate branch');
@@ -285,6 +290,7 @@ export async function publishPullRequest(
 
   if (list.length === 1) {
     const existing = list[0];
+    if (protectedMode && existing.headRefOid !== candidate.candidateSha) throw new GitHubPrCliError('OWNER_BROKER_PR_BRANCH_HEAD_CHANGED');
     prNumber = Number(existing.number);
     if (!Number.isInteger(prNumber) || prNumber <= 0) throw new GitHubPrCliError('existing PR has invalid number');
     const body = upsertManagedBlock(typeof existing.body === 'string' ? existing.body : '', block);
@@ -304,6 +310,10 @@ export async function publishPullRequest(
     if (!match?.[1]) throw new GitHubPrCliError('unable to determine created PR number');
     prNumber = Number(match[1]);
     prUrl = output.split(/\s+/).find((part) => /\/pull\/\d+/.test(part));
+  }
+  if (protectedMode) {
+    const current = JSON.parse(gh(['pr', 'view', String(prNumber), '--repo', repository, '--json', 'headRefOid'], cwd));
+    if (current.headRefOid !== candidate.candidateSha) throw new GitHubPrCliError('OWNER_BROKER_PR_BRANCH_HEAD_CHANGED');
   }
 
   if (state.source_type === 'github_issues') {

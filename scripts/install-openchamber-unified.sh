@@ -20,7 +20,7 @@ RESTART_MODE="${OPENCHAMBER_RESTART_MODE:-auto}"
 [[ "${OPENCHAMBER_PACKAGE_MODE:-release}" == release ]] || { echo 'A verified Linux package is required' >&2; exit 2; }
 for tool in gh python3 systemctl runuser sudo flock curl tar install; do command -v "$tool" >/dev/null; done
 
-install -d -m 755 -o root -g root "$STATE" "$STATE/runtime"
+install -d -m 755 -o root -g root "$STATE" "$STATE/runtime" "$STATE/runtime/releases"
 install -d -m 700 -o root -g root "$STATE/install"
 exec 9>"$STATE/install/lock"
 flock -x 9
@@ -78,7 +78,9 @@ fi
 state_active="$STATE/install/active-sha"
 protected_items=("$UNITS/openchamber.service" "$UNITS/opencode-owner-approval.service" "$UNITS/opencode-owner-verifier.socket" "$UNITS/opencode-owner-verifier.service"
   "$POLICY/owner-broker-required" "$POLICY/owner-broker-passkey" "$POLICY/owner-verifier.env" "$POLICY/openchamber-unified.env"
-  "$POLICY/openchamber-startup.env" "$LIB/verified-node" "$OPENCHAMBER_CURRENT" "$state_active")
+  "$POLICY/openchamber-startup.env" "$LIB/verified-node" "$OPENCHAMBER_CURRENT" "$state_active"
+  "$LIB/opencode-owner-approvald.py" "$LIB/opencode-owner-approval.py" "$LIB/opencode-owner-approval-state.py"
+  "$LIB/opencode-owner-approval-admin.py" "$LIB/migrate-openchamber-profile.py" "$LIB/migrate-openchamber-to-root.py")
 identify_runtime() {
   runtime_home="$(getent passwd opencode | cut -d: -f6)"
   runtime_uid="$(id -u opencode)"
@@ -89,6 +91,42 @@ user_run() {
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" "$@"
 }
 user_systemd() { user_run systemctl --user "$@"; }
+opencode_generation() {
+  user_run bash -s -- "$transaction" "$1" <<'BASH'
+set -Eeuo pipefail
+umask 077
+cd "$HOME"
+backup="$HOME/.local/state/my-opencode/openchamber-cutover-$1"
+paths=(.config/opencode .config/opencode.env .config/systemd/user/opencode-web.service .agents/skills .opencode/bin/opencode)
+case "$2" in
+  snapshot)
+    mkdir -p -- "$backup"
+    for path in "${paths[@]}"; do
+      if [[ -e "$path" || -L "$path" ]]; then cp -a --parents -- "$path" "$backup"; fi
+    done
+    touch "$backup/complete"
+    ;;
+  restore)
+    [[ -f "$backup/complete" ]] || exit 0
+    for path in "${paths[@]}"; do
+      if [[ -e "$path" || -L "$path" ]]; then
+        local_copy="$backup/failed/$path"
+        mkdir -p -- "$(dirname "$local_copy")"
+        if [[ ! -e "$local_copy" && ! -L "$local_copy" ]]; then mv -T -- "$path" "$local_copy"; fi
+      fi
+      if [[ ! -e "$path" && ! -L "$path" && ( -e "$backup/$path" || -L "$backup/$path" ) ]]; then
+        mkdir -p -- "$(dirname "$path")"
+        prepared="$path.openchamber-restore-$1"
+        rm -rf -- "$prepared"
+        cp -a -- "$backup/$path" "$prepared"
+        mv -T -- "$prepared" "$path"
+      fi
+    done
+    ;;
+  *) exit 2;;
+esac
+BASH
+}
 stop_unit() {
   local name=$1 phase
   shift
@@ -117,6 +155,10 @@ rollback() {
   stop_unit opencode-owner-verifier.socket systemctl
   stop_unit opencode-owner-approval.service systemctl
   if [[ -x "$LIB/migrate-openchamber-profile.py" ]]; then user_run python3 "$LIB/migrate-openchamber-profile.py" rollback "$transaction"; fi
+  if [[ -f "$saved/opencode-generation-mutating" ]]; then
+    opencode_generation restore
+    user_systemd daemon-reload
+  fi
   for item in "${protected_items[@]}"; do
     rm -f -- "$item"
     if [[ -e "$saved$item" || -L "$saved$item" ]]; then cp -a "$saved$item" "$item"; fi
@@ -134,8 +176,32 @@ rollback() {
 health() {
   curl -fsS --max-time 2 "$loopback/health" | python3 -c 'import json,sys;h=json.load(sys.stdin);sys.exit(not(h.get("openchamberVersion")=="2.8.0" and h.get("openCodeRunning") is True and h.get("opencodeLaunchBinary")))'
 }
+managed_opencode() {
+  curl -fsS --max-time 2 "$loopback/health" | python3 -c '
+import json, os, sys
+from pathlib import Path
+
+record = json.load(sys.stdin)
+process = record.get("lastManagedOpenCodeProcess") or {}
+pid = process.get("pid")
+if not isinstance(pid, int) or pid < 2:
+    sys.exit(1)
+directory = Path("/proc") / str(pid)
+ready = (directory.stat().st_uid == int(sys.argv[2])
+         and os.path.realpath(directory / "exe") == os.path.realpath(sys.argv[1])
+         and record.get("openCodeRunning") is True
+         and record.get("opencodeBinarySource") not in ("shared-service", "external"))
+sys.exit(not ready)
+' "$runtime_home/.opencode/bin/opencode" "$runtime_uid"
+}
 verifier_health() {
   curl -fsS --max-time 2 --unix-socket /run/my-opencode-verifier/http.sock -H "Host: $approval_host" -o /dev/null http://localhost/healthz
+}
+verifier_proxy_matches() {
+  local local_id external_id
+  local_id="$(curl -fsS --max-time 6 --unix-socket /run/my-opencode-verifier/http.sock -H "Host: $approval_host" -o /dev/null -D - http://localhost/healthz | awk 'tolower($1)=="x-openchamber-verifier-id:" {gsub(/\r/, "", $2); print $2}')" || return 1
+  external_id="$(curl -fsS --max-time 8 -o /dev/null -D - "$approval_origin/healthz" | awk 'tolower($1)=="x-openchamber-verifier-id:" {gsub(/\r/, "", $2); print $2}')" || return 1
+  [[ "$local_id" =~ ^[a-f0-9-]{36}$ && "$local_id" == "$external_id" ]]
 }
 if [[ -f "$STATE/install/pending" ]]; then
   if [[ "$RESTART_MODE" != now ]]; then
@@ -151,7 +217,7 @@ if [[ -f "$STATE/install/pending" ]]; then
 fi
 if [[ -f "$state_active" && "$(cat "$state_active")" == "$CONFIG_SHA $APP_SHA $bind_host $bind_port" ]] &&
     systemctl is-active --quiet openchamber.service && systemctl is-active --quiet opencode-owner-approval.service &&
-    systemctl is-active --quiet opencode-owner-verifier.socket && health && verifier_health; then
+    systemctl is-active --quiet opencode-owner-verifier.socket && identify_runtime && health && managed_opencode && verifier_health; then
   echo "Unified runtime already active config=$CONFIG_SHA app=$APP_SHA"; exit 0
 fi
 
@@ -168,10 +234,8 @@ for part in openchamber-unified.service opencode-owner-approval.service opencode
   fetch "config/systemd/$part" "$work/$part"
 done
 fetch install.sh "$work/install-opencode.sh"
-OPENCODE_MANAGED_BY_OPENCHAMBER=1 MY_OPENCODE_REF="$CONFIG_SHA" bash "$work/install-opencode.sh" "$@"
+id opencode >/dev/null 2>&1 || useradd --create-home --shell /bin/bash opencode
 identify_runtime
-installed="$(user_run "$runtime_home/.opencode/bin/opencode" --version | sed -E 's/^opencode[[:space:]]+v?//')"
-[[ "$installed" == "$EXPECTED_OPENCODE_VERSION" ]] || exit 3
 
 getent group opencode-approval-proxy >/dev/null || groupadd --system opencode-approval-proxy
 id opencode-approval >/dev/null 2>&1 || useradd --system --user-group --no-create-home --shell /usr/sbin/nologin opencode-approval
@@ -203,12 +267,17 @@ for part in opencode-owner-approvald.py opencode-owner-approval.py opencode-owne
   install -m 755 -o root -g root "$work/$part" "$LIB/$part"
 done
 profile=/root/.config/openchamber
+opencode_generation snapshot
 stop_unit openchamber.service user_systemd
 stop_unit opencode-web.service user_systemd
 stop_unit openchamber.service systemctl
 stop_unit opencode-owner-verifier.service systemctl
 stop_unit opencode-owner-verifier.socket systemctl
 stop_unit opencode-owner-approval.service systemctl
+touch "$saved/opencode-generation-mutating"
+OPENCODE_MANAGED_BY_OPENCHAMBER=1 MY_OPENCODE_REF="$CONFIG_SHA" bash "$work/install-opencode.sh" "$@"
+installed="$(user_run "$runtime_home/.opencode/bin/opencode" --version | sed -E 's/^opencode[[:space:]]+v?//')"
+[[ "$installed" == "$EXPECTED_OPENCODE_VERSION" ]]
 if [[ ! -f "$state_active" ]]; then
   if [[ -d "$profile" && ! -L "$profile" ]]; then
     tar --one-file-system -C "$profile" --exclude=./startup.env.pre-p1 --exclude=./.p1-root-ui-rekeyed -cf - . |
@@ -224,6 +293,9 @@ mv -Tf "$STATE/runtime/.current.$transaction" "$OPENCHAMBER_CURRENT"
 
 user_run sh -c 'test ! -f "$HOME/.config/openchamber/startup.env" || cat "$HOME/.config/openchamber/startup.env"' > "$work/ui.env.input"
 grep -E '^OPENCHAMBER_UI_PASSWORD=[^[:cntrl:]]+$' "$work/ui.env.input" > "$work/ui.env" || [[ "$?" == 1 ]]
+if [[ ! -s "$work/ui.env" ]]; then
+  python3 -c 'import secrets; print("OPENCHAMBER_UI_PASSWORD=" + secrets.token_urlsafe(36))' > "$work/ui.env"
+fi
 install -m 600 "$work/ui.env" "$POLICY/openchamber-startup.env"
 printf 'OPENCHAMBER_OWNER_APPROVAL_ORIGIN=%s\n' "$approval_origin" > "$POLICY/owner-verifier.env"
 printf 'OPENCHAMBER_BIND_HOST=%s\nOPENCHAMBER_BIND_PORT=%s\nOPENCODE_BINARY=%s/.opencode/bin/opencode\nPATH=%s/.local/bin:%s/.opencode/bin:/usr/local/bin:/usr/bin:/bin\n' \
@@ -238,15 +310,16 @@ install -m 644 "$work/opencode-owner-verifier.service" "$work/opencode-owner-ver
 
 systemctl daemon-reload
 systemctl start opencode-owner-approval.service opencode-owner-verifier.socket
-curl --silent --show-error --fail --max-time 8 -o /dev/null "$approval_origin/healthz"
+verifier_proxy_matches
 systemctl start openchamber.service
 for _ in {1..30}; do
-  if health 2>/dev/null && verifier_health; then
+  if health 2>/dev/null && managed_opencode 2>/dev/null && verifier_health; then
     break
   fi
   sleep 1
 done
 health
+managed_opencode
 verifier_health
 main_pid="$(systemctl show --property=MainPID --value openchamber.service)"
 [[ "$main_pid" != 0 && "$(ps -p "$main_pid" -o uid= | tr -d ' ')" == "$runtime_uid" ]]

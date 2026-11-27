@@ -62,6 +62,9 @@ class OwnerPasskeyStateTests(unittest.TestCase):
         self.assertEqual(self.act('runtime', 'continuations', session_id='ses_existing')['pending'], pending)
         with self.assertRaisesRegex(ValueError, 'CONTINUATION_MISMATCH'):
             self.act('runtime', 'ack_continuation', request_id=plan['request_id'], session_id='ses_existing', message_id='other')
+        with self.assertRaisesRegex(ValueError, 'CONTINUATION_MISMATCH'):
+            self.act('runtime', 'ack_continuation', request_id=plan['request_id'], session_id='ses_existing', message_id=pending[0]['message_id'])
+        self.act('runtime', 'claim_continuation', request_id=plan['request_id'], session_id='ses_existing', message_id=pending[0]['message_id'])
         for _ in range(2):
             self.act('runtime', 'ack_continuation', request_id=plan['request_id'], session_id='ses_existing', message_id=pending[0]['message_id'])
         self.assertEqual(self.act('runtime', 'continuations', session_id='ses_existing')['pending'], [])
@@ -104,6 +107,31 @@ class OwnerPasskeyStateTests(unittest.TestCase):
         self.act('runtime', 'ack_continuation', **identity)
         replacement = self.plan(previous=1, name='new')
         self.assertNotEqual(replacement['request_id'], plan['request_id'])
+
+    def test_unfreeze_suspends_the_old_plan_and_requires_canonical_refreeze_lineage(self):
+        plan = self.plan()
+        self.finish(plan, self.challenge(plan))
+        unfreeze = self.act('runtime', 'prepare', instance_id=self.run['instance_id'], operation='plan.unfreeze',
+                            pipeline_id='all', stage='approval', previous_generation=0,
+                            snapshot=json.dumps({'run_id': 'test-run', 'manifest_sha256': plan['manifest_sha256']}))
+        self.finish(unfreeze, self.challenge(unfreeze), before=1, after=2)
+        self.assertFalse(self.act('runtime', 'status', request_id=plan['request_id'])['current'])
+        revised = self.plan(previous=1, name='refrozen')
+        lineage = {'request_id': revised['request_id'], 'unfreeze_request_id': unfreeze['request_id']}
+        self.assertFalse(self.act('runtime', 'verify_refreeze', **lineage)['authorized'])
+        self.finish(revised, self.challenge(revised), before=2, after=3)
+        self.assertTrue(self.act('runtime', 'verify_refreeze', **lineage)['authorized'])
+        self.assertFalse(self.act('runtime', 'verify_refreeze', request_id=revised['request_id'], unfreeze_request_id=plan['request_id'])['authorized'])
+
+    def test_retirement_invalidates_receipts_challenges_and_outbox(self):
+        plan = self.plan()
+        self.finish(plan, self.challenge(plan))
+        self.act('runtime', 'retire_run', run_id='test-run', replacement_run_id='replacement')
+        self.assertEqual(self.act('runtime', 'retired_run', run_id='test-run')['replacement_run_id'], 'replacement')
+        self.assertFalse(self.act('runtime', 'status', request_id=plan['request_id'])['current'])
+        self.assertEqual(self.act('runtime', 'scan_continuations')['pending'], [])
+        with self.assertRaisesRegex(ValueError, 'OWNER_RUN_RETIRED'):
+            self.plan(previous=1, name='later')
 
     def test_agent_cannot_decide_and_revocation_and_expiry_fail_closed(self):
         plan = self.plan()

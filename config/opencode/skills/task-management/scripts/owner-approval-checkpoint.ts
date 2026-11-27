@@ -141,7 +141,8 @@ export async function verifyOwnerCheckpointReceipt(
     if (receipt.request_id !== requestId || receipt.current !== true || receipt.decision !== 'approved' ||
         receipt.run_id !== subject.checkpoint.run_id || receipt.operation !== operation || receipt.pipeline_id !== pipelineId ||
         receipt.stage !== stage || receipt.workspace !== subject.workspace || receipt.manifest_sha256 !== state.manifest_sha256 ||
-        receipt.subject_sha256 !== sha(subject.snapshot) || receipt.candidate_sha !== subject.checkpoint.candidate_sha) {
+        receipt.subject_sha256 !== sha(subject.snapshot) || receipt.candidate_sha !== subject.checkpoint.candidate_sha ||
+        receipt.session_id !== state.approval_record?.source_session) {
       throw new Error('OWNER_BROKER_RECEIPT_INVALID');
     }
     return;
