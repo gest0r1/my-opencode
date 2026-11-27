@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { linkPr, syncRun } from './pipeline-github-sync.mjs';
+import { passkeyBrokerRequired, agentBrokerAction } from './owner-broker-client.mjs';
+import { validateState } from './stage-cli-core.ts';
 
 const DEFAULT_STATE_ROOT = '.tmp/pipelines';
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -10,6 +12,25 @@ const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SAFE_BRANCH = /^(?!main$|master$)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const MANAGED_START = '<!-- pipeline-github:start -->';
 const MANAGED_END = '<!-- pipeline-github:end -->';
+
+async function verifyProtectedDelivery(stateRoot: string, runId: string, candidate: string) {
+  if (!passkeyBrokerRequired()) return;
+  const state = await validateState(stateRoot, runId);
+  if (state.status !== 'completed' || !state.manifest_file) throw new Error('OWNER_BROKER_DELIVERY_NOT_READY');
+  const manifest = await readJson(state.manifest_file, 'manifest.json');
+  for (const pipeline of manifest.pipelines) {
+    for (const stage of pipeline.stages) {
+      if (pipeline.executors?.[stage] !== 'owner_acceptance') continue;
+      const runtime = state.pipelines?.[pipeline.id]?.stages?.[stage];
+      if (runtime?.status !== 'completed') throw new Error('OWNER_BROKER_ACCEPTANCE_REQUIRED');
+      const requestId = (runtime.evidence as Record<string, unknown> | null)?.owner_approval_request_id;
+      const receipt = await agentBrokerAction({ action: 'status', request_id: requestId });
+      if (receipt.current !== true || receipt.decision !== 'approved' || receipt.candidate_sha !== candidate.toLowerCase()) {
+        throw new Error('OWNER_BROKER_DELIVERY_CANDIDATE_MISMATCH');
+      }
+    }
+  }
+}
 
 class GitHubPrCliError extends Error {
   constructor(message: string) {
@@ -238,6 +259,7 @@ export async function publishPullRequest(
   }
 
   const candidate = assertCandidate(await readJson(path.join(runDir, 'candidate.json'), 'candidate.json'));
+  await verifyProtectedDelivery(stateRoot, runId, candidate.candidateSha);
   await assertFinalDeploymentValidation(runDir, state, candidate.candidateSha);
   requireGitHubAuth(cwd);
 
@@ -311,7 +333,8 @@ export async function publishPullRequest(
 export async function releaseAfterMerge(runId: string, options: { stateRoot?: string; cwd?: string } = {}): Promise<Record<string, unknown>> {
   if (!RUN_ID.test(runId)) throw new GitHubPrCliError('run-id must be path-safe');
   const cwd = options.cwd ?? process.cwd();
-  const runDir = path.join(path.resolve(options.stateRoot ?? DEFAULT_STATE_ROOT), runId);
+  const stateRoot = path.resolve(options.stateRoot ?? DEFAULT_STATE_ROOT);
+  const runDir = path.join(stateRoot, runId);
   const state = await readJson(path.join(runDir, 'state.json'), 'state.json');
   const manifest = await readJson(String(state.manifest_file ?? ''), 'manifest.json');
   const version = String(manifest.release?.version ?? '');
@@ -319,6 +342,7 @@ export async function releaseAfterMerge(runId: string, options: { stateRoot?: st
   const repository = currentRepository(cwd);
   if (state.repository && state.repository !== repository) throw new GitHubPrCliError(`current origin does not match frozen repository ${String(state.repository)}`);
   const candidate = assertCandidate(await readJson(path.join(runDir, 'candidate.json'), 'candidate.json'));
+  await verifyProtectedDelivery(stateRoot, runId, candidate.candidateSha);
   requireGitHubAuth(cwd);
   const recorded = (state.issue_results ?? []).map((item: any) => item?.pr_number).find((value: unknown) => Number.isInteger(value));
   const pr = JSON.parse(gh(['pr', 'view', recorded ? String(recorded) : candidate.branch, '--repo', repository,

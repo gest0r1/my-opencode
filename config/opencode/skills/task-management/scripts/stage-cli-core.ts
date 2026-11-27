@@ -1,6 +1,6 @@
 import { acceptedReconciliations } from './reconcile-evidence.ts';
-import { authorizeOwnerCheckpoint, verifyOwnerCheckpointReceipt } from './owner-approval-checkpoint.ts';
-import { ownerBrokerRequired } from './owner-broker-client.mjs';
+import { authorizeOwnerCheckpoint, authorizePasskeyCheckpoint, ownerAmendmentSnapshot, verifyOwnerCheckpointReceipt } from './owner-approval-checkpoint.ts';
+import { agentBrokerAction, ownerBrokerRequired, passkeyBrokerRequired } from './owner-broker-client.mjs';
 import { readReviewVerdict } from './review-result-evidence.mjs';
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
@@ -943,11 +943,36 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
     if (state.approval_record) {
       await verifyOwnerCheckpointReceipt(state, 'plan.final_manifest.approve',
         state.approval_record.message_id);
-    } else if (state.status !== 'planned') {
+    } else if (state.status !== 'planned' || Object.values(state.pipelines).some((pipeline) =>
+      pipeline.status !== 'planned' || Object.values(pipeline.stages).some((stage) => stage.status !== 'pending')) ||
+      state.execution_started_at) {
       throw new StageCliError('OWNER_BROKER_PLAN_RECEIPT_REQUIRED');
     }
     if (state.manifest_file) {
       const manifest = readFrozenManifestFromState(state);
+      if (passkeyBrokerRequired()) {
+        for (const amendment of state.owner_amendments ?? []) {
+          const receipt = await agentBrokerAction({ action: 'status', request_id: amendment.owner_approval_request_id });
+          const source = await readFile(amendment.evidence_path, 'utf8');
+          const proposal = JSON.parse(source);
+          const scope = ownerAmendmentSnapshot(state, amendment.pipeline_id, amendment.source_stage, amendment.revision, source);
+          if (receipt.decision !== 'approved' || receipt.operation !== 'owner.amend' || receipt.run_id !== runId ||
+              receipt.manifest_sha256 !== state.manifest_sha256 || receipt.subject_sha256 !== sha256(scope) ||
+              receipt.workspace !== sha256(String(state.worktree_root ?? '')) || amendment.evidence_sha256 !== sha256(source) ||
+              JSON.stringify(amendment.paths) !== JSON.stringify(proposal.paths) ||
+              JSON.stringify(amendment.work_items) !== JSON.stringify(proposal.work_items.map((item: any) => ({
+                id: item.id, pipeline_id: item.pipeline_id, path: item.path, sha256: item.sha256,
+              })))) {
+            throw new StageCliError('OWNER_BROKER_AMENDMENT_RECEIPT_INVALID');
+          }
+        }
+        for (const scope of state.runtime_scope_extensions ?? []) {
+          if (scope.scope_class !== 'owner_amendment') continue;
+          const proved = state.owner_amendments?.some((item) => item.evidence_sha256 === scope.evidence_sha256 &&
+            item.evidence_path === scope.evidence_path && JSON.stringify(item.paths) === JSON.stringify(scope.paths));
+          if (!proved) throw new StageCliError('OWNER_BROKER_AMENDMENT_SCOPE_UNVERIFIED');
+        }
+      }
       for (const pipeline of manifest.pipelines) {
         for (const stage of pipeline.stages) {
           if (pipeline.executors?.[stage] !== 'owner_acceptance') continue;
@@ -1381,7 +1406,7 @@ export async function approvePipeline(stateRoot: string, runId: string, approval
     if (sha256(rawManifest) !== state.manifest_sha256) throw new StageCliError('Frozen manifest hash mismatch');
     // No direct CLI, plan-start, or core caller can mint a real owner grant:
     // the external broker's root ledger is the only authority.
-    const grant = await authorizeOwnerCheckpoint(state, 'plan.final_manifest.approve');
+    const grant = await authorizeOwnerCheckpoint(state, 'plan.final_manifest.approve', 'all', 'approval', approval.source_session);
     state.approval_record = validateApprovalRecord(
       grant.mode === 'broker' ? {
         subject: 'final-manifest',
@@ -1390,6 +1415,7 @@ export async function approvePipeline(stateRoot: string, runId: string, approval
         shown_manifest_sha256: state.manifest_sha256,
         owner_response: `broker-confirmed:${grant.id}`,
         message_id: grant.id,
+        source_session: grant.sessionId,
       } : approval,
       runId, state.manifest_sha256,
     );
@@ -1398,6 +1424,47 @@ export async function approvePipeline(stateRoot: string, runId: string, approval
       pipeline.status = 'approved';
     }
   });
+}
+
+export async function reauthorizeOwnerCheckpoints(stateRoot: string, runId: string, sourceSession: string): Promise<PipelineState> {
+  if (!passkeyBrokerRequired()) throw new StageCliError('OWNER_PASSKEY_BROKER_REQUIRED');
+  const unlock = await acquireLock(stateRoot, runId);
+  try {
+    const state = await readState(stateRoot, runId);
+    if (state.run_id !== runId || state.status === 'planned' || state.superseded_by || !state.manifest_file) {
+      throw new StageCliError('OWNER_REAUTHORIZATION_REQUIRES_EXISTING_APPROVED_RUN');
+    }
+    const filename = state.manifest_file;
+    const manifest = readFrozenManifestFromState(state);
+    const { preflightFile } = await import('./manifest-preflight.mjs');
+    await preflightFile(filename, { environment: false, cwd: process.cwd() });
+    const plan = await authorizeOwnerCheckpoint(state, 'plan.final_manifest.approve', 'all', 'approval', sourceSession);
+    const projection = validateApprovalRecord({ subject: 'final-manifest', run_id: runId, decision: 'approved',
+      shown_manifest_sha256: state.manifest_sha256, owner_response: `broker-confirmed:${plan.id}`,
+      message_id: plan.id, source_session: plan.sessionId }, runId, state.manifest_sha256);
+    for (const amendment of state.owner_amendments ?? []) {
+      const source = await readFile(amendment.evidence_path, 'utf8');
+      if (sha256(source) !== amendment.evidence_sha256) throw new StageCliError('OWNER_AMENDMENT_EVIDENCE_STALE');
+      const grant = await authorizePasskeyCheckpoint({ runId, workspace: sha256(String(state.worktree_root ?? '')),
+        operation: 'owner.amend', pipelineId: amendment.pipeline_id, stage: `amendment-${amendment.revision}`,
+        snapshot: ownerAmendmentSnapshot(state, amendment.pipeline_id, amendment.source_stage, amendment.revision, source) });
+      amendment.owner_approval_request_id = grant.id;
+    }
+    for (const pipeline of manifest.pipelines) {
+      for (const stage of pipeline.stages) {
+        const existing = state.pipelines[pipeline.id]?.stages[stage];
+        if (pipeline.executors?.[stage] !== 'owner_acceptance' || existing?.status !== 'completed') continue;
+        const grant = await authorizeOwnerCheckpoint(state, 'owner.accept', pipeline.id, stage);
+        existing.evidence = { ...existing.evidence, owner_approval_request_id: grant.id } as StageEvidence;
+      }
+    }
+    state.approval_record = projection;
+    state.updated_at = now();
+    await writeJsonAtomic(statePath(stateRoot, runId), state);
+    return state;
+  } finally {
+    await unlock();
+  }
 }
 
 function assertPipelineDependencies(state: PipelineState, pipeline: PipelineRuntime): void {
@@ -2611,7 +2678,7 @@ export async function applyOwnerAmendment(
     if (sha256(content) !== item.sha256) throw new StageCliError('OWNER_AMENDMENT_WORK_ITEM_CHANGED: ' + item.id);
     workItems.push({ id: item.id, pipeline_id: item.pipeline_id, path: item.path, sha256: item.sha256 });
   }
-  return updateState(stateRoot, runId, (state) => {
+  return updateState(stateRoot, runId, async (state) => {
     const pipeline = getPipeline(state, pipelineId);
     const manifest = readFrozenManifestFromState(state);
     const source = pipeline.stages[stage];
@@ -2630,6 +2697,8 @@ export async function applyOwnerAmendment(
     }
     for (const path of evidence.paths as string[]) assertRuntimeScopeExtensible(manifest, path.replace(/\/\*\*$/, ''));
     const revision = (state.owner_amendments?.length ?? 0) + 1;
+    const grant = passkeyBrokerRequired() ? await authorizePasskeyCheckpoint({ runId, workspace: sha256(String(state.worktree_root ?? '')),
+      operation: 'owner.amend', pipelineId, stage: `amendment-${revision}`, snapshot: ownerAmendmentSnapshot(state, pipelineId, stage, revision, raw) }) : null;
     state.owner_amendments ??= [];
     state.owner_amendments.push({
       revision, pipeline_id: pipelineId, source_stage: stage, status: 'approved',
@@ -2638,6 +2707,7 @@ export async function applyOwnerAmendment(
       acceptance_criteria_changed: evidence.acceptance_criteria_changed === true,
       requirements_changed: evidence.requirements_changed === true,
       paths: [...evidence.paths], work_items: workItems,
+      ...(grant ? { owner_approval_request_id: grant.id } : {}),
     });
     if (evidence.paths.length) {
       state.runtime_scope_extensions ??= [];
@@ -3079,6 +3149,7 @@ function usage(): string {
     '  stage-cli start <run-id> <stage> [--pipeline <id>]',
     '  stage-cli complete <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
     '  stage-cli owner-accept <run-id> <stage> --pipeline <id> --result pass|fail [--message <text>]',
+    '  stage-cli owner-reauthorize <run-id> --owner-source-session <id> [--state-root <path>]',
     '  stage-cli fail|block <run-id> <stage> [--pipeline <id>] [--message <text>] [--evidence <path>]',
     '  stage-cli resume <run-id> <stage> [--pipeline <id>]',
     '  stage-cli scope-check <run-id> <stage> <path>... [--pipeline <id>] [--json]',
@@ -3182,6 +3253,11 @@ export async function runCli(args: string[]): Promise<void> {
 
   const runId = positional[1];
   if (!runId) throw new StageCliError('run-id is required');
+  if (command === 'owner-reauthorize') {
+    if (!options.ownerSourceSession) throw new StageCliError('The original OpenCode session ID is required');
+    printState(await reauthorizeOwnerCheckpoints(options.stateRoot, runId, options.ownerSourceSession), options.json);
+    return;
+  }
   if (command === 'status') {
     const state = await readState(options.stateRoot, runId);
     if (options.chart) console.log(renderChart(state));

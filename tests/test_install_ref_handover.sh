@@ -19,7 +19,7 @@ cat > "$BIN/gh" <<'EOS'
 case "$*" in
   *"repos/gest0r1/my-opencode/commits/"*) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
   *"repos/gest0r1/openchamber-ru/commits/"*) printf '%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ;;
-  *"repos/gest0r1/my-opencode/contents/scripts/install-openchamber-root.sh?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"*) cat "$COORDINATOR" ;;
+  *"repos/gest0r1/my-opencode/contents/scripts/install-openchamber-unified.sh?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"*) cat "$COORDINATOR" ;;
   *) echo "unexpected gh: $*" >&2; exit 91 ;;
 esac
 EOS

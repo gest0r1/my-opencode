@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Exact-SHA entrypoint. OpenCode remains under opencode; OpenChamber is root-owned.
+# Exact-SHA entrypoint. OpenChamber and managed OpenCode run under opencode.
 set -Eeuo pipefail
 [[ $EUID == 0 ]] || {
-  echo 'OpenChamber installation must run as root (use sudo). OpenCode stays under opencode.' >&2
+  echo 'Install OpenChamber from an administrative root session. The applications run as opencode.' >&2
   exit 2
 }
 for tool in gh mktemp chmod rm; do
@@ -24,12 +24,11 @@ APP_SHA="$(gh api "repos/$APP_REPO/commits/${OPENCHAMBER_REF:-$REQUESTED_APP_REF
 [[ "$CONFIG_SHA" =~ ^[a-f0-9]{40}$ && "$APP_SHA" =~ ^[a-f0-9]{40}$ ]] || {
   echo 'INSTALL_PINNED_SHA_INVALID' >&2; exit 2;
 }
-TEMP="$(mktemp /tmp/openchamber-root-install.XXXXXXXX)"
+TEMP="$(mktemp /tmp/openchamber-install.XXXXXXXX)"
 trap 'rm -f -- "$TEMP"' EXIT
-# Resolve all mutable refs once. A single trusted root coordinator performs
-# the OpenCode installer under opencode and all OpenChamber work under root.
+# Resolve all mutable refs once for package preparation and activation.
 gh api -H 'Accept: application/vnd.github.raw' \
-  "repos/$CONFIG_REPO/contents/scripts/install-openchamber-root.sh?ref=$CONFIG_SHA" > "$TEMP"
+  "repos/$CONFIG_REPO/contents/scripts/install-openchamber-unified.sh?ref=$CONFIG_SHA" > "$TEMP"
 OPENCODE_CONFIG_REF="$CONFIG_SHA" MY_OPENCODE_REF="$CONFIG_SHA" \
 OPENCODE_CONFIG_SOURCE_REF="$REQUESTED_CONFIG_REF" \
 OPENCHAMBER_REF="$APP_SHA" OPENCHAMBER_SOURCE_REF="$REQUESTED_APP_REF" \

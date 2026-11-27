@@ -1,7 +1,8 @@
 import { dispatchPacket, workItemWaves } from './pipeline-dispatch.ts';
 import { deployEvidencePath } from './dev-deploy-cli.ts';
 import { candidateEvidenceMatches } from './github-actions-gate-core.mjs';
-import { ownerBrokerRequired } from './owner-broker-client.mjs';
+import { ownerBrokerRequired, passkeyBrokerRequired } from './owner-broker-client.mjs';
+import { authorizeOwnerCheckpoint } from './owner-approval-checkpoint.ts';
 // Stable CLI entry point. Keep core stage/DAG/state implementation untouched and
 // reject non-executable machine gates BEFORE init creates any state or approve mutates it.
 export * from './stage-cli-core.ts';
@@ -202,6 +203,8 @@ async function ownerAcceptance(args: string[]): Promise<boolean> {
   }
 
   await enforcePublishedEvidenceCurrent(['complete', runId, stage, '--pipeline', pipelineId, '--state-root', stateRoot]);
+  const rejection = result === 'fail' && passkeyBrokerRequired()
+    ? await authorizeOwnerCheckpoint(state, 'owner.accept', pipelineId, stage, undefined, 'rejected') : null;
   const evidencePath = join(dirname(manifestFile), 'owner', `${pipelineId}-${stage}.json`);
   await mkdir(dirname(evidencePath), { recursive: true });
   const evidence = {
@@ -212,6 +215,7 @@ async function ownerAcceptance(args: string[]): Promise<boolean> {
     stage,
     message: message ?? null,
     recorded_at: new Date().toISOString(),
+    ...(rejection ? { owner_approval_request_id: rejection.id } : {}),
   };
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
 
@@ -430,6 +434,7 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
       subject: 'final-manifest', run_id: manifestObject.run_id,
       decision: 'approved', shown_manifest_sha256: manifestSha,
       owner_response: 'broker-pending',
+      source_session: values.get('--owner-source-session'),
     } : {
       subject: values.get('--approval-subject'), run_id: values.get('--approval-run-id'),
       decision: values.get('--approval-decision'), shown_manifest_sha256: values.get('--approval-manifest-sha256'),

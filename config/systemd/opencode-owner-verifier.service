@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenCode independent WebAuthn verifier
+Requires=opencode-owner-approval.service opencode-owner-verifier.socket
+After=opencode-owner-approval.service
+
+[Service]
+User=opencode-approval
+Group=opencode-approval
+EnvironmentFile=/etc/my-opencode/owner-verifier.env
+ExecStart=/usr/local/lib/my-opencode/verified-node /var/lib/my-openchamber/runtime/current/install/global/node_modules/@openchamber/web/build/bin/owner-approval.js
+UMask=0077
+NoNewPrivileges=true
+PrivateNetwork=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+Restart=on-failure
+RestartSec=2

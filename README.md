@@ -91,72 +91,33 @@ Standalone `install.sh` делегирует полную установку в 
 
 ## OpenCode + OpenChamber RU 2.x
 
-### Runtime OpenChamber
+### Runtime OpenChamber и независимое подтверждение
 
-Канонический runtime хранится как immutable generations:
+Системный `openchamber.service` работает от `opencode`. Он запускает единственный managed OpenCode `2.3.2` от того же пользователя. Проекты, Chats, плагины и данные OpenCode остаются в профиле `opencode`. Дистрибутив хранит проверенные web-пакеты под `/var/lib/my-openchamber/runtime/releases/<package-sha256>` и атомарно переключает `current`. Версия OpenChamber остаётся `2.8.0`.
 
-```text
-~/.local/share/openchamber-v2/releases/<source-sha>/
-~/.local/share/openchamber-v2/current -> releases/<source-sha>/
+Брокер хранит защищённый журнал отдельно. Веб-верификатор работает от `opencode-approval` и принимает HTTP через systemd Unix socket `/run/my-opencode-verifier/http.sock`. Для отдельного DNS-имени настройте HTTPS на доверенном reverse proxy. Сохраните исходный `Host`, обеспечьте процессу proxy доступ к сокету через группу `opencode-approval-proxy` и направьте это имя только на сокет верификатора. Если proxy работает в контейнере, передайте каталог сокета и его числовую группу. Группа недоступна `opencode`.
+
+При первой установке передайте `OPENCHAMBER_OWNER_APPROVAL_ORIGIN=https://approval.example.com`. Origin фиксируется в root-owned policy и задаёт WebAuthn RP для всех Passkey. Установщик проверит доступность `/healthz` через HTTPS. `OPENCHAMBER_BIND_HOST` и `OPENCHAMBER_BIND_PORT` задают обычный интерфейс приложения, по умолчанию `0.0.0.0:3000`.
+
+После первой установки зарегистрируйте Passkey отдельной root-командой из административной SSH-сессии:
+
+```bash
+python3 /usr/local/lib/my-opencode/opencode-owner-approval-admin.py enroll
 ```
 
-Native OpenChamber управляет systemd unit и startup env; unit запускает стабильный managed launcher. Переключение `current` атомарное. При ошибке возвращается предыдущий бинарник, затем native startup повторно применяет сервис. Installer не восстанавливает unit/env вручную.
+Откройте выведенную одноразовую ссылку в системном браузере владельца в течение десяти минут. После регистрации используйте **Pipeline Approval** в OpenChamber. Ссылка откроет точный запрос на отдельном origin. Для отзыва используйте `opencode-owner-approval-admin.py revoke <credential-id>`. Храните выданную ссылку только на время регистрации.
 
-По умолчанию OpenChamber слушает:
+### Обновление и миграция
 
-```text
-http://172.18.0.1:3000
-```
+Установщик разрешает обе ветки в точные SHA, проверяет manifest Linux-релиза и SHA-256 пакета до остановки сервисов. При неизменной паре SHA и здоровых сервисах повторный запуск ничего не перезапускает. Если поменялись только метаданные исходного SHA, локально сохранённый пакет переиспользуется по digest. Режим `release` обязателен для этого установщика.
 
-Это адрес Docker bridge для доступа из Nginx Proxy Manager. Его можно переопределить через `OPENCHAMBER_BIND_HOST` и `OPENCHAMBER_BIND_PORT`.
+Первый переход переносит активный профиль OpenChamber из `/root/.config/openchamber`. При конфликте файлов используется активная копия, уникальные файлы исторического профиля сохраняются. Отчёт о конфликтах и снимок конфигурации находятся в `/var/lib/my-openchamber/install/<transaction>`. Предыдущее пользовательское дерево сохраняется рядом с активным после атомарного переключения. Старый root-профиль, база OpenCode и исторический ledger остаются доступны для восстановления. Если Chrome использовал системное хранилище ключей другого пользователя, может понадобиться повторный вход.
 
-### Release package и fingerprint reuse
+Запускайте активацию с `OPENCHAMBER_RESTART_MODE=now` из внешнего SSH. Из терминала OpenChamber установщик только подготавливает пакет. Если процесс активации был прерван, повторный запуск в режиме `now` сначала восстановит предыдущие сервисы и профиль. После восстановления снова запустите обновление.
 
-Producer workflow `openchamber-ru/.github/workflows/v2-linux-web-package.yml` для каждого OpenChamber source SHA публикует маленький exact-SHA `manifest.json`.
+Установщик останавливает переход, если `opencode` может через старый локальный dev-helper запускать скрипты проверяемого коммита с root-правами. Это даёт доступ к защищённому журналу. Для отдельной установки только OpenCode действует свой user-unit `opencode-web.service`. В установленном OpenChamber старый user-unit отключён.
 
-Manifest содержит:
-
-- `source_sha`;
-- `runtime_fingerprint`;
-- `package_source_sha`;
-- имя `.tgz` package;
-- SHA-256 package;
-- версию OpenChamber.
-
-Если runtime-входы не менялись, workflow **не пересобирает package**: новый manifest ссылается на ранее проверенный `package_source_sha`. Это сохраняет GitHub Actions minutes и повторяет полезную семантику installer 1.x.
-
-Установщик сначала читает manifest. Большой package скачивается только если требуемого verified package ещё нет локально и runtime действительно требует обновления.
-
-`OPENCHAMBER_PACKAGE_MODE`:
-
-- `release` — использовать только verified release package; если manifest/package отсутствует, завершиться ошибкой;
-- `auto` — release package предпочтителен, но при его отсутствии разрешён exact-SHA source fallback;
-- `source` — принудительный exact-SHA source build.
-
-Для серверной миграции рекомендуется `release`, чтобы отсутствие producer release не превращалось в неожиданную локальную сборку.
-
-## Инкрементальная логика обновления
-
-Canonical `install-openchamber.sh` независимо определяет изменения OpenCode config, OpenCode binary, OpenChamber runtime metadata и service state.
-
-| Состояние | Действие |
-|---|---|
-| Ничего не изменилось | config обновляется атомарно с сохранением пользовательских plugins; OpenCode binary, release lookup и OpenChamber package переиспользуются; native startup перезапускает сервис для загрузки config |
-| Изменился только private config, OpenCode `2.3.2` уже установлен | запускается config-only install с `OPENCODE_SKIP_BINARY_INSTALL=1`; официальный binary installer не вызывается |
-| Требуется обновить только OpenCode binary, а pinned `config_sha` уже активен | config обновляется; официальный OpenCode installer обновляет binary с backup/rollback и version validation |
-| Изменился OpenChamber source SHA, но `runtime_fingerprint/package_source_sha` прежние | скачивается только маленький exact-SHA manifest; OpenChamber package не скачивается и не переустанавливается |
-| Изменился runtime package | используется verified local cache либо скачивается новый `.tgz`, затем проверяется SHA-256 |
-| Изменился только host/port/env/service state | runtime package не трогается; выполняется только service reconciliation |
-
-Двигающиеся branch refs на границе транзакции разрешаются в exact SHA. Core/config/runtime helper далее получают только pinned SHA, поэтому branch update во время установки не смешивает разные поколения.
-
-## Локальный сервис OpenCode
-
-`config/systemd/opencode-web.service` — единственный шаблон user-service.
-Installer загружает его из того же pinned config SHA и задаёт `OPENCODE_WEB_PORT`
-(по умолчанию `4096`). OpenCode запускается через `serve` только на `127.0.0.1`.
-Штатное восстановление после сбоя выполняет systemd. Кастомный reboot-helper и
-Scheduler удалены; отдельного сервиса управления автозапуском нет.
+В существующих RUN с историческим подтверждением откройте исходную сессию и выполните `stage-cli owner-reauthorize <run-id> --owner-source-session <id>` через установленный `tsx`. Повторите эту же команду после подтверждения каждого запрошенного checkpoint в Pipeline Approval. Брокер свяжет Passkey с имеющимся frozen manifest и точным кандидатом. Исторические записи сохраняются.
 
 ## Обновление OpenCode
 
@@ -178,6 +139,8 @@ gh api -H 'Accept: application/vnd.github.raw' \
   | OPENCODE_CONFIG_REF="$CONFIG_SHA" \
     OPENCHAMBER_REF="$OPENCHAMBER_SHA" \
     OPENCHAMBER_PACKAGE_MODE=release \
+    OPENCHAMBER_RESTART_MODE=now \
+    OPENCHAMBER_OWNER_APPROVAL_ORIGIN=https://approval.example.com \
     bash
 ```
 
@@ -192,12 +155,10 @@ OPENCHAMBER_RESTART_MODE=now
 ## Проверка после установки
 
 ```bash
-opencode --version
-openchamber --version
-opencode auth list
-openchamber startup status
-systemctl --user status openchamber.service
-ss -lnt | grep '172.18.0.1:3000'
+systemctl show openchamber.service opencode-owner-approval.service opencode-owner-verifier.service -p User -p MainPID -p ActiveState
+readlink /var/lib/my-openchamber/runtime/current
+cat /var/lib/my-openchamber/install/active-sha
+curl -fsS http://127.0.0.1:3000/health
 ```
 
 Ожидаемые версии:

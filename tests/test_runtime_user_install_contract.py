@@ -26,7 +26,7 @@ def main():
     require(ocweb_unit,'opencode serve --port ${OPENCODE_WEB_PORT} --hostname 127.0.0.1')
     forbid(ocweb_unit,'0.0.0.0')
     require(wrapper,'[[ $EUID == 0 ]]')
-    require(wrapper,'install-openchamber-root.sh?ref=$CONFIG_SHA')
+    require(wrapper,'install-openchamber-unified.sh?ref=$CONFIG_SHA')
     forbid(wrapper,'sudo -H -u "$RUNTIME_USER"')
     require(coordinator,'OPENCODE_USER=opencode')
     require(coordinator,'OPENCODE_CONFIG_REF="$CONFIG_SHA"')

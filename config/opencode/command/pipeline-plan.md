@@ -311,6 +311,8 @@ For a new PLAN or owner-contract-changing revision, present gate readiness, bran
 
 Only AFTER the owner explicitly approves the **final manifest** (not a scope/story clarification) and every required planning gate is `ready`, run `plan-start` with an audit descriptor that names this run and the exact SHA-256 shown to the owner. The descriptor records the response and decision; an OpenCode `messageID` or source session may be included only when actually available. These fields maintain workflow correlation and do not authenticate authorship.
 
+With the installed Passkey broker, use `plan-start --owner-source-session <actual OpenCode session ID>` after the planning gates are ready to submit the frozen PLAN. A pending checkpoint waits for the owner's independent Passkey decision. Retry in the same session and worktree after approval. A rejected checkpoint requires owner feedback before a revised PLAN is submitted. The source session cannot be guessed or substituted.
+
 Add the final-manifest decision, exact displayed manifest SHA, run ID and explicit response to the existing `decision-register.md`. A response to a preceding Story, scope, or probe question belongs to that question's existing decision entry and cannot be reused as the final-manifest descriptor. The CLI checks the descriptor fields and the current manifest bytes; it does not infer consent from natural-language wording.
 
 ```text

@@ -46,8 +46,10 @@ reexec_as_runtime_user() {
       "repos/$provision_repo/contents/scripts/$file?ref=$provision_sha" > "$provision_dir/$file"
     chmod 755 "$provision_dir/$file"
   done
+  local -a provision_args=()
+  if [[ "${OPENCODE_MANAGED_BY_OPENCHAMBER:-0}" == 1 ]]; then provision_args+=(--managed-openchamber); fi
   sudo env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    bash "$provision_dir/provision-runtime-user.sh"
+    bash "$provision_dir/provision-runtime-user.sh" "${provision_args[@]}"
   rm -rf -- "$provision_dir"
 
   RUNTIME_HOME="$(getent passwd "$RUNTIME_USER" | cut -d: -f6)"
@@ -202,6 +204,8 @@ gh api -H 'Accept: application/vnd.github.raw' \
 chmod 644 "$UNIT_TMP"
 mv -f "$UNIT_TMP" "$UNIT"
 systemctl --user daemon-reload
-systemctl --user enable opencode-web.service >/dev/null
-echo "OpenCode autostart enabled for user $RUNTIME_USER."
+if [[ "${OPENCODE_MANAGED_BY_OPENCHAMBER:-0}" != 1 && ! -f /etc/my-opencode/owner-broker-passkey ]]; then
+  systemctl --user enable opencode-web.service >/dev/null
+  echo "OpenCode autostart enabled for user $RUNTIME_USER."
+fi
 
