@@ -125,6 +125,7 @@ fi
 install -d -o root -g root -m 755 "$STATE_DIR"
 exec 9>"$STATE_DIR/$KEY.lock"
 flock -x 9
+cd /
 GIT=("${DEV[@]}" /usr/bin/git -C "$REPO_DIR")
 "${GIT[@]}" fetch --quiet --tags origin 9>&-
 SHA="$("${GIT[@]}" rev-parse --verify --quiet "$REF^{commit}" 9>&-)" || { echo "Version $REF is not in origin" >&2; exit 2; }

@@ -30,7 +30,7 @@ sha="$(git -C "$tmp/work" rev-parse HEAD)"
 chown -R opencode-dev:opencode-dev "$tmp/origin.git"
 repo="$tmp/prefix/var/lib/opencode-dev/targets/svd1"
 install -d -o opencode-dev -g opencode-dev -m 700 "$(dirname "$repo")"
-runuser -u opencode-dev -- git clone -q --no-local "$tmp/origin.git" "$repo"
+(cd /; runuser -u opencode-dev -- env "HOME=$tmp/prefix/var/lib/opencode-dev" git clone -q --no-local "$tmp/origin.git" "$repo")
 conf="$tmp/prefix/etc/opencode/deploy-targets/svd1.conf"
 printf 'REPO_DIR=%s\nINSTALLER=install.sh\nARGS=update --target dev --dev-key svd1\nVERSION_FLAG=--version\nSTATUS_ARGS=status --target dev --dev-key svd1 --json\nENV_FIXTURE_DEPLOY_SCOPE=dev\n' "$repo" > "$conf"
 chmod 644 "$conf"
@@ -39,7 +39,8 @@ chmod 644 "$conf"
 if [[ "${OPENCODE_DISPOSABLE_DEPLOY_TEST:-0}" == 1 ]]; then
   test_policy="/etc/sudoers.d/opencode-dev-test-${BASHPID}"
   install -m 440 "$tmp/prefix/etc/sudoers.d/opencode-deploy-opencode" "$test_policy"
-  runuser -u opencode -- sudo -n "$helper" svd1 "$sha" 2>/dev/null
+  install -d -o opencode -g "$(id -gn opencode)" -m 700 "$tmp/caller"
+  runuser -u opencode -- bash -ceu 'cd "$1"; exec sudo -n "$2" svd1 "$3"' bash "$tmp/caller" "$helper" "$sha"
 else
   "$helper" svd1 "$sha" 2>/dev/null
 fi
