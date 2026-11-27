@@ -35,6 +35,11 @@ for part in bootstrap-openchamber-root-tools.sh openchamber-runtime-store.sh run
 done
 source "$work/bootstrap-openchamber-root-tools.sh"
 source "$work/install-journal.sh"
+audit() {
+  XDG_STATE_HOME=/root/.local/state install_journal_event "$@" \
+    "config_ref=${OPENCODE_CONFIG_SOURCE_REF:-$CONFIG_SHA}" "config_sha=$CONFIG_SHA" \
+    "openchamber_ref=${OPENCHAMBER_SOURCE_REF:-$APP_SHA}" "openchamber_sha=$APP_SHA" || true
+}
 ensure_root_node
 ensure_root_bun
 source "$work/stage-openchamber-unified-release.sh"
@@ -170,6 +175,7 @@ rollback() {
   (( old_user_ui == 0 )) || user_systemd start openchamber.service
   (( old_ui == 0 )) || systemctl start openchamber.service
   rm -f "$STATE/install/pending"
+  audit activation rolled_back "exit_code=$result"
   echo "OpenChamber activation rolled back. Backup kept at $saved" >&2
   exit "$result"
 }
@@ -223,6 +229,7 @@ fi
 
 release="$(stage_unified_release "$work")"
 if [[ "$RESTART_MODE" != now ]] && { [[ "$RESTART_MODE" == defer ]] || systemctl is-active --quiet openchamber.service; }; then
+  audit activation pending_restart
   echo 'PENDING APPLY: verified package staged. Run the installer from external SSH with OPENCHAMBER_RESTART_MODE=now.'
   exit 0
 fi
@@ -262,6 +269,7 @@ printf '%s\n' "$transaction" > "$saved/pending"
 mv -Tf "$saved/pending" "$STATE/install/pending"
 trap rollback ERR
 trap 'rollback 130' INT TERM
+audit activation start
 
 for part in opencode-owner-approvald.py opencode-owner-approval.py opencode-owner-approval-state.py opencode-owner-approval-admin.py migrate-openchamber-profile.py migrate-openchamber-to-root.py; do
   install -m 755 -o root -g root "$work/$part" "$LIB/$part"
@@ -329,4 +337,5 @@ printf '%s\n' "$CONFIG_SHA $APP_SHA $bind_host $bind_port" > "$saved/active-sha"
 mv -Tf "$saved/active-sha" "$state_active"
 rm -f "$STATE/install/pending"
 trap - ERR INT TERM
+audit activation activated
 echo "Unified runtime ready config=$CONFIG_SHA app=$APP_SHA OpenCode=$installed"
