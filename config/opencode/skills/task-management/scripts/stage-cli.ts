@@ -1,5 +1,5 @@
 import { dispatchPacket, workItemWaves } from './pipeline-dispatch.ts';
-import { deployEvidencePath } from './dev-deploy-cli.ts';
+import { deployEvidencePath, verifyDeployedServiceGate } from './dev-deploy-cli.ts';
 import { candidateEvidenceMatches } from './github-actions-gate-core.mjs';
 import { ownerBrokerRequired, passkeyBrokerRequired } from './owner-broker-client.mjs';
 import { authorizeOwnerCheckpoint } from './owner-approval-checkpoint.ts';
@@ -317,6 +317,14 @@ export async function enforceCompletionEvidence(args: string[]): Promise<string[
         String(evidence.candidate_sha).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
         !runtime?.started_at || Date.parse(evidence.recorded_at) < Date.parse(runtime.started_at)) {
       throw new Error(`EVIDENCE_INVALID_OR_STALE: dev_deploy ${pipeline.id}/${stage}; run dev-deploy-cli.ts record after installing the candidate`);
+    }
+    if (passkeyBrokerRequired()) {
+      const candidateSha = String(candidate.candidate_sha ?? '').toLowerCase();
+      if (candidate.status !== 'PASS' || candidateSha !== String(candidate.remote_sha ?? '').toLowerCase()) {
+        throw new Error('EVIDENCE_INVALID: candidate SHA is not published');
+      }
+      await verifyDeployedServiceGate({ artifactRoot, runId, pipelineId: pipeline.id, stage,
+        target: String(manifest.deploy_target ?? ''), candidateSha, startedAt: runtime.started_at });
     }
   } else if (executor === 'github_ci' || executor === 'github_dev') {
     evidencePath = join(artifactRoot, 'github', `${pipeline.id}-${stage}.json`);
