@@ -23,6 +23,7 @@ const WORK_ITEM_MARKER_RE = /<pipeline_work_item\s+id="([A-Za-z0-9._:-]{1,128})"
 const BACKGROUND_ACK_RE = /working in the background \(sessionID:\s*([^)\s]+)\)/
 const CHILD_IDLE_PROBE_MS = 1500
 const ORCHESTRATOR_CLI_RE = /(?:stage-cli|stage-complete-cli)\.ts\s+(?:next|advance|waves|status|start)\s+([A-Za-z0-9._-]+)/
+const PLAN_OWNER_CLI_RE = /stage-cli\.ts\s+(?:plan-start|owner-reauthorize)\s/
 // Grace period after an OpenStage turn ends before it counts as a stall.
 const wakeDelayMs = () => Number(process.env.PIPELINE_WAKE_DELAY_MS) || 90_000
 
@@ -661,6 +662,10 @@ export default Plugin.define({
     await plugin.tool.hook("execute.before", async (event) => {
       const sessionID = String(event.sessionID)
       if (event.tool !== "subagent") {
+        if (event.tool === "shell" && /^ses_[A-Za-z0-9]+$/.test(sessionID) &&
+            typeof event.input?.command === "string" && PLAN_OWNER_CLI_RE.test(event.input.command)) {
+          event.input.command = `export MY_OPENCODE_ACTIVE_SESSION=${sessionID}\n${event.input.command}`
+        }
         // The session that drives the RUN CLI is its orchestrator. After an OpenCode restart the owner's
         // next message rarely repeats `/pipeline-run <id>`, so waking must not depend on that prompt.
         const driven = event.tool === "shell" ? ORCHESTRATOR_CLI_RE.exec(String((event.input as any)?.command ?? ""))?.[1] : undefined

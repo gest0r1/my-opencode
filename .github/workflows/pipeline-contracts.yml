@@ -79,7 +79,9 @@ jobs:
           python3 tests/test_runtime_user_install_contract.py
           python3 tests/test_runtime_processes.py
           python3 tests/test_owner_approval_helper.py
+          python3 tests/test_owner_passkey_state.py
           python3 tests/test_openchamber_root_migration.py
+          python3 tests/test_openchamber_unified_migration.py
           python3 tests/test_openchamber_root_child_boundary.py
           python3 tests/test_owner_broker_real_uid.py
           python3 tests/test_openchamber_ui_rekey.py

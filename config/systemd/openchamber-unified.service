@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenChamber and managed OpenCode runtime
+Wants=network-online.target
+After=network-online.target opencode-owner-approval.service
+Requires=opencode-owner-approval.service
+
+[Service]
+User=opencode
+WorkingDirectory=~
+EnvironmentFile=-/etc/my-opencode/openchamber-startup.env
+EnvironmentFile=/etc/my-opencode/openchamber-unified.env
+UnsetEnvironment=OPENCHAMBER_ROOT_MODE OPENCHAMBER_EXECUTION_USER OPENCHAMBER_EXECUTION_UID OPENCHAMBER_EXECUTION_GID OPENCHAMBER_CHATS_DIR OPENCODE_HOST OPENCODE_SKIP_START NODE_OPTIONS
+ExecStart=/usr/local/lib/my-opencode/verified-node /var/lib/my-openchamber/runtime/current/install/global/node_modules/@openchamber/web/build/bin/cli.js serve --host ${OPENCHAMBER_BIND_HOST} --port ${OPENCHAMBER_BIND_PORT} --foreground
+UMask=0077
+ProtectSystem=full
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

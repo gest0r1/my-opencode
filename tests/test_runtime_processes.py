@@ -26,11 +26,15 @@ class RuntimeProcessTests(unittest.TestCase):
 8 2 0 node /root/.local/share/openchamber-v2/current/bin/openchamber serve --host 0.0.0.0 --port 3000 --foreground
 9 8 1001 bash
 10 9 0 sudo bash
+11 1 1001 /usr/local/lib/my-opencode/verified-node /var/lib/my-openchamber/runtime/current/install/global/node_modules/@openchamber/web/build/bin/cli.js serve --foreground
+12 11 1001 bash
+13 12 0 sudo bash
 ''')
-        self.assertEqual([r['pid'] for r in rows if r['runtime']], [5, 6, 8])
+        self.assertEqual([r['pid'] for r in rows if r['runtime']], [5, 6, 8, 11])
         self.assertTrue(processes.embedded(rows, 5))
         self.assertFalse(processes.embedded(rows, 7))
         self.assertTrue(processes.embedded(rows, 10))
+        self.assertTrue(processes.embedded(rows, 13))
         for invalid in ('', 'malformed', '1 2 uid command'):
             with self.assertRaises(ValueError):
                 processes.inventory(invalid)

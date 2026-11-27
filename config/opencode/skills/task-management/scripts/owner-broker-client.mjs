@@ -1,7 +1,8 @@
 import { connect } from 'node:net';
-import { existsSync, lstatSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 
 export const BROKER_ENFORCEMENT_MARKER = '/etc/my-opencode/owner-broker-required';
+const PASSKEY_BROKER_MARKER = '/etc/my-opencode/owner-broker-passkey';
 const BROKER_POLICY_DIR = '/etc/my-opencode';
 export const AGENT_SOCKET = '/run/my-opencode-approval/agent.sock';
 
@@ -16,7 +17,7 @@ export function ownerBrokerRequired() {
     throw new Error('OWNER_BROKER_POLICY_DIR_UNTRUSTED');
   }
   if (!existsSync(BROKER_ENFORCEMENT_MARKER)) {
-    if (existsSync(AGENT_SOCKET)) throw new Error('OWNER_BROKER_POLICY_MARKER_MISSING');
+    if (existsSync(AGENT_SOCKET) || existsSync(PASSKEY_BROKER_MARKER)) throw new Error('OWNER_BROKER_POLICY_MARKER_MISSING');
     return false;
   }
   const st = lstatSync(BROKER_ENFORCEMENT_MARKER);
@@ -24,6 +25,25 @@ export function ownerBrokerRequired() {
     throw new Error('OWNER_BROKER_POLICY_UNTRUSTED');
   }
   return true;
+}
+
+export function passkeyBrokerRequired() {
+  if (!ownerBrokerRequired() || !existsSync(PASSKEY_BROKER_MARKER)) return false;
+  const marker = lstatSync(PASSKEY_BROKER_MARKER);
+  if (!marker.isFile() || marker.isSymbolicLink() || marker.uid !== 0 || (marker.mode & 0o022)) {
+    throw new Error('OWNER_BROKER_PASSKEY_POLICY_UNTRUSTED');
+  }
+  return true;
+}
+
+export function ownerPasskeyUrl(requestId) {
+  if (!/^[a-f0-9]{32}$/.test(String(requestId)) || !passkeyBrokerRequired()) {
+    throw new Error('OWNER_BROKER_PASSKEY_LINK_INVALID');
+  }
+  const value = readFileSync(PASSKEY_BROKER_MARKER, 'utf8').trim();
+  const origin = new URL(value);
+  if (origin.protocol !== 'https:' || origin.origin !== value) throw new Error('OWNER_BROKER_PASSKEY_ORIGIN_INVALID');
+  return new URL('/approval/' + requestId, origin).href;
 }
 
 /** Agent socket returns immutable broker outcome, not model-provided evidence. */

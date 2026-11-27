@@ -74,7 +74,7 @@ def secure_copy(src, dst):
             for name in files:
                 if name in ('.', '..'):
                     raise Refused('UNSAFE_SOURCE_ENTRY')
-                flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+                flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
                 try:
                     source_file = os.open(name, flags, dir_fd=source_fd)
                 except OSError as error:

@@ -1,7 +1,8 @@
 import { dispatchPacket, workItemWaves } from './pipeline-dispatch.ts';
-import { deployEvidencePath } from './dev-deploy-cli.ts';
+import { deployEvidencePath, verifyDeployedServiceGate } from './dev-deploy-cli.ts';
 import { candidateEvidenceMatches } from './github-actions-gate-core.mjs';
-import { ownerBrokerRequired } from './owner-broker-client.mjs';
+import { ownerBrokerRequired, passkeyBrokerRequired } from './owner-broker-client.mjs';
+import { authorizeOwnerCheckpoint } from './owner-approval-checkpoint.ts';
 // Stable CLI entry point. Keep core stage/DAG/state implementation untouched and
 // reject non-executable machine gates BEFORE init creates any state or approve mutates it.
 export * from './stage-cli-core.ts';
@@ -202,6 +203,8 @@ async function ownerAcceptance(args: string[]): Promise<boolean> {
   }
 
   await enforcePublishedEvidenceCurrent(['complete', runId, stage, '--pipeline', pipelineId, '--state-root', stateRoot]);
+  const rejection = result === 'fail' && passkeyBrokerRequired()
+    ? await authorizeOwnerCheckpoint(state, 'owner.accept', pipelineId, stage, undefined, 'rejected') : null;
   const evidencePath = join(dirname(manifestFile), 'owner', `${pipelineId}-${stage}.json`);
   await mkdir(dirname(evidencePath), { recursive: true });
   const evidence = {
@@ -212,6 +215,7 @@ async function ownerAcceptance(args: string[]): Promise<boolean> {
     stage,
     message: message ?? null,
     recorded_at: new Date().toISOString(),
+    ...(rejection ? { owner_approval_request_id: rejection.id } : {}),
   };
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
 
@@ -313,6 +317,14 @@ export async function enforceCompletionEvidence(args: string[]): Promise<string[
         String(evidence.candidate_sha).toLowerCase() !== String(candidate.candidate_sha).toLowerCase() ||
         !runtime?.started_at || Date.parse(evidence.recorded_at) < Date.parse(runtime.started_at)) {
       throw new Error(`EVIDENCE_INVALID_OR_STALE: dev_deploy ${pipeline.id}/${stage}; run dev-deploy-cli.ts record after installing the candidate`);
+    }
+    if (passkeyBrokerRequired()) {
+      const candidateSha = String(candidate.candidate_sha ?? '').toLowerCase();
+      if (candidate.status !== 'PASS' || candidateSha !== String(candidate.remote_sha ?? '').toLowerCase()) {
+        throw new Error('EVIDENCE_INVALID: candidate SHA is not published');
+      }
+      await verifyDeployedServiceGate({ artifactRoot, runId, pipelineId: pipeline.id, stage,
+        target: String(manifest.deploy_target ?? ''), candidateSha, startedAt: runtime.started_at });
     }
   } else if (executor === 'github_ci' || executor === 'github_dev') {
     evidencePath = join(artifactRoot, 'github', `${pipeline.id}-${stage}.json`);
@@ -430,6 +442,7 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
       subject: 'final-manifest', run_id: manifestObject.run_id,
       decision: 'approved', shown_manifest_sha256: manifestSha,
       owner_response: 'broker-pending',
+      source_session: process.env.MY_OPENCODE_ACTIVE_SESSION ?? values.get('--owner-source-session'),
     } : {
       subject: values.get('--approval-subject'), run_id: values.get('--approval-run-id'),
       decision: values.get('--approval-decision'), shown_manifest_sha256: values.get('--approval-manifest-sha256'),
@@ -446,6 +459,7 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
   // Owner can answer later. Resume only a matching frozen PLAN; never re-init
   // or silently adopt a different worktree after the broker request was issued.
   let resumePendingApproval = false;
+  let approvalProjected = false;
   if (command === 'plan-start' && protectedOwnerGate) {
     const stateFile = resolve(values.get('--state-root') ?? '.tmp/pipelines', manifestObject.run_id, 'state.json');
     const existing = await readFile(stateFile, 'utf8').then(JSON.parse).catch((error: any) => {
@@ -453,12 +467,20 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
       throw error;
     });
     if (existing) {
-      if (existing.status !== 'planned' ||
-          existing.manifest_sha256 !== manifestSha ||
+      if (existing.manifest_sha256 !== manifestSha ||
           resolve(String(existing.manifest_file ?? '')) !== resolve(manifest)) {
         throw new Error('OWNER_APPROVAL_RESUME_STATE_MISMATCH');
       }
       resumePendingApproval = true;
+      approvalProjected = existing.status !== 'planned';
+      if (approvalProjected) {
+        const { validateState } = await import('./stage-cli-core.ts');
+        const checked = await validateState(resolve(values.get('--state-root') ?? '.tmp/pipelines'), manifestObject.run_id);
+        const sourceSession = process.env.MY_OPENCODE_ACTIVE_SESSION ?? values.get('--owner-source-session');
+        if (passkeyBrokerRequired() && sourceSession !== checked.approval_record?.source_session) {
+          throw new Error('OWNER_APPROVAL_SOURCE_SESSION_MISMATCH');
+        }
+      }
     }
   }
   const steps: Array<[string, string[]]> = resumePendingApproval ? [] : [
@@ -470,7 +492,7 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
     const runId = manifestObject.run_id;
     steps.push(
       ...(resumePendingApproval ? [] : [['init', [script('stage-cli.ts'), 'init', manifest, ...root, '--json']] as [string, string[]]]),
-      ...(technicalCarry ? [] : [['approve', [script('stage-cli.ts'), 'approve', runId, ...root, ...approvalArgs, '--json']] as [string, string[]]]),
+      ...(technicalCarry || approvalProjected ? [] : [['approve', [script('stage-cli.ts'), 'approve', runId, ...root, ...approvalArgs, '--json']] as [string, string[]]]),
       ['github-sync', [script('pipeline-github-sync.mjs'), 'sync', runId, ...root]],
       ['validate', [script('stage-cli.ts'), 'validate', runId, ...root, '--json']],
       ['next', [script('stage-cli.ts'), 'next', runId, ...root, '--json']],

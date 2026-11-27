@@ -468,6 +468,14 @@ async function main(): Promise<void> {
   if (!['approved', 'in_progress'].includes(state.status)) {
     throw new GateRunnerError(`run is not executable: status=${state.status}`);
   }
+  const { passkeyBrokerRequired } = await import('./owner-broker-client.mjs');
+  if (passkeyBrokerRequired()) {
+    const { validateState } = await import('./stage-cli-core.ts');
+    const checked = await validateState(stateRoot, runId);
+    if (checked.superseded_by || checked.manifest_sha256 !== state.manifest_sha256) {
+      throw new GateRunnerError('OWNER_BROKER_GATE_PLAN_REQUIRED');
+    }
+  }
   if (!state.manifest_file || !state.manifest_sha256) {
     throw new GateRunnerError('run has no frozen manifest metadata; re-plan with current stage-cli');
   }

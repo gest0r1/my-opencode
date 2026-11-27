@@ -1,0 +1,13 @@
+[Unit]
+Description=Private HTTP listener for OpenCode passkey approvals
+
+[Socket]
+ListenStream=/run/my-opencode-verifier/http.sock
+DirectoryMode=0755
+SocketUser=root
+SocketGroup=opencode-approval-proxy
+SocketMode=0660
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

@@ -306,6 +306,7 @@ export interface OwnerAmendmentRecord {
   approved_at: string;
   evidence_path: string;
   evidence_sha256: string;
+  owner_approval_request_id?: string;
   acceptance_criteria_changed: boolean;
   requirements_changed: boolean;
   paths: string[];

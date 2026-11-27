@@ -95,6 +95,8 @@ jobs:
             scripts/install-opencode-generation.sh \
             scripts/install-opencode-dependencies.sh \
             scripts/install-openchamber-v2-core.sh \
+            scripts/install-openchamber-unified.sh \
+            scripts/stage-openchamber-unified-release.sh \
             scripts/openchamber-runtime-store.sh \
             scripts/install-opencode-agents.sh \
             tests/test_incremental_installer.sh \

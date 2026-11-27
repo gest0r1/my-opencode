@@ -7,8 +7,13 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { hasActiveStages, implementationStarted } from './plan-lifecycle.ts';
 import { readLeases } from './dispatch-leases.mjs';
+import { agentBrokerAction, passkeyBrokerRequired } from './owner-broker-client.mjs';
+import { authorizePasskeyCheckpoint, ownerAmendmentSnapshot, verifyOwnerCheckpointReceipt } from './owner-approval-checkpoint.ts';
 
 const hash = raw => createHash('sha256').update(raw).digest('hex');
+const unfreezeSnapshot = (manifest, scope, authorization) => JSON.stringify({
+  run_id: scope.run_id, manifest_sha256: manifest, ...scope, authorization_sha256: hash(authorization),
+});
 const idValid = value => typeof value === 'string' && /^[a-zA-Z0-9][\w.-]{0,127}$/.test(value);
 const safeRelative = value => typeof value === 'string' && value.length > 0 &&
   !value.startsWith('/') && !value.includes('\\') && !value.includes('\0') &&
@@ -129,10 +134,16 @@ export async function beginUnfreeze(stateRoot,run,evidencePath,{validateWorktree
     ownerAuthorization(evidence,run,t.manifestHash);
     const pre=await inventory(t.root);
     const version=hash(JSON.stringify([run,t.manifestHash,hash(evidenceRaw)])).slice(0,24);
+    const approvalSubject=unfreezeSnapshot(t.manifestHash, {run_id:run, revision_id:version,
+      affected_pipelines:evidence.affected_pipelines, affected_gates:evidence.affected_gates,
+      allowed_plan_paths:evidence.allowed_plan_paths, reason:evidence.reason}, evidenceRaw);
+    const grant=passkeyBrokerRequired() ? await authorizePasskeyCheckpoint({runId:run, workspace:hash(t.state.worktree_root),
+      operation:'plan.unfreeze',snapshot:approvalSubject}) : null;
     await snapshot(t.root,version,t);
     const record={schema_version:1,run_id:run,revision_id:version,original_manifest_sha256:t.manifestHash,
       original_state_sha256:hash(JSON.stringify(t.state,null,2)+'\n'),authorization_sha256:hash(evidenceRaw),
       authorization_path:relative(t.root,evidenceAbsolute),original_planning_files:pre,
+      ...(grant ? {owner_approval_request:grant.id} : {}),
       started_at:new Date().toISOString()};
     await fs.writeFile(join(t.root,'planning/unfreeze-active.json'),JSON.stringify(record,null,2)+'\n',{flag:'wx'});
     return {status:'PASS',action:'unfreeze_in_place',run_id:run,revision_id:version,
@@ -203,8 +214,24 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
     if(hash(authRaw)!==marker.authorization_sha256)throw Error('UNFREEZE_APPROVAL_CHANGED');
     const auth=JSON.parse(authRaw);
     ownerAuthorization(auth,run,marker.original_manifest_sha256);
+    const protectedMode=passkeyBrokerRequired();
+    if(protectedMode) {
+      const scope=unfreezeSnapshot(marker.original_manifest_sha256,{run_id:run, revision_id:marker.revision_id,
+        affected_pipelines:auth.affected_pipelines, affected_gates:auth.affected_gates,
+        allowed_plan_paths:auth.allowed_plan_paths, reason:auth.reason},authRaw);
+      const receipt=await agentBrokerAction({action:'status',request_id:marker.owner_approval_request});
+      if(receipt.decision!=='approved'||receipt.operation!=='plan.unfreeze'||receipt.run_id!==run||
+        receipt.workspace!==hash(t.state.worktree_root)||receipt.subject_sha256!==hash(scope))
+        throw Error('UNFREEZE_OWNER_APPROVAL_REQUIRED');
+    }
     await inFlight(t.root,t.state);
     if(t.state.manifest_sha256===t.manifestHash && t.manifestHash!==marker.original_manifest_sha256) {
+      if(protectedMode){
+        await verifyOwnerCheckpointReceipt(t.state,'plan.final_manifest.approve',t.state.approval_record?.message_id);
+        const lineage=await agentBrokerAction({action:'verify_refreeze', request_id:t.state.approval_record.message_id,
+          unfreeze_request_id:marker.owner_approval_request});
+        if(!lineage.authorized)throw Error('UNFREEZE_APPROVED_PLAN_LINEAGE_REQUIRED');
+      }
       if(t.state.unfreeze_revision?.revision_id!==marker.revision_id)throw Error('UNFREEZE_COMMITTED_STATE_MISMATCH');
       const finalized=await optional(join(t.root,'planning/unfreeze-revisions',marker.revision_id,'finalization.json'));
       if(!finalized||finalized.new_manifest_sha256!==t.manifestHash)throw Error('UNFREEZE_FINALIZATION_AUDIT_MISSING');
@@ -276,6 +303,24 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
     }
     if(review.changed_story===true && review.story_review!=='ready')throw Error('UNFREEZE_STORY_REVIEW_REQUIRED');
     await validateFrozenPlan(join(t.root,'manifest.json'));
+    const grant=protectedMode ? await authorizePasskeyCheckpoint({runId:run,workspace:hash(t.state.worktree_root),
+      operation:'plan.final_manifest.approve',snapshot:t.manifestRaw}) : null;
+    if(grant) {
+      const lineage=await agentBrokerAction({action:'verify_refreeze',request_id:grant.id,unfreeze_request_id:marker.owner_approval_request});
+      if(!lineage.authorized)throw Error('UNFREEZE_APPROVED_PLAN_LINEAGE_REQUIRED');
+    }
+    const carryAmendments=[];
+    if(protectedMode) {
+      for(const item of t.state.owner_amendments??[]) {
+        if(!t.manifest.pipelines.some(spec=>spec.id===item.pipeline_id && spec.stages.includes(item.source_stage)))continue;
+        const raw=await fs.readFile(inside(t.root,item.evidence_path),'utf8');
+        if(hash(raw)!==item.evidence_sha256)throw Error('OWNER_AMENDMENT_EVIDENCE_STALE');
+        const reapproved=await authorizePasskeyCheckpoint({runId:run,workspace:hash(t.state.worktree_root),
+          operation:'owner.amend',pipelineId:item.pipeline_id,stage:`amendment-${item.revision}`,
+          snapshot:ownerAmendmentSnapshot({...t.state,manifest_sha256:t.manifestHash},item.pipeline_id,item.source_stage,item.revision,raw)});
+        carryAmendments.push({...item,owner_approval_request_id:reapproved.id});
+      }
+    }
 
     // An existing global published candidate cannot prove the new manifest; invalidate every
     // post-publish consumer, preserving all old proof files as historical evidence only.
@@ -305,11 +350,14 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
       }
     }
     const nextState={...t.state,manifest_sha256:t.manifestHash,pipelines:nextPipelines,status:'in_progress',
+      ...(protectedMode ? {owner_amendments:carryAmendments,runtime_scope_extensions:(t.state.runtime_scope_extensions??[]).filter(scope=>
+        scope.scope_class!=='owner_amendment'||carryAmendments.some(item=>item.evidence_sha256===scope.evidence_sha256))} : {}),
       reconciliations:[], // Previous records are SHA-bound to the old manifest; keep audit files, not active trust.
       active_stages:[],current_stage:undefined,
       approval_record:{subject:'final-manifest',run_id:run,decision:'approved',shown_manifest_sha256:t.manifestHash,
-        current_manifest_sha256:t.manifestHash,owner_response:review.owner_response,message_id:review.owner_message_id,
-        source_session:review.owner_source_session,recorded_at:new Date().toISOString()},
+        current_manifest_sha256:t.manifestHash,owner_response:grant ? `broker-confirmed:${grant.id}` : review.owner_response,
+        message_id:grant?.id??review.owner_message_id,source_session:grant?.sessionId??review.owner_source_session,
+        recorded_at:new Date().toISOString()},
       unfreeze_revision:{revision_id:marker.revision_id,original_manifest_sha256:marker.original_manifest_sha256,
         new_manifest_sha256:t.manifestHash,affected_pipelines:[...affected],review_sha256:hash(reviewRaw),
         recorded_at:new Date().toISOString()},updated_at:new Date().toISOString()};
@@ -352,6 +400,9 @@ export async function abortUnfreeze(stateRoot,run,evidencePath,{validateWorktree
        evidence.owner_decision!=='declined' || !evidence.owner_response?.trim() ||
        !evidence.owner_message_id?.trim() || !evidence.owner_source_session?.trim())
       throw Error('UNFREEZE_ABORT_OWNER_DECISION_REQUIRED');
+    if(passkeyBrokerRequired())await authorizePasskeyCheckpoint({runId:run,workspace:hash(t.state.worktree_root),
+      operation:'plan.unfreeze.abort',snapshot:unfreezeSnapshot(marker.original_manifest_sha256,
+        {run_id:run,revision_id:marker.revision_id},evidenceRaw)});
     await fs.writeFile(join(t.root,'planning/unfreeze-revisions',marker.revision_id,'aborted.json'),
       JSON.stringify({reason:evidence.owner_response,evidence_sha256:hash(evidenceRaw),
         recorded_at:new Date().toISOString()},null,2)+'\n',{flag:'wx'});

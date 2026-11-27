@@ -60,7 +60,7 @@ oc_stage_package() {
     echo "Invalid OpenChamber package SHA256: $package_sha256" >&2
     return 1
   }
-  printf '%s  %s\n' "$package_sha256" "$package_file" | sha256sum -c - >/dev/null
+  printf '%s  %s\n' "$package_sha256" "$package_file" | sha256sum -c - >/dev/null || return 1
 
   oc_runtime_init
   release_dir="$OPENCHAMBER_RELEASES/$package_sha256"

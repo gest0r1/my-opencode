@@ -31,8 +31,8 @@ def inventory(text):
             # Actual root unit: node .../current/bin/openchamber serve ...
             runtime = runtime or (Path(tokens[1]).name in ('openchamber', 'opencode')
                                   and any(t in ('serve', 'web', 'start') for t in tokens[2:]))
-        if executable in ('node', 'bun', 'python3', 'python'):
-            runtime = runtime or any(re.search(r'(?:openchamber|packages/web)/(?:server/|bin/cli)', t)
+        if executable in ('node', 'bun', 'python3', 'python') or (tokens and tokens[0] == '/usr/local/lib/my-opencode/verified-node'):
+            runtime = runtime or any(re.search(r'(?:openchamber|@openchamber/web|packages/web)/(?:build/)?(?:server/|bin/cli)', t)
                                      or re.search(r'/(?:extensions|server-browser)/.+\.(?:js|mjs|py)$', t)
                                      for t in tokens[1:] if not t.startswith('-'))
         rows.append(dict(pid=pid, ppid=ppid, uid=uid, runtime=runtime))

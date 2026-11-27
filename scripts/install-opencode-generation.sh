@@ -12,6 +12,14 @@ SKILLS_HOME="$HOME/.agents/skills"
 SKILLS_PARENT="$HOME/.agents"
 ENV_FILE="$HOME/.config/opencode.env"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/my-opencode"
+PHASE="${OPENCODE_UNIFIED_PHASE:-}"
+CUTOVER="${OPENCODE_UNIFIED_CUTOVER:-}"
+if [[ -n "$PHASE" ]]; then
+  [[ "$PHASE" == prepare || "$PHASE" == activate ]] && [[ "$CUTOVER" =~ ^[a-f0-9]{32}$ ]] || exit 2
+fi
+CUTOVER_DIR="$STATE_ROOT/openchamber-stage-$CUTOVER"
+PREPARED_CONFIG="$CONFIG_PARENT/.opencode-unified-$CUTOVER"
+PREPARED_SKILLS="$SKILLS_PARENT/.skills-unified-$CUTOVER"
 
 BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 export BUN_INSTALL
@@ -24,7 +32,7 @@ for cmd in gh curl tar mktemp mv cp node grep; do
   }
 done
 
-if ! gh auth status >/dev/null 2>&1; then
+if [[ "$PHASE" != activate ]] && ! gh auth status >/dev/null 2>&1; then
   echo "Ошибка: GitHub CLI не авторизован. Выполни: gh auth login" >&2
   exit 1
 fi
@@ -86,6 +94,15 @@ trap cleanup EXIT
 
 ARCHIVE="$TMP_DIR/repo.tar.gz"
 SRC="$TMP_DIR/src"
+if [[ "$PHASE" == activate ]]; then
+  CONFIG_SHA="${OPENCODE_RESOLVED_CONFIG_SHA:?Exact prepared config SHA is required}"
+  [[ -f "$CUTOVER_DIR/prepared" && "$(cat "$CUTOVER_DIR/prepared")" == "$CONFIG_SHA $OPENCODE_INSTALL_VERSION" ]]
+  SRC="$CUTOVER_DIR/source"
+  STAGE_CONFIG="$PREPARED_CONFIG"
+  STAGE_SKILLS="$PREPARED_SKILLS"
+  [[ -d "$STAGE_CONFIG" && -d "$STAGE_SKILLS" ]]
+  node "$SRC/scripts/installed-provenance.mjs" verify "$STAGE_CONFIG"
+else
 mkdir -p "$SRC" "$CONFIG_PARENT" "$SKILLS_PARENT" "$STATE_ROOT"
 
 echo "Скачиваю конфигурацию $REPO@$REF..."
@@ -241,10 +258,38 @@ grep -Fq '# Shell Non-Interactive Strategy (Global)' "$STAGE_CONFIG/AGENTS.md" |
   echo "Ошибка: shell-strategy must not live under plugins/ in V2." >&2
   exit 1
 }
+fi
+
+if [[ "$PHASE" == prepare ]]; then
+  (umask 077; mkdir "$CUTOVER_DIR")
+  mkdir -p "$CUTOVER_DIR/source/config" "$CUTOVER_DIR/source/scripts"
+  cp "$SRC/config/opencode.env.example" "$CUTOVER_DIR/source/config/"
+  cp "$SRC/scripts/installed-provenance.mjs" "$CUTOVER_DIR/source/scripts/"
+  if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" != 1 ]]; then
+    mkdir "$CUTOVER_DIR/binary-home"
+    curl -fsSL https://opencode.ai/v2/install | HOME="$CUTOVER_DIR/binary-home" bash -s -- --version "$OPENCODE_INSTALL_VERSION"
+    prepared_binary="$CUTOVER_DIR/binary-home/.opencode/bin/opencode"
+    [[ -x "$prepared_binary" && "$("$prepared_binary" --version | sed -E 's/^opencode[[:space:]]+v?//')" == "$OPENCODE_INSTALL_VERSION" ]]
+  fi
+  mv -T -- "$STAGE_CONFIG" "$PREPARED_CONFIG"
+  STAGE_CONFIG=''
+  mv -T -- "$STAGE_SKILLS" "$PREPARED_SKILLS"
+  STAGE_SKILLS=''
+  printf '%s\n' "$CONFIG_SHA $OPENCODE_INSTALL_VERSION" > "$CUTOVER_DIR/prepared"
+  exit 0
+fi
 
 # ---- Binary phase: only after config/plugin validation --------------------
 
-if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
+if [[ "$PHASE" == activate ]]; then
+  prepared_binary="$CUTOVER_DIR/binary-home/.opencode/bin/opencode"
+  if [[ -x "$prepared_binary" ]]; then
+    BINARY_UPDATE_ATTEMPTED=1
+    mkdir -p "$(dirname "$OPENCODE_BIN")"
+    install -m 755 "$prepared_binary" "$OPENCODE_BIN.prepared-$CUTOVER"
+    mv -Tf "$OPENCODE_BIN.prepared-$CUTOVER" "$OPENCODE_BIN"
+  fi
+elif [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" == "1" ]]; then
   echo "Пропускаю обновление бинарника OpenCode (config-only mode)."
 else
   BINARY_UPDATE_ATTEMPTED=1
@@ -471,4 +516,5 @@ rm -f -- "$STATE_ROOT/config-generation.json"
 
 echo "Готово: OpenCode и конфигурация $REPO@$REF установлены атомарно."
 echo "Проверка: $OPENCODE_BIN --version -> $("$OPENCODE_BIN" --version)"
+if [[ "$PHASE" == activate ]]; then rm -rf -- "$CUTOVER_DIR"; fi
 

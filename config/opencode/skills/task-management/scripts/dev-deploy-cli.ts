@@ -1,7 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { passkeyBrokerRequired } from './owner-broker-client.mjs';
 
 // dev_deploy evidence. The orchestrator installs the published candidate on the owner's dev contour with
 // `sudo -n /usr/local/sbin/opencode-deploy-target <deploy_target> <candidate_sha>` (the owner confirms each
@@ -12,6 +13,7 @@ import { pathToFileURL } from 'node:url';
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 const SHA = /^[0-9a-f]{40}$/i;
+const DEFAULT_DEPLOY_STATE = '/var/lib/opencode/deploy-targets';
 
 class DevDeployError extends Error {}
 
@@ -33,10 +35,27 @@ async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
   await rename(temp, file);
 }
 
-// The root-owned helper preserves the project installer's --json output verbatim.
-// Current supported adapter contract is an exact top-level "sha" (see
-// dev-deploy-cli.test.mjs). Desired/requested/history SHA mentions never prove
-// what runs. A contradictory nested current SHA makes the status ambiguous.
+function contourStateDirectory() {
+  return passkeyBrokerRequired() ? DEFAULT_DEPLOY_STATE : process.env.OPENCODE_DEPLOY_STATE_DIR || DEFAULT_DEPLOY_STATE;
+}
+
+async function readContourJson(file: string, label: string, expected: string) {
+  if (passkeyBrokerRequired()) {
+    const stateDir = await lstat(DEFAULT_DEPLOY_STATE);
+    if (file !== expected || !stateDir.isDirectory() || stateDir.uid !== 0 || (stateDir.mode & 0o022) !== 0 ||
+        await realpath(DEFAULT_DEPLOY_STATE) !== DEFAULT_DEPLOY_STATE) {
+      throw new DevDeployError('DEV_DEPLOY_STATE_UNTRUSTED');
+    }
+    const entry = await lstat(file);
+    if (!entry.isFile() || entry.uid !== 0 || (entry.mode & 0o022) !== 0) {
+      throw new DevDeployError('DEV_DEPLOY_RECORD_UNTRUSTED');
+    }
+  }
+  return readJson(file, label);
+}
+
+// The helper records the reported top-level SHA and its provenance. Older
+// adapters may include a nested current SHA, which must agree when present.
 export function currentContourSha(value: unknown): string {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new DevDeployError('GATE_SERVICE_STATUS_CURRENT_SHA_MISSING');
@@ -86,21 +105,22 @@ export async function verifyDeployedServiceGate(input: {
       String(evidence.candidate_sha ?? '').toLowerCase() !== candidateSha) {
     throw new DevDeployError('GATE_SERVICE_EVIDENCE_MISMATCH: dev_deploy evidence is not for this run/target/candidate');
   }
-  const stateDir = process.env.OPENCODE_DEPLOY_STATE_DIR || '/var/lib/opencode/deploy-targets';
-  const installed = await readJson(join(stateDir, target + '.json'), 'current contour state');
+  const stateDir = contourStateDirectory();
+  const installRecord = join(stateDir, `${target}.json`);
+  const installed = await readContourJson(installRecord, 'current contour state', installRecord);
   if (installed.key !== target || String(installed.sha ?? '').toLowerCase() !== candidateSha ||
       installed.exit_code !== 0 || !Number.isFinite(Date.parse(installed.finished_at)) ||
       Date.parse(installed.finished_at) < Date.parse(startedAt)) {
     throw new DevDeployError('GATE_SERVICE_INSTALL_CHANGED: contour no longer reports the approved deployment');
   }
   if (!installed.status_file) throw new DevDeployError('GATE_SERVICE_STATUS_MISSING: no current service status file');
-  const status = await readJson(String(installed.status_file), 'current contour status');
+  const status = await readContourJson(String(installed.status_file), 'current contour status', join(stateDir, `${target}.status.json`));
   if (currentContourSha(status) !== candidateSha) {
     throw new DevDeployError('GATE_SERVICE_STATUS_MISMATCH: current service SHA differs from published candidate');
   }
   return { status: 'PASS', run_id: runId, pipeline_id: pipelineId,
     stage, target, candidate_sha: candidateSha, installed_sha: installed.sha,
-    installed_at: installed.finished_at, evidence_path: recordedPath };
+    installed_at: installed.finished_at, status_provenance: installed.status_provenance ?? 'legacy-unattributed', evidence_path: recordedPath };
 }
 
 async function record(args: string[]): Promise<Record<string, unknown>> {
@@ -116,6 +136,7 @@ async function record(args: string[]): Promise<Record<string, unknown>> {
   const runtime = state.pipelines?.[pipelineId]?.stages?.[stage];
   if (runtime?.status !== 'in_progress' || !runtime.started_at) throw new DevDeployError(`DEV_DEPLOY_NOT_IN_PROGRESS: ${pipelineId}/${stage}`);
   const target = String(manifest.deploy_target ?? '');
+  if (passkeyBrokerRequired() && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(target)) throw new DevDeployError('DEV_DEPLOY_TARGET_INVALID');
   const artifactRoot = dirname(resolve(String(state.manifest_file)));
   const candidate = await readJson(join(artifactRoot, 'candidate.json'), 'candidate.json');
   const candidateSha = String(candidate.candidate_sha ?? '').toLowerCase();
@@ -123,13 +144,16 @@ async function record(args: string[]): Promise<Record<string, unknown>> {
     throw new DevDeployError('DEV_DEPLOY_CANDIDATE_REQUIRED: candidate.json has no published PASS candidate');
   }
 
-  const stateDir = process.env.OPENCODE_DEPLOY_STATE_DIR || '/var/lib/opencode/deploy-targets';
+  const stateDir = contourStateDirectory();
   const install = `sudo -n /usr/local/sbin/opencode-deploy-target ${target} ${candidateSha}`;
   const evidence: Record<string, any> = { status: 'FAIL', run_id: runId, pipeline_id: pipelineId, stage, target, candidate_sha: candidateSha,
     recorded_at: new Date().toISOString() };
   let failure: string | null = null;
   let installed: any = null;
-  try { installed = JSON.parse(await readFile(join(stateDir, `${target}.json`), 'utf8')); } catch {}
+  const installRecord = join(stateDir, `${target}.json`);
+  try { installed = await readContourJson(installRecord, 'current contour state', installRecord); } catch (error) {
+    if (error instanceof DevDeployError && error.message.endsWith('_UNTRUSTED')) throw error;
+  }
   if (!installed || installed.key !== target || !installed.finished_at || Date.parse(installed.finished_at) < Date.parse(runtime.started_at)) {
     failure = `DEV_DEPLOY_NOT_RUN: no install of ${target} since the stage started; run: ${install}`;
   } else if (String(installed.sha ?? '').toLowerCase() !== candidateSha) {
@@ -143,7 +167,7 @@ async function record(args: string[]): Promise<Record<string, unknown>> {
       failure = 'DEV_DEPLOY_STATUS_MISSING: current status output is required';
     } else {
       try {
-        status = await readJson(installed.status_file, 'current contour status');
+        status = await readContourJson(installed.status_file, 'current contour status', join(stateDir, `${target}.status.json`));
         const currentSha = currentContourSha(status);
         if (currentSha !== candidateSha) {
           failure = `DEV_DEPLOY_STATUS_MISMATCH: ${target} runs ${currentSha}, not ${candidateSha}`;
