@@ -467,7 +467,11 @@ async function planSequence(command: 'plan-check' | 'plan-start', manifest: stri
       approvalProjected = existing.status !== 'planned';
       if (approvalProjected) {
         const { validateState } = await import('./stage-cli-core.ts');
-        await validateState(resolve(values.get('--state-root') ?? '.tmp/pipelines'), manifestObject.run_id);
+        const checked = await validateState(resolve(values.get('--state-root') ?? '.tmp/pipelines'), manifestObject.run_id);
+        const sourceSession = process.env.MY_OPENCODE_ACTIVE_SESSION ?? values.get('--owner-source-session');
+        if (passkeyBrokerRequired() && sourceSession !== checked.approval_record?.source_session) {
+          throw new Error('OWNER_APPROVAL_SOURCE_SESSION_MISMATCH');
+        }
       }
     }
   }

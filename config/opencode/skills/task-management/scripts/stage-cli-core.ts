@@ -956,7 +956,7 @@ export async function validateState(stateRoot: string, runId: string): Promise<P
           const source = await readFile(amendment.evidence_path, 'utf8');
           const proposal = JSON.parse(source);
           const scope = ownerAmendmentSnapshot(state, amendment.pipeline_id, amendment.source_stage, amendment.revision, source);
-          if (receipt.decision !== 'approved' || receipt.operation !== 'owner.amend' || receipt.run_id !== runId ||
+          if (receipt.current !== true || receipt.decision !== 'approved' || receipt.operation !== 'owner.amend' || receipt.run_id !== runId ||
               receipt.manifest_sha256 !== state.manifest_sha256 || receipt.subject_sha256 !== sha256(scope) ||
               receipt.workspace !== sha256(String(state.worktree_root ?? '')) || amendment.evidence_sha256 !== sha256(source) ||
               JSON.stringify(amendment.paths) !== JSON.stringify(proposal.paths) ||

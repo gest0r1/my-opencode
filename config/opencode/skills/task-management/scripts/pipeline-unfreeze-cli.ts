@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { hasActiveStages, implementationStarted } from './plan-lifecycle.ts';
 import { readLeases } from './dispatch-leases.mjs';
 import { agentBrokerAction, passkeyBrokerRequired } from './owner-broker-client.mjs';
-import { authorizePasskeyCheckpoint, verifyOwnerCheckpointReceipt } from './owner-approval-checkpoint.ts';
+import { authorizePasskeyCheckpoint, ownerAmendmentSnapshot, verifyOwnerCheckpointReceipt } from './owner-approval-checkpoint.ts';
 
 const hash = raw => createHash('sha256').update(raw).digest('hex');
 const unfreezeSnapshot = (manifest, scope, authorization) => JSON.stringify({
@@ -309,6 +309,18 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
       const lineage=await agentBrokerAction({action:'verify_refreeze',request_id:grant.id,unfreeze_request_id:marker.owner_approval_request});
       if(!lineage.authorized)throw Error('UNFREEZE_APPROVED_PLAN_LINEAGE_REQUIRED');
     }
+    const carryAmendments=[];
+    if(protectedMode) {
+      for(const item of t.state.owner_amendments??[]) {
+        if(!t.manifest.pipelines.some(spec=>spec.id===item.pipeline_id && spec.stages.includes(item.source_stage)))continue;
+        const raw=await fs.readFile(inside(t.root,item.evidence_path),'utf8');
+        if(hash(raw)!==item.evidence_sha256)throw Error('OWNER_AMENDMENT_EVIDENCE_STALE');
+        const reapproved=await authorizePasskeyCheckpoint({runId:run,workspace:hash(t.state.worktree_root),
+          operation:'owner.amend',pipelineId:item.pipeline_id,stage:`amendment-${item.revision}`,
+          snapshot:ownerAmendmentSnapshot({...t.state,manifest_sha256:t.manifestHash},item.pipeline_id,item.source_stage,item.revision,raw)});
+        carryAmendments.push({...item,owner_approval_request_id:reapproved.id});
+      }
+    }
 
     // An existing global published candidate cannot prove the new manifest; invalidate every
     // post-publish consumer, preserving all old proof files as historical evidence only.
@@ -338,6 +350,8 @@ export async function finalizeUnfreeze(stateRoot,run,reviewPath, { validateFroze
       }
     }
     const nextState={...t.state,manifest_sha256:t.manifestHash,pipelines:nextPipelines,status:'in_progress',
+      ...(protectedMode ? {owner_amendments:carryAmendments,runtime_scope_extensions:(t.state.runtime_scope_extensions??[]).filter(scope=>
+        scope.scope_class!=='owner_amendment'||carryAmendments.some(item=>item.evidence_sha256===scope.evidence_sha256))} : {}),
       reconciliations:[], // Previous records are SHA-bound to the old manifest; keep audit files, not active trust.
       active_stages:[],current_stage:undefined,
       approval_record:{subject:'final-manifest',run_id:run,decision:'approved',shown_manifest_sha256:t.manifestHash,

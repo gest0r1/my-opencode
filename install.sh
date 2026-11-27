@@ -180,6 +180,7 @@ if [[ "${OPENCODE_SKIP_BINARY_INSTALL:-0}" != 1 &&
 fi
 
 bash "$GENERATION" "$@"
+if [[ "${OPENCODE_UNIFIED_PHASE:-}" == prepare ]]; then exit 0; fi
 configure_server_browser
 
 # OpenCode is a persistent user service owned by opencode.
