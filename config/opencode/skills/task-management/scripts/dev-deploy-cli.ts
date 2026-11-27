@@ -100,7 +100,7 @@ export async function verifyDeployedServiceGate(input: {
   }
   return { status: 'PASS', run_id: runId, pipeline_id: pipelineId,
     stage, target, candidate_sha: candidateSha, installed_sha: installed.sha,
-    installed_at: installed.finished_at, evidence_path: recordedPath };
+    installed_at: installed.finished_at, status_provenance: installed.status_provenance ?? 'legacy-unattributed', evidence_path: recordedPath };
 }
 
 async function record(args: string[]): Promise<Record<string, unknown>> {

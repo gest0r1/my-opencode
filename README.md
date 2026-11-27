@@ -117,6 +117,12 @@ python3 /usr/local/lib/my-opencode/opencode-owner-approval-admin.py enroll
 
 На хосте с зарегистрированным dev-контуром администратор сначала устанавливает `scripts/setup-opencode-deploy-sudo.sh` из проверенного SHA и переносит clone продукта в `/var/lib/opencode-dev/targets/<key>`. В root-owned `/etc/opencode/deploy-targets/<key>.conf` задаются `REPO_DIR`, относительный `INSTALLER`, фиксированные `ARGS` и `STATUS_ARGS`. Checkout, запуск installer и чтение status выполняются от `opencode-dev` с запретом повышения прав. Системные сервисы и доступ к отдельным портам настраивает администратор для этого пользователя. Проверка `sudo /usr/local/sbin/opencode-deploy-target --check-isolation` должна завершиться успешно до перехода на Passkey. Для отдельной установки OpenCode действует user-unit `opencode-web.service`. После перехода OpenChamber отключает старый user-unit.
 
+При использовании `STATUS_ARGS` результат помечается `candidate-reported`. Для независимой проверки администратор указывает абсолютный путь `STATUS_READER` к своему защищённому скрипту. Он получает ключ контура и путь clone, выполняется от `opencode-dev` и возвращает JSON с SHA реально запущенного продукта.
+
+Через `ENV_<NAME>=<value>` задаются несекретные параметры продукта, например его отдельный каталог установки. Для Docker-контуров helper использует принадлежащий `opencode-dev` rootless-сокет `/run/user/<uid>/docker.sock`, если администратор заранее запустил daemon для этого пользователя. Проверка изоляции отклоняет учётную запись с административным `sudo` или привилегированными группами Docker/LXD.
+
+Если образ содержит `org.opencontainers.image.revision`, установите `scripts/opencode-dev-image-status.sh` в защищённый каталог под root и укажите путь как `STATUS_READER`. Задайте `ENV_COMPOSE_PROJECT_NAME` и `ENV_DEV_STATUS_SERVICE`. Проверка читает revision у образа фактически запущенного контейнера в rootless daemon.
+
 В существующих RUN с историческим подтверждением откройте исходную сессию и выполните `stage-cli owner-reauthorize <run-id> --owner-source-session <id>` через установленный `tsx`. Повторите эту же команду после подтверждения каждого запрошенного checkpoint в Pipeline Approval. Брокер свяжет Passkey с имеющимся frozen manifest и точным кандидатом. Исторические записи сохраняются.
 
 ## Обновление OpenCode

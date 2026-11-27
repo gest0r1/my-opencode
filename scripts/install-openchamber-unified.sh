@@ -327,9 +327,9 @@ if [[ ! -f "$state_active" ]]; then
       user_run python3 "$LIB/migrate-openchamber-profile.py" prepare "$transaction" > "$saved/profile-report.json"
     touch "$saved/profile-mutating"
     user_run python3 "$LIB/migrate-openchamber-profile.py" activate "$transaction"
+    user_run bash -c 'source "$1"; configure_server_browser' bash "$LIB/bootstrap-runtime-tools.sh"
   fi
 fi
-user_run bash -c 'source "$1"; configure_server_browser' bash "$LIB/bootstrap-runtime-tools.sh"
 if [[ -n "$old_current" ]]; then printf '%s\n' "$old_current" > "$saved/previous-release"; fi
 ln -s "$node_path" "$work/verified-node"
 mv -Tf "$work/verified-node" "$LIB/verified-node"

@@ -4,7 +4,9 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "$EUID" != 0 ]]; then echo 'SKIP: test_deploy_sudo needs root'; exit 0; fi
 id opencode >/dev/null 2>&1 || useradd --system --no-create-home opencode
-tmp="$(mktemp -d)"; trap 'rm -rf -- "$tmp"' EXIT
+tmp="$(mktemp -d)"
+test_policy=''
+trap 'if [[ -n "$test_policy" ]]; then rm -f -- "$test_policy"; fi; rm -rf -- "$tmp"' EXIT
 chmod 755 "$tmp"
 OPENCODE_SUDO_PREFIX="$tmp/prefix" bash "$ROOT/scripts/setup-opencode-deploy-sudo.sh" >/dev/null
 helper="$tmp/prefix/usr/local/sbin/opencode-deploy-target"
@@ -19,6 +21,7 @@ cat > "$tmp/work/install.sh" <<'SH'
 if [[ "$1" == status ]]; then printf '{"version":"0.6.5","sha":"%s"}\n' "$(git rev-parse HEAD)"; exit 0; fi
 [[ "$(id -un)" == opencode-dev && "$(awk '/^NoNewPrivs:/ { print $2 }' /proc/self/status)" == 1 ]] || exit 97
 printf '%s\n' "$*" > .fixture-install
+printf '%s\n' "${FIXTURE_DEPLOY_SCOPE:-}" > .fixture-env
 [[ "$*" != *fail* ]]
 SH
 git -C "$tmp/work" add install.sh; git -C "$tmp/work" commit -qm v1; git -C "$tmp/work" tag v0.6.5
@@ -29,16 +32,24 @@ repo="$tmp/prefix/var/lib/opencode-dev/targets/svd1"
 install -d -o opencode-dev -g opencode-dev -m 700 "$(dirname "$repo")"
 runuser -u opencode-dev -- git clone -q --no-local "$tmp/origin.git" "$repo"
 conf="$tmp/prefix/etc/opencode/deploy-targets/svd1.conf"
-printf 'REPO_DIR=%s\nINSTALLER=install.sh\nARGS=update --target dev --dev-key svd1\nVERSION_FLAG=--version\nSTATUS_ARGS=status --target dev --dev-key svd1 --json\n' "$repo" > "$conf"
+printf 'REPO_DIR=%s\nINSTALLER=install.sh\nARGS=update --target dev --dev-key svd1\nVERSION_FLAG=--version\nSTATUS_ARGS=status --target dev --dev-key svd1 --json\nENV_FIXTURE_DEPLOY_SCOPE=dev\n' "$repo" > "$conf"
 chmod 644 "$conf"
 "$helper" --check-isolation | grep -Fxq 'Dev deploy isolation: opencode-dev'
 
-"$helper" svd1 "$sha" 2>/dev/null
+if [[ "${OPENCODE_DISPOSABLE_DEPLOY_TEST:-0}" == 1 ]]; then
+  test_policy="/etc/sudoers.d/opencode-dev-test-${BASHPID}"
+  install -m 440 "$tmp/prefix/etc/sudoers.d/opencode-deploy-opencode" "$test_policy"
+  runuser -u opencode -- sudo -n "$helper" svd1 "$sha" 2>/dev/null
+else
+  "$helper" svd1 "$sha" 2>/dev/null
+fi
 [[ "$(cat "$repo/.fixture-install")" == "update --target dev --dev-key svd1 --version $sha" ]]
+[[ "$(cat "$repo/.fixture-env")" == dev ]]
 [[ "$(stat -c %U "$repo/.fixture-install")" == opencode-dev ]]
 # The outcome is recorded for the pipeline, world-readable, with the installer status of that commit.
 state="$tmp/prefix/var/lib/opencode/deploy-targets"
 grep -Fq "\"sha\":\"$sha\",\"exit_code\":0" "$state/svd1.json"
+grep -Fq '"status_provenance":"candidate-reported"' "$state/svd1.json"
 grep -Fq "\"sha\":\"$sha\"" "$state/svd1.status.json"
 [[ "$(stat -c %a "$state/svd1.json")" == 644 ]]
 [[ "$(stat -c %U "$state/svd1.json")" == root ]]
