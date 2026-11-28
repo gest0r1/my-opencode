@@ -95,17 +95,67 @@ Standalone `install.sh` делегирует полную установку в 
 
 Системный `openchamber.service` работает от `opencode`. Он запускает единственный managed OpenCode `2.3.2` от того же пользователя. Проекты, Chats, плагины и данные OpenCode остаются в профиле `opencode`. Дистрибутив хранит проверенные web-пакеты под `/var/lib/my-openchamber/runtime/releases/<package-sha256>` и атомарно переключает `current`. Версия OpenChamber остаётся `2.8.0`.
 
-Брокер хранит защищённый журнал отдельно. Веб-верификатор работает от `opencode-approval` и принимает HTTP через systemd Unix socket `/run/my-opencode-verifier/http.sock`. Для отдельного DNS-имени настройте HTTPS на доверенном reverse proxy. Сохраните исходный `Host`, обеспечьте процессу proxy доступ к сокету через группу `opencode-approval-proxy` и направьте это имя только на сокет верификатора. Если proxy работает в контейнере, передайте каталог сокета и его числовую группу. Группа недоступна `opencode`.
+Подтверждения Passkey обслуживает отдельный HTTPS-адрес. OpenChamber сохраняет свой адрес, OpenCode работает локально. Веб-верификатор работает от `opencode-approval` и принимает HTTP через сокет `/run/my-opencode-verifier/http.sock`.
 
-При первой установке передайте `OPENCHAMBER_OWNER_APPROVAL_ORIGIN=https://approval.example.com`. Origin фиксируется в root-owned policy и задаёт WebAuthn RP для всех Passkey. Установщик проверит доступность `/healthz` через HTTPS. `OPENCHAMBER_BIND_HOST` и `OPENCHAMBER_BIND_PORT` задают обычный интерфейс приложения, по умолчанию `0.0.0.0:3000`.
+#### Первый переход на Passkey
 
-После первой установки зарегистрируйте Passkey отдельной root-командой из административной SSH-сессии:
+**1. Выберите адрес подтверждений.** Создайте DNS-запись для отдельного поддомена, например `approval.example.com`, указывающую на ваш HTTPS-прокси. Подготовьте для него действующий TLS-сертификат. Зафиксируйте имя до регистрации Passkey, поскольку ключи привязываются к этому адресу. Для домена с кириллицей получите ASCII-имя командой `python3 -c 'import sys; print(sys.argv[1].encode("idna").decode())' 'approval.ваш-домен.ru'`. Используйте ASCII-имя в конфигурации прокси и в `OPENCHAMBER_OWNER_APPROVAL_ORIGIN`.
+
+**2. Настройте HTTPS-прокси до запуска установщика.** Следующие команды на VPS выполняйте от `root`. Для Nginx на хосте создайте группу и добавьте в неё учётную запись рабочих процессов. В примере это `www-data`. Уточните свою учётную запись командой `ps -C nginx -o user,args`.
+
+```bash
+getent group opencode-approval-proxy || groupadd --system opencode-approval-proxy
+usermod -aG opencode-approval-proxy www-data
+```
+
+Добавьте в конфигурацию Nginx отдельный виртуальный хост. Замените имя и пути к сертификату своими. `proxy_pass` сохраняет путь запроса, а `proxy_set_header` передаёт исходный `Host`.
+
+```nginx
+upstream openchamber_passkey {
+    server unix:/run/my-opencode-verifier/http.sock;
+}
+
+server {
+    listen 443 ssl;
+    server_name approval.example.com;
+    ssl_certificate /etc/letsencrypt/live/approval.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/approval.example.com/privkey.pem;
+
+    location / {
+        proxy_set_header Host $http_host;
+        proxy_pass http://openchamber_passkey;
+    }
+}
+```
+
+Выполните `nginx -t && systemctl reload nginx`. Затем с VPS выполните `curl -sS -D - -o /dev/null https://approval.example.com/healthz` со своим адресом. На первом переходе Nginx обычно вернёт `502`, поскольку установщик ещё не создал сокет. На этом шаге проверьте, что DNS и TLS работают и запрос попадает в новый виртуальный хост. После установки ожидается `204`.
+
+Для прокси в контейнере выполните команду создания группы, затем заранее создайте на хосте `/run/my-opencode-verifier` командой `install -d -o root -g root -m 755 /run/my-opencode-verifier`. Смонтируйте каталог в контейнер по тому же пути и предоставьте процессу прокси дополнительную группу, соответствующую GID из `getent group opencode-approval-proxy` на хосте. Для другого прокси настройте тот же HTTPS-адрес, Unix-сокет и передачу `Host`.
+
+**3. Проверьте dev-контур, если он зарегистрирован на VPS.** Подготовьте его по разделу [«Подготовка зарегистрированного dev-контура»](#подготовка-зарегистрированного-dev-контура). Команда `/usr/local/sbin/opencode-deploy-target --check-isolation`, запущенная от `root`, должна вывести `Dev deploy isolation: opencode-dev` до перехода.
+
+**4. Установите из `main`.** Войдите по внешнему SSH как `root`, проверьте доступ `gh auth status` и замените `approval.example.com` на свой адрес. При необходимости задайте `OPENCHAMBER_BIND_HOST` и `OPENCHAMBER_BIND_PORT` для интерфейса OpenChamber. Их значения по умолчанию `0.0.0.0` и `3000`.
+
+```bash
+(
+  set -o pipefail
+  gh api -H 'Accept: application/vnd.github.raw' \
+    'repos/gest0r1/my-opencode/contents/install-openchamber.sh?ref=main' |
+    OPENCHAMBER_OWNER_APPROVAL_ORIGIN=https://approval.example.com \
+    OPENCHAMBER_RESTART_MODE=now \
+    bash
+)
+```
+
+Ожидаемый результат — строка `Unified runtime ready` с точными SHA. Проверьте приложение по прежнему адресу и повторите запрос к `/healthz` нового поддомена. В ответе должны быть HTTP `204` и заголовок `X-OpenChamber-Verifier-Id`. Установщик сравнивает этот заголовок с ответом локального сокета. Ошибка проверки вызывает откат активации. При `502` после запуска сокета проверьте доступ рабочих процессов прокси к его группе и путь монтирования. При `403` от верификатора проверьте передаваемый `Host`.
+
+**5. Зарегистрируйте Passkey.** Выполните в административной SSH-сессии:
 
 ```bash
 python3 /usr/local/lib/my-opencode/opencode-owner-approval-admin.py enroll
 ```
 
-Откройте выведенную одноразовую ссылку в системном браузере владельца в течение десяти минут. После регистрации используйте **Pipeline Approval** в OpenChamber. Ссылка откроет точный запрос на отдельном origin. Для отзыва используйте `opencode-owner-approval-admin.py revoke <credential-id>`. Храните выданную ссылку только на время регистрации.
+Откройте выведенную одноразовую ссылку в системном браузере владельца в течение десяти минут. Ожидаемый результат в браузере `Passkey registered.`. Затем откройте **Pipeline Approval** в OpenChamber и проверьте тестовый запрос подтверждения. Для отзыва ключа используйте `opencode-owner-approval-admin.py revoke <credential-id>`.
 
 ### Обновление и миграция
 
@@ -115,7 +165,24 @@ python3 /usr/local/lib/my-opencode/opencode-owner-approval-admin.py enroll
 
 Запускайте активацию с `OPENCHAMBER_RESTART_MODE=now` из внешнего SSH. Из терминала OpenChamber установщик только подготавливает пакет. Если процесс активации был прерван, повторный запуск в режиме `now` сначала восстановит предыдущие сервисы и профиль. После восстановления снова запустите обновление.
 
-На хосте с зарегистрированным dev-контуром администратор сначала устанавливает `scripts/setup-opencode-deploy-sudo.sh` из проверенного SHA и переносит clone продукта в `/var/lib/opencode-dev/targets/<key>`. В root-owned `/etc/opencode/deploy-targets/<key>.conf` задаются `REPO_DIR`, относительный `INSTALLER`, фиксированные `ARGS` и `STATUS_ARGS`. Checkout, запуск installer и чтение status выполняются от `opencode-dev` с запретом повышения прав. Системные сервисы и доступ к отдельным портам настраивает администратор для этого пользователя. Проверка `sudo /usr/local/sbin/opencode-deploy-target --check-isolation` должна завершиться успешно до перехода на Passkey. Для отдельной установки OpenCode действует user-unit `opencode-web.service`. После перехода OpenChamber отключает старый user-unit.
+Для отдельной установки OpenCode действует user-unit `opencode-web.service`. После перехода OpenChamber отключает старый user-unit.
+
+#### Подготовка зарегистрированного dev-контура
+
+1. Из внешнего root SSH установите helper из того же проверенного SHA my-opencode, с которого будете обновлять OpenChamber. Подставьте этот SHA вместо `VERIFIED_SHA`.
+
+   ```bash
+   (
+     set -o pipefail
+     gh api -H 'Accept: application/vnd.github.raw' \
+       'repos/gest0r1/my-opencode/contents/scripts/setup-opencode-deploy-sudo.sh?ref=VERIFIED_SHA' | bash
+   )
+   ```
+
+   Команда `id opencode-dev` должна показать отдельную учётную запись.
+2. Подготовьте клон продуктового репозитория в `/var/lib/opencode-dev/targets/<key>`. Владелец клона и его каталога `.git` — `opencode-dev`. У этой учётной записи должен работать `git fetch` из `origin`.
+3. Обновите существующий `/etc/opencode/deploy-targets/<key>.conf`. Владельцем файла должен быть `root`, право записи остаётся у владельца. Укажите в `REPO_DIR` новый путь к клону. Сверьте относительный `INSTALLER`, `ARGS` и `STATUS_ARGS` с контрактом конкретного продукта. Checkout, запуск установщика и чтение статуса выполняются от `opencode-dev` без повышения прав. Если среде нужны системные сервисы или порты, подготовьте их для этой учётной записи отдельно.
+4. Выполните `/usr/local/sbin/opencode-deploy-target --check-isolation` от `root`. Ожидаемый результат — `Dev deploy isolation: opencode-dev`. Эта команда проверяет изоляцию, а запуск продукта и чтение его фактического SHA проверяются отдельным прогоном dev-контура.
 
 При использовании `STATUS_ARGS` результат помечается `candidate-reported`. Для независимой проверки администратор указывает абсолютный путь `STATUS_READER` к своему защищённому скрипту. Он получает ключ контура и путь clone, выполняется от `opencode-dev` и возвращает JSON с SHA реально запущенного продукта.
 
